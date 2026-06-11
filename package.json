@@ -1,0 +1,37 @@
+{
+  "name": "querymt-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test:ui": "vitest run"
+  },
+  "devDependencies": {
+    "@agentclientprotocol/sdk": "latest",
+    "@lucide/svelte": "^0.525.0",
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.64.0",
+    "@tailwindcss/vite": "^4.1.11",
+    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/cli": "^2.8.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/svelte": "^5.3.1",
+    "@types/node": "^24.0.0",
+    "bits-ui": "^1.8.0",
+    "jsdom": "^29.1.1",
+    "svelte": "^5.38.2",
+    "svelte-check": "^4.3.1",
+    "tailwindcss": "^4.1.11",
+    "typescript": "^5.9.2",
+    "vite": "^8.0.0",
+    "vitest": "^4.1.8",
+    "zod": "^4.3.5"
+  },
+  "dependencies": {
+    "@tauri-apps/plugin-dialog": "^2.7.1"
+  }
+}

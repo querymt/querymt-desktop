@@ -1,0 +1,39 @@
+# Node / SvelteKit
+node_modules/
+.svelte-kit/
+build/
+.vercel/
+.vite/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Environment / local overrides
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Tauri / Rust build artifacts
+src-tauri/target/
+src-tauri/gen/
+Cargo.lock
+
+# Tauri generated capability / schema outputs
+src-tauri/*.schema.json
+src-tauri/*-schema.json
+src-tauri/capabilities.json
+src-tauri/acl-manifests.json
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Misc caches
+coverage/
