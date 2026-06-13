@@ -36,4 +36,6 @@ src-tauri/acl-manifests.json
 *.swo
 
 # Misc caches
+.direnv/
 coverage/
+result

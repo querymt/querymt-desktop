@@ -11,6 +11,7 @@ This repository currently contains the initial app scaffold plus a static produc
 ```bash
 npm install
 npm run dev
+npx tauri dev
 ```
 
 Tauri integration is scaffolded under `src-tauri/` and will be wired up in later slices.
