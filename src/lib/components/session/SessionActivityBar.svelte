@@ -15,7 +15,7 @@
       return 'Agent is replying…';
     }
     if (session.runState === 'thinking') {
-      return 'Agent is thinking…';
+      return session.activityLabel ?? 'Agent is thinking…';
     }
     if (session.runState === 'submitting') {
       return 'Sending prompt…';

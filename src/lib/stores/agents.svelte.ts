@@ -72,7 +72,7 @@ const DEFAULT_AGENTS: AgentConfig[] = [
   }
 ];
 
-class AgentsStore {
+export class AgentsStore {
   private clients = new Map<string, AgentClientRecord>();
 
   configs = $state<AgentConfig[]>(loadInitialAgents());
@@ -623,20 +623,20 @@ class AgentsStore {
     }
 
     const record = this.ensureClientRecord(this.activeAgentId);
-    await this.connectAgent(this.activeAgentId);
 
     try {
       const attachments = this.promptAttachments;
-      this.activeSession.runState = 'submitting';
-      this.activeSession.activityLabel = 'Sending prompt…';
-      this.activeSession.lastError = null;
-      this.lastPromptResponse = await record.client.sendPrompt(this.activeSessionId, prompt, attachments);
+      const sessionId = this.activeSessionId;
+      this.addOptimisticUserPrompt(sessionId, prompt);
       this.activeSession.runState = 'thinking';
       this.activeSession.activityLabel = 'Waiting for the agent to respond…';
-      this.activeSession.lastStopReason = this.lastPromptResponse.stopReason ?? null;
+      this.activeSession.lastError = null;
       this.composerPrompt = '';
       this.clearPromptAttachments();
-      await this.drainQueuedSessionUpdates(this.activeAgentId, this.activeSessionId);
+      await this.connectAgent(this.activeAgentId);
+      this.lastPromptResponse = await record.client.sendPrompt(sessionId, prompt, attachments);
+      this.activeSession.lastStopReason = this.lastPromptResponse.stopReason ?? null;
+      await this.drainQueuedSessionUpdates(this.activeAgentId, sessionId);
       if (this.activeSession.runState === 'thinking') {
         this.activeSession.runState = 'completed';
         this.activeSession.activityLabel = 'Turn completed.';
@@ -1213,11 +1213,72 @@ class AgentsStore {
     record.recentSessionUpdateKeys = [];
   }
 
+  private addOptimisticUserPrompt(sessionId: string, prompt: string) {
+    const eventIndex = this.activeSession.events.length;
+    const id = `${sessionId}-optimistic-user-${eventIndex + 1}`;
+    this.activeSession.transcript.push({
+      id,
+      kind: 'user_message_chunk',
+      text: prompt,
+      messageId: id,
+      eventIndex
+    });
+    this.activeSession.events.push({
+      id: `${id}-event`,
+      kind: 'user_message_chunk',
+      text: prompt,
+      messageId: id
+    });
+  }
+
+  private removeMatchingOptimisticUserPrompt(notification: SessionNotification) {
+    const update = notification.update;
+    if (update.sessionUpdate !== 'user_message_chunk' || update.content.type !== 'text') {
+      return;
+    }
+
+    const optimistic = this.activeSession.transcript.find(
+      (item) => item.kind === 'user_message_chunk' && item.id.includes('-optimistic-user-') && item.text === update.content.text
+    );
+    if (!optimistic) {
+      return;
+    }
+
+    this.activeSession.transcript = this.activeSession.transcript.filter((item) => item.id !== optimistic.id);
+    this.activeSession.events = this.activeSession.events.filter((event) => event.messageId !== optimistic.messageId);
+  }
+
+  private applySessionSummaryUpdate(agentId: string, notification: SessionNotification) {
+    if (notification.update.sessionUpdate !== 'session_info_update') {
+      return;
+    }
+
+    const sessions = this.sessionsByAgent[agentId] ?? [];
+    const nextSessions = sessions.map((session) => {
+      if (session.sessionId !== notification.sessionId) {
+        return session;
+      }
+
+      return {
+        ...session,
+        title: notification.update.title ?? 'Untitled session',
+        updatedAt: notification.update.updatedAt ?? null
+      };
+    });
+
+    this.sessionsByAgent = {
+      ...this.sessionsByAgent,
+      [agentId]: nextSessions
+    };
+  }
+
   private handleSessionNotification(
     agentId: string,
     notification: SessionNotification,
     record: AgentClientRecord
   ) {
+    this.applySessionSummaryUpdate(agentId, notification);
+
     if (this.activeAgentId !== agentId || (this.activeSessionId && notification.sessionId !== this.activeSessionId)) {
       return;
     }
@@ -1231,6 +1292,7 @@ class AgentsStore {
       this.activeSession.sessionId = notification.sessionId;
     }
 
+    this.removeMatchingOptimisticUserPrompt(notification);
     this.activeSession = applySessionNotification(this.activeSession, notification);
     record.recentSessionUpdateKeys.push(notificationKey);
     if (record.recentSessionUpdateKeys.length > 200) {
