@@ -23,8 +23,12 @@
     ]
   },
   "bundle": {
-    "active": false,
-    "targets": "all",
-    "icon": []
+    "active": true,
+    "targets": ["dmg", "nsis", "appimage", "deb"],
+    "category": "DeveloperTool",
+    "publisher": "QueryMT",
+    "shortDescription": "Native desktop control center for QueryMT.",
+    "longDescription": "QueryMT Desktop is a native Tauri application for managing QueryMT agents, sessions, logs, and workspaces.",
+    "icon": ["icons/icon.png"]
   }
 }

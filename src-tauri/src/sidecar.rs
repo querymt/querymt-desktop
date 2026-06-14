@@ -2,11 +2,12 @@ use serde::Serialize;
 use std::{
     collections::{HashMap, VecDeque},
     io::{BufRead, BufReader, Write},
+    path::PathBuf,
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{ipc::Channel, AppHandle, Emitter};
+use tauri::{ipc::Channel, AppHandle, Emitter, Manager};
 
 const MAX_LOG_LINES: usize = 200;
 const MAX_SESSION_UPDATES: usize = 4000;
@@ -156,7 +157,7 @@ impl AcpAgentManager {
             &format!("Starting agent with command: {command_line}"),
         );
 
-        let mut command = build_launch_command(&command_line)?;
+        let mut command = build_launch_command(app, &command_line)?;
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let mut child = command
@@ -182,7 +183,7 @@ impl AcpAgentManager {
         process.session_updates.clear();
         process.state.state = AgentState::Running;
         process.state.pid = Some(pid);
-        process.state.version = run_version_command(command_line.split_whitespace().next());
+        process.state.version = run_version_command(app, command_line.split_whitespace().next());
         process.state.message = "ACP stdio agent is running.".to_string();
         process.state.last_error = None;
         push_log(
@@ -351,21 +352,24 @@ impl AcpAgentManager {
     }
 }
 
-fn build_launch_command(command_line: &str) -> Result<Command, String> {
+fn build_launch_command(app: &AppHandle, command_line: &str) -> Result<Command, String> {
     let parts = shlex::split(command_line)
         .ok_or_else(|| "Could not parse command line for ACP agent.".to_string())?;
     let (program, args) = parts
         .split_first()
         .ok_or_else(|| "ACP command line cannot be empty.".to_string())?;
 
-    let mut command = Command::new(program);
+    let mut command = Command::new(resolve_agent_program_path(app, program));
     command.args(args);
     Ok(command)
 }
 
-fn run_version_command(program: Option<&str>) -> Option<String> {
+fn run_version_command(app: &AppHandle, program: Option<&str>) -> Option<String> {
     let program = program?;
-    let output = Command::new(program).arg("--version").output().ok()?;
+    let output = Command::new(resolve_agent_program_path(app, program))
+        .arg("--version")
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -376,6 +380,96 @@ fn run_version_command(program: Option<&str>) -> Option<String> {
     } else {
         Some(stdout)
     }
+}
+
+fn resolve_agent_program_path(app: &AppHandle, program: &str) -> PathBuf {
+    let configured = PathBuf::from(program);
+    if configured.components().count() > 1 || configured.is_absolute() {
+        return configured;
+    }
+
+    let Some(sidecar_filename) = qmtcode_sidecar_filename(program) else {
+        return configured;
+    };
+
+    for candidate in qmtcode_sidecar_candidates(app, &sidecar_filename) {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    configured
+}
+
+fn qmtcode_sidecar_filename(program: &str) -> Option<String> {
+    match program {
+        "qmtcode" | "qmtcode.exe" => Some(format!("qmtcode-{}{}", current_target_triple(), executable_suffix())),
+        _ => None,
+    }
+}
+
+fn qmtcode_sidecar_candidates(app: &AppHandle, sidecar_filename: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(exe_dir) = current_exe.parent() {
+            candidates.push(exe_dir.join(sidecar_filename));
+            candidates.push(exe_dir.join("binaries").join(sidecar_filename));
+        }
+    }
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join(sidecar_filename));
+        candidates.push(resource_dir.join("binaries").join(sidecar_filename));
+    }
+
+    candidates
+}
+
+#[cfg(target_os = "windows")]
+fn executable_suffix() -> &'static str {
+    ".exe"
+}
+
+#[cfg(not(target_os = "windows"))]
+fn executable_suffix() -> &'static str {
+    ""
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn current_target_triple() -> &'static str {
+    "aarch64-apple-darwin"
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn current_target_triple() -> &'static str {
+    "x86_64-apple-darwin"
+}
+
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn current_target_triple() -> &'static str {
+    "x86_64-pc-windows-msvc"
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn current_target_triple() -> &'static str {
+    "x86_64-unknown-linux-gnu"
+}
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+fn current_target_triple() -> &'static str {
+    "aarch64-unknown-linux-gnu"
+}
+
+#[cfg(not(any(
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "macos", target_arch = "x86_64"),
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "aarch64")
+)))]
+fn current_target_triple() -> &'static str {
+    "unsupported-target"
 }
 
 fn reconcile_child_state(process: &mut ManagedAgentProcess) {
