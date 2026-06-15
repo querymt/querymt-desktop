@@ -90,7 +90,11 @@
   </div>
 
   <div class="session-page-content">
-    <ActiveSessionView session={agentsStore.activeSession} />
+    <ActiveSessionView
+      session={agentsStore.activeSession}
+      sessionConfigPending={agentsStore.sessionConfigPending}
+      onConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
+    />
 
      {#if selectedSession}
        <div bind:this={composerAnchor} class="session-composer-anchor">
@@ -110,8 +114,13 @@
            agentLabel={showAgentBadges ? selectedSession.agentName : null}
            onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
            onModelChange={(value) => agentsStore.setComposerModel(value)}
-           onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}
-           onSendPrompt={() => agentsStore.sendPromptToActiveSession()}
+            onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}
+            sessionConfigOptions={agentsStore.activeSession.configOptions}
+            sessionConfigPending={agentsStore.sessionConfigPending}
+            onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
+            onDismissError={() => agentsStore.clearError()}
+            onSendPrompt={() => agentsStore.sendPromptToActiveSession()}
+
          />
        </div>
 
