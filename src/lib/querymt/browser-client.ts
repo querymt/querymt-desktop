@@ -19,6 +19,10 @@ export class BrowserClient implements Client {
   private extensionNotificationHandlers: Array<(notification: QuerymtExtensionNotification) => void> = [];
 
   async sessionUpdate(params: SessionNotification): Promise<void> {
+    console.debug('querymt session/update received', {
+      sessionId: params.sessionId,
+      update: params.update.sessionUpdate
+    });
     for (const handler of this.sessionUpdateHandlers) {
       handler(params);
     }

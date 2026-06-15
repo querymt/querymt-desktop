@@ -3,11 +3,20 @@
   import { tick } from 'svelte';
   import ModelQuickPicker from '$lib/components/primitives/ModelQuickPicker.svelte';
   import WorkspacePathInput from '$lib/components/primitives/WorkspacePathInput.svelte';
+  import {
+    findModeConfigOption,
+    findReasoningConfigOption,
+    getConfigOptionChoices
+  } from '$lib/querymt/config-options';
   import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment } from '$lib/domain/types';
+  import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 
   let modelPickerRef: { openPicker: () => Promise<void> } | null = null;
   let fileInputElement: HTMLInputElement | null = null;
   let isDragging = $state(false);
+  const isMacPlatform =
+    typeof navigator !== 'undefined' &&
+    /mac/i.test(`${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`);
 
   let {
     cwd = '',
@@ -32,6 +41,8 @@
     selectedProfileId = 'default',
     targetOptions = [],
     selectedTargetId = 'local',
+    sessionConfigOptions = [],
+    sessionConfigPending = {},
     onCwdInput = null,
     onPromptInput,
     onModelChange = null,
@@ -40,7 +51,9 @@
     onRemoveAttachment = null,
     onProfileChange = null,
     onTargetChange = null,
+    onSessionConfigChange = null,
     onCreateSession = null,
+    onDismissError = null,
     onSendPrompt
   }: {
     cwd?: string;
@@ -65,6 +78,8 @@
     selectedProfileId?: string;
     targetOptions?: ComposerOption[];
     selectedTargetId?: string;
+    sessionConfigOptions?: SessionConfigOption[];
+    sessionConfigPending?: Record<string, boolean>;
     onCwdInput?: ((value: string) => void) | null;
     onPromptInput: (value: string) => void;
     onModelChange?: ((value: string) => void) | null;
@@ -73,16 +88,86 @@
     onRemoveAttachment?: ((attachmentId: string) => void) | null;
     onProfileChange?: ((profileId: string) => void) | null;
     onTargetChange?: ((targetId: string) => void) | null;
+    onSessionConfigChange?: ((configId: string, value: string) => void | Promise<void>) | null;
     onCreateSession?: (() => void) | null;
+    onDismissError?: (() => void) | null;
     onSendPrompt: () => void;
   } = $props();
 
   let promptElement: HTMLTextAreaElement | null = null;
+  let errorTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  const modeOption = $derived(activeSessionId ? findModeConfigOption(sessionConfigOptions) : undefined);
+  const reasoningOption = $derived(activeSessionId ? findReasoningConfigOption(sessionConfigOptions) : undefined);
+
+  const promptFrameTone = $derived.by(() => {
+    const modeValue = `${modeOption?.currentValue ?? ''} ${modeOption?.name ?? ''}`.toLowerCase();
+    if (modeValue.includes('build') || modeValue.includes('edit') || modeValue.includes('agent')) {
+      return 'success';
+    }
+    return 'default';
+  });
+
+  function getNextConfigValue(option: (SessionConfigOption & { type: 'select' }) | undefined): string | null {
+    if (!option || sessionConfigPending[option.id]) {
+      return null;
+    }
+
+    const choices = getConfigOptionChoices(option);
+    if (choices.length < 2) {
+      return null;
+    }
+
+    const currentIndex = choices.findIndex((choice) => choice.value === option.currentValue);
+    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % choices.length : 0;
+    return choices[nextIndex]?.value ?? null;
+  }
+
+  function cycleConfigOption(option: (SessionConfigOption & { type: 'select' }) | undefined) {
+    if (!option) {
+      return;
+    }
+
+    const nextValue = getNextConfigValue(option);
+    if (nextValue) {
+      void onSessionConfigChange?.(option.id, nextValue);
+    }
+  }
+
+  function dismissError() {
+    onDismissError?.();
+  }
+
+  function shouldSendFromKeyboard(event: KeyboardEvent): boolean {
+    if (event.key !== 'Enter' || event.shiftKey || event.altKey) {
+      return false;
+    }
+
+    return isMacPlatform ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+  }
 
   function handlePromptKeydown(event: KeyboardEvent) {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'm') {
       event.preventDefault();
       void modelPickerRef?.openPicker();
+      return;
+    }
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 't') {
+      event.preventDefault();
+      cycleConfigOption(reasoningOption);
+      return;
+    }
+
+    if (!loading && shouldSendFromKeyboard(event)) {
+      event.preventDefault();
+      onSendPrompt();
+      return;
+    }
+
+    if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key === 'Tab') {
+      event.preventDefault();
+      cycleConfigOption(modeOption);
     }
   }
 
@@ -119,34 +204,60 @@
     void focusPrompt();
   });
 
+  $effect(() => {
+    if (errorTimeout) {
+      clearTimeout(errorTimeout);
+      errorTimeout = null;
+    }
+
+    if (!error || !onDismissError) {
+      return;
+    }
+
+    errorTimeout = setTimeout(() => {
+      onDismissError?.();
+      errorTimeout = null;
+    }, 12000);
+
+    return () => {
+      if (errorTimeout) {
+        clearTimeout(errorTimeout);
+        errorTimeout = null;
+      }
+    };
+  });
+
   async function focusPrompt() {
     await tick();
     promptElement?.focus();
   }
 </script>
 
-<div class={`panel-strong ${launch ? 'p-4 md:p-6' : minimal ? 'p-4 md:p-5' : 'p-3 md:p-4'}`}>
-  <div class={`flex flex-col ${launch ? 'gap-4 rounded-[24px] bg-black/8' : 'gap-3 rounded-[18px] border border-white/8 bg-black/10'} ${launch ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}>
+<div class={`panel-strong composer-mode-frame composer-mode-frame-${promptFrameTone} ${launch ? 'p-4 md:p-6' : minimal ? 'p-4 md:p-5' : 'p-3 md:p-4'}`}>
+  <div class={`flex flex-col ${launch ? 'gap-4 rounded-[24px] bg-black/8' : 'gap-3 rounded-[18px] bg-black/10'} ${launch ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}>
     {#if !launch}
-      <div class="flex items-start justify-between gap-4 px-2 pt-1">
-        <div>
-          <div class={`${minimal ? 'text-base' : 'text-sm'} font-semibold`}>{sessionOnly ? 'Reply' : minimal ? 'Start with a prompt' : 'Ask QueryMT'}</div>
-          <p class="muted mt-1 text-sm">
-            {#if sessionOnly}
-              Continue this session with a quick reply.
-            {:else if minimal}
-              Describe the task, choose a workspace, and start a focused session.
-            {:else}
-              Start a new session or continue the selected one.
-            {/if}
-          </p>
-        </div>
-        <div class="flex items-center gap-2">
-          {#if !sessionOnly && !minimal}
-            <div class="kbd">Cmd+N</div>
+      <div class="px-2 pt-1">
+        <div class={`${minimal ? 'text-base' : 'text-sm'} font-semibold`}>{sessionOnly ? 'Reply' : minimal ? 'Start with a prompt' : 'Ask QueryMT'}</div>
+        <p class="muted mt-1 text-sm">
+          {#if sessionOnly}
+            Continue this session with a quick reply.
+          {:else if minimal}
+            Describe the task, choose a workspace, and start a focused session.
+          {:else}
+            Start a new session or continue the selected one.
           {/if}
-          <div class="kbd">Cmd+M</div>
-        </div>
+        </p>
+      </div>
+    {/if}
+
+    {#if error}
+      <div class={`${launch ? 'mx-1' : 'mx-2'} flex items-start justify-between gap-3 rounded-[18px] border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100`} role="alert" aria-live="polite">
+        <p class="min-w-0 flex-1">{error}</p>
+        {#if onDismissError}
+          <button class="text-rose-200 transition hover:text-rose-50" type="button" aria-label="Dismiss error" onclick={dismissError}>
+            <X size={14} />
+          </button>
+        {/if}
       </div>
     {/if}
 
@@ -223,6 +334,32 @@
             {/each}
           </select>
         {/if}
+        {#if modeOption}
+          <select
+            class="composer-select-pill"
+            value={modeOption.currentValue}
+            disabled={!!sessionConfigPending[modeOption.id]}
+            aria-label={modeOption.name}
+            onchange={(event) => onSessionConfigChange?.(modeOption.id, (event.currentTarget as HTMLSelectElement).value)}
+          >
+            {#each getConfigOptionChoices(modeOption) as choice}
+              <option value={choice.value}>{choice.name}</option>
+            {/each}
+          </select>
+        {/if}
+        {#if reasoningOption}
+          <select
+            class="composer-select-pill"
+            value={reasoningOption.currentValue}
+            disabled={!!sessionConfigPending[reasoningOption.id]}
+            aria-label={reasoningOption.name}
+            onchange={(event) => onSessionConfigChange?.(reasoningOption.id, (event.currentTarget as HTMLSelectElement).value)}
+          >
+            {#each getConfigOptionChoices(reasoningOption) as choice}
+              <option value={choice.value}>{choice.name}</option>
+            {/each}
+          </select>
+        {/if}
         <ModelQuickPicker
           bind:this={modelPickerRef}
           modelOptions={modelOptions}
@@ -272,7 +409,4 @@
     </div>
   </div>
 
-  {#if error}
-    <div class="mt-3 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{error}</div>
-  {/if}
 </div>

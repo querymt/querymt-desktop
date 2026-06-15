@@ -1,7 +1,15 @@
 let requestedPermission = false;
 
+function shouldNotifyInBackground(): boolean {
+  if (typeof document === 'undefined') {
+    return true;
+  }
+
+  return document.visibilityState !== 'visible' || (typeof document.hasFocus === 'function' && !document.hasFocus());
+}
+
 export async function sendDesktopNotification(title: string, body: string) {
-  if (typeof Notification === 'undefined') {
+  if (typeof Notification === 'undefined' || !shouldNotifyInBackground()) {
     return;
   }
 

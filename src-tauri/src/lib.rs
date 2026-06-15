@@ -13,6 +13,9 @@ pub fn run() {
         .manage(AcpAgentManager::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_ping,
+            commands::querymt_profile_templates,
+            commands::querymt_profiles_list,
+            commands::querymt_profile_enable_template,
             commands::querymt_agent_status,
             commands::querymt_agent_start,
             commands::querymt_agent_stop,
@@ -27,7 +30,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+            if matches!(
+                event,
+                tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+            ) {
                 let manager = app.state::<AcpAgentManager>();
                 manager.shutdown_all();
             }

@@ -151,14 +151,21 @@ export class DesktopAcpClient {
     return response.sessions;
   }
 
-  async createSession(cwd: string): Promise<NewSessionResponse> {
+  async createSession(cwd: string, profileId?: string | null): Promise<NewSessionResponse> {
     if (!this.connection) {
       await this.connect();
     }
 
     return this.connection!.newSession({
       cwd,
-      mcpServers: []
+      mcpServers: [],
+      _meta: profileId
+        ? {
+            querymt: {
+              profile_id: profileId
+            }
+          }
+        : undefined
     });
   }
 

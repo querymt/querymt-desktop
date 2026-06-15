@@ -134,15 +134,34 @@ describe('Agents page', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Edit QMTCODE' }));
     const nameInput = screen.getByDisplayValue('QMTCODE');
     const commandInput = screen.getByDisplayValue('/usr/local/bin/qmtcode --acp');
+    expect(commandInput).toHaveAttribute('autocomplete', 'off');
+    expect(commandInput).toHaveAttribute('autocorrect', 'off');
+    expect(commandInput).toHaveAttribute('autocapitalize', 'off');
+    expect(commandInput).not.toHaveAttribute('spellcheck', 'true');
     await fireEvent.input(nameInput, { target: { value: 'QMTCODE Local' } });
-    await fireEvent.input(commandInput, { target: { value: '/usr/bin/qmtcode --acp' } });
+    await fireEvent.input(commandInput, { target: { value: '/usr/bin/qmtcode --acp --mesh' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     expect(agentsStore.updateConfig).toHaveBeenCalledWith('agent-1', {
       name: 'QMTCODE Local',
-      commandLine: '/usr/bin/qmtcode --acp'
+      commandLine: '/usr/bin/qmtcode --acp --mesh'
     });
     expect(agentsStore.refreshAgent).toHaveBeenCalled();
+  });
+
+  it('shows degraded runtime state when ACP control is failing', () => {
+    agentsStore.connectionStates['agent-1'] = 'failed';
+    agentsStore.controlHealthByAgent['agent-1'] = {
+      state: 'failed',
+      summary: 'Agent failed to initialize.',
+      missingMethods: [],
+      missingFeatures: []
+    };
+
+    const { container } = render(AgentsPage);
+
+    expect(container.querySelector('.status-dot-degraded')).toBeTruthy();
+    expect(screen.getByText('running')).toBeInTheDocument();
   });
 
   it('opens the details drawer for extended information', async () => {

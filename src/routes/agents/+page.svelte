@@ -48,10 +48,12 @@
     selectedAgentId ? agentCards.find((card) => card.config.id === selectedAgentId) ?? null : null
   );
 
-  function statusClass(state?: string | null) {
-    if (state === 'running') return 'status-dot-running';
+  function statusClass(state?: string | null, connectionState?: string | null, controlState?: string | null) {
+    if (state === 'failed' || connectionState === 'failed' || controlState === 'failed' || controlState === 'degraded') {
+      return 'status-dot-degraded';
+    }
+    if (state === 'running' && connectionState !== 'failed' && controlState !== 'failed') return 'status-dot-running';
     if (state === 'starting' || state === 'stopping') return 'status-dot-starting';
-    if (state === 'failed') return 'status-dot-degraded';
     return 'status-dot-stopped';
   }
 
@@ -157,7 +159,7 @@
           <article class="surface-muted p-3">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div class="min-w-0 flex flex-1 items-center gap-3">
-                <span class={`status-dot ${statusClass(card.status?.state)}`}></span>
+                <span class={`status-dot ${statusClass(card.status?.state, card.connectionState, card.controlHealth.state)}`}></span>
                 <div class="min-w-0 flex-1">
                   <div class="flex flex-wrap items-center gap-2">
                     <div class="truncate text-sm font-medium">{card.config.name}</div>
@@ -238,7 +240,7 @@
           </label>
           <label class="block space-y-2">
             <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Command line</span>
-            <input class="input-shell w-full" placeholder="/path/to/executable --acp" bind:value={draftCommandLine} />
+            <input class="input-shell w-full" placeholder="/path/to/executable --acp" bind:value={draftCommandLine} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="text" />
           </label>
         </div>
 
@@ -272,8 +274,9 @@
       <aside class="h-full w-full max-w-2xl overflow-auto border-l border-white/8 bg-[var(--bg-panel-strong)] p-5 shadow-2xl">
         <div class="flex items-start justify-between gap-3">
           <div>
-            <div class="flex items-center gap-3">
-              <span class={`status-dot ${statusClass(selectedCard.status?.state)}`}></span>
+              <div class="flex items-center gap-3">
+                <span class={`status-dot ${statusClass(selectedCard.status?.state, selectedCard.connectionState, selectedCard.controlHealth.state)}`}></span>
+
               <div class="text-lg font-semibold">{selectedCard.config.name}</div>
             </div>
             <div class="mt-1 text-sm text-[var(--muted)]">{selectedCard.config.commandLine}</div>

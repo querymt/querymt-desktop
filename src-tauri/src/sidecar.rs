@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::{
     collections::{HashMap, VecDeque},
+    fs,
     io::{BufRead, BufReader, Write},
     path::PathBuf,
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
@@ -158,7 +159,11 @@ impl AcpAgentManager {
         );
 
         let mut command = build_launch_command(app, &command_line)?;
-        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        apply_querymt_desktop_environment(app, &command_line, &mut command)?;
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         let mut child = command
             .spawn()
@@ -192,7 +197,12 @@ impl AcpAgentManager {
             &format!("Agent process started with pid {pid}."),
         );
 
-        spawn_stdout_reader(agent_id.clone(), Arc::clone(&self.inner), stdout, app.clone());
+        spawn_stdout_reader(
+            agent_id.clone(),
+            Arc::clone(&self.inner),
+            stdout,
+            app.clone(),
+        );
         spawn_stderr_reader(agent_id, Arc::clone(&self.inner), stderr, app.clone());
 
         Ok(process.state.clone().into_status())
@@ -267,7 +277,11 @@ impl AcpAgentManager {
             process.state.state = AgentState::Stopped;
             process.state.pid = None;
             process.state.message = "Agent process stopped during app shutdown.".to_string();
-            push_log(&mut process.logs, "system", "Agent process stopped during app shutdown.");
+            push_log(
+                &mut process.logs,
+                "system",
+                "Agent process stopped during app shutdown.",
+            );
         }
     }
 
@@ -301,19 +315,21 @@ impl AcpAgentManager {
         let mut retained = VecDeque::new();
 
         while let Some(value) = process.session_updates.pop_front() {
-          let matches = session_id.as_ref().map_or(true, |expected| {
-              value
-                  .get("sessionId")
-                  .and_then(serde_json::Value::as_str)
-                  .map(|actual| actual == expected)
-                  .unwrap_or(false)
-          });
+            let notification = value.get("params").unwrap_or(&value);
+            let matches = session_id.as_ref().map_or(true, |expected| {
+                notification
+                    .get("sessionId")
+                    .or_else(|| notification.get("session_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(|actual| actual == expected)
+                    .unwrap_or(false)
+            });
 
-          if matches {
-              drained.push(value);
-          } else {
-              retained.push_back(value);
-          }
+            if matches {
+                drained.push(notification.clone());
+            } else {
+                retained.push_back(value);
+            }
         }
 
         process.session_updates = retained;
@@ -327,11 +343,7 @@ impl AcpAgentManager {
             .ok_or_else(|| format!("No process registered for agent {agent_id}"))?;
 
         reconcile_child_state(process);
-        push_log(
-            &mut process.logs,
-            "system",
-            &summarize_acp_in_line(&line),
-        );
+        push_log(&mut process.logs, "system", &summarize_acp_in_line(&line));
 
         let stdin = process
             .stdin
@@ -362,6 +374,50 @@ fn build_launch_command(app: &AppHandle, command_line: &str) -> Result<Command, 
     let mut command = Command::new(resolve_agent_program_path(app, program));
     command.args(args);
     Ok(command)
+}
+
+fn apply_querymt_desktop_environment(
+    app: &AppHandle,
+    command_line: &str,
+    command: &mut Command,
+) -> Result<(), String> {
+    if !command_line.contains("qmtcode") {
+        return Ok(());
+    }
+
+    let (app_data_dir, profiles_dir, templates_dir) = querymt_desktop_paths(app)?;
+    fs::create_dir_all(&profiles_dir).map_err(|error| {
+        format!(
+            "Failed to create profiles directory {}: {error}",
+            profiles_dir.display()
+        )
+    })?;
+    fs::create_dir_all(&templates_dir).map_err(|error| {
+        format!(
+            "Failed to create profile templates directory {}: {error}",
+            templates_dir.display()
+        )
+    })?;
+
+    command.env("QUERYMT_DESKTOP_HOME", &app_data_dir);
+    command.env("QUERYMT_DESKTOP_PROFILES_DIR", &profiles_dir);
+    command.env("QUERYMT_DESKTOP_PROFILE_TEMPLATES_DIR", &templates_dir);
+    if !command_line.contains("--profiles-dir") {
+        command.arg("--profiles-dir");
+        command.arg(&profiles_dir);
+    }
+    Ok(())
+}
+
+fn querymt_desktop_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    let profiles_root = app_data_dir.join("profiles");
+    let profiles_dir = profiles_root.join("user");
+    let templates_dir = profiles_root.join("templates");
+    Ok((app_data_dir, profiles_dir, templates_dir))
 }
 
 fn run_version_command(app: &AppHandle, program: Option<&str>) -> Option<String> {
@@ -403,7 +459,11 @@ fn resolve_agent_program_path(app: &AppHandle, program: &str) -> PathBuf {
 
 fn qmtcode_sidecar_filename(program: &str) -> Option<String> {
     match program {
-        "qmtcode" | "qmtcode.exe" => Some(format!("qmtcode-{}{}", current_target_triple(), executable_suffix())),
+        "qmtcode" | "qmtcode.exe" => Some(format!(
+            "qmtcode-{}{}",
+            current_target_triple(),
+            executable_suffix()
+        )),
         _ => None,
     }
 }
@@ -483,6 +543,7 @@ fn reconcile_child_state(process: &mut ManagedAgentProcess) {
                 .code()
                 .map(|code| code.to_string())
                 .unwrap_or_else(|| "terminated by signal".to_string());
+            let expected_stop = matches!(process.state.state, AgentState::Stopping | AgentState::Stopped);
             push_log(
                 &mut process.logs,
                 "system",
@@ -491,9 +552,16 @@ fn reconcile_child_state(process: &mut ManagedAgentProcess) {
             process.child = None;
             process.stdin = None;
             process.session_updates.clear();
-            process.state.state = AgentState::Stopped;
             process.state.pid = None;
-            process.state.message = "ACP stdio agent is not running.".to_string();
+            if expected_stop {
+                process.state.state = AgentState::Stopped;
+                process.state.message = "ACP stdio agent is not running.".to_string();
+                process.state.last_error = None;
+            } else {
+                process.state.state = AgentState::Failed;
+                process.state.last_error = Some(format!("Agent process exited with status {exit}."));
+                process.state.message = "ACP stdio agent exited unexpectedly.".to_string();
+            }
         }
         Ok(None) => {}
         Err(error) => {
@@ -530,17 +598,13 @@ fn spawn_stdout_reader(
                 );
 
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-                    if value
-                        .get("method")
-                        .and_then(serde_json::Value::as_str)
+                    if value.get("method").and_then(serde_json::Value::as_str)
                         == Some("session/update")
                     {
-                        if let Some(params) = value.get("params") {
-                            if process.session_updates.len() >= MAX_SESSION_UPDATES {
-                                process.session_updates.pop_front();
-                            }
-                            process.session_updates.push_back(params.clone());
+                        if process.session_updates.len() >= MAX_SESSION_UPDATES {
+                            process.session_updates.pop_front();
                         }
+                        process.session_updates.push_back(value);
                     }
                 }
 
@@ -632,7 +696,10 @@ fn summarize_acp_in_line(line: &str) -> String {
         return format!("ACP-IN raw={}", truncate_for_log(line));
     };
 
-    let id = message.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let id = message
+        .get("id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let method = message
         .get("method")
         .and_then(serde_json::Value::as_str)

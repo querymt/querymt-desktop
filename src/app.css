@@ -231,6 +231,25 @@ button {
   border-color: var(--border-strong);
 }
 
+.composer-mode-frame {
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.composer-mode-frame-default {
+  border-color: rgba(255, 122, 26, 0.2);
+}
+
+.composer-mode-frame-default,
+.composer-mode-frame-default:hover {
+  border-color: rgba(255, 122, 26, 0.2);
+}
+
+.composer-mode-frame-success,
+.composer-mode-frame-success:hover {
+  border-color: rgba(74, 222, 128, 0.32);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(74, 222, 128, 0.08);
+}
+
 .list-row {
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
 }
