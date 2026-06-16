@@ -173,7 +173,7 @@
 
 <div class="inline-flex">
   <button
-    class="badge max-w-[22rem] justify-between gap-2 bg-black/35 pr-2 text-left"
+    class="badge max-w-[22rem] justify-between gap-2 pr-2 text-left"
     disabled={disabled}
     type="button"
     onclick={openPicker}
@@ -227,7 +227,7 @@
           <section class="space-y-2">
             <div class="px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--muted)]">{group.label}</div>
             {#if group.items.length === 0 && group.label === 'Recent'}
-              <div class="rounded-2xl border border-white/8 bg-black/10 px-3 py-3 text-xs text-[var(--muted)]">
+              <div class="surface-muted px-3 py-3 text-xs text-[var(--muted)]">
                 No recent models yet.
               </div>
             {:else if group.items.length > 0}
@@ -288,13 +288,13 @@
         {/each}
 
         {#if flatResults.length === 0 && modelOptions.length > 0}
-          <div class="rounded-2xl border border-white/8 bg-black/10 px-3 py-3 text-xs text-[var(--muted)]">
+          <div class="surface-muted px-3 py-3 text-xs text-[var(--muted)]">
             No models match "{query}".
           </div>
         {/if}
 
         {#if modelOptions.length === 0}
-          <div class="rounded-2xl border border-white/8 bg-black/10 px-3 py-3 text-xs text-[var(--muted)]">
+          <div class="surface-muted px-3 py-3 text-xs text-[var(--muted)]">
             {#if loading}
               Loading models...
             {:else}

@@ -5,8 +5,8 @@
 </script>
 
 <div class="panel-strong overflow-hidden">
-  <div class="border-b border-white/8 px-4 py-3 text-sm font-medium">Sessions</div>
-  <div class="divide-y divide-white/8">
+  <div class="border-b border-[var(--border)] px-4 py-3 text-sm font-medium">Sessions</div>
+  <div class="divide-y divide-[var(--border)]">
     {#each sessions as session}
       <div class="px-4 py-3">
         <div class="flex items-start justify-between gap-3">

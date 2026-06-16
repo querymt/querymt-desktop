@@ -1,8 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { RefreshCw } from '@lucide/svelte';
+  import { KeyRound, LogIn, LogOut, RefreshCw, Trash2 } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
+  import AppCheckbox from '$lib/components/primitives/AppCheckbox.svelte';
+  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { appearanceStore, type AppearanceThemeMode } from '$lib/stores/appearance.svelte';
+  import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
   import { AuthMethod, OAuthFlowKindTs, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
   import { enableProfileTemplate, listProfileTemplates, type ProfileTemplateInfo } from '$lib/querymt/profile-templates';
 
@@ -52,6 +58,17 @@
     selectedAgentId ? agentsStore.pluginUpdateStatusByAgent[selectedAgentId] ?? null : null
   );
   const lastPluginUpdate = $derived.by(() => (selectedAgentId ? agentsStore.lastPluginUpdateByAgent[selectedAgentId] ?? null : null));
+
+  onMount(() => {
+    appearanceStore.initialize();
+    void windowDecorationsStore.initialize();
+  });
+
+  const themeOptions: Array<{ value: AppearanceThemeMode; label: string }> = [
+    { value: 'system', label: 'System' },
+    { value: 'light', label: 'Light' },
+    { value: 'dark', label: 'Dark' }
+  ];
 
   const authMethodOptions: Array<{ value: AuthMethod | 'auto'; label: string }> = [
     { value: 'auto', label: 'Auto' },
@@ -336,6 +353,20 @@
     clearKeyProviderPending = provider;
   }
 
+  function handleThemeChange(value: string) {
+    if (value === 'system' || value === 'light' || value === 'dark') {
+      appearanceStore.setThemeMode(value);
+    }
+  }
+
+  async function handleWindowDecorationChange(enabled: boolean) {
+    try {
+      await windowDecorationsStore.toggleCustomTitlebar(enabled);
+    } catch (error) {
+      pageError = error instanceof Error ? error.message : 'Failed to update window decorations.';
+    }
+  }
+
   async function handleAuthMethodChange(provider: AuthProviderEntry, value: string) {
     if (!selectedAgentId || value === 'auto') return;
     setBusy(`method:${provider.provider}`);
@@ -378,6 +409,40 @@
   </div>
 
   <section class="panel p-4 space-y-4">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <h2 class="text-sm font-semibold">Appearance</h2>
+        <p class="muted mt-1 max-w-2xl text-sm">
+          Match the QueryMT website style while choosing whether Desktop owns the titlebar or leaves it to the operating system.
+        </p>
+      </div>
+      <div class="compact-toolbar">
+        <label class="inline-flex items-center gap-2 text-sm">
+          <span class="text-[var(--muted)]">Theme</span>
+          <AppSelect value={appearanceStore.themeMode} options={themeOptions} pill ariaLabel="Theme" onValueChange={handleThemeChange} />
+        </label>
+        <AppCheckbox
+          checked={windowDecorationsStore.mode === 'custom'}
+          disabled={!windowDecorationsStore.supported}
+          label="Custom titlebar"
+          pill
+          onCheckedChange={(checked) => void handleWindowDecorationChange(checked)}
+        />
+      </div>
+    </div>
+    <div class="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
+      <span class="badge">Theme: {appearanceStore.themeMode === 'system' ? `system (${appearanceStore.resolvedTheme})` : appearanceStore.themeMode}</span>
+      <span class="badge">Window: {windowDecorationsStore.mode === 'custom' ? 'custom QueryMT titlebar' : 'OS titlebar'}</span>
+      {#if !windowDecorationsStore.supported}
+        <span class="badge">Available in Tauri desktop builds</span>
+      {/if}
+      {#if windowDecorationsStore.error}
+        <span class="badge text-[var(--danger)]">{windowDecorationsStore.error}</span>
+      {/if}
+    </div>
+  </section>
+
+  <section class="panel p-4 space-y-4">
     <div class="flex items-start justify-between gap-3">
       <div>
         <h2 class="text-sm font-semibold">Curated profiles</h2>
@@ -391,7 +456,7 @@
     </div>
 
     {#if profileTemplateError}
-      <div class="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+      <div class="alert-error">
         {profileTemplateError}
       </div>
     {/if}
@@ -436,11 +501,7 @@
       <div class="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)] lg:items-end">
         <label class="space-y-2">
           <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Agent</span>
-          <select class="input-shell" bind:value={selectedAgentId}>
-            {#each authAgents as agent}
-              <option value={agent.id}>{agent.name}</option>
-            {/each}
-          </select>
+          <AppSelect bind:value={selectedAgentId} options={authAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" />
         </label>
 
         <div class="flex flex-wrap gap-2 text-xs">
@@ -454,32 +515,32 @@
       </div>
 
       {#if authError || pageError}
-        <div class="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+        <div class="alert-error">
           {pageError ?? authError}
         </div>
       {/if}
 
       {#if pageMessage}
-        <div class="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+        <div class="alert-success">
           {pageMessage}
         </div>
       {/if}
 
       {#if pluginUpdateStatus}
-        <div class="rounded-2xl border border-sky-500/25 bg-sky-500/10 px-4 py-3 text-sm text-sky-100 space-y-1">
+        <div class="surface-muted border-[var(--rail)] bg-[var(--accent-dim)] px-4 py-3 text-sm text-[var(--text)] space-y-1">
           <div class="font-medium">Plugin update in progress</div>
           <div>{pluginUpdateStatus.plugin_name} - {pluginUpdateStatus.phase}</div>
           {#if pluginUpdateStatus.percent != null}
             <div>{pluginUpdateStatus.percent.toFixed(0)}% complete</div>
           {/if}
           {#if pluginUpdateStatus.message}
-            <div class="text-sky-200/80">{pluginUpdateStatus.message}</div>
+            <div class="text-[var(--muted)]">{pluginUpdateStatus.message}</div>
           {/if}
         </div>
       {/if}
 
       {#if lastPluginUpdate && lastPluginUpdate.length > 0}
-        <div class="rounded-2xl border border-white/8 bg-black/10 px-4 py-3 text-sm text-[var(--muted)] space-y-2">
+        <div class="surface-muted px-4 py-3 text-sm text-[var(--muted)] space-y-2">
           <div class="font-medium text-[var(--text)]">Last plugin update</div>
           <div class="space-y-1">
             {#each lastPluginUpdate as result}
@@ -497,77 +558,66 @@
           No auth-enabled providers reported by this agent.
         </div>
       {:else}
-        <div class="grid gap-3 xl:grid-cols-2">
-          {#each providers as provider}
-            <article class="surface-muted p-4 space-y-4">
-              <div class="flex items-start justify-between gap-3">
-                <div>
-                  <div class="text-sm font-medium">{provider.display_name}</div>
-                  <div class="mt-1 text-xs text-[var(--muted)]">{provider.provider}</div>
-                </div>
-                <div class="text-right text-xs text-[var(--muted)]">
-                  <div>{authStatusLabel(provider)}</div>
-                  <div class="mt-1">{authDetail(provider)}</div>
-                </div>
+        <Tooltip.Provider>
+          <div class="settings-provider-list">
+            {#each providers as provider}
+            <article class="settings-provider-row">
+              <div class="settings-provider-main">
+                <div class="settings-provider-title">{provider.display_name}</div>
+                <div class="settings-provider-id">{provider.provider}</div>
               </div>
 
-              <div class="flex flex-wrap gap-2 text-xs">
-                {#if provider.supports_oauth}<span class="badge">oauth</span>{/if}
-                {#if provider.has_stored_api_key}<span class="badge">stored key</span>{/if}
-                {#if provider.has_env_api_key}<span class="badge">env key</span>{/if}
-                {#if provider.env_var_name}<span class="badge">{provider.env_var_name}</span>{/if}
-                {#if provider.preferred_method}<span class="badge">preferred {provider.preferred_method}</span>{/if}
+              <div class="settings-provider-state">
+                <div class="settings-provider-status">{authStatusLabel(provider)}</div>
+                <div class="settings-provider-detail">{authDetail(provider)}</div>
+                <div class="settings-provider-badges">
+                  {#if provider.supports_oauth}<span class="badge">oauth</span>{/if}
+                  {#if provider.has_stored_api_key}<span class="badge">stored key</span>{/if}
+                  {#if provider.has_env_api_key}<span class="badge">env key</span>{/if}
+                  {#if provider.env_var_name}<span class="badge">{provider.env_var_name}</span>{/if}
+                  {#if provider.preferred_method}<span class="badge">preferred {provider.preferred_method}</span>{/if}
+                </div>
+                {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}
+                  <div class="settings-provider-hint">Use Sign in to open the browser, or complete OAuth manually if redirect capture is unavailable.</div>
+                {/if}
               </div>
 
-              <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-                <label class="space-y-2">
-                  <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Preferred auth</span>
-                  <select
-                    class="input-shell"
-                    value={provider.preferred_method ?? 'auto'}
-                    disabled={actionLoading === `method:${provider.provider}`}
-                    onchange={(event) => handleAuthMethodChange(provider, (event.currentTarget as HTMLSelectElement).value)}
-                  >
-                    {#each authMethodOptions as option}
-                      <option value={option.value}>{option.label}</option>
-                    {/each}
-                  </select>
-                </label>
+              <div class="settings-provider-method">
+                <AppSelect
+                  value={provider.preferred_method ?? 'auto'}
+                  options={authMethodOptions}
+                  disabled={actionLoading === `method:${provider.provider}`}
+                  pill
+                  ariaLabel="Preferred auth"
+                  onValueChange={(value) => void handleAuthMethodChange(provider, value)}
+                />
+              </div>
 
-                <div class="compact-toolbar">
-                  {#if provider.supports_oauth}
-                    <button class="action-btn" type="button" disabled={!!actionLoading} onclick={() => handleOAuth(provider)}>
-                      Sign in
-                    </button>
+              <div class="settings-provider-actions">
+                  {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}
+                    <IconTooltipButton label="Sign in" icon={LogIn} disabled={!!actionLoading} onclick={() => handleOAuth(provider)} />
                   {/if}
-                  {#if provider.oauth_status === OAuthStatus.Connected}
-                    <button class="action-btn" type="button" disabled={!!actionLoading} onclick={() => handleDisconnect(provider)}>
-                      Disconnect
-                    </button>
+                  {#if provider.supports_oauth && provider.oauth_status === OAuthStatus.Connected}
+                    <IconTooltipButton label="Disconnect OAuth" icon={LogOut} disabled={!!actionLoading} onclick={() => handleDisconnect(provider)} />
                   {/if}
-                  <button class="action-btn" type="button" disabled={!!actionLoading} onclick={() => handleSetApiToken(provider)}>
-                    Set API key
-                  </button>
-                  <button class="action-btn" type="button" disabled={!!actionLoading || !provider.has_stored_api_key} onclick={() => handleClearApiToken(provider)}>
-                    Clear key
-                  </button>
-                </div>
+                  {#if (provider.preferred_method ?? 'auto') === AuthMethod.ApiKey}
+                    <IconTooltipButton label="Set API key" icon={KeyRound} disabled={!!actionLoading} onclick={() => handleSetApiToken(provider)} />
+                  {/if}
+                  {#if provider.has_stored_api_key}
+                    <IconTooltipButton label="Clear stored API key" icon={Trash2} tone="danger" disabled={!!actionLoading} onclick={() => handleClearApiToken(provider)} />
+                  {/if}
               </div>
-
-              {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}
-                <div class="rounded-2xl border border-white/8 bg-black/10 px-4 py-3 text-xs text-[var(--muted)]">
-                  OAuth is available for this provider. Start sign-in to open the browser, then complete it automatically or paste the callback URL/code in the dialog.
-                </div>
-              {/if}
             </article>
-          {/each}
-        </div>
+            {/each}
+          </div>
+          <p class="settings-provider-footnote">OAuth sign-in opens your browser. API keys are stored in the desktop keyring.</p>
+        </Tooltip.Provider>
       {/if}
     </section>
   {/if}
 
   {#if tokenDialogProvider}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
       <div class="panel w-full max-w-lg p-5 space-y-4">
         <div>
           <div class="text-lg font-semibold">Set API key</div>
@@ -588,7 +638,7 @@
   {/if}
 
   {#if manualOAuthProvider}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
       <div class="panel w-full max-w-xl p-5 space-y-4">
         <div>
           <div class="text-lg font-semibold">Complete OAuth sign-in</div>
@@ -609,7 +659,7 @@
   {/if}
 
   {#if disconnectProviderPending}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
       <div class="panel w-full max-w-md p-5 space-y-4">
         <div>
           <div class="text-lg font-semibold">Disconnect provider</div>
@@ -624,7 +674,7 @@
   {/if}
 
   {#if clearKeyProviderPending}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
       <div class="panel w-full max-w-md p-5 space-y-4">
         <div>
           <div class="text-lg font-semibold">Clear stored API key</div>

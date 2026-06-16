@@ -11,7 +11,7 @@
       <div class="muted text-sm">No technical events recorded yet.</div>
     {:else}
       {#each session.events as event}
-        <div class="rounded-2xl border border-white/8 bg-black/10 px-3 py-2">
+        <div class="surface-muted px-3 py-2">
           <div class="muted mb-1 text-[11px] uppercase tracking-[0.16em]">{event.kind}</div>
           <div class="whitespace-pre-wrap text-sm">{event.text}</div>
         </div>

@@ -14,7 +14,7 @@
 
       <div class="space-y-3">
         {#each group.items as item}
-          <div class="rounded-2xl border border-white/8 bg-white/3 p-3">
+          <div class="surface-muted p-3">
             <div class="flex items-center justify-between gap-3 text-sm">
               <span>{item.label}</span>
               <span>{item.value}</span>

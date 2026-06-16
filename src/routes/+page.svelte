@@ -51,11 +51,12 @@
 </script>
 
 <div class="flex min-h-[calc(100vh-7rem)] w-full items-center justify-center px-4">
-  <section class="mx-auto w-full max-w-4xl space-y-5">
-    <div class="space-y-2 text-center">
-      <h1 class="text-3xl font-semibold tracking-tight md:text-4xl">What should QueryMT do?</h1>
+  <section class="mx-auto w-full max-w-4xl space-y-6">
+    <div class="space-y-3 text-center">
+      <div class="section-eyebrow">Desktop control center</div>
+      <h1 class="text-3xl font-extrabold tracking-[-0.03em] text-[var(--text)] md:text-5xl">What should QueryMT do?</h1>
       <p class="mx-auto max-w-2xl text-sm text-[var(--muted)] md:text-base">
-        Start with a prompt. Everything else can wait.
+        Start with a workspace and prompt. QueryMT handles the session, tools, and context from there.
       </p>
     </div>
 

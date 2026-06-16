@@ -21,7 +21,7 @@ const agentsStore = vi.hoisted(() => ({
         has_stored_api_key: false,
         has_env_api_key: false,
         supports_oauth: true,
-        preferred_method: 'oauth'
+        preferred_method: 'api_key'
       }
     ]
   },
@@ -50,10 +50,32 @@ const agentsStore = vi.hoisted(() => ({
   disconnectProvider: vi.fn(async () => ({ success: true })),
   setProviderApiToken: vi.fn(async () => ({ success: true })),
   clearProviderApiToken: vi.fn(async () => ({ success: true })),
-  setProviderAuthMethod: vi.fn(async () => ({ success: true }))
+  setProviderAuthMethod: vi.fn(async () => ({ success: true })),
+  refreshManagedProfiles: vi.fn(async () => {})
 }));
 
 vi.mock('$lib/stores/agents.svelte', () => ({ agentsStore }));
+
+vi.mock('$lib/stores/appearance.svelte', () => ({
+  appearanceStore: {
+    themeMode: 'system',
+    resolvedTheme: 'light',
+    initialized: true,
+    initialize: vi.fn(),
+    setThemeMode: vi.fn()
+  }
+}));
+
+vi.mock('$lib/stores/window-decorations.svelte', () => ({
+  windowDecorationsStore: {
+    mode: 'os',
+    supported: true,
+    initialized: true,
+    error: null,
+    initialize: vi.fn(async () => {}),
+    toggleCustomTitlebar: vi.fn(async () => {})
+  }
+}));
 
 Object.defineProperty(window, 'open', {
   value: vi.fn(),

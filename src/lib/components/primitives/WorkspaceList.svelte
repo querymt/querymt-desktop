@@ -17,7 +17,7 @@
 </script>
 
 <div class="panel-strong overflow-hidden">
-  <div class="flex items-center justify-between gap-4 border-b border-white/8 px-4 py-3">
+  <div class="flex items-center justify-between gap-4 border-b border-[var(--border)] px-4 py-3">
     <div>
       <div class="text-sm font-medium">Workspaces</div>
       <div class="muted mt-1 text-xs">Desktop folders and quick context shortcuts.</div>
@@ -30,10 +30,10 @@
   </div>
 
   {#if error}
-    <div class="border-b border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{error}</div>
+    <div class="alert-error rounded-none border-x-0 border-t-0">{error}</div>
   {/if}
 
-  <div class="divide-y divide-white/8">
+  <div class="divide-y divide-[var(--border)]">
     {#if items.length === 0}
       <div class="muted px-4 py-5 text-sm">No workspaces added yet. Pick a folder to create the first desktop workspace context.</div>
     {/if}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Link, Plus, RefreshCw, Ticket, Trash2, XCircle } from '@lucide/svelte';
+  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
 
@@ -205,11 +206,7 @@
       <div class="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)] lg:items-end">
         <label class="space-y-2">
           <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Agent</span>
-          <select class="input-shell" bind:value={selectedAgentId}>
-            {#each meshAgents as agent}
-              <option value={agent.id}>{agent.name}</option>
-            {/each}
-          </select>
+          <AppSelect bind:value={selectedAgentId} options={meshAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" />
         </label>
 
         <div class="flex flex-wrap gap-2 text-xs">
@@ -223,7 +220,7 @@
       </div>
 
       {#if actionError}
-        <div class="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+        <div class="alert-error">
           {actionError}
         </div>
       {/if}
@@ -265,7 +262,7 @@
           </div>
 
           {#if lastInvite}
-            <div class="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+            <div class="alert-success">
               Created invite {lastInvite.invite_id}: {lastInvite.url}
             </div>
           {/if}
@@ -338,14 +335,14 @@
                 </div>
 
                 {#if remoteSessionsFor(node.id).length > 0}
-                  <details class="details-reset rounded-2xl border border-white/8 bg-black/10 px-4 py-3" open>
+                  <details class="details-reset surface-muted px-4 py-3" open>
                     <summary class="flex items-center justify-between gap-3 text-sm font-medium">
                       <span>Remote sessions</span>
                       <span class="panel-copy">{remoteSessionsFor(node.id).length}</span>
                     </summary>
                     <div class="mt-3 space-y-2">
                       {#each remoteSessionsFor(node.id) as session}
-                        <div class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/8 bg-black/10 px-3 py-3 text-sm">
+                        <div class="surface-muted flex flex-wrap items-center justify-between gap-3 px-3 py-3 text-sm">
                           <div>
                             <div class="font-medium">{session.title ?? session.id}</div>
                             <div class="mt-1 text-xs text-[var(--muted)]">{session.cwd ?? 'No cwd'} • {session.updated_at ?? 'No activity yet'}</div>

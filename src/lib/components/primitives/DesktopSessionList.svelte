@@ -40,7 +40,7 @@
 </script>
 
 <div class="panel-strong overflow-hidden">
-  <div class="flex items-center justify-between gap-4 border-b border-white/8 px-4 py-3">
+  <div class="flex items-center justify-between gap-4 border-b border-[var(--border)] px-4 py-3">
     <div>
       <div class="text-sm font-medium">Session index</div>
       <div class="panel-copy mt-1">Grouped by agent and workspace, with the detail view moved into its own route.</div>
@@ -53,10 +53,10 @@
   </div>
 
   {#if error}
-    <div class="border-b border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{error}</div>
+    <div class="alert-error rounded-none border-x-0 border-t-0">{error}</div>
   {/if}
 
-  <div class="divide-y divide-white/8">
+  <div class="divide-y divide-[var(--border)]">
     {#if loading}
       <div class="muted px-4 py-4 text-sm">Loading sessions…</div>
     {:else if sessions.length === 0}
