@@ -14,7 +14,7 @@ serde_json = "1"
 shlex = "2"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
-toml = "0.8"
+toml = "0.9"
 
 [lib]
 name = "querymt_desktop_lib"
