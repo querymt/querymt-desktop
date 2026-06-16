@@ -17,6 +17,7 @@
   const { children } = $props<{ children?: Snippet }>();
 
   let windowMaximized = $state(false);
+  let isMacPlatform = $state(false);
 
   const routeToSection: Record<string, SectionName> = {
     '/': 'Today',
@@ -43,6 +44,8 @@
     appearanceStore.initialize();
     void agentsStore.initialize();
     void windowDecorationsStore.initialize();
+
+    isMacPlatform = navigator.platform.toLowerCase().includes('mac');
 
     let unlistenResize: (() => void) | undefined;
     let unlistenFocus: (() => void) | undefined;
@@ -121,21 +124,36 @@
     tabindex="-1"
     aria-label="Window controls"
   >
-    <div class="custom-titlebar-brand" data-tauri-drag-region>
+    {#if isMacPlatform}
+      <div class="custom-titlebar-controls custom-titlebar-controls-mac">
+        <button class="custom-titlebar-close" type="button" aria-label="Close window" onclick={(event) => { event.stopPropagation(); void closeWindow(); }}>
+          <X size={10} strokeWidth={3} />
+        </button>
+        <button class="custom-titlebar-minimize" type="button" aria-label="Minimize window" onclick={(event) => { event.stopPropagation(); void minimizeWindow(); }}>
+          <Minimize size={10} strokeWidth={3} />
+        </button>
+        <button class="custom-titlebar-maximize" type="button" aria-label="Maximize window" onclick={(event) => { event.stopPropagation(); void toggleMaximizeWindow(); }}>
+          <Maximize size={9} strokeWidth={3} />
+        </button>
+      </div>
+    {/if}
+    <div class={`custom-titlebar-brand ${isMacPlatform ? 'custom-titlebar-brand-mac' : ''}`} data-tauri-drag-region>
       <span class="custom-titlebar-dot" aria-hidden="true"></span>
       <span data-tauri-drag-region>QueryMT</span>
     </div>
-    <div class="custom-titlebar-controls">
-      <button type="button" aria-label="Minimize window" onclick={(event) => { event.stopPropagation(); void minimizeWindow(); }}>
-        <Minimize size={14} strokeWidth={2} />
-      </button>
-      <button type="button" aria-label="Maximize window" onclick={(event) => { event.stopPropagation(); void toggleMaximizeWindow(); }}>
-        <Maximize size={14} strokeWidth={2} />
-      </button>
-      <button class="custom-titlebar-close" type="button" aria-label="Close window" onclick={(event) => { event.stopPropagation(); void closeWindow(); }}>
-        <X size={15} strokeWidth={2} />
-      </button>
-    </div>
+    {#if !isMacPlatform}
+      <div class="custom-titlebar-controls">
+        <button type="button" aria-label="Minimize window" onclick={(event) => { event.stopPropagation(); void minimizeWindow(); }}>
+          <Minimize size={14} strokeWidth={2} />
+        </button>
+        <button type="button" aria-label="Maximize window" onclick={(event) => { event.stopPropagation(); void toggleMaximizeWindow(); }}>
+          <Maximize size={14} strokeWidth={2} />
+        </button>
+        <button class="custom-titlebar-close" type="button" aria-label="Close window" onclick={(event) => { event.stopPropagation(); void closeWindow(); }}>
+          <X size={15} strokeWidth={2} />
+        </button>
+      </div>
+    {/if}
   </div>
 {/if}
 

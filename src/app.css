@@ -299,6 +299,16 @@ html:has(.app-shell-custom-titlebar) body {
   align-self: stretch;
 }
 
+.custom-titlebar-controls-mac {
+  align-items: center;
+  gap: 0.5rem;
+  padding-inline: 0.75rem 0.4rem;
+}
+
+.custom-titlebar-brand-mac {
+  padding-left: 0.35rem;
+}
+
 .custom-titlebar-controls button {
   display: inline-flex;
   width: 2.9rem;
@@ -312,6 +322,30 @@ html:has(.app-shell-custom-titlebar) body {
   transition: background 0.15s ease, color 0.15s ease;
 }
 
+.custom-titlebar-controls-mac button {
+  width: 0.78rem;
+  height: 0.78rem;
+  border-radius: 999px;
+  color: rgba(80, 54, 38, 0);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.16);
+}
+
+.custom-titlebar-controls-mac button:hover {
+  color: rgba(80, 54, 38, 0.86);
+}
+
+.custom-titlebar-controls-mac .custom-titlebar-close {
+  background: #ff5f57;
+}
+
+.custom-titlebar-controls-mac .custom-titlebar-minimize {
+  background: #ffbd2e;
+}
+
+.custom-titlebar-controls-mac .custom-titlebar-maximize {
+  background: #28c840;
+}
+
 .custom-titlebar-controls button:hover {
   background: var(--accent-dim);
   color: var(--text);
@@ -320,6 +354,19 @@ html:has(.app-shell-custom-titlebar) body {
 .custom-titlebar-controls .custom-titlebar-close:hover {
   background: #e81123;
   color: #fff;
+}
+
+.custom-titlebar-controls-mac .custom-titlebar-close:hover {
+  background: #ff5f57;
+  color: rgba(80, 54, 38, 0.86);
+}
+
+.custom-titlebar-controls-mac .custom-titlebar-minimize:hover {
+  background: #ffbd2e;
+}
+
+.custom-titlebar-controls-mac .custom-titlebar-maximize:hover {
+  background: #28c840;
 }
 
 .panel {
