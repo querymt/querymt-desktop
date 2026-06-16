@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { RefreshCw } from '@lucide/svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { AuthMethod, OAuthFlowKindTs, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
+  import { enableProfileTemplate, listProfileTemplates, type ProfileTemplateInfo } from '$lib/querymt/profile-templates';
 
   let selectedAgentId = $state('');
   let actionLoading = $state<string | null>(null);
@@ -15,6 +17,9 @@
   let manualOAuthValue = $state('');
   let disconnectProviderPending = $state<AuthProviderEntry | null>(null);
   let clearKeyProviderPending = $state<AuthProviderEntry | null>(null);
+  let profileTemplates = $state<ProfileTemplateInfo[]>([]);
+  let profileTemplatesLoading = $state(false);
+  let profileTemplateError = $state<string | null>(null);
 
   const selectedAgent = $derived.by(() =>
     selectedAgentId ? agentsStore.configs.find((config) => config.id === selectedAgentId) ?? null : null
@@ -54,6 +59,38 @@
     { value: AuthMethod.ApiKey, label: 'API key' },
     { value: AuthMethod.EnvVar, label: 'Env var' }
   ];
+
+  onMount(() => {
+    void refreshProfileTemplates();
+  });
+
+  async function refreshProfileTemplates() {
+    profileTemplatesLoading = true;
+    profileTemplateError = null;
+    try {
+      profileTemplates = await listProfileTemplates();
+    } catch (error) {
+      profileTemplateError = error instanceof Error ? error.message : 'Failed to load profile templates.';
+    } finally {
+      profileTemplatesLoading = false;
+    }
+  }
+
+  async function enableTemplate(template: ProfileTemplateInfo) {
+    setBusy(`profile-template:${template.id}`);
+    pageError = null;
+    pageMessage = null;
+    try {
+      const updated = await enableProfileTemplate(template.id);
+      profileTemplates = profileTemplates.map((entry) => (entry.id === updated.id ? updated : entry));
+      await agentsStore.refreshManagedProfiles();
+      pageMessage = `Enabled ${updated.name}. The running agent will pick up profile changes automatically.`;
+    } catch (error) {
+      pageError = error instanceof Error ? error.message : `Failed to enable ${template.name}.`;
+    } finally {
+      setBusy(null);
+    }
+  }
 
   function authStatusLabel(provider: AuthProviderEntry) {
     if (provider.oauth_status === OAuthStatus.Connected) return 'OAuth connected';
@@ -339,6 +376,56 @@
       </button>
     </div>
   </div>
+
+  <section class="panel p-4 space-y-4">
+    <div class="flex items-start justify-between gap-3">
+      <div>
+        <h2 class="text-sm font-semibold">Curated profiles</h2>
+        <p class="mt-1 text-sm text-[var(--muted)]">
+          Enable bundled TOML profile templates into Desktop app-data. Existing user copies are never overwritten.
+        </p>
+      </div>
+      <button class="icon-btn" type="button" aria-label="Refresh profile templates" disabled={profileTemplatesLoading} onclick={() => refreshProfileTemplates()}>
+        <RefreshCw size={16} />
+      </button>
+    </div>
+
+    {#if profileTemplateError}
+      <div class="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+        {profileTemplateError}
+      </div>
+    {/if}
+
+    {#if profileTemplates.length === 0 && !profileTemplatesLoading}
+      <div class="surface-muted p-4 text-sm text-[var(--muted)]">No bundled profile templates found.</div>
+    {:else}
+      <div class="grid gap-3 xl:grid-cols-3">
+        {#each profileTemplates as template}
+          <article class="surface-muted p-4 space-y-3">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-sm font-medium">{template.name}</div>
+                <div class="mt-1 text-xs text-[var(--muted)]">{template.id}</div>
+              </div>
+              <span class="badge">{template.enabled ? 'enabled' : 'template'}</span>
+            </div>
+            <p class="text-sm text-[var(--muted)]">{template.description}</p>
+            <div class="flex flex-wrap gap-2 text-xs">
+              {#each template.tags as tag}
+                <span class="badge">{tag}</span>
+              {/each}
+            </div>
+            {#if template.userPath}
+              <div class="truncate text-xs text-[var(--muted)]">{template.userPath}</div>
+            {/if}
+            <button class="action-btn" type="button" disabled={template.enabled || actionLoading === `profile-template:${template.id}`} onclick={() => enableTemplate(template)}>
+              {template.enabled ? 'Enabled' : 'Enable profile'}
+            </button>
+          </article>
+        {/each}
+      </div>
+    {/if}
+  </section>
 
   {#if authAgents.length === 0}
     <section class="panel p-6 text-sm text-[var(--muted)]">

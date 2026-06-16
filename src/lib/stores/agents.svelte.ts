@@ -41,8 +41,14 @@ import type {
   ScheduleInfo,
   ScheduleListInfo
 } from '$lib/querymt/generated/types';
-import { getCurrentModelId, setModelConfigOptionRequest } from '$lib/querymt/config-options';
+import {
+  getCurrentModelId,
+  getCurrentProfileId,
+  getProfileChoices,
+  setModelConfigOptionRequest
+} from '$lib/querymt/config-options';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
+import { listManagedProfiles } from '$lib/querymt/profile-templates';
 import { getAgentLogs, getAgentStatus, restartAgent, startAgent, stopAgent, validateWorkspaceDirectory } from '$lib/querymt/sidecar';
 import { inboxStore } from '$lib/stores/inbox.svelte';
 
@@ -125,6 +131,7 @@ export class AgentsStore {
   composerProfileId = $state<string>('default');
   composerTargetId = $state<string>('local');
   promptAttachments = $state<PromptAttachment[]>([]);
+  managedProfileOptions = $state<ComposerOption[]>([]);
   promptFocusToken = $state(0);
   loading = $state(false);
   error = $state<string | null>(null);
@@ -157,6 +164,7 @@ export class AgentsStore {
           .filter((config) => config.enabled && config.autoStart)
           .map((config) => this.startConfiguredAgent(config.id))
       );
+      await this.refreshManagedProfiles();
       await this.refreshAllSessions();
       await this.preloadModelsForRunningAgents();
     } catch (error) {
@@ -199,8 +207,28 @@ export class AgentsStore {
     this.promptAttachments = [];
   }
 
+  async refreshManagedProfiles() {
+    const profiles = await listManagedProfiles();
+    this.managedProfileOptions = profiles.map((profile) => ({
+      id: profile.id,
+      label: profile.name,
+      description: profile.description ?? null
+    }));
+  }
+
   getProfileOptions(): ComposerOption[] {
-    return [{ id: 'default', label: 'Default profile', description: 'Use the agent default.' }];
+    const options = [
+      { id: 'default', label: 'Default profile', description: 'Use the agent default.' },
+      ...this.managedProfileOptions,
+      ...getProfileChoices(this.activeSession.configOptions)
+    ];
+
+    const seen = new Set<string>();
+    return options.filter((option) => {
+      if (seen.has(option.id)) return false;
+      seen.add(option.id);
+      return true;
+    });
   }
 
   getTargetOptions(agentId: string | null): ComposerOption[] {
@@ -567,7 +595,10 @@ export class AgentsStore {
     const record = this.ensureClientRecord(agentId);
     await this.connectAgent(agentId);
 
-    const response = await record.client.createSession(normalizedCwd);
+    const response = await record.client.createSession(
+      normalizedCwd,
+      this.composerProfileId === 'default' ? null : this.composerProfileId
+    );
     this.lastCreatedSession = response;
     this.rememberRecentWorkspace(normalizedCwd);
     await this.refreshSessionsForAgent(agentId);
@@ -591,6 +622,7 @@ export class AgentsStore {
       const sessionId = response.sessionId;
       this.resetActiveSession(agentId, sessionId);
       this.activeSession.configOptions = response.configOptions ?? [];
+      this.composerProfileId = getCurrentProfileId(this.activeSession.configOptions) ?? this.composerProfileId;
       await this.applySelectedModelToSession(agentId, sessionId, this.composerModelId || getDefaultModelId(this.modelsByAgent[agentId] ?? []));
       this.composerModelId = getCurrentModelId(this.activeSession.configOptions) ?? this.composerModelId;
       await this.drainQueuedSessionUpdates(agentId, sessionId);
@@ -670,6 +702,7 @@ export class AgentsStore {
       await tick();
       this.lastLoadedSession = await record.client.loadSession(target.sessionId, target.cwd);
       this.activeSession.configOptions = this.lastLoadedSession.configOptions ?? [];
+      this.composerProfileId = getCurrentProfileId(this.activeSession.configOptions) ?? this.composerProfileId;
       this.composerModelId = getCurrentModelId(this.activeSession.configOptions) ?? this.composerModelId;
       await this.drainQueuedSessionUpdates(agentId, sessionId);
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });
@@ -1170,6 +1203,7 @@ export class AgentsStore {
     await this.connectAgent(agentId);
     const configOptions = await record.client.setSessionConfigOption(setModelConfigOptionRequest(sessionId, model));
     this.activeSession.configOptions = configOptions;
+    this.composerProfileId = getCurrentProfileId(configOptions) ?? this.composerProfileId;
     this.composerModelId = getCurrentModelId(configOptions) ?? model.id;
     this.rememberRecentModel(agentId, model.id);
   }
@@ -1237,8 +1271,13 @@ export class AgentsStore {
       return;
     }
 
+    const contentText = update.content.text;
     const optimistic = this.activeSession.transcript.find(
-      (item) => item.kind === 'user_message_chunk' && item.id.includes('-optimistic-user-') && item.text === update.content.text
+      (item) =>
+        item.kind === 'user_message_chunk' &&
+        item.id.includes('-optimistic-user-') &&
+        'text' in item &&
+        item.text === contentText
     );
     if (!optimistic) {
       return;
@@ -1249,7 +1288,8 @@ export class AgentsStore {
   }
 
   private applySessionSummaryUpdate(agentId: string, notification: SessionNotification) {
-    if (notification.update.sessionUpdate !== 'session_info_update') {
+    const update = notification.update;
+    if (update.sessionUpdate !== 'session_info_update') {
       return;
     }
 
@@ -1261,8 +1301,8 @@ export class AgentsStore {
 
       return {
         ...session,
-        title: notification.update.title ?? 'Untitled session',
-        updatedAt: notification.update.updatedAt ?? null
+        title: update.title ?? 'Untitled session',
+        updatedAt: update.updatedAt ?? null
       };
     });
 
