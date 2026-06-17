@@ -696,6 +696,33 @@ export class AgentsStore {
     }
   }
 
+  async cancelActiveSession() {
+    if (!this.activeAgentId || !this.activeSessionId) {
+      this.error = 'No active session selected.';
+      return;
+    }
+
+    if (!PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) && this.activeSession.runState !== 'submitting') {
+      return;
+    }
+
+    const record = this.ensureClientRecord(this.activeAgentId);
+
+    try {
+      this.error = null;
+      this.activeSession.activityLabel = 'Cancelling turn…';
+      this.activeSession.lastError = null;
+      await this.connectAgent(this.activeAgentId);
+      await record.client.cancelSession(this.activeSessionId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to cancel ACP prompt.';
+      this.activeSession.runState = 'failed';
+      this.activeSession.lastError = message;
+      this.activeSession.activityLabel = message;
+      this.error = message;
+    }
+  }
+
   async loadSession(agentId: string, sessionId: string) {
     const summary = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
     if (!summary) {

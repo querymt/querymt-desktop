@@ -462,6 +462,14 @@ export class DesktopAcpClient {
     });
   }
 
+  async cancelSession(sessionId: string): Promise<void> {
+    if (!this.connection) {
+      await this.connect();
+    }
+
+    await this.connection!.cancel({ sessionId });
+  }
+
   onSessionUpdate(handler: Parameters<BrowserClient['onSessionUpdate']>[0]): () => void {
     this.browserClient.onSessionUpdate(handler);
     return () => this.browserClient.offSessionUpdate(handler);

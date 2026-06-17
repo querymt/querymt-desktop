@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { ChevronRight, FolderKanban, MessagesSquare, RefreshCw } from '@lucide/svelte';
-  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
-  import { formatSessionTimestamp, getSessionWorkspaceName } from '$lib/domain/sessions';
-  import type { DesktopSessionSummary } from '$lib/domain/types';
+  import { Accordion } from 'bits-ui';
+  import { ChevronDown, ChevronRight, Clock3, FolderKanban, RefreshCw, Search } from '@lucide/svelte';
+  import { formatSessionTimestamp, groupSessionsByWorkspace } from '$lib/domain/sessions';
+  import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
 
   let {
     sessions,
@@ -20,87 +20,129 @@
     onOpenSession?: ((session: DesktopSessionSummary) => void) | null;
   } = $props();
 
-  const groupedSessions = $derived.by(() => {
-    const groups = new Map<string, Map<string, DesktopSessionSummary[]>>();
+  let query = $state('');
+  let statusFilter = $state<'all' | SessionStatus>('all');
+  let openGroups = $state<string[]>([]);
+  let lastWorkspaceKeySignature = $state('');
 
-    for (const session of sessions) {
-      const agentKey = session.agentName;
-      const workspaceKey = getSessionWorkspaceName(session.cwd);
-      const workspaceGroups = groups.get(agentKey) ?? new Map<string, DesktopSessionSummary[]>();
-      const existing = workspaceGroups.get(workspaceKey) ?? [];
-      existing.push(session);
-      workspaceGroups.set(workspaceKey, existing);
-      groups.set(agentKey, workspaceGroups);
-    }
-
-    return [...groups.entries()].map(([agentName, workspaceGroups]) => [
-      agentName,
-      [...workspaceGroups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-    ]) as Array<[string, Array<[string, DesktopSessionSummary[]]>]>;
+  const filteredSessions = $derived.by(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return sessions.filter((session) => {
+      const matchesStatus = statusFilter === 'all' || session.status === statusFilter;
+      const matchesQuery =
+        !normalizedQuery ||
+        session.title.toLowerCase().includes(normalizedQuery) ||
+        session.cwd.toLowerCase().includes(normalizedQuery) ||
+        session.agentName.toLowerCase().includes(normalizedQuery);
+      return matchesStatus && matchesQuery;
+    });
   });
+
+  const workspaceGroups = $derived(groupSessionsByWorkspace(filteredSessions));
+
+  $effect(() => {
+    const nextSignature = workspaceGroups.map((group) => group.key).join('|');
+    if (nextSignature !== lastWorkspaceKeySignature) {
+      lastWorkspaceKeySignature = nextSignature;
+      const visibleKeys = new Set(workspaceGroups.map((group) => group.key));
+      const preservedOpenGroups = openGroups.filter((key) => visibleKeys.has(key));
+      openGroups = preservedOpenGroups.length > 0 ? preservedOpenGroups : workspaceGroups.slice(0, 3).map((group) => group.key);
+    }
+  });
+
+  const statusFilters: Array<{ value: 'all' | SessionStatus; label: string }> = [
+    { value: 'all', label: 'All' },
+    { value: 'active', label: 'Active' },
+    { value: 'waiting', label: 'Waiting' },
+    { value: 'completed', label: 'Completed' }
+  ];
 </script>
 
-<div class="panel-strong overflow-hidden">
-  <div class="flex items-center justify-between gap-4 border-b border-[var(--border)] px-4 py-3">
-    <div>
-      <div class="text-sm font-medium">Session index</div>
-      <div class="panel-copy mt-1">Grouped by agent and workspace, with the detail view moved into its own route.</div>
+<div class="session-browser">
+  <div class="session-browser-toolbar">
+    <label class="session-browser-search">
+      <Search size={15} />
+      <input bind:value={query} placeholder="Search sessions, workspaces, agents…" />
+    </label>
+    <div class="session-browser-actions">
+      <div class="session-browser-filters" aria-label="Session status filter">
+        {#each statusFilters as filter}
+          <button
+            class={`session-browser-filter ${statusFilter === filter.value ? 'session-browser-filter-active' : ''}`}
+            type="button"
+            aria-pressed={statusFilter === filter.value}
+            onclick={() => (statusFilter = filter.value)}
+          >
+            {filter.label}
+          </button>
+        {/each}
+      </div>
+      {#if onRefresh}
+        <button class="icon-btn" type="button" aria-label="Refresh sessions" onclick={onRefresh}>
+          <RefreshCw size={16} />
+        </button>
+      {/if}
     </div>
-    {#if onRefresh}
-      <IconTooltipButton label="Refresh sessions" icon={RefreshCw} size={16} onclick={onRefresh} />
-    {/if}
   </div>
 
   {#if error}
-    <div class="alert-error rounded-none border-x-0 border-t-0">{error}</div>
+    <div class="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{error}</div>
   {/if}
 
-  <div class="divide-y divide-[var(--border)]">
+  <div class="session-browser-body">
     {#if loading}
       <div class="muted px-4 py-4 text-sm">Loading sessions…</div>
     {:else if sessions.length === 0}
       <div class="muted px-4 py-4 text-sm">{emptyMessage}</div>
+    {:else if workspaceGroups.length === 0}
+      <div class="muted px-4 py-4 text-sm">No sessions match the current filters.</div>
     {:else}
-      {#each groupedSessions as [agentName, workspaceGroups]}
-        <section class="px-4 py-4">
-          <div class="mb-3 flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
-            <MessagesSquare size={13} />
-            <span>{agentName}</span>
-          </div>
-
-          <div class="space-y-4">
-            {#each workspaceGroups as [workspaceName, workspaceSessions]}
-              <div>
-                <div class="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
-                  <FolderKanban size={13} />
-                  <span>{workspaceName}</span>
-                  <span class="badge">{workspaceSessions.length}</span>
-                </div>
-
-                <div class="space-y-2">
-                  {#each workspaceSessions as session}
-                    <button class="click-card list-row surface-muted p-4" type="button" onclick={() => onOpenSession?.(session)}>
-                      <div class="flex items-start justify-between gap-3">
-                        <div class="min-w-0">
-                          <div class="truncate text-sm font-medium">{session.title}</div>
-                          <div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
-                            <span class="badge capitalize">{session.status}</span>
-                            <span>{formatSessionTimestamp(session.updatedAt)}</span>
-                          </div>
-                          <div class="mt-2 truncate text-sm text-[var(--muted)]">{session.cwd}</div>
-                        </div>
-                        <span class="icon-btn shrink-0" aria-hidden="true">
-                          <ChevronRight size={16} />
-                        </span>
-                      </div>
-                    </button>
-                  {/each}
-                </div>
+      <Accordion.Root type="multiple" bind:value={openGroups} class="session-workspace-accordion">
+        {#each workspaceGroups as group}
+          <Accordion.Item value={group.key} class="session-workspace-item">
+            <Accordion.Header level={3} class="session-workspace-header">
+              <Accordion.Trigger class="session-workspace-trigger">
+                <span class="session-workspace-trigger-main">
+                  <span class="session-workspace-icon"><FolderKanban size={16} /></span>
+                  <span class="session-workspace-copy">
+                    <span class="session-workspace-name">{group.name}</span>
+                    <span class="session-workspace-path">{group.path}</span>
+                  </span>
+                </span>
+                <span class="session-workspace-meta">
+                  <span class="badge">{group.sessions.length}</span>
+                  <span class="session-workspace-updated"><Clock3 size={12} /> {formatSessionTimestamp(group.latestActivity)}</span>
+                  <ChevronDown size={15} class="session-workspace-chevron" />
+                </span>
+              </Accordion.Trigger>
+            </Accordion.Header>
+            <Accordion.Content class="session-workspace-content">
+              <div class="session-workspace-agents">
+                {#each group.agents as agent}
+                  <span class="session-agent-chip">{agent}</span>
+                {/each}
               </div>
-            {/each}
-          </div>
-        </section>
-      {/each}
+              <div class="session-workspace-session-list">
+                {#each group.sessions as session}
+                  <button class="session-row" type="button" onclick={() => onOpenSession?.(session)}>
+                    <span class="session-row-main">
+                      <span class="session-row-title">{session.title}</span>
+                      <span class="session-row-meta">
+                        <span class="badge capitalize">{session.status}</span>
+                        <span>{session.agentName}</span>
+                        <span>{formatSessionTimestamp(session.updatedAt)}</span>
+                      </span>
+                    </span>
+                    <span class="session-row-open" aria-hidden="true">
+                      <ChevronRight size={16} />
+                    </span>
+                  </button>
+                {/each}
+              </div>
+            </Accordion.Content>
+          </Accordion.Item>
+        {/each}
+      </Accordion.Root>
     {/if}
   </div>
 </div>

@@ -17,6 +17,7 @@ const mockClient = vi.hoisted(() => {
     })),
     listSessions: vi.fn(async () => []),
     sendPrompt: vi.fn(async (): Promise<PromptResponse> => ({ stopReason: 'end_turn' })),
+    cancelSession: vi.fn(async () => undefined),
     getInitializeResponse: vi.fn(() => ({
       protocolVersion: 1,
       agentCapabilities: {},
@@ -166,6 +167,33 @@ describe('AgentsStore prompt session start', () => {
     expect(store.activeSession.activityLabel).toBe('Turn cancelled.');
     expect(store.activeSession.activeToolCallId).toBe(null);
     expect(store.activeSession.lastStopReason).toBe('cancelled');
+  });
+
+  it('requests cancellation for a running active session', async () => {
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.runState = 'tool-running';
+    store.activeSession.activityLabel = 'Running tool: search';
+
+    await store.cancelActiveSession();
+
+    expect(store.activeSession.activityLabel).toBe('Cancelling turn…');
+    expect(store.activeSession.lastError).toBe(null);
+    expect(mockClient.cancelSession).toHaveBeenCalledWith('session-1');
+  });
+
+  it('ignores cancellation when the active session is idle', async () => {
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.runState = 'completed';
+
+    await store.cancelActiveSession();
+
+    expect(mockClient.cancelSession).not.toHaveBeenCalled();
   });
 
   it('clears composer errors explicitly', () => {

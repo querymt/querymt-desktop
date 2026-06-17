@@ -94,6 +94,7 @@
       session={agentsStore.activeSession}
       sessionConfigPending={agentsStore.sessionConfigPending}
       onConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
+      onCancel={() => agentsStore.cancelActiveSession()}
     />
 
      {#if selectedSession}

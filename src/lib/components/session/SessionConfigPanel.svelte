@@ -1,13 +1,19 @@
 <script lang="ts">
-  import { Settings2 } from '@lucide/svelte';
+  import { Bot, Brain, Check, Cpu, LoaderCircle, Settings2, SlidersHorizontal, UserRound } from '@lucide/svelte';
   import {
+    findModelConfigOption,
     findModeConfigOption,
+    findProfileConfigOption,
     findReasoningConfigOption,
     getConfigOptionChoices,
     getSelectConfigOptions
   } from '$lib/querymt/config-options';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
-  import type { SessionConfigOption } from '@agentclientprotocol/sdk';
+  import type { SessionConfigOption, SessionConfigSelectOption } from '@agentclientprotocol/sdk';
+  import type { Component } from 'svelte';
+
+  type SelectConfigOption = SessionConfigOption & { type: 'select' };
+  type ControlTone = 'mode' | 'reasoning' | 'model' | 'profile' | 'advanced';
 
   let {
     session,
@@ -19,55 +25,176 @@
     onConfigChange: (configId: string, value: string) => void | Promise<void>;
   } = $props();
 
-  const prioritizedOptions = $derived.by(() => {
-    const mode = findModeConfigOption(session.configOptions);
-    const reasoning = findReasoningConfigOption(session.configOptions);
-    const all = getSelectConfigOptions(session.configOptions);
-    const pinned = new Set([mode?.id, reasoning?.id].filter((value): value is string => Boolean(value)));
-    const remaining = all.filter((option) => !pinned.has(option.id));
-    return [mode, reasoning, ...remaining].filter(
-      (option, index, array): option is SessionConfigOption & { type: 'select' } =>
-        Boolean(option) && array.findIndex((entry) => entry?.id === option?.id) === index
-    );
+  const modeOption = $derived(findModeConfigOption(session.configOptions));
+  const reasoningOption = $derived(findReasoningConfigOption(session.configOptions));
+  const modelOption = $derived(findModelConfigOption(session.configOptions));
+  const profileOption = $derived(findProfileConfigOption(session.configOptions));
+  const hasPendingOption = $derived(Object.values(pending).some(Boolean));
+
+  const primaryOptions = $derived.by(() => {
+    const seen = new Set<string>();
+    return [modeOption, reasoningOption, modelOption, profileOption].filter((option): option is SelectConfigOption => {
+      if (!option || seen.has(option.id)) {
+        return false;
+      }
+      seen.add(option.id);
+      return true;
+    });
   });
+
+  const advancedOptions = $derived.by(() => {
+    const pinned = new Set(primaryOptions.map((option) => option.id));
+    return getSelectConfigOptions(session.configOptions).filter((option) => !pinned.has(option.id));
+  });
+
+  function selectedChoice(option: SelectConfigOption): SessionConfigSelectOption | null {
+    return getConfigOptionChoices(option).find((choice) => choice.value === option.currentValue) ?? null;
+  }
+
+  function shouldUseSegments(option: SelectConfigOption): boolean {
+    const choices = getConfigOptionChoices(option);
+    return choices.length > 1 && choices.length <= 4;
+  }
+
+  function toneForOption(option: SelectConfigOption): ControlTone {
+    if (option.id === modeOption?.id) return 'mode';
+    if (option.id === reasoningOption?.id) return 'reasoning';
+    if (option.id === modelOption?.id) return 'model';
+    if (option.id === profileOption?.id) return 'profile';
+    return 'advanced';
+  }
+
+  function iconForTone(tone: ControlTone): Component {
+    switch (tone) {
+      case 'mode':
+        return SlidersHorizontal;
+      case 'reasoning':
+        return Brain;
+      case 'model':
+        return Cpu;
+      case 'profile':
+        return UserRound;
+      default:
+        return Settings2;
+    }
+  }
+
+  function changeConfig(option: SelectConfigOption, value: string) {
+    if (pending[option.id] || value === option.currentValue) {
+      return;
+    }
+    return onConfigChange(option.id, value);
+  }
 </script>
 
-<section class="surface-muted p-4">
-  <div class="mb-3 row-tight text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
-    <Settings2 size={14} />
-    <span>Session config</span>
-  </div>
+<details class="details-reset session-config-card">
+  <summary class="session-config-summary">
+    <span>
+      <span class="session-config-eyebrow"><Settings2 size={14} /> Session controls</span>
+      <span class="session-config-subtitle">{primaryOptions.length + advancedOptions.length} live controls</span>
+    </span>
+    <span class={`session-config-status-chip ${hasPendingOption ? 'session-config-status-chip-pending' : ''}`}>
+      {#if hasPendingOption}
+        <LoaderCircle size={12} class="animate-spin" />
+        Updating
+      {:else}
+        Live
+      {/if}
+    </span>
+  </summary>
 
-  {#if prioritizedOptions.length > 0}
-    <div class="space-y-3">
-      {#each prioritizedOptions as option}
-        <label class="block space-y-2">
-          <div class="flex items-start justify-between gap-3">
-            <div>
-              <div class="text-sm font-medium">{option.name}</div>
-              {#if option.description}
-                <div class="muted mt-1 text-xs">{option.description}</div>
+  {#if primaryOptions.length > 0 || advancedOptions.length > 0}
+    {#if primaryOptions.length > 0}
+      <div class="session-config-primary">
+        {#each primaryOptions as option}
+          {@const tone = toneForOption(option)}
+          {@const Icon = iconForTone(tone)}
+          {@const choice = selectedChoice(option)}
+          <div class={`session-config-row session-config-row-${tone}`}>
+            <div class="session-config-row-top">
+              <span class="session-config-row-icon"><Icon size={15} /></span>
+              <div class="session-config-row-body">
+                <div class="session-config-row-label">{option.name}</div>
+                <div class="session-config-current">{choice?.name ?? option.currentValue}</div>
+              </div>
+              {#if pending[option.id]}
+                <span class="session-config-row-pending"><LoaderCircle size={13} class="animate-spin" /> Updating</span>
               {/if}
             </div>
-            <span class={`badge min-w-[5.75rem] justify-center transition-opacity ${pending[option.id] ? 'opacity-100' : 'opacity-0'}`} aria-hidden={!pending[option.id]}>
-              Updating…
-            </span>
+            {#if option.description}
+              <div class="session-config-description">{option.description}</div>
+            {/if}
+
+            {#if shouldUseSegments(option)}
+              <div class="session-config-segments" aria-label={option.name}>
+                {#each getConfigOptionChoices(option) as optionChoice}
+                  <button
+                    class={`session-config-segment ${optionChoice.value === option.currentValue ? 'session-config-segment-active' : ''}`}
+                    type="button"
+                    disabled={!!pending[option.id]}
+                    aria-pressed={optionChoice.value === option.currentValue}
+                    onclick={() => changeConfig(option, optionChoice.value)}
+                  >
+                    {#if optionChoice.value === option.currentValue}
+                      <Check size={12} />
+                    {/if}
+                    <span>{optionChoice.name}</span>
+                  </button>
+                {/each}
+              </div>
+            {:else}
+              <select
+                class="session-config-select"
+                value={option.currentValue}
+                disabled={!!pending[option.id]}
+                aria-label={option.name}
+                onchange={(event) => changeConfig(option, (event.currentTarget as HTMLSelectElement).value)}
+              >
+                {#each getConfigOptionChoices(option) as optionChoice}
+                  <option value={optionChoice.value}>{optionChoice.name}</option>
+                {/each}
+              </select>
+            {/if}
           </div>
-          <select
-            class="composer-select-pill w-full"
-            value={option.currentValue}
-            disabled={!!pending[option.id]}
-            aria-label={option.name}
-            onchange={(event) => onConfigChange(option.id, (event.currentTarget as HTMLSelectElement).value)}
-          >
-            {#each getConfigOptionChoices(option) as choice}
-              <option value={choice.value}>{choice.name}</option>
-            {/each}
-          </select>
-        </label>
-      {/each}
-    </div>
+        {/each}
+      </div>
+    {/if}
+
+    {#if advancedOptions.length > 0}
+      <details class="details-reset session-config-advanced">
+        <summary class="session-config-advanced-summary">
+          <span><Bot size={14} /> More controls</span>
+          <span class="badge">{advancedOptions.length}</span>
+        </summary>
+        <div class="session-config-advanced-list">
+          {#each advancedOptions as option}
+            {@const choice = selectedChoice(option)}
+            <label class="session-config-compact-row">
+              <span>
+                <span class="session-config-row-label">{option.name}</span>
+                {#if option.description}
+                  <span class="session-config-description">{option.description}</span>
+                {:else}
+                  <span class="session-config-current">{choice?.name ?? option.currentValue}</span>
+                {/if}
+              </span>
+              <select
+                class="session-config-select"
+                value={option.currentValue}
+                disabled={!!pending[option.id]}
+                aria-label={option.name}
+                onchange={(event) => changeConfig(option, (event.currentTarget as HTMLSelectElement).value)}
+              >
+                {#each getConfigOptionChoices(option) as optionChoice}
+                  <option value={optionChoice.value}>{optionChoice.name}</option>
+                {/each}
+              </select>
+            </label>
+          {/each}
+        </div>
+      </details>
+    {/if}
   {:else}
-    <div class="muted text-sm">No configurable session options yet.</div>
+    <div class="session-config-empty">No live controls exposed by this agent yet.</div>
   {/if}
-</section>
+</details>

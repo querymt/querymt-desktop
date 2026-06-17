@@ -13,7 +13,12 @@
   import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
   import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
   import type { SectionName } from '$lib/design/tokens';
+  import type { SessionRunState } from '$lib/domain/types';
   import type { Snippet } from 'svelte';
+
+  const LEFT_RAIL_HIDDEN_KEY = 'querymt.left-rail.hidden';
+  const ESC_CANCEL_WINDOW_MS = 700;
+  const CANCELLABLE_RUN_STATES = new Set<SessionRunState>(['submitting', 'thinking', 'streaming', 'tool-running']);
 
   const { children } = $props<{ children?: Snippet }>();
 
@@ -34,7 +39,22 @@
     '/settings': 'Settings'
   };
 
+  let leftRailHidden = $state(false);
+  let lastEscapeAt = 0;
+
   const pathname = $derived(page.url.pathname);
+  const isActiveSessionRoute = $derived(pathname.startsWith('/sessions/'));
+  const leftRailQuiet = $derived(pathname === '/' || isActiveSessionRoute);
+  const isSessionCancellable = $derived(
+    isActiveSessionRoute && CANCELLABLE_RUN_STATES.has(agentsStore.activeSession.runState)
+  );
+  const layoutClass = $derived.by(() => {
+    if (leftRailHidden) {
+      return 'grid min-h-[calc(100vh-2rem)] grid-cols-1 gap-4 lg:grid-cols-[56px_minmax(0,1fr)] 2xl:grid-cols-[56px_minmax(0,1fr)_280px]';
+    }
+
+    return 'grid min-h-[calc(100vh-2rem)] grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)] 2xl:grid-cols-[220px_minmax(0,1fr)_280px]';
+  });
 
   const section = $derived.by(() => {
     if (pathname.startsWith('/sessions/')) {
@@ -43,6 +63,13 @@
 
     return routeToSection[pathname] ?? 'Today';
   });
+
+  function setLeftRailCollapsed(value: boolean) {
+    leftRailHidden = value;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(LEFT_RAIL_HIDDEN_KEY, value ? '1' : '0');
+    }
+  }
 
   onMount(() => {
     appearanceStore.initialize();
@@ -64,7 +91,22 @@
       });
     }
 
+    if (typeof localStorage !== 'undefined') {
+      leftRailHidden = localStorage.getItem(LEFT_RAIL_HIDDEN_KEY) === '1';
+    }
+
     const onKeyDown = async (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && isSessionCancellable) {
+        const now = Date.now();
+        if (now - lastEscapeAt <= ESC_CANCEL_WINDOW_MS) {
+          event.preventDefault();
+          lastEscapeAt = 0;
+          await agentsStore.cancelActiveSession();
+          return;
+        }
+        lastEscapeAt = now;
+      }
+
       if (!(event.metaKey || event.ctrlKey)) {
         return;
       }

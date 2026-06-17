@@ -11,18 +11,20 @@
   let {
     session,
     sessionConfigPending = {},
-    onConfigChange
+    onConfigChange,
+    onCancel
   }: {
     session: ActiveSessionViewModel;
     sessionConfigPending?: Record<string, boolean>;
     onConfigChange: (configId: string, value: string) => void | Promise<void>;
+    onCancel?: () => void | Promise<void>;
   } = $props();
 
   const turns = $derived(buildSessionConversation(session));
 </script>
 
 <div class="session-detail-shell">
-  <SessionActivityBar {session} />
+  <SessionActivityBar {session} {onCancel} />
 
   <div class="session-detail-grid">
     <section class="session-conversation-column">
