@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { Bot, CalendarClock, Link, MessageSquarePlus, Network, Plus, Search, SendHorizontal, X } from '@lucide/svelte';
   import { Command, Dialog } from 'bits-ui';
+  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import type { CommandPalettePrefill, DesktopSessionSummary } from '$lib/domain/types';
   import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
@@ -319,7 +320,7 @@
       class="model-picker-modal !w-[min(46rem,calc(100vw-2rem))] !p-0"
       onOpenAutoFocus={(event) => event.preventDefault()}
     >
-      <div class="border-b border-white/8 px-4 py-4">
+      <div class="border-b border-[var(--border)] px-4 py-4">
         <div class="flex items-center justify-between gap-3">
           <div>
             <div class="text-sm font-medium">Command palette</div>
@@ -348,7 +349,7 @@
 
             <Command.List class="mt-3 max-h-[26rem] overflow-y-auto pr-1">
               <Command.Empty>
-                <div class="rounded-2xl border border-white/8 bg-black/10 px-3 py-3 text-xs text-[var(--muted)]">
+                <div class="surface-muted px-3 py-3 text-xs text-[var(--muted)]">
                   No matching commands.
                 </div>
               </Command.Empty>
@@ -428,11 +429,7 @@
 
             <label class="space-y-2">
               <span class="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Agent</span>
-              <select class="input-shell w-full" bind:value={scheduleAgentId}>
-                {#each scheduleCapableAgents as agent}
-                  <option value={agent.id}>{agent.name}</option>
-                {/each}
-              </select>
+              <AppSelect class="w-full" bind:value={scheduleAgentId} options={scheduleCapableAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" />
             </label>
 
             <div class="grid gap-2">
@@ -456,12 +453,7 @@
             {:else}
               <label class="space-y-2">
                 <span class="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Session</span>
-                <select class="input-shell w-full" bind:value={scheduleSessionId}>
-                  <option value="">Select session…</option>
-                  {#each sessionChoices as session}
-                    <option value={session.sessionId}>{sessionLabel(session)}</option>
-                  {/each}
-                </select>
+                <AppSelect class="w-full" bind:value={scheduleSessionId} options={[{ value: '', label: 'Select session...' }, ...sessionChoices.map((session) => ({ value: session.sessionId, label: sessionLabel(session) }))]} ariaLabel="Session" />
               </label>
             {/if}
 
@@ -484,7 +476,7 @@
               <input class="input-shell w-full" bind:value={scheduleCron} placeholder="Cron expression" />
             {/if}
 
-            <details class="details-reset rounded-2xl border border-white/8 bg-black/10 px-4 py-3" bind:open={scheduleAdvanced}>
+            <details class="details-reset surface-muted px-4 py-3" bind:open={scheduleAdvanced}>
               <summary class="cursor-pointer text-sm font-medium">Advanced</summary>
               <div class="mt-3 grid gap-3 md:grid-cols-3">
                 <input class="input-shell" bind:value={scheduleMaxRuns} placeholder="Max runs" />
@@ -494,7 +486,7 @@
             </details>
 
             {#if formError}
-              <div class="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{formError}</div>
+              <div class="alert-error">{formError}</div>
             {/if}
 
             <div class="flex justify-end gap-3">
@@ -520,18 +512,14 @@
 
             <label class="space-y-2">
               <span class="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Agent</span>
-              <select class="input-shell w-full" bind:value={scheduleAgentId}>
-                {#each remoteCapableAgents as agent}
-                  <option value={agent.id}>{agent.name}</option>
-                {/each}
-              </select>
+              <AppSelect class="w-full" bind:value={scheduleAgentId} options={remoteCapableAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" />
             </label>
 
             <input class="input-shell w-full" bind:value={remoteNodeId} placeholder="Node id" />
             <input class="input-shell w-full" bind:value={remoteWorkspace} placeholder="Working directory (optional)" />
 
             {#if formError}
-              <div class="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{formError}</div>
+              <div class="alert-error">{formError}</div>
             {/if}
 
             <div class="flex justify-end gap-3">
@@ -554,18 +542,14 @@
 
             <label class="space-y-2">
               <span class="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Agent</span>
-              <select class="input-shell w-full" bind:value={scheduleAgentId}>
-                {#each remoteCapableAgents as agent}
-                  <option value={agent.id}>{agent.name}</option>
-                {/each}
-              </select>
+              <AppSelect class="w-full" bind:value={scheduleAgentId} options={remoteCapableAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" />
             </label>
 
             <input class="input-shell w-full" bind:value={attachNodeId} placeholder="Node id" />
             <input class="input-shell w-full" bind:value={attachSessionId} placeholder="Session id" />
 
             {#if formError}
-              <div class="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{formError}</div>
+              <div class="alert-error">{formError}</div>
             {/if}
 
             <div class="flex justify-end gap-3">

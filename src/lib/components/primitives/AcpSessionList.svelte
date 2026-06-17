@@ -5,8 +5,8 @@
 </script>
 
 <div class="panel-strong overflow-hidden">
-  <div class="border-b border-white/8 px-4 py-3 text-sm font-medium">ACP sessions</div>
-  <div class="divide-y divide-white/8">
+  <div class="border-b border-[var(--border)] px-4 py-3 text-sm font-medium">ACP sessions</div>
+  <div class="divide-y divide-[var(--border)]">
     {#if sessions.length === 0}
       <div class="muted px-4 py-4 text-sm">No sessions returned yet.</div>
     {:else}

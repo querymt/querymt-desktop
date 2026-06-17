@@ -72,13 +72,13 @@
 
   <section class="space-y-3">
     <div class="flex items-center justify-between gap-2">
-      <div class="text-xs uppercase tracking-[0.2em] text-slate-400">Pending inbox</div>
+      <div class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Pending inbox</div>
       <span class="badge">{inboxStore.pendingCount}</span>
     </div>
 
     {#if inboxStore.actionableItems.length > 0}
       {#each inboxStore.actionableItems.slice(0, 2) as item}
-        <div class="rounded-2xl border border-white/8 bg-white/4 p-3">
+        <div class="surface-muted p-3">
           <div class="flex items-center justify-between gap-2 text-sm">
             <span>{item.title}</span>
             <span class="badge">{item.type}</span>
@@ -97,7 +97,7 @@
         </div>
       {/each}
     {:else}
-      <div class="rounded-2xl border border-white/8 bg-white/4 p-3">
+      <div class="surface-muted p-3">
         <div class="text-sm font-medium">No live requests</div>
         <div class="muted mt-1 text-xs">Permission and elicitation requests will appear here once an agent needs input.</div>
       </div>
@@ -105,15 +105,15 @@
   </section>
 
   <section class="space-y-3">
-    <div class="text-xs uppercase tracking-[0.2em] text-slate-400">Recent events</div>
+    <div class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Recent events</div>
     {#if recentEvents.length === 0}
-      <div class="rounded-2xl border border-white/8 bg-white/4 p-3">
+      <div class="surface-muted p-3">
         <div class="text-sm font-medium">No live activity</div>
         <div class="muted mt-1 text-xs">Start a configured agent to populate live activity here.</div>
       </div>
     {:else}
       {#each recentEvents as event}
-        <div class="rounded-2xl border border-white/8 bg-white/4 p-3">
+        <div class="surface-muted p-3">
           <div class="flex items-center justify-between gap-2 text-sm">
             <span>{event.title}</span>
             <span class="muted text-xs">{event.when}</span>

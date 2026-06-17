@@ -5,10 +5,10 @@
   export let runtime: RuntimeCardType;
 
   const statusTone: Record<RuntimeCardType['status'], string> = {
-    running: 'text-emerald-300 bg-emerald-400/10',
-    starting: 'text-amber-300 bg-amber-400/10',
-    degraded: 'text-orange-300 bg-orange-400/10',
-    stopped: 'text-slate-300 bg-slate-400/10'
+    running: 'text-[var(--success)] bg-[var(--bg-card-hover)]',
+    starting: 'text-[var(--warn)] bg-[var(--bg-card-hover)]',
+    degraded: 'text-[var(--accent)] bg-[var(--accent-dim)]',
+    stopped: 'text-[var(--muted)] bg-[var(--bg-card-hover)]'
   };
 
   const statusDotTone: Record<RuntimeCardType['status'], string> = {
@@ -64,7 +64,7 @@
     </div>
   </div>
 
-  <details class="details-reset mt-4 rounded-2xl border border-white/8 bg-black/10 px-4 py-3">
+  <details class="details-reset surface-muted mt-4 px-4 py-3">
     <summary class="flex items-center justify-between gap-3 text-sm font-medium">
       <span class="flex items-center gap-2">
         <Layers3 size={14} />

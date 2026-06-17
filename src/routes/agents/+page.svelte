@@ -208,7 +208,7 @@
             </div>
 
             {#if card.error}
-              <div class="mt-3 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+              <div class="alert-error mt-3">
                 {card.error}
               </div>
             {/if}
@@ -219,7 +219,7 @@
   </section>
 
   {#if agentDialogMode}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
       <div class="panel w-full max-w-3xl p-5 space-y-4">
         <div class="flex items-start justify-between gap-3">
           <div>
@@ -253,7 +253,7 @@
   {/if}
 
   {#if pendingDeleteAgentId}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
       <div class="panel w-full max-w-md p-5 space-y-4">
         <div>
           <div class="text-lg font-semibold">Delete agent</div>
@@ -268,8 +268,8 @@
   {/if}
 
   {#if selectedCard}
-    <div class="fixed inset-0 z-40 flex justify-end bg-black/35" role="dialog" aria-modal="true">
-      <aside class="h-full w-full max-w-2xl overflow-auto border-l border-white/8 bg-[var(--bg-panel-strong)] p-5 shadow-2xl">
+    <div class="fixed inset-0 z-40 flex justify-end bg-[color:rgba(36,36,38,0.35)]" role="dialog" aria-modal="true">
+      <aside class="h-full w-full max-w-2xl overflow-auto border-l border-[var(--border)] bg-[var(--bg-panel-strong)] p-5 shadow-2xl">
         <div class="flex items-start justify-between gap-3">
           <div>
             <div class="flex items-center gap-3">
@@ -345,7 +345,7 @@
             {:else}
               <div class="space-y-2">
                 {#each selectedCard.sessions as session}
-                  <div class="rounded-2xl border border-white/8 bg-black/10 px-3 py-2">
+                  <div class="surface-muted px-3 py-2">
                     <div class="text-sm font-medium">{session.title}</div>
                     <div class="mt-1 text-xs text-[var(--muted)]">{session.sessionId}</div>
                     {#if session.cwd}<div class="mt-1 text-xs text-[var(--muted)]">{session.cwd}</div>{/if}

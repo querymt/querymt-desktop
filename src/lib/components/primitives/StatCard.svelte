@@ -10,10 +10,10 @@
   } = $props();
 
   const toneClass: Record<typeof tone, string> = {
-    default: 'text-slate-100',
-    success: 'text-emerald-300',
-    warn: 'text-amber-300',
-    danger: 'text-rose-300'
+    default: 'text-[var(--text)]',
+    success: 'text-[var(--success)]',
+    warn: 'text-[var(--warn)]',
+    danger: 'text-[var(--danger)]'
   };
 </script>
 

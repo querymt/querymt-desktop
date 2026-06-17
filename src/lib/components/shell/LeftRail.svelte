@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { appMeta, sectionIcons, sectionOrder, type SectionName } from '$lib/design/tokens';
+  import { sectionIcons, sectionOrder, type SectionName } from '$lib/design/tokens';
 
   export let current: SectionName;
   export let quiet = false;
@@ -16,21 +16,16 @@
   };
 </script>
 
-<nav class={`panel sticky top-6 self-start flex max-h-[calc(100vh-3rem)] flex-col gap-3 overflow-y-auto p-4 transition ${quiet ? 'opacity-55 hover:opacity-100' : ''}`}>
-  <div class="mb-3 px-2">
-    <div class="text-sm font-medium text-[var(--accent)]">{appMeta.title}</div>
-    <div class="muted text-xs">{appMeta.subtitle}</div>
-  </div>
-
+<nav class={`panel sticky top-6 self-start flex max-h-[calc(100vh-3rem)] flex-col gap-4 overflow-y-auto p-4 transition ${quiet ? 'opacity-80 hover:opacity-100' : ''}`}>
   <div class="space-y-1">
     {#each sectionOrder as section}
       {@const Icon = sectionIcons[section]}
       <a
-        class={`flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm transition ${current === section ? 'bg-[var(--accent-dim)] text-[var(--text)]' : 'text-slate-300 hover:bg-white/5'}`}
+        class={`flex items-center gap-3 rounded-full px-2.5 py-2 text-sm transition ${current === section ? 'bg-[var(--accent-dim)] text-[var(--text)]' : 'text-[var(--muted)] hover:bg-[var(--bg-card-hover)] hover:text-[var(--text)]'}`}
         href={routeMap[section]}
         aria-current={current === section ? 'page' : undefined}
       >
-        <span class={`flex h-9 w-9 items-center justify-center rounded-2xl border ${current === section ? 'border-[var(--border-strong)] bg-black/20 text-[var(--accent)]' : 'border-white/8 bg-black/10 text-slate-400'}`}>
+        <span class={`flex h-9 w-9 items-center justify-center rounded-full border ${current === section ? 'border-[var(--rail)] bg-[var(--bg-card)] text-[var(--accent)]' : 'border-[var(--border)] bg-[var(--bg-card)] text-[var(--muted)]'}`}>
           <Icon size={16} />
         </span>
         <span class="flex-1">{section}</span>

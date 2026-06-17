@@ -37,7 +37,7 @@
     <div class="mt-3 space-y-2">
       {#each agents as agent}
         {#if errors[agent.id]}
-          <div class="flex items-start gap-2 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+          <div class="alert-error flex items-start gap-2">
             <CircleAlert size={16} class="mt-0.5 shrink-0" />
             <span><strong>{agent.name}:</strong> {errors[agent.id]}</span>
           </div>

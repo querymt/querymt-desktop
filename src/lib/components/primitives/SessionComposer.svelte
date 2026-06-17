@@ -1,6 +1,7 @@
 <script lang="ts">
   import { FilePlus2, Paperclip, Plus, SendHorizontal, X } from '@lucide/svelte';
   import { tick } from 'svelte';
+  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import ModelQuickPicker from '$lib/components/primitives/ModelQuickPicker.svelte';
   import WorkspacePathInput from '$lib/components/primitives/WorkspacePathInput.svelte';
   import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment } from '$lib/domain/types';
@@ -126,7 +127,7 @@
 </script>
 
 <div class={`panel-strong ${launch ? 'p-4 md:p-6' : minimal ? 'p-4 md:p-5' : 'p-3 md:p-4'}`}>
-  <div class={`flex flex-col ${launch ? 'gap-4 rounded-[24px] bg-black/8' : 'gap-3 rounded-[18px] border border-white/8 bg-black/10'} ${launch ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}>
+  <div class={`flex flex-col ${launch ? 'gap-4 rounded-[24px] bg-[var(--bg-card)]' : 'gap-3 rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)]'} ${launch ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}>
     {#if !launch}
       <div class="flex items-start justify-between gap-4 px-2 pt-1">
         <div>
@@ -191,7 +192,7 @@
     {#if attachments.length > 0}
       <div class="flex flex-wrap gap-2 px-1">
         {#each attachments as attachment}
-          <span class="badge max-w-full gap-2 bg-black/25">
+          <span class="badge max-w-full gap-2">
             <span class="truncate">{attachment.name}</span>
             <span class="muted">{formatFileSize(attachment.size)}</span>
             <button class="text-[var(--muted)] hover:text-[var(--text)]" type="button" aria-label={`Remove ${attachment.name}`} onclick={() => onRemoveAttachment?.(attachment.id)}>
@@ -202,7 +203,7 @@
       </div>
     {/if}
 
-    <div class={`flex flex-wrap items-center justify-between gap-3 ${launch ? 'border-t border-white/6 px-1 pt-3' : 'border-t border-white/8 px-2 pt-3'}`}>
+    <div class={`flex flex-wrap items-center justify-between gap-3 ${launch ? 'border-t border-[var(--border)] px-1 pt-3' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
       <div class="flex flex-wrap items-center gap-2">
         {#if !sessionOnly && onCreateSession && !minimal && !launch}
           <button class="icon-btn" disabled={loading} type="button" aria-label="Blank session" onclick={onCreateSession}>
@@ -210,18 +211,10 @@
           </button>
         {/if}
         {#if !sessionOnly && profileOptions.length > 0}
-          <select class="composer-select-pill" value={selectedProfileId} onchange={(event) => onProfileChange?.((event.currentTarget as HTMLSelectElement).value)} aria-label="Profile">
-            {#each profileOptions as profile}
-              <option value={profile.id}>{profile.label}</option>
-            {/each}
-          </select>
+          <AppSelect value={selectedProfileId} options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))} pill ariaLabel="Profile" onValueChange={(value) => onProfileChange?.(value)} />
         {/if}
         {#if !sessionOnly && targetOptions.length > 1}
-          <select class="composer-select-pill" value={selectedTargetId} onchange={(event) => onTargetChange?.((event.currentTarget as HTMLSelectElement).value)} aria-label="Session target">
-            {#each targetOptions as target}
-              <option value={target.id}>{target.label}</option>
-            {/each}
-          </select>
+          <AppSelect value={selectedTargetId} options={targetOptions.map((target) => ({ value: target.id, label: target.label }))} pill ariaLabel="Session target" onValueChange={(value) => onTargetChange?.(value)} />
         {/if}
         <ModelQuickPicker
           bind:this={modelPickerRef}
@@ -273,6 +266,6 @@
   </div>
 
   {#if error}
-    <div class="mt-3 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{error}</div>
+    <div class="alert-error mt-3">{error}</div>
   {/if}
 </div>

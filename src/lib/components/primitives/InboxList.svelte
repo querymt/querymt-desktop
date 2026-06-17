@@ -1,4 +1,6 @@
 <script lang="ts">
+  import AppCheckbox from '$lib/components/primitives/AppCheckbox.svelte';
+  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import type { InboxFormField, InboxItem } from '$lib/domain/types';
 
   let {
@@ -61,53 +63,46 @@
                 {field.label}{#if field.required} *{/if}
               </span>
               {#if field.kind === 'boolean'}
-                <input
-                  class="h-4 w-4"
-                  type="checkbox"
+                <AppCheckbox
                   checked={Boolean(field.value)}
-                  onchange={(event) => onFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).checked)}
+                  ariaLabel={field.label}
+                  onCheckedChange={(checked) => onFieldChange?.(item.id, field.key, checked)}
                 />
               {:else if field.kind === 'array' && field.options}
                 <div class="flex flex-wrap gap-2">
                   {#each field.options as option}
-                    <label class="badge cursor-pointer gap-2">
-                      <input
-                        type="checkbox"
-                        checked={Array.isArray(field.value) && field.value.includes(option.value)}
-                        onchange={(event) => {
-                          const checked = (event.currentTarget as HTMLInputElement).checked;
-                          const current = Array.isArray(field.value) ? field.value : [];
-                          const next = checked
-                            ? [...current, option.value]
-                            : current.filter((value) => value !== option.value);
-                          onFieldChange?.(item.id, field.key, next);
-                        }}
-                      />
-                      <span>{option.label}</span>
-                    </label>
+                    <AppCheckbox
+                      checked={Array.isArray(field.value) && field.value.includes(option.value)}
+                      label={option.label}
+                      pill
+                      onCheckedChange={(checked) => {
+                        const current = Array.isArray(field.value) ? field.value : [];
+                        const next = checked
+                          ? [...current, option.value]
+                          : current.filter((value) => value !== option.value);
+                        onFieldChange?.(item.id, field.key, next);
+                      }}
+                    />
                   {/each}
                 </div>
               {:else if field.options}
-                <select
-                  class="rounded-2xl border border-white/8 bg-black/10 px-3 py-2 text-sm outline-none"
+                <AppSelect
+                  class="w-full"
                   value={String(field.value)}
-                  onchange={(event) => onFieldChange?.(item.id, field.key, (event.currentTarget as HTMLSelectElement).value)}
-                >
-                  <option value="">Select…</option>
-                  {#each field.options as option}
-                    <option value={option.value}>{option.label}</option>
-                  {/each}
-                </select>
+                  options={[{ value: '', label: 'Select...' }, ...field.options]}
+                  ariaLabel={field.label}
+                  onValueChange={(value) => onFieldChange?.(item.id, field.key, value)}
+                />
               {:else if field.kind === 'number' || field.kind === 'integer'}
                 <input
-                  class="rounded-2xl border border-white/8 bg-black/10 px-3 py-2 text-sm outline-none"
+                  class="input-shell px-3 py-2 text-sm"
                   type="number"
                   value={String(field.value)}
                   onchange={(event) => onFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value)}
                 />
               {:else}
                 <input
-                  class="rounded-2xl border border-white/8 bg-black/10 px-3 py-2 text-sm outline-none"
+                  class="input-shell px-3 py-2 text-sm"
                   type="text"
                   value={String(field.value)}
                   onchange={(event) => onFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value)}
@@ -122,7 +117,7 @@
       {/if}
 
       {#if item.error}
-        <div class="mt-4 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{item.error}</div>
+        <div class="alert-error mt-4">{item.error}</div>
       {/if}
 
       {#if item.actions && item.actions.length > 0 && item.status !== 'resolved'}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Pause, Play, RefreshCw, Trash2, Zap } from '@lucide/svelte';
+  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
 
@@ -95,11 +96,7 @@
       <div class="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)] lg:items-end">
         <label class="space-y-2">
           <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Agent</span>
-          <select class="input-shell" bind:value={selectedAgentId}>
-            {#each scheduleAgents as agent}
-              <option value={agent.id}>{agent.name}</option>
-            {/each}
-          </select>
+          <AppSelect bind:value={selectedAgentId} options={scheduleAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" />
         </label>
 
         <div class="flex flex-wrap gap-2 text-xs">
@@ -123,7 +120,7 @@
       {/if}
 
       {#if actionError}
-        <div class="rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+        <div class="alert-error">
           {actionError}
         </div>
       {/if}
