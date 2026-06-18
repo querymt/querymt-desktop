@@ -1,7 +1,7 @@
 import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 
 export type RuntimeStatus = 'running' | 'starting' | 'degraded' | 'stopped';
-export type SessionStatus = 'active' | 'waiting' | 'completed';
+export type SessionStatus = 'idle' | 'thinking' | 'waiting' | 'completed' | 'cancelling';
 export type SessionRunState =
   | 'idle'
   | 'submitting'

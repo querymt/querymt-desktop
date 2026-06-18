@@ -1,5 +1,9 @@
 import type { SessionInfo } from '@agentclientprotocol/sdk';
 import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
+import {
+  SessionRuntimeStatus as QuerymtSessionRuntimeStatus,
+  type SessionMeta as QuerymtSessionMeta
+} from '$lib/querymt/generated/types';
 
 export interface WorkspaceSessionGroup {
   key: string;
@@ -29,15 +33,41 @@ export function mapAcpSessionsToDesktopSessions(
 }
 
 export function inferSessionStatus(session: SessionInfo): SessionStatus {
-  if (session.sessionId === null) {
-    return 'waiting';
+  const meta = readSessionMeta(session);
+  if (!meta) {
+    return 'idle';
   }
 
-  if (session.updatedAt) {
-    return 'active';
+  switch (meta.runtimeStatus) {
+    case QuerymtSessionRuntimeStatus.Running:
+      return 'thinking';
+    case QuerymtSessionRuntimeStatus.Waiting:
+      return 'waiting';
+    case QuerymtSessionRuntimeStatus.CancelRequested:
+      return 'cancelling';
+    case QuerymtSessionRuntimeStatus.Idle:
+    default:
+      return meta.userMessageCount > 0 ? 'completed' : 'idle';
+  }
+}
+
+function readSessionMeta(session: SessionInfo): QuerymtSessionMeta | null {
+  const meta = session._meta;
+  if (!meta || typeof meta !== 'object') {
+    return null;
   }
 
-  return 'waiting';
+  const candidate = meta as Partial<QuerymtSessionMeta>;
+  if (
+    typeof candidate.messageCount !== 'number' ||
+    typeof candidate.userMessageCount !== 'number' ||
+    typeof candidate.hasErrors !== 'boolean' ||
+    typeof candidate.runtimeStatus !== 'string'
+  ) {
+    return null;
+  }
+
+  return candidate as QuerymtSessionMeta;
 }
 
 export function getSessionWorkspaceName(cwd: string): string {

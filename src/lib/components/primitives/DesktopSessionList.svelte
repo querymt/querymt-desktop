@@ -52,10 +52,28 @@
 
   const statusFilters: Array<{ value: 'all' | SessionStatus; label: string }> = [
     { value: 'all', label: 'All' },
-    { value: 'active', label: 'Active' },
+    { value: 'idle', label: 'Idle' },
+    { value: 'thinking', label: 'Thinking' },
     { value: 'waiting', label: 'Waiting' },
+    { value: 'cancelling', label: 'Cancelling' },
     { value: 'completed', label: 'Completed' }
   ];
+
+  function getStatusLabel(status: SessionStatus): string {
+    switch (status) {
+      case 'thinking':
+        return 'Thinking';
+      case 'waiting':
+        return 'Waiting';
+      case 'cancelling':
+        return 'Cancelling';
+      case 'completed':
+        return 'Completed';
+      case 'idle':
+      default:
+        return 'Idle';
+    }
+  }
 </script>
 
 <div class="session-browser">
@@ -128,7 +146,7 @@
                     <span class="session-row-main">
                       <span class="session-row-title">{session.title}</span>
                       <span class="session-row-meta">
-                        <span class="badge capitalize">{session.status}</span>
+                        <span class="badge">{getStatusLabel(session.status)}</span>
                         <span>{session.agentName}</span>
                         <span>{formatSessionTimestamp(session.updatedAt)}</span>
                       </span>
