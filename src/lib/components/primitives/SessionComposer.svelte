@@ -2,6 +2,7 @@
   import { FilePlus2, Paperclip, Plus, SendHorizontal, X } from '@lucide/svelte';
   import { tick } from 'svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import ModelQuickPicker from '$lib/components/primitives/ModelQuickPicker.svelte';
   import WorkspacePathInput from '$lib/components/primitives/WorkspacePathInput.svelte';
   import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment } from '$lib/domain/types';
@@ -206,9 +207,7 @@
     <div class={`flex flex-wrap items-center justify-between gap-3 ${launch ? 'border-t border-[var(--border)] px-1 pt-3' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
       <div class="flex flex-wrap items-center gap-2">
         {#if !sessionOnly && onCreateSession && !minimal && !launch}
-          <button class="icon-btn" disabled={loading} type="button" aria-label="Blank session" onclick={onCreateSession}>
-            <Plus size={16} />
-          </button>
+          <IconTooltipButton label="Blank session" icon={Plus} size={16} disabled={loading} onclick={onCreateSession} />
         {/if}
         {#if !sessionOnly && profileOptions.length > 0}
           <AppSelect value={selectedProfileId} options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))} pill ariaLabel="Profile" onValueChange={(value) => onProfileChange?.(value)} />
@@ -244,9 +243,7 @@
             (event.currentTarget as HTMLInputElement).value = '';
           }}
         />
-        <button class="icon-btn" type="button" aria-label="Attach files" onclick={() => fileInputElement?.click()}>
-          <Paperclip size={16} />
-        </button>
+        <IconTooltipButton label="Attach files" icon={Paperclip} size={16} onclick={() => fileInputElement?.click()} />
         {#if !sessionOnly && onCreateSession && !launch}
           <button class={minimal ? 'icon-btn' : 'action-btn'} disabled={loading} type="button" aria-label="Blank session" onclick={onCreateSession}>
             <FilePlus2 size={16} />

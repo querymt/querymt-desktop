@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ChevronRight, FolderKanban, MessagesSquare, RefreshCw } from '@lucide/svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import { formatSessionTimestamp, getSessionWorkspaceName } from '$lib/domain/sessions';
   import type { DesktopSessionSummary } from '$lib/domain/types';
 
@@ -46,9 +47,7 @@
       <div class="panel-copy mt-1">Grouped by agent and workspace, with the detail view moved into its own route.</div>
     </div>
     {#if onRefresh}
-      <button class="icon-btn" type="button" aria-label="Refresh sessions" onclick={onRefresh}>
-        <RefreshCw size={16} />
-      </button>
+      <IconTooltipButton label="Refresh sessions" icon={RefreshCw} size={16} onclick={onRefresh} />
     {/if}
   </div>
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { fly } from 'svelte/transition';
   import { CornerDownLeft, Expand, SendHorizontal } from '@lucide/svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
 
   let {
     prompt = '',
@@ -49,9 +50,7 @@
         </div>
       </div>
 
-      <button class="icon-btn icon-btn-primary" disabled={loading} type="button" aria-label="Send reply" onclick={onSendPrompt}>
-        <SendHorizontal size={16} />
-      </button>
+      <IconTooltipButton label="Send reply" icon={SendHorizontal} tone="primary" size={16} disabled={loading} onclick={onSendPrompt} />
     </div>
   </div>
 {/if}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Pause, Play, RefreshCw, Trash2, Zap } from '@lucide/svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
 
@@ -81,9 +82,7 @@
     />
 
     <div class="compact-toolbar">
-      <button class="icon-btn" type="button" aria-label="Refresh schedules" disabled={!selectedAgentId || loading} onclick={() => refreshSchedules()}>
-        <RefreshCw size={16} />
-      </button>
+      <IconTooltipButton label="Refresh schedules" icon={RefreshCw} size={16} disabled={!selectedAgentId || loading} onclick={() => refreshSchedules()} />
     </div>
   </div>
 
@@ -145,42 +144,31 @@
                 <div class="compact-toolbar">
                   <span class="badge">{schedule.state}</span>
                   {#if schedule.node_id}<span class="badge">{schedule.node_id}</span>{/if}
-                  <button
-                    class="icon-btn"
-                    type="button"
-                    aria-label={`Pause ${schedule.public_id}`}
+                  <IconTooltipButton
+                    label="Pause"
+                    icon={Pause}
                     disabled={!canRun('querymt/schedules/pause') || loading}
                     onclick={() => runAction('pause', schedule.public_id, schedule.node_id)}
-                  >
-                    <Pause size={15} />
-                  </button>
-                  <button
-                    class="icon-btn"
-                    type="button"
-                    aria-label={`Resume ${schedule.public_id}`}
+                  />
+                  <IconTooltipButton
+                    label="Resume"
+                    icon={Play}
                     disabled={!canRun('querymt/schedules/resume') || loading}
                     onclick={() => runAction('resume', schedule.public_id, schedule.node_id)}
-                  >
-                    <Play size={15} />
-                  </button>
-                  <button
-                    class="icon-btn"
-                    type="button"
-                    aria-label={`Trigger ${schedule.public_id}`}
+                  />
+                  <IconTooltipButton
+                    label="Trigger"
+                    icon={Zap}
                     disabled={!canRun('querymt/schedules/trigger') || loading}
                     onclick={() => runAction('trigger', schedule.public_id, schedule.node_id)}
-                  >
-                    <Zap size={15} />
-                  </button>
-                  <button
-                    class="icon-btn"
-                    type="button"
-                    aria-label={`Delete ${schedule.public_id}`}
+                  />
+                  <IconTooltipButton
+                    label="Delete"
+                    icon={Trash2}
+                    tone="danger"
                     disabled={!canRun('querymt/schedules/delete') || loading}
                     onclick={() => runAction('delete', schedule.public_id, schedule.node_id)}
-                  >
-                    <Trash2 size={15} />
-                  </button>
+                  />
                 </div>
               </div>
 

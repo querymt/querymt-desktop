@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Check, ChevronDown, RefreshCw, Search } from '@lucide/svelte';
   import { tick } from 'svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import type { ModelEntry, ModelInfo } from '$lib/domain/types';
 
   type ModelGroup = {
@@ -201,9 +202,7 @@
           <div class="muted text-xs">Search, press Enter, and continue typing.</div>
         </div>
         {#if onRefresh}
-          <button class="icon-btn" disabled={loading} type="button" aria-label="Refresh models" onclick={onRefresh}>
-            <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
-          </button>
+          <IconTooltipButton label="Refresh models" icon={RefreshCw} size={14} iconClass={loading ? 'animate-spin' : ''} disabled={loading} onclick={onRefresh} />
         {/if}
       </div>
 

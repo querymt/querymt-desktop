@@ -4,6 +4,7 @@
   import { ArrowLeft, MessagesSquare, RefreshCw } from '@lucide/svelte';
   import { onMount, tick } from 'svelte';
   import ActiveSessionView from '$lib/components/primitives/ActiveSessionView.svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import StickySessionComposer from '$lib/components/session/StickySessionComposer.svelte';
@@ -65,9 +66,7 @@
       <span>Back to sessions</span>
     </button>
 
-    <button class="icon-btn" type="button" aria-label="Refresh session" onclick={() => refreshSession()}>
-      <RefreshCw size={16} />
-    </button>
+    <IconTooltipButton label="Refresh session" icon={RefreshCw} size={16} onclick={() => refreshSession()} />
   </div>
 
   <div class="page-toolbar">

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { getContext, onMount } from 'svelte';
   import { KeyRound, LogIn, LogOut, RefreshCw, Trash2 } from '@lucide/svelte';
-  import { Tooltip } from 'bits-ui';
+  import { Portal } from 'bits-ui';
   import AppCheckbox from '$lib/components/primitives/AppCheckbox.svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
@@ -26,6 +26,9 @@
   let profileTemplates = $state<ProfileTemplateInfo[]>([]);
   let profileTemplatesLoading = $state(false);
   let profileTemplateError = $state<string | null>(null);
+
+  const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
+  const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
 
   const selectedAgent = $derived.by(() =>
     selectedAgentId ? agentsStore.configs.find((config) => config.id === selectedAgentId) ?? null : null
@@ -402,9 +405,7 @@
       <button class="action-btn" type="button" disabled={!selectedAgentId || !!actionLoading} onclick={() => updatePlugins()}>
         Update plugins
       </button>
-      <button class="icon-btn" type="button" aria-label="Refresh providers" disabled={!selectedAgentId || authLoading || actionLoading === 'refresh'} onclick={() => refreshProviders()}>
-        <RefreshCw size={16} />
-      </button>
+      <IconTooltipButton label="Refresh providers" icon={RefreshCw} size={16} disabled={!selectedAgentId || authLoading || actionLoading === 'refresh'} onclick={() => refreshProviders()} />
     </div>
   </div>
 
@@ -450,9 +451,7 @@
           Enable bundled TOML profile templates into Desktop app-data. Existing user copies are never overwritten.
         </p>
       </div>
-      <button class="icon-btn" type="button" aria-label="Refresh profile templates" disabled={profileTemplatesLoading} onclick={() => refreshProfileTemplates()}>
-        <RefreshCw size={16} />
-      </button>
+      <IconTooltipButton label="Refresh profile templates" icon={RefreshCw} size={16} disabled={profileTemplatesLoading} onclick={() => refreshProfileTemplates()} />
     </div>
 
     {#if profileTemplateError}
@@ -558,8 +557,7 @@
           No auth-enabled providers reported by this agent.
         </div>
       {:else}
-        <Tooltip.Provider>
-          <div class="settings-provider-list">
+        <div class="settings-provider-list">
             {#each providers as provider}
             <article class="settings-provider-row">
               <div class="settings-provider-main">
@@ -609,82 +607,89 @@
               </div>
             </article>
             {/each}
-          </div>
-          <p class="settings-provider-footnote">OAuth sign-in opens your browser. API keys are stored in the desktop keyring.</p>
-        </Tooltip.Provider>
+        </div>
+        <p class="settings-provider-footnote">OAuth sign-in opens your browser. API keys are stored in the desktop keyring.</p>
       {/if}
     </section>
   {/if}
 
   {#if tokenDialogProvider}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
-      <div class="panel w-full max-w-lg p-5 space-y-4">
-        <div>
-          <div class="text-lg font-semibold">Set API key</div>
-          <div class="text-sm text-[var(--muted)]">Store a key for {tokenDialogProvider.display_name} in the desktop agent keyring.</div>
-        </div>
-        <label class="block space-y-2">
-          <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">API key</span>
-          <input class="input-shell w-full" type="password" bind:value={tokenDialogValue} placeholder="Paste API key" />
-        </label>
-        <div class="compact-toolbar justify-end">
-          <button class="action-btn" type="button" onclick={() => closeTokenDialog()} disabled={!!actionLoading}>Cancel</button>
-          <button class="action-btn" type="button" onclick={() => submitApiToken()} disabled={!!actionLoading || !tokenDialogValue.trim()}>
-            Save key
-          </button>
+    <Portal to={overlayPortalTarget}>
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
+        <div class="panel w-full max-w-lg p-5 space-y-4">
+          <div>
+            <div class="text-lg font-semibold">Set API key</div>
+            <div class="text-sm text-[var(--muted)]">Store a key for {tokenDialogProvider.display_name} in the desktop agent keyring.</div>
+          </div>
+          <label class="block space-y-2">
+            <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">API key</span>
+            <input class="input-shell w-full" type="password" bind:value={tokenDialogValue} placeholder="Paste API key" />
+          </label>
+          <div class="compact-toolbar justify-end">
+            <button class="action-btn" type="button" onclick={() => closeTokenDialog()} disabled={!!actionLoading}>Cancel</button>
+            <button class="action-btn" type="button" onclick={() => submitApiToken()} disabled={!!actionLoading || !tokenDialogValue.trim()}>
+              Save key
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </Portal>
   {/if}
 
   {#if manualOAuthProvider}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
-      <div class="panel w-full max-w-xl p-5 space-y-4">
-        <div>
-          <div class="text-lg font-semibold">Complete OAuth sign-in</div>
-          <div class="text-sm text-[var(--muted)]">Paste the callback URL or returned code for {manualOAuthProvider.display_name}.</div>
-        </div>
-        <label class="block space-y-2">
-          <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Callback URL or code</span>
-          <textarea class="input-shell w-full min-h-28" bind:value={manualOAuthValue} placeholder="https://... or pasted code"></textarea>
-        </label>
-        <div class="compact-toolbar justify-end">
-          <button class="action-btn" type="button" onclick={() => closeManualOAuthDialog()} disabled={!!actionLoading}>Cancel</button>
-          <button class="action-btn" type="button" onclick={() => submitManualOAuth()} disabled={!!actionLoading || !manualOAuthValue.trim()}>
-            Complete sign-in
-          </button>
+    <Portal to={overlayPortalTarget}>
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
+        <div class="panel w-full max-w-xl p-5 space-y-4">
+          <div>
+            <div class="text-lg font-semibold">Complete OAuth sign-in</div>
+            <div class="text-sm text-[var(--muted)]">Paste the callback URL or returned code for {manualOAuthProvider.display_name}.</div>
+          </div>
+          <label class="block space-y-2">
+            <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Callback URL or code</span>
+            <textarea class="input-shell w-full min-h-28" bind:value={manualOAuthValue} placeholder="https://... or pasted code"></textarea>
+          </label>
+          <div class="compact-toolbar justify-end">
+            <button class="action-btn" type="button" onclick={() => closeManualOAuthDialog()} disabled={!!actionLoading}>Cancel</button>
+            <button class="action-btn" type="button" onclick={() => submitManualOAuth()} disabled={!!actionLoading || !manualOAuthValue.trim()}>
+              Complete sign-in
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </Portal>
   {/if}
 
   {#if disconnectProviderPending}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
-      <div class="panel w-full max-w-md p-5 space-y-4">
-        <div>
-          <div class="text-lg font-semibold">Disconnect provider</div>
-          <div class="text-sm text-[var(--muted)]">Remove OAuth credentials for {disconnectProviderPending.display_name}?</div>
-        </div>
-        <div class="compact-toolbar justify-end">
-          <button class="action-btn" type="button" onclick={() => closeDisconnectDialog()} disabled={!!actionLoading}>Cancel</button>
-          <button class="action-btn" type="button" onclick={() => confirmDisconnectProvider()} disabled={!!actionLoading}>Disconnect</button>
+    <Portal to={overlayPortalTarget}>
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
+        <div class="panel w-full max-w-md p-5 space-y-4">
+          <div>
+            <div class="text-lg font-semibold">Disconnect provider</div>
+            <div class="text-sm text-[var(--muted)]">Remove OAuth credentials for {disconnectProviderPending.display_name}?</div>
+          </div>
+          <div class="compact-toolbar justify-end">
+            <button class="action-btn" type="button" onclick={() => closeDisconnectDialog()} disabled={!!actionLoading}>Cancel</button>
+            <button class="action-btn" type="button" onclick={() => confirmDisconnectProvider()} disabled={!!actionLoading}>Disconnect</button>
+          </div>
         </div>
       </div>
-    </div>
+    </Portal>
   {/if}
 
   {#if clearKeyProviderPending}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
-      <div class="panel w-full max-w-md p-5 space-y-4">
-        <div>
-          <div class="text-lg font-semibold">Clear stored API key</div>
-          <div class="text-sm text-[var(--muted)]">Remove the saved key for {clearKeyProviderPending.display_name}?</div>
-        </div>
-        <div class="compact-toolbar justify-end">
-          <button class="action-btn" type="button" onclick={() => closeClearKeyDialog()} disabled={!!actionLoading}>Cancel</button>
-          <button class="action-btn" type="button" onclick={() => confirmClearApiToken()} disabled={!!actionLoading}>Clear key</button>
+    <Portal to={overlayPortalTarget}>
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
+        <div class="panel w-full max-w-md p-5 space-y-4">
+          <div>
+            <div class="text-lg font-semibold">Clear stored API key</div>
+            <div class="text-sm text-[var(--muted)]">Remove the saved key for {clearKeyProviderPending.display_name}?</div>
+          </div>
+          <div class="compact-toolbar justify-end">
+            <button class="action-btn" type="button" onclick={() => closeClearKeyDialog()} disabled={!!actionLoading}>Cancel</button>
+            <button class="action-btn" type="button" onclick={() => confirmClearApiToken()} disabled={!!actionLoading}>Clear key</button>
+          </div>
         </div>
       </div>
-    </div>
+    </Portal>
   {/if}
 </div>

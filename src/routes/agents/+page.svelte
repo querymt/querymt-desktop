@@ -13,6 +13,9 @@
     Trash2,
     X
   } from '@lucide/svelte';
+  import { getContext } from 'svelte';
+  import { Portal } from 'bits-ui';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import SidecarLogList from '$lib/components/primitives/SidecarLogList.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
@@ -25,6 +28,9 @@
   let pendingDeleteAgentId = $state<string | null>(null);
   let draftName = $state('');
   let draftCommandLine = $state('');
+
+  const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
+  const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
 
   const agentCards = $derived.by(() =>
     agentsStore.configs.map((config) => ({
@@ -131,12 +137,8 @@
     />
 
     <div class="compact-toolbar">
-      <button class="icon-btn" type="button" aria-label="Refresh agents" onclick={() => agentsStore.initialize()}>
-        <RefreshCw size={16} />
-      </button>
-      <button class="icon-btn icon-btn-primary" type="button" aria-label="Add agent" onclick={() => openAddDialog()}>
-        <CirclePlus size={16} />
-      </button>
+      <IconTooltipButton label="Refresh agents" icon={RefreshCw} size={16} onclick={() => agentsStore.initialize()} />
+      <IconTooltipButton label="Add agent" icon={CirclePlus} tone="primary" size={16} onclick={() => openAddDialog()} />
     </div>
   </div>
 
@@ -171,39 +173,20 @@
               </div>
 
               <div class="compact-toolbar">
-                <button class="icon-btn" type="button" aria-label={`Details for ${card.config.name}`} onclick={() => openDetails(card.config.id)}>
-                  <Info size={15} />
-                </button>
-                <button class="icon-btn" type="button" aria-label={`Edit ${card.config.name}`} onclick={() => openEditDialog(card)}>
-                  <Pencil size={15} />
-                </button>
+                <IconTooltipButton label="Details" icon={Info} onclick={() => openDetails(card.config.id)} />
+                <IconTooltipButton label="Edit" icon={Pencil} onclick={() => openEditDialog(card)} />
                 {#if card.status?.state === 'running' || card.status?.state === 'starting' || card.status?.state === 'stopping'}
-                  <button class="icon-btn" type="button" aria-label={`Stop ${card.config.name}`} onclick={() => agentsStore.stopConfiguredAgent(card.config.id)}>
-                    <Square size={15} />
-                  </button>
-                  <button class="icon-btn" type="button" aria-label={`Restart ${card.config.name}`} onclick={() => agentsStore.restartConfiguredAgent(card.config.id)}>
-                    <RotateCcw size={15} />
-                  </button>
+                  <IconTooltipButton label="Stop" icon={Square} onclick={() => agentsStore.stopConfiguredAgent(card.config.id)} />
+                  <IconTooltipButton label="Restart" icon={RotateCcw} onclick={() => agentsStore.restartConfiguredAgent(card.config.id)} />
                 {:else}
-                  <button class="icon-btn" type="button" aria-label={`Start ${card.config.name}`} onclick={() => agentsStore.startConfiguredAgent(card.config.id)}>
-                    <Play size={15} />
-                  </button>
+                  <IconTooltipButton label="Start" icon={Play} onclick={() => agentsStore.startConfiguredAgent(card.config.id)} />
                 {/if}
-                <button
-                  class="icon-btn"
-                  type="button"
-                  aria-label={card.config.autoStart ? `Disable auto-start for ${card.config.name}` : `Enable auto-start for ${card.config.name}`}
+                <IconTooltipButton
+                  label={card.config.autoStart ? 'Disable auto-start' : 'Enable auto-start'}
+                  icon={card.config.autoStart ? ToggleRight : ToggleLeft}
                   onclick={() => agentsStore.updateConfig(card.config.id, { autoStart: !card.config.autoStart })}
-                >
-                  {#if card.config.autoStart}
-                    <ToggleRight size={15} />
-                  {:else}
-                    <ToggleLeft size={15} />
-                  {/if}
-                </button>
-                <button class="icon-btn" type="button" aria-label={`Delete ${card.config.name}`} onclick={() => (pendingDeleteAgentId = card.config.id)}>
-                  <Trash2 size={15} />
-                </button>
+                />
+                <IconTooltipButton label="Delete" icon={Trash2} tone="danger" onclick={() => (pendingDeleteAgentId = card.config.id)} />
               </div>
             </div>
 
@@ -219,57 +202,60 @@
   </section>
 
   {#if agentDialogMode}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
-      <div class="panel w-full max-w-3xl p-5 space-y-4">
-        <div class="flex items-start justify-between gap-3">
-          <div>
-            <div class="text-lg font-semibold">{agentDialogMode === 'add' ? 'Add agent' : 'Edit agent'}</div>
-            <div class="text-sm text-[var(--muted)]">Set the display name and ACP command line.</div>
+    <Portal to={overlayPortalTarget}>
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
+        <div class="panel w-full max-w-3xl p-5 space-y-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <div class="text-lg font-semibold">{agentDialogMode === 'add' ? 'Add agent' : 'Edit agent'}</div>
+              <div class="text-sm text-[var(--muted)]">Set the display name and ACP command line.</div>
+            </div>
+            <IconTooltipButton label="Close agent dialog" icon={X} onclick={() => closeAgentDialog()} />
           </div>
-          <button class="icon-btn" type="button" aria-label="Close agent dialog" onclick={() => closeAgentDialog()}>
-            <X size={15} />
-          </button>
-        </div>
 
-        <div class="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <label class="block space-y-2">
-            <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Agent name</span>
-            <input class="input-shell w-full" placeholder="Agent name" bind:value={draftName} />
-          </label>
-          <label class="block space-y-2">
-            <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Command line</span>
-            <input class="input-shell w-full" placeholder="/path/to/executable --acp" bind:value={draftCommandLine} />
-          </label>
-        </div>
+          <div class="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
+            <label class="block space-y-2">
+              <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Agent name</span>
+              <input class="input-shell w-full" placeholder="Agent name" bind:value={draftName} />
+            </label>
+            <label class="block space-y-2">
+              <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Command line</span>
+              <input class="input-shell w-full" placeholder="/path/to/executable --acp" bind:value={draftCommandLine} />
+            </label>
+          </div>
 
-        <div class="compact-toolbar justify-end">
-          <button class="action-btn" type="button" onclick={() => closeAgentDialog()}>Cancel</button>
-          <button class="action-btn action-btn-primary" type="button" onclick={() => saveAgentDialog()} disabled={!draftName.trim() || !draftCommandLine.trim()}>
-            {agentDialogMode === 'add' ? 'Add agent' : 'Save changes'}
-          </button>
+          <div class="compact-toolbar justify-end">
+            <button class="action-btn" type="button" onclick={() => closeAgentDialog()}>Cancel</button>
+            <button class="action-btn action-btn-primary" type="button" onclick={() => saveAgentDialog()} disabled={!draftName.trim() || !draftCommandLine.trim()}>
+              {agentDialogMode === 'add' ? 'Add agent' : 'Save changes'}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </Portal>
   {/if}
 
   {#if pendingDeleteAgentId}
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
-      <div class="panel w-full max-w-md p-5 space-y-4">
-        <div>
-          <div class="text-lg font-semibold">Delete agent</div>
-          <div class="text-sm text-[var(--muted)]">Remove this configured agent from the desktop app?</div>
-        </div>
-        <div class="compact-toolbar justify-end">
-          <button class="action-btn" type="button" onclick={() => (pendingDeleteAgentId = null)}>Cancel</button>
-          <button class="action-btn" type="button" onclick={() => confirmDeleteAgent()}>Delete</button>
+    <Portal to={overlayPortalTarget}>
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
+        <div class="panel w-full max-w-md p-5 space-y-4">
+          <div>
+            <div class="text-lg font-semibold">Delete agent</div>
+            <div class="text-sm text-[var(--muted)]">Remove this configured agent from the desktop app?</div>
+          </div>
+          <div class="compact-toolbar justify-end">
+            <button class="action-btn" type="button" onclick={() => (pendingDeleteAgentId = null)}>Cancel</button>
+            <button class="action-btn" type="button" onclick={() => confirmDeleteAgent()}>Delete</button>
+          </div>
         </div>
       </div>
-    </div>
+    </Portal>
   {/if}
 
   {#if selectedCard}
-    <div class="fixed inset-0 z-40 flex justify-end bg-[color:rgba(36,36,38,0.35)]" role="dialog" aria-modal="true">
-      <aside class="h-full w-full max-w-2xl overflow-auto border-l border-[var(--border)] bg-[var(--bg-panel-strong)] p-5 shadow-2xl">
+    <Portal to={overlayPortalTarget}>
+      <div class="fixed inset-0 z-40 flex justify-end bg-[color:rgba(36,36,38,0.35)]" role="dialog" aria-modal="true">
+        <aside class="agent-details-panel h-full w-full max-w-2xl overflow-auto border-l border-[var(--border)] bg-[var(--bg-panel-strong)] p-5 shadow-2xl">
         <div class="flex items-start justify-between gap-3">
           <div>
             <div class="flex items-center gap-3">
@@ -278,9 +264,7 @@
             </div>
             <div class="mt-1 text-sm text-[var(--muted)]">{selectedCard.config.commandLine}</div>
           </div>
-          <button class="icon-btn" type="button" aria-label="Close details" onclick={() => closeDetails()}>
-            <X size={15} />
-          </button>
+          <IconTooltipButton label="Close details" icon={X} onclick={() => closeDetails()} />
         </div>
 
         <div class="mt-5 space-y-4">
@@ -295,9 +279,11 @@
           <section class="surface-muted p-4 space-y-3">
             <div class="flex items-center justify-between gap-3">
               <div class="text-sm font-medium">Control health</div>
-              <button class="icon-btn" type="button" aria-label={`Refresh capabilities for ${selectedCard.config.name}`} onclick={() => agentsStore.refreshCapabilities(selectedCard.config.id)}>
-                <RefreshCw size={15} />
-              </button>
+              <IconTooltipButton
+                label="Refresh capabilities"
+                icon={RefreshCw}
+                onclick={() => agentsStore.refreshCapabilities(selectedCard.config.id)}
+              />
             </div>
             <div class="text-sm text-[var(--muted)]">{selectedCard.controlHealth.summary}</div>
             <div class="flex flex-wrap gap-2 text-xs">
@@ -360,7 +346,8 @@
             <SidecarLogList logs={selectedCard.logs} title={`${selectedCard.config.name} logs`} emptyMessage="No logs yet for this agent." />
           </section>
         </div>
-      </aside>
-    </div>
+        </aside>
+      </div>
+    </Portal>
   {/if}
 </div>
