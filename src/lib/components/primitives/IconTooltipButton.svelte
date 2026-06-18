@@ -7,12 +7,16 @@
     label,
     disabled = false,
     tone = 'default',
+    size = 15,
+    iconClass = '',
     onclick
   }: {
-    icon: Component<{ size?: number; strokeWidth?: number }>;
+    icon: Component<{ size?: number; strokeWidth?: number; class?: string }>;
     label: string;
     disabled?: boolean;
-    tone?: 'default' | 'danger';
+    tone?: 'default' | 'primary' | 'danger';
+    size?: number;
+    iconClass?: string;
     onclick?: () => void;
   } = $props();
 </script>
@@ -20,13 +24,13 @@
 <Tooltip.Root delayDuration={250} disableHoverableContent disabled={disabled}>
   <Tooltip.Trigger>
     <button
-      class={`icon-btn ${tone === 'danger' ? 'icon-btn-danger' : ''}`}
+      class={`icon-btn ${tone === 'primary' ? 'icon-btn-primary' : tone === 'danger' ? 'icon-btn-danger' : ''}`}
       type="button"
       aria-label={label}
       {disabled}
       onclick={() => onclick?.()}
     >
-      <Icon size={15} strokeWidth={2} />
+      <Icon {size} strokeWidth={2} class={iconClass} />
     </button>
   </Tooltip.Trigger>
   <Tooltip.Portal>

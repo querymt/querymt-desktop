@@ -165,8 +165,39 @@ html:has(.app-shell-custom-titlebar) body {
   box-shadow: none;
 }
 
+.app-overlay-root {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+}
+
+.app-shell-custom-titlebar .app-overlay-root {
+  inset: 12px;
+  overflow: hidden;
+  border-radius: inherit;
+  transform: translateZ(0);
+}
+
+.app-shell-custom-titlebar.app-shell-maximized .app-overlay-root {
+  inset: 0;
+  border-radius: 0;
+}
+
+.app-overlay-root > * {
+  pointer-events: auto;
+}
+
+.app-shell-custom-titlebar .agent-details-panel {
+  padding-top: 3.25rem;
+}
+
 @media (min-width: 1024px) {
   .app-shell-custom-titlebar {
+    padding-top: 3.5rem;
+  }
+
+  .app-shell-custom-titlebar .agent-details-panel {
     padding-top: 3.5rem;
   }
 }
@@ -1052,6 +1083,14 @@ summary:focus-visible {
   background: var(--bg-panel-strong);
   padding: 1rem;
   box-shadow: var(--shadow-lg);
+}
+
+.command-palette-modal {
+  width: min(46rem, calc(100vw - 2rem));
+}
+
+.app-shell-custom-titlebar .command-palette-modal {
+  width: min(46rem, calc(100% - 2rem));
 }
 
 .model-search-shell {

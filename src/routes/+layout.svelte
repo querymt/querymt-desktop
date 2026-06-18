@@ -2,8 +2,9 @@
   import '../app.css';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { onMount } from 'svelte';
+  import { onMount, setContext } from 'svelte';
   import { Maximize, Minimize, X } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
   import LeftRail from '$lib/components/shell/LeftRail.svelte';
   import CommandPalette from '$lib/components/shell/CommandPalette.svelte';
   import Inspector from '$lib/components/shell/Inspector.svelte';
@@ -18,6 +19,9 @@
 
   let windowMaximized = $state(false);
   let isMacPlatform = $state(false);
+  let overlayPortalTarget = $state<HTMLElement | null>(null);
+
+  setContext('app-overlay-target', () => overlayPortalTarget);
 
   const routeToSection: Record<string, SectionName> = {
     '/': 'Today',
@@ -168,21 +172,22 @@
   <button class="window-resize-handle window-resize-handle-sw" type="button" aria-label="Resize southwest" onpointerdown={(event) => void startResizeDrag('SouthWest', event)}></button>
 {/if}
 
-<div class={`app-shell min-h-screen p-4 lg:p-6 ${windowDecorationsStore.usesCustomTitlebar ? `app-shell-custom-titlebar ${windowMaximized ? 'app-shell-maximized' : ''}` : ''}`}>
-  <div class="app-grid grid min-h-[calc(100vh-2rem)] grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)] 2xl:grid-cols-[220px_minmax(0,1fr)_280px]">
-     <LeftRail current={section} quiet={pathname === '/'} />
- 
+<Tooltip.Provider>
+  <div class={`app-shell min-h-screen p-4 lg:p-6 ${windowDecorationsStore.usesCustomTitlebar ? `app-shell-custom-titlebar ${windowMaximized ? 'app-shell-maximized' : ''}` : ''}`}>
+    <div class="app-grid grid min-h-[calc(100vh-2rem)] grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)] 2xl:grid-cols-[220px_minmax(0,1fr)_280px]">
+      <LeftRail current={section} quiet={pathname === '/'} />
+
       <div class="flex min-w-0 flex-col gap-4">
         <main class="min-h-0 flex-1">
           {@render children?.()}
         </main>
-        <CommandPalette />
+        <CommandPalette portalTarget={overlayPortalTarget} />
       </div>
 
-
-
-    <div class="hidden min-h-0 2xl:block">
-      <Inspector />
+      <div class="hidden min-h-0 2xl:block">
+        <Inspector />
+      </div>
     </div>
+    <div bind:this={overlayPortalTarget} class="app-overlay-root"></div>
   </div>
-</div>
+</Tooltip.Provider>

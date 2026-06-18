@@ -17,6 +17,8 @@
     run: () => Promise<void> | void;
   };
 
+  let { portalTarget = null }: { portalTarget?: HTMLElement | null } = $props();
+
   let scheduleAgentId = $state('');
   let schedulePrompt = $state('');
   let scheduleWorkspace = $state('');
@@ -314,10 +316,10 @@
 </script>
 
 <Dialog.Root bind:open={commandPaletteStore.open}>
-  <Dialog.Portal>
+  <Dialog.Portal to={portalTarget ?? undefined}>
     <Dialog.Overlay class="model-picker-backdrop" />
     <Dialog.Content
-      class="model-picker-modal !w-[min(46rem,calc(100vw-2rem))] !p-0"
+      class="model-picker-modal command-palette-modal !p-0"
       onOpenAutoFocus={(event) => event.preventDefault()}
     >
       <div class="border-b border-[var(--border)] px-4 py-4">

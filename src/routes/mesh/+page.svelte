@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Link, Plus, RefreshCw, Ticket, Trash2, XCircle } from '@lucide/svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
 
@@ -191,9 +192,7 @@
     />
 
     <div class="compact-toolbar">
-      <button class="icon-btn" type="button" aria-label="Refresh mesh" disabled={!selectedAgentId || loading} onclick={() => refreshMesh()}>
-        <RefreshCw size={16} />
-      </button>
+      <IconTooltipButton label="Refresh mesh" icon={RefreshCw} size={16} disabled={!selectedAgentId || loading} onclick={() => refreshMesh()} />
     </div>
   </div>
 
@@ -321,9 +320,7 @@
                   <div class="compact-toolbar">
                     <span class="badge">{node.transport}</span>
                     <span class="badge">{node.active_sessions} active</span>
-                    <button class="icon-btn" type="button" aria-label={`Load remote sessions for ${node.label}`} disabled={!canRun('querymt/remote/sessions') || loading} onclick={() => loadRemoteSessions(node.id)}>
-                      <RefreshCw size={15} />
-                    </button>
+                    <IconTooltipButton label="Load remote sessions" icon={RefreshCw} disabled={!canRun('querymt/remote/sessions') || loading} onclick={() => loadRemoteSessions(node.id)} />
                   </div>
                 </div>
 
@@ -347,9 +344,7 @@
                             <div class="font-medium">{session.title ?? session.id}</div>
                             <div class="mt-1 text-xs text-[var(--muted)]">{session.cwd ?? 'No cwd'} • {session.updated_at ?? 'No activity yet'}</div>
                           </div>
-                          <button class="icon-btn" type="button" aria-label={`Dismiss ${session.id}`} disabled={!canRun('querymt/remote/dismissSession') || loading} onclick={() => dismissRemoteSession(node.id, session.id)}>
-                            <XCircle size={15} />
-                          </button>
+                          <IconTooltipButton label="Dismiss" icon={XCircle} disabled={!canRun('querymt/remote/dismissSession') || loading} onclick={() => dismissRemoteSession(node.id, session.id)} />
                         </div>
                       {/each}
                     </div>
@@ -378,9 +373,7 @@
                   </div>
                   <div class="compact-toolbar">
                     <span class="badge">{invite.status}</span>
-                    <button class="icon-btn" type="button" aria-label={`Revoke ${invite.invite_id}`} disabled={!canRun('querymt/mesh/revokeInvite') || loading} onclick={() => revokeInvite(invite.invite_id)}>
-                      <Trash2 size={15} />
-                    </button>
+                    <IconTooltipButton label="Revoke" icon={Trash2} tone="danger" disabled={!canRun('querymt/mesh/revokeInvite') || loading} onclick={() => revokeInvite(invite.invite_id)} />
                   </div>
                 </div>
                 <div class="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
