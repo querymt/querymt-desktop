@@ -1,8 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import DesktopSessionList from '$lib/components/primitives/DesktopSessionList.svelte';
-  import AcpStatusSummary from '$lib/components/primitives/AcpStatusSummary.svelte';
   import type { DesktopSessionSummary } from '$lib/domain/types';
   import { agentsStore } from '$lib/stores/agents.svelte';
 
@@ -11,19 +9,8 @@
   }
 </script>
 
-<div class="space-y-4 page-width-wide">
-  <SectionHeader
-    eyebrow="Organized history"
-    title="Sessions"
-    description="All online agents are initialized automatically. This page stays focused on the session list only."
-  />
-
-  <AcpStatusSummary
-    agents={agentsStore.configs.filter((config) => config.enabled)}
-    connectionStates={agentsStore.connectionStates}
-    controlHealth={agentsStore.controlHealthByAgent}
-    errors={agentsStore.agentErrors}
-  />
+<div class="space-y-5 page-width-wide">
+  <h1 class="text-2xl font-semibold tracking-tight text-[var(--text)]">Sessions</h1>
 
   <DesktopSessionList
     sessions={agentsStore.sessions}

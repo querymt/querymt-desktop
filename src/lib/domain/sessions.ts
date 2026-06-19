@@ -1,5 +1,18 @@
 import type { SessionInfo } from '@agentclientprotocol/sdk';
 import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
+import {
+  SessionRuntimeStatus as QuerymtSessionRuntimeStatus,
+  type SessionMeta as QuerymtSessionMeta
+} from '$lib/querymt/generated/types';
+
+export interface WorkspaceSessionGroup {
+  key: string;
+  name: string;
+  path: string;
+  sessions: DesktopSessionSummary[];
+  latestActivity: string | null;
+  agents: string[];
+}
 
 export function mapAcpSessionsToDesktopSessions(
   sessions: SessionInfo[],
@@ -20,21 +33,86 @@ export function mapAcpSessionsToDesktopSessions(
 }
 
 export function inferSessionStatus(session: SessionInfo): SessionStatus {
-  if (session.sessionId === null) {
-    return 'waiting';
+  const meta = readSessionMeta(session);
+  if (!meta) {
+    return 'idle';
   }
 
-  if (session.updatedAt) {
-    return 'active';
+  switch (meta.runtimeStatus) {
+    case QuerymtSessionRuntimeStatus.Running:
+      return 'thinking';
+    case QuerymtSessionRuntimeStatus.Waiting:
+      return 'waiting';
+    case QuerymtSessionRuntimeStatus.CancelRequested:
+      return 'cancelling';
+    case QuerymtSessionRuntimeStatus.Idle:
+    default:
+      return meta.userMessageCount > 0 ? 'completed' : 'idle';
+  }
+}
+
+function readSessionMeta(session: SessionInfo): QuerymtSessionMeta | null {
+  const meta = session._meta;
+  if (!meta || typeof meta !== 'object') {
+    return null;
   }
 
-  return 'waiting';
+  const candidate = meta as Partial<QuerymtSessionMeta>;
+  if (
+    typeof candidate.messageCount !== 'number' ||
+    typeof candidate.userMessageCount !== 'number' ||
+    typeof candidate.hasErrors !== 'boolean' ||
+    typeof candidate.runtimeStatus !== 'string'
+  ) {
+    return null;
+  }
+
+  return candidate as QuerymtSessionMeta;
 }
 
 export function getSessionWorkspaceName(cwd: string): string {
   const normalized = cwd.replace(/\\/g, '/').replace(/\/$/, '');
   const segments = normalized.split('/').filter(Boolean);
   return segments.at(-1) ?? cwd;
+}
+
+export function getSessionWorkspaceKey(cwd: string): string {
+  return cwd.trim() || '__no_workspace__';
+}
+
+export function groupSessionsByWorkspace(sessions: DesktopSessionSummary[]): WorkspaceSessionGroup[] {
+  const groups = new Map<string, DesktopSessionSummary[]>();
+
+  for (const session of sessions) {
+    const key = getSessionWorkspaceKey(session.cwd);
+    const existing = groups.get(key) ?? [];
+    existing.push(session);
+    groups.set(key, existing);
+  }
+
+  return [...groups.entries()]
+    .map(([key, groupSessions]) => {
+      const sortedSessions = groupSessions.slice().sort(compareSessionsByActivity);
+      const latestActivity = sortedSessions[0]?.updatedAt ?? null;
+      const path = key === '__no_workspace__' ? 'No workspace path recorded' : key;
+      return {
+        key,
+        name: key === '__no_workspace__' ? 'No workspace' : getSessionWorkspaceName(key),
+        path,
+        sessions: sortedSessions,
+        latestActivity,
+        agents: [...new Set(sortedSessions.map((session) => session.agentName))].sort((a, b) => a.localeCompare(b))
+      };
+    })
+    .sort((a, b) => compareNullableTimestamps(b.latestActivity, a.latestActivity));
+}
+
+function compareSessionsByActivity(a: DesktopSessionSummary, b: DesktopSessionSummary): number {
+  return compareNullableTimestamps(b.updatedAt, a.updatedAt);
+}
+
+function compareNullableTimestamps(a: string | null, b: string | null): number {
+  return (a ?? '').localeCompare(b ?? '');
 }
 
 export function formatSessionTimestamp(updatedAt: string | null): string {

@@ -8,13 +8,23 @@
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
 
-  let { session }: { session: ActiveSessionViewModel } = $props();
+  let {
+    session,
+    sessionConfigPending = {},
+    onConfigChange,
+    onCancel
+  }: {
+    session: ActiveSessionViewModel;
+    sessionConfigPending?: Record<string, boolean>;
+    onConfigChange: (configId: string, value: string) => void | Promise<void>;
+    onCancel?: () => void | Promise<void>;
+  } = $props();
 
   const turns = $derived(buildSessionConversation(session));
 </script>
 
 <div class="session-detail-shell">
-  <SessionActivityBar {session} />
+  <SessionActivityBar {session} {onCancel} />
 
   <div class="session-detail-grid">
     <section class="session-conversation-column">
@@ -36,7 +46,7 @@
 
     <aside class="session-side-rail">
       <SessionPlanPanel {session} />
-      <SessionConfigPanel {session} />
+      <SessionConfigPanel session={session} pending={sessionConfigPending} {onConfigChange} />
       <SessionTechnicalDetails {session} />
     </aside>
   </div>

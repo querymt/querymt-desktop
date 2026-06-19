@@ -82,6 +82,8 @@
       selectedProfileId={agentsStore.composerProfileId}
       targetOptions={agentsStore.getTargetOptions(primaryAgentId)}
       selectedTargetId={agentsStore.composerTargetId}
+      sessionConfigOptions={agentsStore.activeSession.configOptions}
+      sessionConfigPending={agentsStore.sessionConfigPending}
       onCwdInput={(value) => agentsStore.setComposerCwd(value)}
       onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
       onModelChange={(value) => agentsStore.setComposerModel(value)}
@@ -90,7 +92,9 @@
       onRemoveAttachment={(attachmentId) => agentsStore.removePromptAttachment(attachmentId)}
       onProfileChange={(profileId) => agentsStore.setComposerProfile(profileId)}
       onTargetChange={(targetId) => agentsStore.setComposerTarget(targetId)}
+      onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
       onCreateSession={() => startBlankSessionFromToday()}
+      onDismissError={() => agentsStore.clearError()}
       onSendPrompt={() => startSessionFromToday()}
     />
 

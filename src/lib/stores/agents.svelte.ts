@@ -20,7 +20,8 @@ import type {
   DesktopSessionSummary,
   ModelEntry,
   ModelInfo,
-  PromptAttachment
+  PromptAttachment,
+  SessionRunState
 } from '$lib/domain/types';
 import type {
   AuthMethod,
@@ -42,12 +43,15 @@ import type {
   ScheduleListInfo
 } from '$lib/querymt/generated/types';
 import {
+  findModelConfigOption,
   getCurrentModelId,
   getCurrentProfileId,
   getProfileChoices,
-  setModelConfigOptionRequest
+  setModelConfigOptionRequest,
+  setSessionConfigOptionRequest
 } from '$lib/querymt/config-options';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
+import { sendDesktopNotification } from '$lib/querymt/notifications';
 import { listManagedProfiles } from '$lib/querymt/profile-templates';
 import { getAgentLogs, getAgentStatus, restartAgent, startAgent, stopAgent, validateWorkspaceDirectory } from '$lib/querymt/sidecar';
 import { inboxStore } from '$lib/stores/inbox.svelte';
@@ -57,6 +61,7 @@ const RECENT_MODELS_STORAGE_KEY = 'querymt-desktop.recent-models';
 const RECENT_WORKSPACES_STORAGE_KEY = 'querymt-desktop.recent-workspaces';
 const RECENT_MODELS_LIMIT = 5;
 const RECENT_WORKSPACES_LIMIT = 8;
+const PROMPT_ACTIVE_RUN_STATES = new Set<SessionRunState>(['thinking', 'streaming', 'tool-running']);
 
 interface AgentClientRecord {
   client: DesktopAcpClient;
@@ -130,6 +135,7 @@ export class AgentsStore {
   composerModelId = $state<string>('');
   composerProfileId = $state<string>('default');
   composerTargetId = $state<string>('local');
+  sessionConfigPending = $state<Record<string, boolean>>({});
   promptAttachments = $state<PromptAttachment[]>([]);
   managedProfileOptions = $state<ComposerOption[]>([]);
   promptFocusToken = $state(0);
@@ -176,6 +182,7 @@ export class AgentsStore {
 
   setComposerCwd(value: string) {
     this.composerCwd = value;
+    this.error = null;
   }
 
   getRecentWorkspaces(): string[] {
@@ -184,6 +191,11 @@ export class AgentsStore {
 
   setComposerPrompt(value: string) {
     this.composerPrompt = value;
+    this.error = null;
+  }
+
+  clearError() {
+    this.error = null;
   }
 
   setComposerProfile(profileId: string) {
@@ -490,7 +502,7 @@ export class AgentsStore {
   }
 
   async refreshAllSessions() {
-    await Promise.all(
+    await Promise.allSettled(
       this.configs
         .filter((config) => this.statuses[config.id]?.state === 'running')
         .map((config) => this.refreshSessionsForAgent(config.id))
@@ -538,10 +550,7 @@ export class AgentsStore {
     record.error = null;
 
     try {
-      const [sessions, models] = await Promise.all([
-        record.client.listSessions(),
-        record.client.listModels().catch(() => this.modelsByAgent[agentId] ?? [])
-      ]);
+      const sessions = await record.client.listSessions();
       this.sessionsByAgent = {
         ...this.sessionsByAgent,
         [agentId]: mapAcpSessionsToDesktopSessions(sessions, {
@@ -549,6 +558,7 @@ export class AgentsStore {
           agentName: config.name
         })
       };
+      const models = await record.client.listModels().catch(() => this.modelsByAgent[agentId] ?? []);
       if (models.length > 0) {
         this.modelsByAgent = {
           ...this.modelsByAgent,
@@ -606,6 +616,7 @@ export class AgentsStore {
   }
 
   async createSession(agentId: string): Promise<string | null> {
+    this.error = null;
     const config = this.configs.find((candidate) => candidate.id === agentId);
     const cwd = this.composerCwd.trim();
     if (!config || !cwd) {
@@ -643,6 +654,7 @@ export class AgentsStore {
   }
 
   async sendPromptToActiveSession() {
+    this.error = null;
     const prompt = this.composerPrompt.trim();
     if (!prompt) {
       this.error = 'Prompt text is required to send a session prompt.';
@@ -669,9 +681,11 @@ export class AgentsStore {
       this.lastPromptResponse = await record.client.sendPrompt(sessionId, prompt, attachments);
       this.activeSession.lastStopReason = this.lastPromptResponse.stopReason ?? null;
       await this.drainQueuedSessionUpdates(this.activeAgentId, sessionId);
-      if (this.activeSession.runState === 'thinking') {
+      if (PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState)) {
         this.activeSession.runState = 'completed';
-        this.activeSession.activityLabel = 'Turn completed.';
+        this.activeSession.activeToolCallId = null;
+        this.activeSession.activityLabel =
+          this.lastPromptResponse.stopReason === 'cancelled' ? 'Turn cancelled.' : 'Turn completed.';
       }
       await this.refreshSessionsForAgent(this.activeAgentId);
     } catch (error) {
@@ -679,6 +693,33 @@ export class AgentsStore {
       this.activeSession.lastError = error instanceof Error ? error.message : 'Failed to send ACP prompt.';
       this.activeSession.activityLabel = this.activeSession.lastError;
       this.error = this.activeSession.lastError;
+    }
+  }
+
+  async cancelActiveSession() {
+    if (!this.activeAgentId || !this.activeSessionId) {
+      this.error = 'No active session selected.';
+      return;
+    }
+
+    if (!PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) && this.activeSession.runState !== 'submitting') {
+      return;
+    }
+
+    const record = this.ensureClientRecord(this.activeAgentId);
+
+    try {
+      this.error = null;
+      this.activeSession.activityLabel = 'Cancelling turn…';
+      this.activeSession.lastError = null;
+      await this.connectAgent(this.activeAgentId);
+      await record.client.cancelSession(this.activeSessionId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to cancel ACP prompt.';
+      this.activeSession.runState = 'failed';
+      this.activeSession.lastError = message;
+      this.activeSession.activityLabel = message;
+      this.error = message;
     }
   }
 
@@ -697,18 +738,55 @@ export class AgentsStore {
     const record = this.ensureClientRecord(agentId);
     await this.connectAgent(agentId);
 
+    if (!record.initializeResponse?.agentCapabilities?.loadSession) {
+      this.error = 'This agent does not support session/load.';
+      return;
+    }
+
     try {
       this.resetActiveSession(agentId, sessionId);
+      this.activeSession.runState = 'thinking';
+      this.activeSession.activityLabel = 'Loading session history...';
+      this.activeSession.lastError = null;
       await tick();
       this.lastLoadedSession = await record.client.loadSession(target.sessionId, target.cwd);
+      await Promise.resolve();
+      await tick();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const liveReplayCount = this.activeSession.events.length;
+      const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
+
+      console.debug('querymt session/load replay', {
+        agentId,
+        sessionId,
+        liveReplayCount,
+        drainedCount,
+        totalEvents: this.activeSession.events.length
+      });
+
+      const snapshotSession = activeSessionFromLoadResponse(sessionId, this.lastLoadedSession);
+      const hasReplayHistory =
+        this.activeSession.transcript.length > 0 || this.activeSession.toolCalls.length > 0 || this.activeSession.events.length > 0;
+      const hasSnapshotHistory =
+        snapshotSession.transcript.length > 0 || snapshotSession.toolCalls.length > 0 || snapshotSession.events.length > 0;
+      if (!hasReplayHistory && hasSnapshotHistory) {
+        this.activeSession = snapshotSession;
+      }
+
       this.activeSession.configOptions = this.lastLoadedSession.configOptions ?? [];
       this.composerProfileId = getCurrentProfileId(this.activeSession.configOptions) ?? this.composerProfileId;
       this.composerModelId = getCurrentModelId(this.activeSession.configOptions) ?? this.composerModelId;
-      await this.drainQueuedSessionUpdates(agentId, sessionId);
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });
+      if (!hasReplayHistory && !hasSnapshotHistory && drainedCount === 0) {
+        this.activeSession.activityLabel = 'Session loaded, but the agent returned no replayable history.';
+      }
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
     } catch (error) {
-      this.error = error instanceof Error ? error.message : 'Failed to load ACP session.';
+      const message = error instanceof Error ? error.message : 'Failed to load ACP session.';
+      this.activeSession.runState = 'failed';
+      this.activeSession.lastError = message;
+      this.activeSession.activityLabel = message;
+      this.error = message;
     }
   }
 
@@ -1085,16 +1163,23 @@ export class AgentsStore {
     return result;
   }
 
-  private async drainQueuedSessionUpdates(agentId: string, sessionId: string) {
+  private async drainQueuedSessionUpdates(agentId: string, sessionId: string): Promise<number> {
     const { drainAgentSessionUpdates } = await import('$lib/querymt/sidecar');
     try {
       const queued = await drainAgentSessionUpdates(agentId, sessionId);
+      let applied = 0;
       for (const notification of queued as SessionNotification[]) {
         const record = this.ensureClientRecord(agentId);
+        const before = this.activeSession.events.length;
         this.handleSessionNotification(agentId, notification, record);
+        if (this.activeSession.events.length > before) {
+          applied += 1;
+        }
       }
+      return applied;
     } catch {
       // Ignore drain failures and continue with live session streaming.
+      return 0;
     }
   }
 
@@ -1199,13 +1284,50 @@ export class AgentsStore {
       return;
     }
 
+    const configId = findModelConfigOption(this.activeSession.configOptions)?.id ?? 'model';
+    await this.updateSessionConfigOption(agentId, sessionId, configId, model.id, { model });
+  }
+
+  async setActiveSessionConfigOption(configId: string, value: string) {
+    if (!this.activeAgentId || !this.activeSessionId) {
+      throw new Error('No active session selected.');
+    }
+
+    await this.updateSessionConfigOption(this.activeAgentId, this.activeSessionId, configId, value);
+  }
+
+  private async updateSessionConfigOption(
+    agentId: string,
+    sessionId: string,
+    configId: string,
+    value: string,
+    options: { model?: ModelEntry } = {}
+  ) {
     const record = this.ensureClientRecord(agentId);
     await this.connectAgent(agentId);
-    const configOptions = await record.client.setSessionConfigOption(setModelConfigOptionRequest(sessionId, model));
-    this.activeSession.configOptions = configOptions;
-    this.composerProfileId = getCurrentProfileId(configOptions) ?? this.composerProfileId;
-    this.composerModelId = getCurrentModelId(configOptions) ?? model.id;
-    this.rememberRecentModel(agentId, model.id);
+    this.sessionConfigPending = {
+      ...this.sessionConfigPending,
+      [configId]: true
+    };
+
+    try {
+      const request = options.model
+        ? setModelConfigOptionRequest(sessionId, options.model, configId)
+        : setSessionConfigOptionRequest(sessionId, configId, value);
+      const configOptions = await record.client.setSessionConfigOption(request);
+      this.activeSession.configOptions = configOptions;
+      this.composerProfileId = getCurrentProfileId(configOptions) ?? this.composerProfileId;
+      this.composerModelId = getCurrentModelId(configOptions) ?? this.composerModelId;
+      const activeModelId = getCurrentModelId(configOptions);
+      if (activeModelId) {
+        this.rememberRecentModel(agentId, activeModelId);
+      }
+    } finally {
+      this.sessionConfigPending = {
+        ...this.sessionConfigPending,
+        [configId]: false
+      };
+    }
   }
 
   private async hydrateModelInfo(agentId: string, models: ModelEntry[]) {
@@ -1320,11 +1442,23 @@ export class AgentsStore {
     this.applySessionSummaryUpdate(agentId, notification);
 
     if (this.activeAgentId !== agentId || (this.activeSessionId && notification.sessionId !== this.activeSessionId)) {
+      console.debug('querymt session/update dropped', {
+        agentId,
+        activeAgentId: this.activeAgentId,
+        activeSessionId: this.activeSessionId,
+        notificationSessionId: notification.sessionId,
+        update: notification.update.sessionUpdate
+      });
       return;
     }
 
     const notificationKey = `${notification.sessionId}:${JSON.stringify(notification.update)}`;
     if (record.recentSessionUpdateKeys.includes(notificationKey)) {
+      console.debug('querymt session/update duplicate', {
+        agentId,
+        sessionId: notification.sessionId,
+        update: notification.update.sessionUpdate
+      });
       return;
     }
 
@@ -1333,10 +1467,39 @@ export class AgentsStore {
     }
 
     this.removeMatchingOptimisticUserPrompt(notification);
+    const beforeEvents = this.activeSession.events.length;
     this.activeSession = applySessionNotification(this.activeSession, notification);
+    console.debug('querymt session/update applied', {
+      agentId,
+      sessionId: notification.sessionId,
+      update: notification.update.sessionUpdate,
+      beforeEvents,
+      afterEvents: this.activeSession.events.length
+    });
+    void this.maybeNotifyForSessionUpdate(agentId, notification);
     record.recentSessionUpdateKeys.push(notificationKey);
     if (record.recentSessionUpdateKeys.length > 200) {
       record.recentSessionUpdateKeys.shift();
+    }
+  }
+
+  private async maybeNotifyForSessionUpdate(agentId: string, notification: SessionNotification) {
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    const update = notification.update;
+    if (!config) {
+      return;
+    }
+
+    if (update.sessionUpdate === 'tool_call_update' && update.status === 'failed') {
+      await sendDesktopNotification(`${config.name}: tool failed`, update.title ? `${update.title} failed.` : 'A tool call failed.');
+      return;
+    }
+
+    if (update.sessionUpdate === 'agent_message_chunk') {
+      const text = update.content.type === 'text' ? update.content.text.trim() : '';
+      if (text.length > 0) {
+        await sendDesktopNotification(`${config.name}: reply`, text.slice(0, 180));
+      }
     }
   }
 }

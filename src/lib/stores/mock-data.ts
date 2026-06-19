@@ -53,7 +53,7 @@ export const sessionItems: SessionItem[] = [
     title: 'Fix flaky sync tests',
     runtime: 'iOS Review Agent',
     workspace: 'mobile-app',
-    status: 'active',
+    status: 'thinking',
     lastMessage: 'Investigating intermittent network mocks.',
     updatedAt: 'Just now'
   },

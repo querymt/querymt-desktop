@@ -1,33 +1,45 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PromptResponse, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
 import { AgentsStore } from './agents.svelte';
 
-const mockClient = vi.hoisted(() => ({
-  connect: vi.fn(async () => ({
-    protocolVersion: 1,
-    agentCapabilities: {},
-    authMethods: []
-  })),
-  createSession: vi.fn(async () => ({
-    sessionId: 'session-1',
-    configOptions: []
-  })),
-  listSessions: vi.fn(async () => []),
-  sendPrompt: vi.fn(async () => ({ stopReason: null })),
-  getInitializeResponse: vi.fn(() => ({
-    protocolVersion: 1,
-    agentCapabilities: {},
-    authMethods: []
-  })),
-  getControlCapabilities: vi.fn(() => null),
-  getControlHealth: vi.fn(() => ({ state: 'unknown', summary: 'unknown', missingMethods: [], missingFeatures: [] })),
-  listModels: vi.fn(async () => []),
-  getModelInfo: vi.fn(async () => ({})),
-  onSessionUpdate: vi.fn(() => undefined),
-  onExtensionNotification: vi.fn(() => undefined),
-  onPermissionRequest: vi.fn(() => undefined),
-  onElicitationRequest: vi.fn(() => undefined),
-  setSessionConfigOption: vi.fn(async () => [])
-}));
+const mockClient = vi.hoisted(() => {
+  let sessionUpdateHandler: ((notification: SessionNotification) => void) | null = null;
+
+  return {
+    connect: vi.fn(async () => ({
+      protocolVersion: 1,
+      agentCapabilities: {},
+      authMethods: []
+    })),
+    createSession: vi.fn(async () => ({
+      sessionId: 'session-1',
+      configOptions: []
+    })),
+    listSessions: vi.fn(async () => []),
+    sendPrompt: vi.fn(async (): Promise<PromptResponse> => ({ stopReason: 'end_turn' })),
+    cancelSession: vi.fn(async () => undefined),
+    getInitializeResponse: vi.fn(() => ({
+      protocolVersion: 1,
+      agentCapabilities: {},
+      authMethods: []
+    })),
+    getControlCapabilities: vi.fn(() => null),
+    getControlHealth: vi.fn(() => ({ state: 'unknown', summary: 'unknown', missingMethods: [], missingFeatures: [] })),
+    listModels: vi.fn(async () => []),
+    getModelInfo: vi.fn(async () => ({})),
+    onSessionUpdate: vi.fn((handler: (notification: SessionNotification) => void) => {
+      sessionUpdateHandler = handler;
+    }),
+    emitSessionUpdate: (notification: SessionNotification) => sessionUpdateHandler?.(notification),
+    resetSessionUpdateHandler: () => {
+      sessionUpdateHandler = null;
+    },
+    onExtensionNotification: vi.fn(() => undefined),
+    onPermissionRequest: vi.fn(() => undefined),
+    onElicitationRequest: vi.fn(() => undefined),
+    setSessionConfigOption: vi.fn(async () => [])
+  };
+});
 
 vi.mock('$lib/querymt/acp-client', () => ({
   DesktopAcpClient: vi.fn(function () {
@@ -74,6 +86,7 @@ function createStore() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockClient.resetSessionUpdateHandler();
 });
 
 describe('AgentsStore prompt session start', () => {
@@ -81,8 +94,8 @@ describe('AgentsStore prompt session start', () => {
     let resolvePrompt!: () => void;
     mockClient.sendPrompt.mockImplementationOnce(
       () =>
-        new Promise((resolve) => {
-          resolvePrompt = () => resolve({ stopReason: null });
+        new Promise<PromptResponse>((resolve) => {
+          resolvePrompt = () => resolve({ stopReason: 'end_turn' });
         })
     );
     const store = createStore();
@@ -103,5 +116,184 @@ describe('AgentsStore prompt session start', () => {
       expect(mockClient.sendPrompt).toHaveBeenCalledWith('session-1', 'Fix the failing tests', []);
     });
     resolvePrompt();
+  });
+
+  it('marks a streaming prompt completed when the prompt response returns a stop reason', async () => {
+    let resolvePrompt!: () => void;
+    mockClient.sendPrompt.mockImplementationOnce(
+      () =>
+        new Promise<PromptResponse>((resolve) => {
+          resolvePrompt = () => resolve({ stopReason: 'end_turn' });
+        })
+    );
+    const store = createStore();
+
+    void store.startSessionWithPrompt('agent-1');
+
+    await vi.waitFor(() => {
+      expect(mockClient.sendPrompt).toHaveBeenCalledWith('session-1', 'Fix the failing tests', []);
+    });
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Done.' }
+      }
+    });
+    expect(store.activeSession.runState).toBe('streaming');
+    expect(store.activeSession.activityLabel).toBe('Agent is replying…');
+
+    resolvePrompt();
+
+    await vi.waitFor(() => {
+      expect(store.activeSession.runState).toBe('completed');
+    });
+    expect(store.activeSession.activityLabel).toBe('Turn completed.');
+    expect(store.activeSession.lastStopReason).toBe('end_turn');
+  });
+
+  it('marks an active prompt cancelled when the prompt response is cancelled', async () => {
+    mockClient.sendPrompt.mockResolvedValueOnce({ stopReason: 'cancelled' });
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.runState = 'tool-running';
+    store.activeSession.activeToolCallId = 'tool-1';
+
+    await store.sendPromptToActiveSession();
+
+    expect(store.activeSession.runState).toBe('completed');
+    expect(store.activeSession.activityLabel).toBe('Turn cancelled.');
+    expect(store.activeSession.activeToolCallId).toBe(null);
+    expect(store.activeSession.lastStopReason).toBe('cancelled');
+  });
+
+  it('requests cancellation for a running active session', async () => {
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.runState = 'tool-running';
+    store.activeSession.activityLabel = 'Running tool: search';
+
+    await store.cancelActiveSession();
+
+    expect(store.activeSession.activityLabel).toBe('Cancelling turn…');
+    expect(store.activeSession.lastError).toBe(null);
+    expect(mockClient.cancelSession).toHaveBeenCalledWith('session-1');
+  });
+
+  it('ignores cancellation when the active session is idle', async () => {
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.runState = 'completed';
+
+    await store.cancelActiveSession();
+
+    expect(mockClient.cancelSession).not.toHaveBeenCalled();
+  });
+
+  it('clears composer errors explicitly', () => {
+    const store = createStore();
+    store.error = 'Prompt failed';
+
+    store.clearError();
+
+    expect(store.error).toBe(null);
+  });
+
+  it('clears stale errors when the composer prompt changes', () => {
+    const store = createStore();
+    store.error = 'Prompt failed';
+
+    store.setComposerPrompt('Try again');
+
+    expect(store.composerPrompt).toBe('Try again');
+    expect(store.error).toBe(null);
+  });
+
+  it('updates the active session config option and tracks pending state', async () => {
+    const store = createStore();
+    const configOptions: SessionConfigOption[] = [
+      {
+        id: 'mode',
+        name: 'Session Mode',
+        type: 'select',
+        currentValue: 'code',
+        options: [
+          { value: 'code', name: 'Code' },
+          { value: 'ask', name: 'Ask' }
+        ]
+      },
+      {
+        id: 'model',
+        name: 'Model',
+        type: 'select',
+        currentValue: 'claude-3-5',
+        options: [{ value: 'claude-3-5', name: 'Claude 3.5' }]
+      }
+    ];
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    (mockClient.setSessionConfigOption as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async () =>
+        new Promise<SessionConfigOption[]>((resolve) => {
+          expect(store.sessionConfigPending.mode).toBe(true);
+          resolve(configOptions);
+        })
+    );
+
+    await store.setActiveSessionConfigOption('mode', 'ask');
+
+    expect(mockClient.setSessionConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-1', configId: 'mode', value: 'ask' })
+    );
+    expect(store.activeSession.configOptions).toEqual(configOptions);
+    expect(store.composerModelId).toBe('claude-3-5');
+    expect(store.sessionConfigPending.mode).toBe(false);
+  });
+
+  it('continues refreshing other agents when one session refresh fails', async () => {
+    const store = createStore();
+    store.configs = [
+      ...store.configs,
+      {
+        id: 'agent-2',
+        name: 'Mesh Agent',
+        commandLine: '/usr/local/bin/qmtcode --acp --mesh',
+        enabled: true,
+        autoStart: true
+      }
+    ];
+    store.statuses = {
+      ...store.statuses,
+      'agent-2': {
+        agentId: 'agent-2',
+        state: 'running',
+        commandLine: '/usr/local/bin/qmtcode --acp --mesh',
+        pid: 4321,
+        version: '1.0.0',
+        message: 'Running',
+        lastError: null
+      }
+    };
+    let listSessionsCalls = 0;
+    (mockClient.listSessions as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      listSessionsCalls += 1;
+      if (listSessionsCalls === 2) {
+        throw new Error('mesh failed');
+      }
+      return [{ sessionId: 'session-1', title: 'Local session', cwd: '/tmp/work', updatedAt: '2026-06-16T12:00:00Z' }];
+    });
+
+    await store.refreshAllSessions();
+
+    expect(store.sessionsByAgent['agent-1']).toEqual([
+      expect.objectContaining({ sessionId: 'session-1', title: 'Local session' })
+    ]);
+    expect(store.agentErrors['agent-2']).toBe('mesh failed');
   });
 });

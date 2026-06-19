@@ -1016,6 +1016,21 @@ export interface SessionLoadSnapshot {
 	cursor: StreamCursor;
 }
 
+/** High-level runtime state for stop/resume orchestration. */
+export enum SessionRuntimeStatus {
+	Idle = "idle",
+	Running = "running",
+	Waiting = "waiting",
+	CancelRequested = "cancel_requested",
+}
+
+export interface SessionMeta {
+	messageCount: number;
+	userMessageCount: number;
+	hasErrors: boolean;
+	runtimeStatus: SessionRuntimeStatus;
+}
+
 /**
  * Mirror of `querymt::chat::Tool` for typeshare generation.
  * Note: kept for typeshare output; may be unused in Rust code paths.

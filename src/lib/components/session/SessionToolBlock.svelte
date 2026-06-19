@@ -9,9 +9,36 @@
     tool: SessionToolCallItem;
     open?: boolean;
   } = $props();
+
+  let detailsOpen = $state(false);
+  let userToggled = $state(false);
+  let lastToolStateKey = $state('');
+
+  $effect(() => {
+    const nextKey = `${tool.id}:${tool.status}:${open ? 'open' : 'closed'}`;
+    if (nextKey !== lastToolStateKey) {
+      lastToolStateKey = nextKey;
+      if (!userToggled || open) {
+        detailsOpen = open;
+      }
+      if (open) {
+        userToggled = false;
+      }
+    }
+  });
+
+  function handleToggle(event: Event) {
+    const target = event.currentTarget as HTMLDetailsElement;
+    detailsOpen = target.open;
+    userToggled = true;
+  }
 </script>
 
-<details class={`details-reset session-tool-block ${tool.status === 'failed' ? 'session-tool-block-failed' : tool.status === 'in_progress' ? 'session-tool-block-running' : tool.status === 'completed' ? 'session-tool-block-complete' : ''}`} {open}>
+<details
+  class={`details-reset session-tool-block ${tool.status === 'failed' ? 'session-tool-block-failed' : tool.status === 'in_progress' ? 'session-tool-block-running' : tool.status === 'completed' ? 'session-tool-block-complete' : ''}`}
+  bind:open={detailsOpen}
+  ontoggle={handleToggle}
+>
   <summary class="session-tool-summary">
     <div class="session-tool-summary-main">
       <span class="session-tool-icon">

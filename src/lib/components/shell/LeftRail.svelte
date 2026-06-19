@@ -1,8 +1,12 @@
 <script lang="ts">
-  import { sectionIcons, sectionOrder, type SectionName } from '$lib/design/tokens';
+  import { ChevronLeft, ChevronRight } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
+  import { appMeta, sectionIcons, sectionOrder, type SectionName } from '$lib/design/tokens';
 
   export let current: SectionName;
   export let quiet = false;
+  export let collapsed = false;
+  export let onToggle: (() => void) | undefined = undefined;
 
   const routeMap: Record<SectionName, string> = {
     Today: '/',
@@ -16,20 +20,78 @@
   };
 </script>
 
-<nav class={`panel sticky top-6 self-start flex max-h-[calc(100vh-3rem)] flex-col gap-4 overflow-y-auto p-4 transition ${quiet ? 'opacity-80 hover:opacity-100' : ''}`}>
-  <div class="space-y-1">
-    {#each sectionOrder as section}
-      {@const Icon = sectionIcons[section]}
-      <a
-        class={`flex items-center gap-3 rounded-full px-2.5 py-2 text-sm transition ${current === section ? 'bg-[var(--accent-dim)] text-[var(--text)]' : 'text-[var(--muted)] hover:bg-[var(--bg-card-hover)] hover:text-[var(--text)]'}`}
-        href={routeMap[section]}
-        aria-current={current === section ? 'page' : undefined}
-      >
-        <span class={`flex h-9 w-9 items-center justify-center rounded-full border ${current === section ? 'border-[var(--rail)] bg-[var(--bg-card)] text-[var(--accent)]' : 'border-[var(--border)] bg-[var(--bg-card)] text-[var(--muted)]'}`}>
-          <Icon size={16} />
-        </span>
-        <span class="flex-1">{section}</span>
-      </a>
-    {/each}
-  </div>
-</nav>
+<Tooltip.Provider delayDuration={120} skipDelayDuration={80}>
+  <nav
+    class={`panel left-rail sticky top-6 self-start flex max-h-[calc(100vh-3rem)] flex-col gap-3 overflow-visible p-4 transition ${quiet ? 'opacity-55 hover:opacity-100 focus-within:opacity-100' : ''} ${collapsed ? 'left-rail-collapsed' : ''}`}
+    aria-label="Primary navigation"
+  >
+    <div class="left-rail-header">
+      <div class="left-rail-brand">
+        <div class="left-rail-brand-mark" aria-hidden="true">Q</div>
+        {#if !collapsed}
+          <div class="left-rail-brand-copy">
+            <div class="text-sm font-medium text-[var(--accent)]">{appMeta.title}</div>
+            <div class="muted text-xs">{appMeta.subtitle}</div>
+          </div>
+        {:else}
+          <span class="left-rail-active-label">{current}</span>
+        {/if}
+      </div>
+
+      {#if onToggle}
+        <button
+          class="left-rail-header-toggle"
+          type="button"
+          aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+          aria-expanded={!collapsed}
+          onclick={onToggle}
+        >
+          {#if collapsed}
+            <ChevronRight size={14} strokeWidth={1.8} />
+          {:else}
+            <ChevronLeft size={14} strokeWidth={1.8} />
+          {/if}
+        </button>
+      {/if}
+    </div>
+
+    <div class="left-rail-nav-items">
+      {#each sectionOrder as section}
+        {@const Icon = sectionIcons[section]}
+        {#if collapsed}
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              <a
+                class={`left-rail-link ${current === section ? 'left-rail-link-active' : ''}`}
+                href={routeMap[section]}
+                aria-current={current === section ? 'page' : undefined}
+                aria-label={section}
+              >
+                <span class={`left-rail-link-icon ${current === section ? 'left-rail-link-icon-active' : ''}`}>
+                  <Icon size={16} />
+                </span>
+              </a>
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class="left-rail-tooltip" side="right" sideOffset={10}>
+                {section}
+                <Tooltip.Arrow class="left-rail-tooltip-arrow" />
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+        {:else}
+          <a
+            class={`left-rail-link ${current === section ? 'left-rail-link-active' : ''}`}
+            href={routeMap[section]}
+            aria-current={current === section ? 'page' : undefined}
+          >
+            <span class={`left-rail-link-icon ${current === section ? 'left-rail-link-icon-active' : ''}`}>
+              <Icon size={16} />
+            </span>
+            <span class="left-rail-link-label">{section}</span>
+          </a>
+        {/if}
+      {/each}
+    </div>
+  </nav>
+</Tooltip.Provider>
