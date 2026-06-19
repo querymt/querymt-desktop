@@ -13,7 +13,7 @@
     Trash2,
     X
   } from '@lucide/svelte';
-  import { getContext } from 'svelte';
+  import { getContext, onMount } from 'svelte';
   import { Portal } from 'bits-ui';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
@@ -95,6 +95,38 @@
   function closeDetails() {
     selectedAgentId = null;
   }
+
+  function closeTopmostOverlay() {
+    if (agentDialogMode) {
+      closeAgentDialog();
+      return true;
+    }
+
+    if (pendingDeleteAgentId) {
+      pendingDeleteAgentId = null;
+      return true;
+    }
+
+    if (selectedAgentId) {
+      closeDetails();
+      return true;
+    }
+
+    return false;
+  }
+
+  onMount(() => {
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (closeTopmostOverlay()) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeydown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeydown, { capture: true });
+  });
 
   async function saveAgentDialog() {
     const name = draftName.trim();
@@ -205,8 +237,9 @@
 
   {#if agentDialogMode}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
-        <div class="panel w-full max-w-3xl p-5 space-y-4">
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4">
+        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close agent dialog" onclick={() => closeAgentDialog()}></button>
+        <div class="panel relative z-10 w-full max-w-3xl p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div class="flex items-start justify-between gap-3">
             <div>
               <div class="text-lg font-semibold">{agentDialogMode === 'add' ? 'Add agent' : 'Edit agent'}</div>
@@ -239,8 +272,9 @@
 
   {#if pendingDeleteAgentId}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
-        <div class="panel w-full max-w-md p-5 space-y-4">
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4">
+        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close delete confirmation" onclick={() => (pendingDeleteAgentId = null)}></button>
+        <div class="panel relative z-10 w-full max-w-md p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div>
             <div class="text-lg font-semibold">Delete agent</div>
             <div class="text-sm text-[var(--muted)]">Remove this configured agent from the desktop app?</div>
@@ -256,8 +290,9 @@
 
   {#if selectedCard}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-40 flex justify-end bg-[color:rgba(36,36,38,0.35)]" role="dialog" aria-modal="true">
-        <aside class="agent-details-panel h-full w-full max-w-2xl overflow-auto border-l border-[var(--border)] bg-[var(--bg-panel-strong)] p-5 shadow-2xl">
+      <div class="fixed inset-0 z-40 flex justify-end bg-[color:rgba(36,36,38,0.35)]">
+        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close details" onclick={() => closeDetails()}></button>
+        <div class="agent-details-panel relative z-10 h-full w-full max-w-2xl overflow-auto border-l border-[var(--border)] bg-[var(--bg-panel-strong)] p-5 shadow-2xl" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
         <div class="flex items-start justify-between gap-3">
           <div>
               <div class="flex items-center gap-3">
@@ -349,7 +384,7 @@
             <SidecarLogList logs={selectedCard.logs} title={`${selectedCard.config.name} logs`} emptyMessage="No logs yet for this agent." />
           </section>
         </div>
-        </aside>
+        </div>
       </div>
     </Portal>
   {/if}
