@@ -121,7 +121,12 @@
 
       if (key === 'p') {
         event.preventDefault();
-        commandPaletteStore.openCommands();
+        if (commandPaletteStore.open) {
+          commandPaletteStore.close();
+        } else if (!document.querySelector('[data-blocking-overlay="true"]')) {
+          // Avoid stacking the command palette over dialogs that already own user focus.
+          commandPaletteStore.openCommands();
+        }
       }
     };
 

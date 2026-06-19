@@ -150,6 +150,45 @@
     clearKeyProviderPending = null;
   }
 
+  function closeTopmostDialog() {
+    if (actionLoading) return false;
+
+    if (tokenDialogProvider) {
+      closeTokenDialog();
+      return true;
+    }
+
+    if (manualOAuthProvider) {
+      closeManualOAuthDialog();
+      return true;
+    }
+
+    if (disconnectProviderPending) {
+      closeDisconnectDialog();
+      return true;
+    }
+
+    if (clearKeyProviderPending) {
+      closeClearKeyDialog();
+      return true;
+    }
+
+    return false;
+  }
+
+  onMount(() => {
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (closeTopmostDialog()) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeydown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeydown, { capture: true });
+  });
+
   async function refreshProviders() {
     if (!selectedAgentId) return;
     setBusy('refresh');
@@ -615,8 +654,9 @@
 
   {#if tokenDialogProvider}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
-        <div class="panel w-full max-w-lg p-5 space-y-4">
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4">
+        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close API key dialog" onclick={() => closeTopmostDialog()}></button>
+        <div class="panel relative z-10 w-full max-w-lg p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div>
             <div class="text-lg font-semibold">Set API key</div>
             <div class="text-sm text-[var(--muted)]">Store a key for {tokenDialogProvider.display_name} in the desktop agent keyring.</div>
@@ -638,8 +678,9 @@
 
   {#if manualOAuthProvider}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
-        <div class="panel w-full max-w-xl p-5 space-y-4">
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4">
+        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close OAuth dialog" onclick={() => closeTopmostDialog()}></button>
+        <div class="panel relative z-10 w-full max-w-xl p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div>
             <div class="text-lg font-semibold">Complete OAuth sign-in</div>
             <div class="text-sm text-[var(--muted)]">Paste the callback URL or returned code for {manualOAuthProvider.display_name}.</div>
@@ -661,8 +702,9 @@
 
   {#if disconnectProviderPending}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
-        <div class="panel w-full max-w-md p-5 space-y-4">
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4">
+        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close disconnect confirmation" onclick={() => closeTopmostDialog()}></button>
+        <div class="panel relative z-10 w-full max-w-md p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div>
             <div class="text-lg font-semibold">Disconnect provider</div>
             <div class="text-sm text-[var(--muted)]">Remove OAuth credentials for {disconnectProviderPending.display_name}?</div>
@@ -678,8 +720,9 @@
 
   {#if clearKeyProviderPending}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4" role="dialog" aria-modal="true">
-        <div class="panel w-full max-w-md p-5 space-y-4">
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4">
+        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close clear key confirmation" onclick={() => closeTopmostDialog()}></button>
+        <div class="panel relative z-10 w-full max-w-md p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div>
             <div class="text-lg font-semibold">Clear stored API key</div>
             <div class="text-sm text-[var(--muted)]">Remove the saved key for {clearKeyProviderPending.display_name}?</div>
