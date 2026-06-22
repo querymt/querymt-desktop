@@ -9,7 +9,8 @@ describe('renderMarkdownToHtml', () => {
     expect(html).toContain('code-block-header');
     expect(html).toContain('data-code-copy');
     expect(html).toContain('language-ts');
-    expect(html).toContain('tok-keyword');
+    expect(html).toContain('const value =');
+    expect(html).not.toContain('tok-keyword');
   });
 
   it('escapes raw html outside and inside code blocks', () => {

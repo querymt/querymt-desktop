@@ -10,37 +10,11 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#39;');
 }
 
-function highlightCode(code: string, language: string): string {
-  const escaped = escapeHtml(code);
-  const normalized = language.toLowerCase();
-
-  if (['ts', 'tsx', 'js', 'jsx', 'javascript', 'typescript'].includes(normalized)) {
-    return escaped
-      .replace(/\b(const|let|var|function|return|async|await|import|from|export|type|interface|class|new|if|else|for|while|try|catch)\b/g, '<span class="tok-keyword">$1</span>')
-      .replace(/(&quot;[^&]*?&quot;|'[^']*?'|`[^`]*?`)/g, '<span class="tok-string">$1</span>')
-      .replace(/\b(true|false|null|undefined)\b/g, '<span class="tok-literal">$1</span>');
-  }
-
-  if (['rs', 'rust'].includes(normalized)) {
-    return escaped
-      .replace(/\b(fn|let|mut|pub|impl|struct|enum|trait|use|mod|match|if|else|for|while|loop|async|await|return|Self|self)\b/g, '<span class="tok-keyword">$1</span>')
-      .replace(/(&quot;[^&]*?&quot;)/g, '<span class="tok-string">$1</span>');
-  }
-
-  if (['sh', 'bash', 'zsh', 'shell'].includes(normalized)) {
-    return escaped
-      .replace(/\b(cd|ls|git|npm|cargo|pnpm|yarn|echo|export|source)\b/g, '<span class="tok-keyword">$1</span>')
-      .replace(/(#.*)$/gm, '<span class="tok-comment">$1</span>');
-  }
-
-  return escaped;
-}
-
 function renderCodeBlock(code: string, language: string): string {
   const langClass = language ? ` language-${escapeHtml(language)}` : '';
   const label = language ? escapeHtml(language) : '';
   const header = `<div class="code-block-header"><span class="code-block-language">${label}</span><button class="code-block-copy" type="button" data-code-copy aria-label="Copy code">Copy</button></div>`;
-  return `<div class="code-block-shell">${header}<pre><code class="${langClass.trim()}">${highlightCode(code.trimEnd(), language)}</code></pre></div>`;
+  return `<div class="code-block-shell">${header}<pre><code class="${langClass.trim()}">${escapeHtml(code.trimEnd())}</code></pre></div>`;
 }
 
 marked.use({

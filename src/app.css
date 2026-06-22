@@ -1616,6 +1616,10 @@ summary:focus-visible {
   padding: 0.85rem;
 }
 
+.markdown-body .code-block-shell .shiki {
+  background: transparent !important;
+}
+
 .markdown-body .code-block-shell code {
   display: block;
   max-width: 100%;
@@ -1625,20 +1629,24 @@ summary:focus-visible {
   white-space: pre;
 }
 
-.tok-keyword {
-  color: var(--accent);
+.markdown-body .code-block-shell .line {
+  min-height: 1.45em;
 }
 
-.tok-string {
-  color: var(--success);
+:root:not([data-theme='dark']) .shiki,
+:root:not([data-theme='dark']) .shiki span {
+  color: var(--shiki-light) !important;
+  font-style: var(--shiki-light-font-style) !important;
+  font-weight: var(--shiki-light-font-weight) !important;
+  text-decoration: var(--shiki-light-text-decoration) !important;
 }
 
-.tok-literal {
-  color: var(--amber);
-}
-
-.tok-comment {
-  color: var(--text-dim);
+:root[data-theme='dark'] .shiki,
+:root[data-theme='dark'] .shiki span {
+  color: var(--shiki-dark) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+  text-decoration: var(--shiki-dark-text-decoration) !important;
 }
 
 .session-page {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Tooltip } from 'bits-ui';
   import { Sparkles } from '@lucide/svelte';
+  import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
 
   let {
     reasoning,
@@ -33,30 +34,6 @@
     const first = reasoning.map((entry) => stripHtml(entry.html)).find(Boolean);
     return first ? truncatePreview(first) : 'Thinking';
   });
-
-  function copyCodeBlocks(node: HTMLElement) {
-    async function handleClick(event: MouseEvent) {
-      const target = event.target instanceof Element ? event.target : null;
-      const button = target?.closest<HTMLButtonElement>('[data-code-copy]');
-      if (!button) return;
-
-      const code = button.closest('.code-block-shell')?.querySelector('code')?.textContent;
-      if (!code) return;
-
-      await navigator.clipboard.writeText(code);
-      button.textContent = 'Copied';
-      window.setTimeout(() => {
-        button.textContent = 'Copy';
-      }, 1200);
-    }
-
-    node.addEventListener('click', handleClick);
-    return {
-      destroy() {
-        node.removeEventListener('click', handleClick);
-      }
-    };
-  }
 </script>
 
 {#if reasoning.length > 0}
@@ -79,7 +56,7 @@
     </summary>
     <div class="session-reasoning-body">
       {#each reasoning as entry}
-        <div class="session-reasoning-entry markdown-body" use:copyCodeBlocks>{@html entry.html}</div>
+        <div class="session-reasoning-entry markdown-body" use:enhanceCodeBlocks>{@html entry.html}</div>
       {/each}
     </div>
   </details>

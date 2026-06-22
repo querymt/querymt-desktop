@@ -1,6 +1,7 @@
 <script lang="ts">
   import SessionActivities from '$lib/components/session/SessionActivities.svelte';
   import SessionReasoningBlock from '$lib/components/session/SessionReasoningBlock.svelte';
+  import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
   import type { SessionConversationTurn } from '$lib/domain/session-conversation';
 
   let {
@@ -12,36 +13,12 @@
     activeToolCallId?: string | null;
     openReasoning?: boolean;
   } = $props();
-
-  function copyCodeBlocks(node: HTMLElement) {
-    async function handleClick(event: MouseEvent) {
-      const target = event.target instanceof Element ? event.target : null;
-      const button = target?.closest<HTMLButtonElement>('[data-code-copy]');
-      if (!button) return;
-
-      const code = button.closest('.code-block-shell')?.querySelector('code')?.textContent;
-      if (!code) return;
-
-      await navigator.clipboard.writeText(code);
-      button.textContent = 'Copied';
-      window.setTimeout(() => {
-        button.textContent = 'Copy';
-      }, 1200);
-    }
-
-    node.addEventListener('click', handleClick);
-    return {
-      destroy() {
-        node.removeEventListener('click', handleClick);
-      }
-    };
-  }
 </script>
 
 <article class="session-turn">
   {#if turn.user}
     <section class="session-message session-message-user">
-      <div class="session-message-body markdown-body" use:copyCodeBlocks>{@html turn.user.html}</div>
+      <div class="session-message-body markdown-body" use:enhanceCodeBlocks>{@html turn.user.html}</div>
     </section>
   {/if}
 
@@ -49,7 +26,7 @@
 
   {#if turn.assistant}
     <section class="session-agent-block">
-      <div class="session-agent-body markdown-body" use:copyCodeBlocks>{@html turn.assistant.html}</div>
+      <div class="session-agent-body markdown-body" use:enhanceCodeBlocks>{@html turn.assistant.html}</div>
 
       <SessionActivities activities={turn.activities} {activeToolCallId} />
     </section>
