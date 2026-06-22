@@ -1868,13 +1868,13 @@ summary:focus-visible {
 }
 
 .session-activities {
-  margin-top: 0.25rem;
-  max-width: min(50rem, 100%);
+  max-width: 100%;
+  padding: 0.15rem 0.25rem;
 }
 
 .session-activities-summary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 1rem;
   width: 100%;
@@ -1884,6 +1884,7 @@ summary:focus-visible {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
+  cursor: pointer;
 }
 
 .session-activities-summary-main {
@@ -1893,57 +1894,51 @@ summary:focus-visible {
   min-width: 0;
 }
 
-.session-activities-label {
+.session-activities-icon {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  white-space: nowrap;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  color: var(--accent);
+  line-height: 0;
 }
 
-.session-activities-summary-status {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  justify-self: end;
-  gap: 0.45rem;
-}
-
-.session-activities-status-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  border-radius: 999px;
-  border: 1px solid var(--status-muted-border);
-  background: var(--status-muted-bg);
-  color: var(--status-muted);
-  padding: 0.18rem 0.45rem;
-  font-size: 0.62rem;
-  letter-spacing: 0.08em;
-}
-
-.session-activities-status-chip-running {
+.session-activities-icon-running {
   color: var(--status-running);
-  border-color: var(--status-running-border);
-  background: var(--status-running-bg);
 }
 
-.session-activities-status-chip-failed {
+.session-activities-icon-failed {
   color: var(--status-danger);
-  border-color: var(--status-danger-border);
-  background: var(--status-danger-bg);
 }
 
-.session-activities-status-chip-completed {
+.session-activities-icon-completed {
   color: var(--status-success);
-  border-color: var(--status-success-border);
-  background: var(--status-success-bg);
+}
+
+.session-activities-icon svg {
+  display: block;
+}
+
+.session-activities-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-weight: 500;
+  color: var(--muted);
 }
 
 .session-activities-list {
-  margin-top: 0.65rem;
+  margin-top: 0.45rem;
+  margin-left: 0.78rem;
   display: grid;
-  gap: 0.55rem;
+  gap: 0.45rem;
+  border-left: 1px solid var(--border);
+  padding-left: 1rem;
 }
 
 .session-message-meta {
@@ -2010,66 +2005,140 @@ summary:focus-visible {
 }
 
 .session-tool-block {
-  overflow: hidden;
-  border: 1px solid var(--border);
-  background: transparent;
-  border-radius: 12px;
-}
-
-.session-tool-block-running {
-  border-color: rgba(251, 191, 36, 0.24);
-}
-
-.session-tool-block-complete {
-  border-color: rgba(74, 222, 128, 0.18);
-}
-
-.session-tool-block-failed {
-  border-color: rgba(248, 113, 113, 0.24);
+  position: relative;
+  border-radius: 0;
 }
 
 .session-tool-summary {
-  display: flex;
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.8rem;
-  padding: 0.55rem 0.65rem;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.25rem 0 0.25rem 0;
+  cursor: pointer;
+}
+
+.session-tool-status-rail {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: var(--status-muted);
+  box-shadow: 0 0 0 3px var(--bg-panel);
 }
 
 .session-tool-summary-main {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.55rem;
+  min-width: 0;
 }
 
 .session-tool-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.45rem;
-  height: 1.45rem;
+  flex: 0 0 auto;
+  width: 1.2rem;
+  height: 1.2rem;
   border-radius: 999px;
   color: var(--muted);
 }
 
+.session-tool-summary-copy {
+  min-width: 0;
+}
+
+.session-tool-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 580;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-tool-summary-meta {
-  margin-top: 0.12rem;
-  font-size: 0.72rem;
+  margin-top: 0.04rem;
+  overflow: hidden;
   color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-tool-disclosure {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  opacity: 0.65;
+  transition: transform 140ms ease, opacity 140ms ease;
+}
+
+.session-tool-block[open] .session-tool-disclosure {
+  transform: rotate(180deg);
+  opacity: 1;
+}
+
+.session-tool-block-running .session-tool-status-rail,
+.session-tool-block-running .session-tool-icon {
+  color: var(--status-running);
+  background: var(--status-running);
+}
+
+.session-tool-block-complete .session-tool-status-rail,
+.session-tool-block-complete .session-tool-icon {
+  color: var(--status-success);
+  background: var(--status-success);
+}
+
+.session-tool-block-failed .session-tool-status-rail,
+.session-tool-block-failed .session-tool-icon {
+  color: var(--status-danger);
+  background: var(--status-danger);
+}
+
+.session-tool-block-running .session-tool-icon,
+.session-tool-block-complete .session-tool-icon,
+.session-tool-block-failed .session-tool-icon {
+  background: transparent;
 }
 
 .session-tool-content {
   display: grid;
-  gap: 0.6rem;
-  border-top: 1px solid var(--border);
-  padding: 0.65rem 0.65rem 0.65rem 2.85rem;
+  gap: 0.55rem;
+  padding: 0.35rem 0 0.65rem 2rem;
   font-size: 0.76rem;
   line-height: 1.5;
 }
 
+.session-tool-detail {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.session-tool-detail-label {
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
 .session-tool-content pre {
-  font-size: 0.74rem;
+  margin: 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--code-bg);
+  padding: 0.65rem 0.7rem;
+  font-size: 0.72rem;
   line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 .session-plan-card {

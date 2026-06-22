@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, CheckCircle2, LoaderCircle, TerminalSquare } from '@lucide/svelte';
+  import { AlertTriangle, CheckCircle2, ChevronDown, LoaderCircle, TerminalSquare } from '@lucide/svelte';
   import type { SessionToolCallItem } from '$lib/domain/types';
 
   let {
@@ -27,6 +27,8 @@
     }
   });
 
+  const statusLabel = $derived(tool.status.replace('_', ' '));
+
   function handleToggle(event: Event) {
     const target = event.currentTarget as HTMLDetailsElement;
     detailsOpen = target.open;
@@ -40,38 +42,41 @@
   ontoggle={handleToggle}
 >
   <summary class="session-tool-summary">
+    <span class="session-tool-status-rail" aria-hidden="true"></span>
     <div class="session-tool-summary-main">
       <span class="session-tool-icon">
         {#if tool.status === 'failed'}
           <AlertTriangle size={14} />
         {:else if tool.status === 'in_progress'}
-          <LoaderCircle size={14} />
+          <LoaderCircle size={14} class="animate-spin" />
         {:else if tool.status === 'completed'}
           <CheckCircle2 size={14} />
         {:else}
           <TerminalSquare size={14} />
         {/if}
       </span>
-      <div>
-        <div class="text-sm font-medium">{tool.title}</div>
-        <div class="session-tool-summary-meta">{tool.kind ?? 'tool'} · {tool.status}</div>
+      <div class="session-tool-summary-copy">
+        <div class="session-tool-title">{tool.title}</div>
+        <div class="session-tool-summary-meta">{tool.kind ?? 'tool'} · {statusLabel}</div>
       </div>
     </div>
-    <span class="badge">{tool.status}</span>
+    <span class="session-tool-disclosure" aria-hidden="true"><ChevronDown size={14} /></span>
   </summary>
 
-  <div class="session-tool-content">
-    {#if tool.arguments}
-      <div>
-        <div class="muted mb-1 uppercase tracking-[0.16em]">Parameters</div>
-        <pre class="surface-muted overflow-x-auto p-3 whitespace-pre-wrap">{tool.arguments}</pre>
-      </div>
-    {/if}
-    {#if tool.result}
-      <div>
-        <div class="muted mb-1 uppercase tracking-[0.16em]">Result</div>
-        <pre class="surface-muted overflow-x-auto p-3 whitespace-pre-wrap">{tool.result}</pre>
-      </div>
-    {/if}
-  </div>
+  {#if tool.arguments || tool.result}
+    <div class="session-tool-content">
+      {#if tool.arguments}
+        <div class="session-tool-detail">
+          <div class="session-tool-detail-label">Parameters</div>
+          <pre>{tool.arguments}</pre>
+        </div>
+      {/if}
+      {#if tool.result}
+        <div class="session-tool-detail">
+          <div class="session-tool-detail-label">Result</div>
+          <pre>{tool.result}</pre>
+        </div>
+      {/if}
+    </div>
+  {/if}
 </details>
