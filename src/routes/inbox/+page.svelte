@@ -14,17 +14,20 @@
   }
 </script>
 
-<div class="space-y-4 page-width-wide">
-  <SectionHeader
-    eyebrow="Human loop"
-    title="Inbox"
-    description="Things that need human attention across agents and background work."
-  />
+<div class="agents-page">
+  <div class="page-toolbar">
+    <SectionHeader
+      title="Inbox"
+      description="Permission and elicitation requests that need human attention."
+    />
+  </div>
 
-  <InboxList
-    items={inboxStore.items}
-    onAction={(itemId, actionId) => inboxStore.handleAction(itemId, actionId)}
-    onFieldChange={(itemId, fieldKey, value) => inboxStore.updateField(itemId, fieldKey, value)}
-    onOpenSession={(item) => openSession(item)}
-  />
+  <div class="agents-unified-panel">
+    <InboxList
+      items={inboxStore.items}
+      onAction={(itemId, actionId) => inboxStore.handleAction(itemId, actionId)}
+      onFieldChange={(itemId, fieldKey, value) => inboxStore.updateField(itemId, fieldKey, value)}
+      onOpenSession={(item) => openSession(item)}
+    />
+  </div>
 </div>

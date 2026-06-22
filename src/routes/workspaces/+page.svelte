@@ -12,18 +12,21 @@
   }
 </script>
 
-<div class="space-y-4 page-width-wide">
-  <SectionHeader
-    eyebrow="Desktop context"
-    title="Workspaces"
-    description="Desktop contexts and folder shortcuts for starting work with any configured agent."
-  />
+<div class="settings-page">
+  <div class="page-toolbar">
+    <SectionHeader
+      title="Workspaces"
+      description="Manage desktop folders and quick context shortcuts."
+    />
+  </div>
 
-  <WorkspaceList
-    items={workspacesStore.items}
-    loading={workspacesStore.loading}
-    error={workspacesStore.error}
-    onAddWorkspace={() => workspacesStore.addWorkspaceFromDialog()}
-    onUseWorkspace={(item) => useWorkspace(item)}
-  />
+  <div class="settings-unified-panel">
+    <WorkspaceList
+      items={workspacesStore.items}
+      loading={workspacesStore.loading}
+      error={workspacesStore.error}
+      onAddWorkspace={() => workspacesStore.addWorkspaceFromDialog()}
+      onUseWorkspace={(item) => useWorkspace(item)}
+    />
+  </div>
 </div>

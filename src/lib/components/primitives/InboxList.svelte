@@ -20,16 +20,24 @@
   }
 </script>
 
-<div class="space-y-3">
+<section class="settings-section">
+  <div class="settings-section-header">
+    <div>
+      <h2>Requests</h2>
+      <p>Permission and elicitation requests from active agents.</p>
+    </div>
+  </div>
+
   {#if items.length === 0}
-    <div class="panel-strong p-5">
-      <div class="text-sm font-semibold">No requests need attention</div>
-      <div class="muted mt-2 text-sm">Permission and elicitation requests will appear here while an active agent needs your input.</div>
+    <div class="empty-state">
+      <div class="text-sm font-medium">No requests need attention</div>
+      <div class="panel-copy mt-1">Permission and elicitation requests will appear here while an active agent needs your input.</div>
     </div>
   {/if}
 
+  <div class="space-y-3">
   {#each items as item}
-    <article class="panel-strong p-4">
+    <article class="surface-muted p-4">
       <div class="flex items-start justify-between gap-4">
         <div>
           <h3 class="text-sm font-semibold">{item.title}</h3>
@@ -135,4 +143,5 @@
       {/if}
     </article>
   {/each}
-</div>
+  </div>
+</section>

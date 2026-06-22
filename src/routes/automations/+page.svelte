@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { Pause, Play, RefreshCw, Trash2, Zap } from '@lucide/svelte';
+  import { Pause, Play, Plus, RefreshCw, Trash2, Zap } from '@lucide/svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
 
   const scheduleAgents = $derived.by(() =>
     agentsStore.configs.filter((config) => {
@@ -42,6 +43,43 @@
     return selectedCapabilities?.methods.includes(method) ?? false;
   }
 
+  function selectedCapabilitySummary() {
+    if (!selectedCapabilities) return loading ? 'Refreshing schedule capabilities' : 'No capabilities reported yet';
+
+    const details = [`API v${selectedCapabilities.querymt_control_version}`, selectedCapabilities.agent.kind];
+    if (selectedCapabilities.features.schedules) details.push('Schedules');
+    if (selectedCapabilities.features.remote_schedules) details.push('Remote schedules');
+    return details.join(' · ');
+  }
+
+  function selectedHealthSummary() {
+    if (!selectedAgent) return 'No agent selected';
+    return agentsStore.controlHealthByAgent[selectedAgent.id]?.summary ?? 'No control summary yet';
+  }
+
+  function lastActionSummary() {
+    if (!lastAction) return 'No schedule actions yet';
+    return `${lastAction.action} ${lastAction.success ? 'ok' : 'failed'}`;
+  }
+
+  function scheduleMeta(schedule: (typeof selectedSchedules)[number]) {
+    const details = [schedule.state, `runs ${schedule.run_count}`, `failures ${schedule.consecutive_failures}`, `max runtime ${schedule.max_runtime_seconds}s`];
+    if (schedule.max_runs) details.push(`max runs ${schedule.max_runs}`);
+    if (schedule.next_run_at) details.push(`next ${schedule.next_run_at}`);
+    if (schedule.last_run_at) details.push(`last ${schedule.last_run_at}`);
+    return details.join(' · ');
+  }
+
+  function openScheduleCreate() {
+    commandPaletteStore.openSchedule({
+      agentId: selectedAgentId || null,
+      sessionId: agentsStore.activeSessionId,
+      cwd: agentsStore.composerCwd || null,
+      prompt: agentsStore.composerPrompt,
+      nodeId: null
+    });
+  }
+
   async function refreshSchedules() {
     if (!selectedAgentId) {
       return;
@@ -73,77 +111,93 @@
   }
 </script>
 
-<div class="space-y-4 page-width-wide">
+<div class="settings-page">
   <div class="page-toolbar">
     <SectionHeader
-      eyebrow="Scheduled control"
       title="Automations"
-      description="Overview existing automated tasks, inspect health, and pause or remove tasks quickly. Use Cmd+P for creation flows."
+      description="Manage scheduled tasks and automation health."
     />
-
-    <div class="compact-toolbar">
-      <IconTooltipButton label="Refresh schedules" icon={RefreshCw} size={16} disabled={!selectedAgentId || loading} onclick={() => refreshSchedules()} />
-    </div>
   </div>
 
-  {#if scheduleAgents.length === 0}
-    <div class="panel empty-state p-6 text-sm text-[var(--muted)]">
-      No connected agents currently advertise `querymt/schedules/list`.
-    </div>
-  {:else}
-    <section class="panel p-4 space-y-4">
-      <div class="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)] lg:items-end">
-        <label class="space-y-2">
-          <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Agent</span>
-          <AppSelect bind:value={selectedAgentId} options={scheduleAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" />
-        </label>
-
-        <div class="flex flex-wrap gap-2 text-xs">
-          {#if selectedCapabilities}
-            <span class="badge">api v{selectedCapabilities.querymt_control_version}</span>
-            <span class="badge">{selectedCapabilities.agent.kind}</span>
-            {#if selectedCapabilities.features.schedules}<span class="badge">schedules</span>{/if}
-            {#if selectedCapabilities.features.remote_schedules}<span class="badge">remote schedules</span>{/if}
-          {/if}
+  <div class="settings-unified-panel">
+    {#if scheduleAgents.length === 0}
+      <section class="settings-section">
+        <div class="settings-section-header">
+          <div>
+            <h2>Agent</h2>
+            <p>No connected agents currently advertise `querymt/schedules/list`.</p>
+          </div>
         </div>
-      </div>
-
-      {#if selectedAgent}
-        <div class="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-          <span class="badge">{agentsStore.controlHealthByAgent[selectedAgent.id]?.summary ?? 'No control summary yet.'}</span>
-          {#if lastAction}
-            <span class="badge">last action: {lastAction.action} {lastAction.success ? 'ok' : 'failed'}</span>
-          {/if}
-          <span>Use <span class="kbd !px-2 !py-0.5">Cmd+P</span> to create a scheduled task.</span>
+      </section>
+    {:else}
+      <section class="settings-section">
+        <div class="settings-section-header settings-section-header-action">
+          <div>
+            <h2>Agent</h2>
+            <p>Choose the agent that provides schedule controls.</p>
+          </div>
+          <IconTooltipButton label="Refresh schedules" icon={RefreshCw} size={16} disabled={!selectedAgentId || loading} onclick={() => refreshSchedules()} />
         </div>
-      {/if}
+
+        <div class="settings-preference-list">
+          <div class="settings-preference-row">
+            <div class="settings-preference-main">
+              <div class="settings-preference-title">Active agent</div>
+              <div class="settings-preference-description">{selectedCapabilitySummary()}</div>
+            </div>
+            <AppSelect bind:value={selectedAgentId} options={scheduleAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Agent" />
+          </div>
+
+          <div class="settings-preference-row">
+            <div class="settings-preference-main">
+              <div class="settings-preference-title">Health</div>
+              <div class="settings-preference-description">{selectedHealthSummary()}</div>
+            </div>
+          </div>
+
+          <div class="settings-preference-row">
+            <div class="settings-preference-main">
+              <div class="settings-preference-title">Last action</div>
+              <div class="settings-preference-description">{lastActionSummary()}</div>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {#if actionError}
-        <div class="alert-error">
+        <div class="alert-error settings-section-message">
           {actionError}
         </div>
       {/if}
 
-      {#if selectedSchedules.length === 0}
-        <div class="empty-state">
-          <div class="text-sm font-medium">No schedules loaded yet</div>
-          <div class="panel-copy mt-1">Refresh to inspect the selected agent’s automation queue.</div>
+      <section class="settings-section">
+        <div class="settings-section-header settings-section-header-action">
+          <div>
+            <h2>Schedules</h2>
+            <p>Review active automations and run quick actions.</p>
+          </div>
+          <button class="action-btn action-btn-primary" type="button" onclick={() => openScheduleCreate()}>
+            <Plus size={15} />
+            Create
+          </button>
         </div>
-      {:else}
-        <div class="space-y-3">
-          {#each selectedSchedules as schedule}
-            <article class="surface-muted p-4 space-y-3">
-              <div class="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div class="text-sm font-medium">{schedule.public_id}</div>
-                  <div class="mt-1 text-xs text-[var(--muted)]">
-                    session {schedule.session_public_id} • task {schedule.task_public_id}
-                  </div>
+
+        {#if selectedSchedules.length === 0}
+          <div class="empty-state">
+            <div class="text-sm font-medium">No schedules loaded yet</div>
+            <div class="panel-copy mt-1">Refresh to inspect the selected agent's automation queue.</div>
+          </div>
+        {:else}
+          <div class="mesh-item-list">
+            {#each selectedSchedules as schedule}
+              <article class="mesh-item-row">
+                <div class="mesh-item-main">
+                  <div class="mesh-item-title">{schedule.public_id}</div>
+                  <div class="mesh-item-description">session {schedule.session_public_id} · task {schedule.task_public_id}{schedule.node_id ? ` · node ${schedule.node_id}` : ''}</div>
+                  <div class="mesh-item-meta">{scheduleMeta(schedule)}</div>
                 </div>
 
-                <div class="compact-toolbar">
-                  <span class="badge">{schedule.state}</span>
-                  {#if schedule.node_id}<span class="badge">{schedule.node_id}</span>{/if}
+                <div class="mesh-item-actions">
                   <IconTooltipButton
                     label="Pause"
                     icon={Pause}
@@ -170,20 +224,11 @@
                     onclick={() => runAction('delete', schedule.public_id, schedule.node_id)}
                   />
                 </div>
-              </div>
-
-              <div class="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-                <span>runs {schedule.run_count}</span>
-                <span>• failures {schedule.consecutive_failures}</span>
-                <span>• max runtime {schedule.max_runtime_seconds}s</span>
-                {#if schedule.max_runs}<span>• max runs {schedule.max_runs}</span>{/if}
-                {#if schedule.next_run_at}<span>• next {schedule.next_run_at}</span>{/if}
-                {#if schedule.last_run_at}<span>• last {schedule.last_run_at}</span>{/if}
-              </div>
-            </article>
-          {/each}
-        </div>
-      {/if}
-    </section>
-  {/if}
+              </article>
+            {/each}
+          </div>
+        {/if}
+      </section>
+    {/if}
+  </div>
 </div>

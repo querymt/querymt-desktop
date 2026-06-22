@@ -16,46 +16,46 @@
   } = $props();
 </script>
 
-<div class="panel-strong overflow-hidden">
-  <div class="flex items-center justify-between gap-4 border-b border-[var(--border)] px-4 py-3">
+<section class="settings-section">
+  <div class="settings-section-header settings-section-header-action">
     <div>
-      <div class="text-sm font-medium">Workspaces</div>
-      <div class="muted mt-1 text-xs">Desktop folders and quick context shortcuts.</div>
+      <h2>Folders</h2>
+      <p>Desktop folders available as workspace context.</p>
     </div>
     {#if onAddWorkspace}
-      <button class="action-btn !px-3 !py-1.5 text-xs" disabled={loading} onclick={onAddWorkspace}>
-        {loading ? 'Picking…' : 'Pick folder'}
+      <button class="action-btn action-btn-primary" disabled={loading} onclick={onAddWorkspace}>
+        {loading ? 'Picking...' : 'Pick folder'}
       </button>
     {/if}
   </div>
 
   {#if error}
-    <div class="alert-error rounded-none border-x-0 border-t-0">{error}</div>
+    <div class="alert-error settings-section-message">{error}</div>
   {/if}
 
-  <div class="divide-y divide-[var(--border)]">
-    {#if items.length === 0}
-      <div class="muted px-4 py-5 text-sm">No workspaces added yet. Pick a folder to create the first desktop workspace context.</div>
-    {/if}
-
-    {#each items as item}
-      <article class="px-4 py-4">
-        <div class="flex items-start justify-between gap-4">
-          <div>
-            <h3 class="text-sm font-semibold">{item.name}</h3>
-            <p class="muted mt-1 text-sm">{item.path}</p>
+  {#if items.length === 0}
+    <div class="empty-state">
+      <div class="text-sm font-medium">No workspaces added yet</div>
+      <div class="panel-copy mt-1">Pick a folder to create the first desktop workspace context.</div>
+    </div>
+  {:else}
+    <div class="mesh-item-list">
+      {#each items as item}
+        <article class="mesh-item-row">
+          <div class="mesh-item-main">
+            <div class="mesh-item-title">{item.name}</div>
+            <div class="mesh-item-description">{item.path}</div>
+            <div class="mesh-item-meta">{item.status} · default runtime {item.defaultRuntime}</div>
           </div>
-          <span class="badge">{item.status}</span>
-        </div>
-        <div class="mt-3 flex items-center justify-between gap-3">
-          <div class="muted text-xs">Default runtime: {item.defaultRuntime}</div>
           {#if onUseWorkspace}
-            <button class="action-btn !px-3 !py-1.5 text-xs" type="button" onclick={() => onUseWorkspace?.(item)}>
-              Use in session
-            </button>
+            <div class="mesh-item-actions">
+              <button class="action-btn" type="button" onclick={() => onUseWorkspace?.(item)}>
+                Use
+              </button>
+            </div>
           {/if}
-        </div>
-      </article>
-    {/each}
-  </div>
-</div>
+        </article>
+      {/each}
+    </div>
+  {/if}
+</section>
