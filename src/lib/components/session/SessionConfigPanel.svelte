@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Bot, Brain, Check, Cpu, LoaderCircle, Settings2, SlidersHorizontal, UserRound } from '@lucide/svelte';
+  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import {
     findModelConfigOption,
     findModeConfigOption,
@@ -87,11 +88,14 @@
   }
 </script>
 
-<details class="details-reset session-config-card">
+<details class="details-reset surface-muted session-config-card">
   <summary class="session-config-summary">
     <span>
-      <span class="session-config-eyebrow"><Settings2 size={14} /> Session controls</span>
-      <span class="session-config-subtitle">{primaryOptions.length + advancedOptions.length} live controls</span>
+      <span class="session-config-eyebrow row-tight text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
+        <Settings2 size={14} />
+        <span>Session controls</span>
+      </span>
+      <span class="session-config-subtitle muted text-xs">{primaryOptions.length + advancedOptions.length} live controls</span>
     </span>
     <span class={`session-config-status-chip ${hasPendingOption ? 'session-config-status-chip-pending' : ''}`}>
       {#if hasPendingOption}
@@ -143,17 +147,14 @@
                 {/each}
               </div>
             {:else}
-              <select
-                class="session-config-select"
+              <AppSelect
+                class="w-full"
                 value={option.currentValue}
+                options={getConfigOptionChoices(option).map((optionChoice) => ({ value: optionChoice.value, label: optionChoice.name }))}
                 disabled={!!pending[option.id]}
-                aria-label={option.name}
-                onchange={(event) => changeConfig(option, (event.currentTarget as HTMLSelectElement).value)}
-              >
-                {#each getConfigOptionChoices(option) as optionChoice}
-                  <option value={optionChoice.value}>{optionChoice.name}</option>
-                {/each}
-              </select>
+                ariaLabel={option.name}
+                onValueChange={(value) => changeConfig(option, value)}
+              />
             {/if}
           </div>
         {/each}
@@ -178,17 +179,14 @@
                   <span class="session-config-current">{choice?.name ?? option.currentValue}</span>
                 {/if}
               </span>
-              <select
-                class="session-config-select"
+              <AppSelect
+                class="w-full"
                 value={option.currentValue}
+                options={getConfigOptionChoices(option).map((optionChoice) => ({ value: optionChoice.value, label: optionChoice.name }))}
                 disabled={!!pending[option.id]}
-                aria-label={option.name}
-                onchange={(event) => changeConfig(option, (event.currentTarget as HTMLSelectElement).value)}
-              >
-                {#each getConfigOptionChoices(option) as optionChoice}
-                  <option value={optionChoice.value}>{optionChoice.name}</option>
-                {/each}
-              </select>
+                ariaLabel={option.name}
+                onValueChange={(value) => changeConfig(option, value)}
+              />
             </label>
           {/each}
         </div>

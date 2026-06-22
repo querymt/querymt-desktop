@@ -8,6 +8,7 @@
   import LeftRail from '$lib/components/shell/LeftRail.svelte';
   import CommandPalette from '$lib/components/shell/CommandPalette.svelte';
   import Inspector from '$lib/components/shell/Inspector.svelte';
+  import SessionContextRail from '$lib/components/session/SessionContextRail.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { appearanceStore } from '$lib/stores/appearance.svelte';
   import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
@@ -127,6 +128,12 @@
           // Avoid stacking the command palette over dialogs that already own user focus.
           commandPaletteStore.openCommands();
         }
+        return;
+      }
+
+      if (key === 'b') {
+        event.preventDefault();
+        setLeftRailCollapsed(!leftRailHidden);
       }
     };
 
@@ -221,8 +228,13 @@
 
 <Tooltip.Provider>
   <div class={`app-shell min-h-screen p-4 lg:p-6 ${windowDecorationsStore.usesCustomTitlebar ? `app-shell-custom-titlebar ${windowMaximized ? 'app-shell-maximized' : ''}` : ''}`}>
-    <div class="app-grid grid min-h-[calc(100vh-2rem)] grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)] 2xl:grid-cols-[220px_minmax(0,1fr)_280px]">
-      <LeftRail current={section} quiet={pathname === '/'} />
+    <div class={`app-grid grid ${layoutClass}`}>
+      <LeftRail
+        current={section}
+        quiet={leftRailQuiet}
+        collapsed={leftRailHidden}
+        onToggle={() => setLeftRailCollapsed(!leftRailHidden)}
+      />
 
       <div class="flex min-w-0 flex-col gap-4">
         <main class="min-h-0 flex-1">
@@ -231,8 +243,17 @@
         <CommandPalette portalTarget={overlayPortalTarget} />
       </div>
 
-      <div class="hidden min-h-0 2xl:block">
+      <div class="app-inspector-column hidden min-h-0 2xl:grid">
         <Inspector />
+        {#if isActiveSessionRoute && agentsStore.activeSessionId}
+          <aside class="session-side-rail session-side-rail-inspector">
+            <SessionContextRail
+              session={agentsStore.activeSession}
+              sessionConfigPending={agentsStore.sessionConfigPending}
+              onConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
+            />
+          </aside>
+        {/if}
       </div>
     </div>
     <div bind:this={overlayPortalTarget} class="app-overlay-root"></div>

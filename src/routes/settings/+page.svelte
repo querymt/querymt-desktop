@@ -654,7 +654,7 @@
 
   {#if tokenDialogProvider}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4">
+      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
         <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close API key dialog" onclick={() => closeTopmostDialog()}></button>
         <div class="panel relative z-10 w-full max-w-lg p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div>
@@ -678,7 +678,7 @@
 
   {#if manualOAuthProvider}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4">
+      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
         <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close OAuth dialog" onclick={() => closeTopmostDialog()}></button>
         <div class="panel relative z-10 w-full max-w-xl p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div>
@@ -702,7 +702,7 @@
 
   {#if disconnectProviderPending}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4">
+      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
         <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close disconnect confirmation" onclick={() => closeTopmostDialog()}></button>
         <div class="panel relative z-10 w-full max-w-md p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div>
@@ -720,7 +720,7 @@
 
   {#if clearKeyProviderPending}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4">
+      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
         <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close clear key confirmation" onclick={() => closeTopmostDialog()}></button>
         <div class="panel relative z-10 w-full max-w-md p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div>

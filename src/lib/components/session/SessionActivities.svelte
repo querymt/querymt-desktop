@@ -16,7 +16,7 @@
   let lastActivityStateKey = $state('');
 
   const hasRunningActivity = $derived.by(() =>
-    activities.some((activity) => activity.tool.id === activeToolCallId || activity.tool.status === 'in_progress' || activity.tool.status === 'failed')
+    activities.some((activity) => activity.tool.id === activeToolCallId || activity.tool.status === 'in_progress')
   );
   const runningCount = $derived(activities.filter((activity) => activity.tool.status === 'in_progress').length);
   const failedCount = $derived(activities.filter((activity) => activity.tool.status === 'failed').length);
@@ -50,7 +50,7 @@
   <details class="details-reset session-activities" bind:open={detailsOpen} ontoggle={handleToggle}>
     <summary class="session-activities-summary">
       <span class="session-activities-summary-main">
-        <span class="row-tight"><Wrench size={14} /> Activities</span>
+        <span class="session-activities-label"><Wrench size={14} /> Activities</span>
         <span class="badge">{activities.length}</span>
       </span>
       <span class="session-activities-summary-status">
@@ -82,7 +82,7 @@
     </summary>
     <div class="session-activities-list">
       {#each activities as activity}
-        <SessionToolBlock tool={activity.tool} open={activity.tool.id === activeToolCallId || activity.tool.status === 'in_progress' || activity.tool.status === 'failed'} />
+        <SessionToolBlock tool={activity.tool} open={activity.tool.id === activeToolCallId || activity.tool.status === 'in_progress'} />
       {/each}
     </div>
   </details>

@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { FilePlus2, Paperclip, Plus, SendHorizontal, X } from '@lucide/svelte';
+  import { fly } from 'svelte/transition';
+  import { Brain, FilePlus2, Paperclip, Plus, SendHorizontal, SlidersHorizontal, X } from '@lucide/svelte';
   import { tick } from 'svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import ComposerSplitPillSelect from '$lib/components/primitives/ComposerSplitPillSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import ModelQuickPicker from '$lib/components/primitives/ModelQuickPicker.svelte';
   import WorkspacePathInput from '$lib/components/primitives/WorkspacePathInput.svelte';
@@ -31,6 +33,9 @@
     activeSessionId = null,
     promptFocusToken = 0,
     sessionOnly = false,
+    docked = false,
+    dockAlignLeft = null,
+    dockAlignWidth = null,
     modelOptions = [],
     selectedModelId = '',
     modelInfo = {},
@@ -68,6 +73,9 @@
     activeSessionId?: string | null;
     promptFocusToken?: number;
     sessionOnly?: boolean;
+    docked?: boolean;
+    dockAlignLeft?: number | null;
+    dockAlignWidth?: number | null;
     modelOptions?: ModelEntry[];
     selectedModelId?: string;
     modelInfo?: Record<string, ModelInfo | null>;
@@ -99,16 +107,16 @@
   let promptElement: HTMLTextAreaElement | null = null;
   let errorTimeout: ReturnType<typeof setTimeout> | null = null;
 
+  const unifiedShell = $derived(launch || sessionOnly);
+  const sessionPlaceholder = 'Write a reply for this session...';
+
+  const dockPositionStyle = $derived.by(() => {
+    if (!docked || dockAlignLeft == null || dockAlignWidth == null) return '';
+    return `left:${dockAlignLeft}px;width:${dockAlignWidth}px;transform:none;`;
+  });
+
   const modeOption = $derived(activeSessionId ? findModeConfigOption(sessionConfigOptions) : undefined);
   const reasoningOption = $derived(activeSessionId ? findReasoningConfigOption(sessionConfigOptions) : undefined);
-
-  const promptFrameTone = $derived.by(() => {
-    const modeValue = `${modeOption?.currentValue ?? ''} ${modeOption?.name ?? ''}`.toLowerCase();
-    if (modeValue.includes('build') || modeValue.includes('edit') || modeValue.includes('agent')) {
-      return 'success';
-    }
-    return 'default';
-  });
 
   function getNextConfigValue(option: (SessionConfigOption & { type: 'select' }) | undefined): string | null {
     if (!option || sessionConfigPending[option.id]) {
@@ -201,9 +209,15 @@
     return `${(size / (1024 * 1024)).toFixed(1)} MB`;
   }
 
+  function handleAttachClick() {
+    fileInputElement?.click();
+  }
+
   $effect(() => {
-    promptFocusToken;
-    void focusPrompt();
+    if (!docked) {
+      promptFocusToken;
+      void focusPrompt();
+    }
   });
 
   $effect(() => {
@@ -235,171 +249,205 @@
   }
 </script>
 
-<div class={`panel-strong ${launch ? 'p-4 md:p-6' : minimal ? 'p-4 md:p-5' : 'p-3 md:p-4'}`}>
-  <div class={`flex flex-col ${launch ? 'gap-4 rounded-[24px] bg-[var(--bg-card)]' : 'gap-3 rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)]'} ${launch ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}>
-    {#if !launch}
-      <div class="px-2 pt-1">
-        <div class={`${minimal ? 'text-base' : 'text-sm'} font-semibold`}>{sessionOnly ? 'Reply' : minimal ? 'Start with a prompt' : 'Ask QueryMT'}</div>
-        <p class="muted mt-1 text-sm">
-          {#if sessionOnly}
-            Continue this session with a quick reply.
-          {:else if minimal}
-            Describe the task, choose a workspace, and start a focused session.
-          {:else}
-            Start a new session or continue the selected one.
-          {/if}
-        </p>
-      </div>
-    {/if}
-
-    {#if error}
-      <div class={`${launch ? 'mx-1' : 'mx-2'} flex items-start justify-between gap-3 rounded-[18px] border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100`} role="alert" aria-live="polite">
-        <p class="min-w-0 flex-1">{error}</p>
-        {#if onDismissError}
-          <button class="text-rose-200 transition hover:text-rose-50" type="button" aria-label="Dismiss error" onclick={dismissError}>
-            <X size={14} />
-          </button>
+{#snippet composerBody()}
+  {#if !unifiedShell}
+    <div class="px-2 pt-1">
+      <div class={`${minimal ? 'text-base' : 'text-sm'} font-semibold`}>{sessionOnly ? 'Reply' : minimal ? 'Start with a prompt' : 'Ask QueryMT'}</div>
+      <p class="muted mt-1 text-sm">
+        {#if sessionOnly}
+          Continue this session with a quick reply.
+        {:else if minimal}
+          Describe the task, choose a workspace, and start a focused session.
+        {:else}
+          Start a new session or continue the selected one.
         {/if}
-      </div>
-    {/if}
-
-    {#if !sessionOnly}
-      <div class={launch ? 'px-1' : 'px-2'}>
-        <WorkspacePathInput
-          value={cwd}
-          disabled={false}
-          recentPaths={recentWorkspaces}
-          onInput={(value) => onCwdInput?.(value)}
-        />
-      </div>
-    {/if}
-
-    <div
-      class={`${launch ? 'px-1' : 'px-2'} rounded-[18px] transition ${isDragging ? 'bg-[var(--accent-dim)] ring-1 ring-[var(--border-strong)]' : ''}`}
-      role="region"
-      aria-label="Prompt and attachment drop zone"
-      ondragover={(event) => {
-        event.preventDefault();
-        isDragging = true;
-      }}
-      ondragleave={() => (isDragging = false)}
-      ondrop={(event) => {
-        event.preventDefault();
-        isDragging = false;
-        if (event.dataTransfer?.files.length) {
-          void readDroppedFiles(event.dataTransfer.files);
-        }
-      }}
-    >
-      <textarea
-        bind:this={promptElement}
-        class={`block w-full resize-none border-0 bg-transparent px-1 py-2 text-sm text-[var(--text)] outline-none ${launch ? 'min-h-[132px] text-base' : minimal ? 'min-h-[168px]' : compact ? 'min-h-[116px]' : 'min-h-[156px]'}`}
-        placeholder={sessionOnly ? 'Write a reply for this session...' : launch ? 'Ask QueryMT to inspect, change, debug, explain, or plan something.' : minimal ? 'What should QueryMT do in this workspace?' : 'Ask QueryMT to inspect, plan, change, or explain something in this workspace.'}
-        value={prompt}
-        oninput={(event) => onPromptInput((event.currentTarget as HTMLTextAreaElement).value)}
-        onkeydown={handlePromptKeydown}
-      ></textarea>
+      </p>
     </div>
-
-    {#if attachments.length > 0}
-      <div class="flex flex-wrap gap-2 px-1">
-        {#each attachments as attachment}
-          <span class="badge max-w-full gap-2">
-            <span class="truncate">{attachment.name}</span>
-            <span class="muted">{formatFileSize(attachment.size)}</span>
-            <button class="text-[var(--muted)] hover:text-[var(--text)]" type="button" aria-label={`Remove ${attachment.name}`} onclick={() => onRemoveAttachment?.(attachment.id)}>
-              <X size={13} />
-            </button>
-          </span>
-        {/each}
-      </div>
-    {/if}
-
-    <div class={`flex flex-wrap items-center justify-between gap-3 ${launch ? 'border-t border-[var(--border)] px-1 pt-3' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
-      <div class="flex flex-wrap items-center gap-2">
-        {#if !sessionOnly && onCreateSession && !minimal && !launch}
-          <IconTooltipButton label="Blank session" icon={Plus} size={16} disabled={loading} onclick={onCreateSession} />
-        {/if}
-        {#if !sessionOnly && profileOptions.length > 0}
-          <AppSelect value={selectedProfileId} options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))} pill ariaLabel="Profile" onValueChange={(value) => onProfileChange?.(value)} />
-        {/if}
-        {#if !sessionOnly && targetOptions.length > 1}
-          <AppSelect value={selectedTargetId} options={targetOptions.map((target) => ({ value: target.id, label: target.label }))} pill ariaLabel="Session target" onValueChange={(value) => onTargetChange?.(value)} />
-        {/if}
-        {#if modeOption}
-          <select
-            class="composer-select-pill"
-            value={modeOption.currentValue}
-            disabled={!!sessionConfigPending[modeOption.id]}
-            aria-label={modeOption.name}
-            onchange={(event) => onSessionConfigChange?.(modeOption.id, (event.currentTarget as HTMLSelectElement).value)}
-          >
-            {#each getConfigOptionChoices(modeOption) as choice}
-              <option value={choice.value}>{choice.name}</option>
-            {/each}
-          </select>
-        {/if}
-        {#if reasoningOption}
-          <select
-            class="composer-select-pill"
-            value={reasoningOption.currentValue}
-            disabled={!!sessionConfigPending[reasoningOption.id]}
-            aria-label={reasoningOption.name}
-            onchange={(event) => onSessionConfigChange?.(reasoningOption.id, (event.currentTarget as HTMLSelectElement).value)}
-          >
-            {#each getConfigOptionChoices(reasoningOption) as choice}
-              <option value={choice.value}>{choice.name}</option>
-            {/each}
-          </select>
-        {/if}
-        <ModelQuickPicker
-          bind:this={modelPickerRef}
-          modelOptions={modelOptions}
-          recentModels={recentModels}
-          selectedModelId={selectedModelId}
-          modelInfo={modelInfo}
-          loading={modelLoading}
-          disabled={false}
-          agentLabel={agentLabel}
-          onSelect={(value) => onModelChange?.(value)}
-          onRefresh={onRefreshModels}
-        />
-      </div>
-
-      <div class="flex items-center gap-2">
-        <input
-          bind:this={fileInputElement}
-          class="hidden"
-          type="file"
-          multiple
-          onchange={(event) => {
-            const files = (event.currentTarget as HTMLInputElement).files;
-            if (files?.length) {
-              void readDroppedFiles(files);
-            }
-            (event.currentTarget as HTMLInputElement).value = '';
-          }}
-        />
-        <IconTooltipButton label="Attach files" icon={Paperclip} size={16} onclick={() => fileInputElement?.click()} />
-        {#if !sessionOnly && onCreateSession && !launch}
-          <button class={minimal ? 'icon-btn' : 'action-btn'} disabled={loading} type="button" aria-label="Blank session" onclick={onCreateSession}>
-            <FilePlus2 size={16} />
-            {#if !minimal}
-              <span>Blank session</span>
-            {/if}
-          </button>
-        {/if}
-        <button class={`${launch ? 'action-btn action-btn-primary min-w-[9rem] justify-center px-5 py-3' : minimal ? 'action-btn action-btn-primary px-4' : 'icon-btn icon-btn-primary'}`} disabled={loading} type="button" aria-label={activeSessionId ? 'Send reply' : 'Start session'} onclick={onSendPrompt}>
-          <SendHorizontal size={16} />
-          {#if minimal || launch}
-            <span>{activeSessionId ? 'Send reply' : 'Start session'}</span>
-          {/if}
-        </button>
-      </div>
-    </div>
-  </div>
+  {/if}
 
   {#if error}
-    <div class="alert-error mt-3">{error}</div>
+    <div class={`${unifiedShell ? 'mx-1' : 'mx-2'} flex items-start justify-between gap-3 rounded-[18px] border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100`} role="alert" aria-live="polite">
+      <p class="min-w-0 flex-1">{error}</p>
+      {#if onDismissError}
+        <button class="text-rose-200 transition hover:text-rose-50" type="button" aria-label="Dismiss error" onclick={dismissError}>
+          <X size={14} />
+        </button>
+      {/if}
+    </div>
   {/if}
-</div>
+
+  {#if !sessionOnly}
+    <div class={unifiedShell ? 'px-1' : 'px-2'}>
+      <WorkspacePathInput
+        value={cwd}
+        disabled={false}
+        recentPaths={recentWorkspaces}
+        onInput={(value) => onCwdInput?.(value)}
+      />
+    </div>
+  {/if}
+
+  <div
+    class={`${unifiedShell ? 'px-1' : 'px-2'} rounded-[18px] transition ${isDragging ? 'bg-[var(--accent-dim)] ring-1 ring-[var(--border-strong)]' : ''}`}
+    role="region"
+    aria-label="Prompt and attachment drop zone"
+    ondragover={(event) => {
+      event.preventDefault();
+      isDragging = true;
+    }}
+    ondragleave={() => (isDragging = false)}
+    ondrop={(event) => {
+      event.preventDefault();
+      isDragging = false;
+      if (event.dataTransfer?.files.length) {
+        void readDroppedFiles(event.dataTransfer.files);
+      }
+    }}
+  >
+    <textarea
+      bind:this={promptElement}
+      class={`block w-full resize-none border-0 bg-transparent px-1 py-2 text-sm text-[var(--text)] outline-none ${launch ? 'min-h-[132px] text-base' : sessionOnly ? 'min-h-[116px]' : minimal ? 'min-h-[168px]' : compact ? 'min-h-[116px]' : 'min-h-[156px]'}`}
+      placeholder={sessionOnly ? sessionPlaceholder : launch ? 'Ask QueryMT to inspect, change, debug, explain, or plan something.' : minimal ? 'What should QueryMT do in this workspace?' : 'Ask QueryMT to inspect, plan, change, or explain something in this workspace.'}
+      value={prompt}
+      oninput={(event) => onPromptInput((event.currentTarget as HTMLTextAreaElement).value)}
+      onkeydown={handlePromptKeydown}
+    ></textarea>
+  </div>
+
+  {#if attachments.length > 0}
+    <div class="flex flex-wrap gap-2 px-1">
+      {#each attachments as attachment}
+        <span class="badge max-w-full gap-2">
+          <span class="truncate">{attachment.name}</span>
+          <span class="muted">{formatFileSize(attachment.size)}</span>
+          <button class="text-[var(--muted)] hover:text-[var(--text)]" type="button" aria-label={`Remove ${attachment.name}`} onclick={() => onRemoveAttachment?.(attachment.id)}>
+            <X size={13} />
+          </button>
+        </span>
+      {/each}
+    </div>
+  {/if}
+
+  <div class={`flex flex-wrap items-center justify-between gap-3 ${unifiedShell ? 'border-t border-[var(--border)] px-1 pt-3' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
+    <div class="flex flex-wrap items-center gap-2">
+      {#if !sessionOnly && onCreateSession && !minimal && !launch}
+        <IconTooltipButton label="Blank session" icon={Plus} size={16} disabled={loading} onclick={onCreateSession} />
+      {/if}
+      {#if !sessionOnly && profileOptions.length > 0}
+        <AppSelect value={selectedProfileId} options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))} pill ariaLabel="Profile" onValueChange={(value) => onProfileChange?.(value)} />
+      {/if}
+      {#if !sessionOnly && targetOptions.length > 1}
+        <AppSelect value={selectedTargetId} options={targetOptions.map((target) => ({ value: target.id, label: target.label }))} pill ariaLabel="Session target" onValueChange={(value) => onTargetChange?.(value)} />
+      {/if}
+      {#if modeOption}
+        <ComposerSplitPillSelect
+          value={modeOption.currentValue}
+          options={getConfigOptionChoices(modeOption).map((choice) => ({ value: choice.value, label: choice.name }))}
+          icon={SlidersHorizontal}
+          pending={!!sessionConfigPending[modeOption.id]}
+          disabled={!!sessionConfigPending[modeOption.id]}
+          ariaLabel={modeOption.name}
+          onValueChange={(value) => onSessionConfigChange?.(modeOption.id, value)}
+        />
+      {/if}
+      {#if reasoningOption}
+        <ComposerSplitPillSelect
+          value={reasoningOption.currentValue}
+          options={getConfigOptionChoices(reasoningOption).map((choice) => ({ value: choice.value, label: choice.name }))}
+          icon={Brain}
+          pending={!!sessionConfigPending[reasoningOption.id]}
+          disabled={!!sessionConfigPending[reasoningOption.id]}
+          ariaLabel={reasoningOption.name}
+          onValueChange={(value) => onSessionConfigChange?.(reasoningOption.id, value)}
+        />
+      {/if}
+      <ModelQuickPicker
+        bind:this={modelPickerRef}
+        modelOptions={modelOptions}
+        recentModels={recentModels}
+        selectedModelId={selectedModelId}
+        modelInfo={modelInfo}
+        loading={modelLoading}
+        disabled={false}
+        agentLabel={agentLabel}
+        onSelect={(value) => onModelChange?.(value)}
+        onRefresh={onRefreshModels}
+      />
+    </div>
+
+    <div class="flex items-center gap-2">
+      <input
+        bind:this={fileInputElement}
+        class="hidden"
+        type="file"
+        multiple
+        onchange={(event) => {
+          const files = (event.currentTarget as HTMLInputElement).files;
+          if (files?.length) {
+            void readDroppedFiles(files);
+          }
+          (event.currentTarget as HTMLInputElement).value = '';
+        }}
+      />
+      <IconTooltipButton label="Attach files" icon={Paperclip} size={16} onclick={handleAttachClick} />
+      {#if !sessionOnly && onCreateSession && !launch}
+        <button class={minimal ? 'icon-btn' : 'action-btn'} disabled={loading} type="button" aria-label="Blank session" onclick={onCreateSession}>
+          <FilePlus2 size={16} />
+          {#if !minimal}
+            <span>Blank session</span>
+          {/if}
+        </button>
+      {/if}
+      <button
+        class={`${launch ? 'action-btn action-btn-primary min-w-[9rem] justify-center px-5 py-3' : minimal ? 'action-btn action-btn-primary px-4' : 'icon-btn icon-btn-primary'}`}
+        disabled={loading}
+        type="button"
+        aria-label={activeSessionId ? 'Send reply' : 'Start session'}
+        onclick={onSendPrompt}
+      >
+        <SendHorizontal size={16} />
+        {#if minimal || launch}
+          <span>{activeSessionId ? 'Send reply' : 'Start session'}</span>
+        {/if}
+      </button>
+    </div>
+  </div>
+{/snippet}
+
+{#if docked}
+  <div class="session-composer-dock" style={dockPositionStyle} transition:fly={{ y: 18, duration: 180 }}>
+    <input
+      bind:this={fileInputElement}
+      class="hidden"
+      type="file"
+      multiple
+      onchange={(event) => {
+        const files = (event.currentTarget as HTMLInputElement).files;
+        if (files?.length) {
+          void readDroppedFiles(files);
+        }
+        (event.currentTarget as HTMLInputElement).value = '';
+      }}
+    />
+
+    <div class="session-composer-dock-collapsed">
+      <input
+        class="session-composer-dock-input"
+        type="text"
+        value={prompt}
+        placeholder={sessionPlaceholder}
+        oninput={(event) => onPromptInput((event.currentTarget as HTMLInputElement).value)}
+      />
+      <IconTooltipButton label="Attach files" icon={Paperclip} size={16} onclick={handleAttachClick} />
+      <IconTooltipButton label="Send reply" icon={SendHorizontal} tone="primary" size={16} disabled={loading} onclick={onSendPrompt} />
+    </div>
+  </div>
+{:else}
+  <div class={`panel-strong ${unifiedShell ? 'p-4 md:p-6' : minimal ? 'p-4 md:p-5' : 'p-3 md:p-4'}`}>
+    <div
+      class={`flex flex-col ${unifiedShell ? 'gap-4 rounded-[24px] bg-[var(--bg-card)]' : 'gap-3 rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)]'} ${unifiedShell ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}
+    >
+      {@render composerBody()}
+    </div>
+  </div>
+{/if}

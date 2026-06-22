@@ -237,7 +237,7 @@
 
   {#if agentDialogMode}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4">
+      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
         <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close agent dialog" onclick={() => closeAgentDialog()}></button>
         <div class="panel relative z-10 w-full max-w-3xl p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div class="flex items-start justify-between gap-3">
@@ -272,7 +272,7 @@
 
   {#if pendingDeleteAgentId}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-[color:rgba(36,36,38,0.48)] px-4">
+      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
         <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close delete confirmation" onclick={() => (pendingDeleteAgentId = null)}></button>
         <div class="panel relative z-10 w-full max-w-md p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div>
@@ -290,7 +290,7 @@
 
   {#if selectedCard}
     <Portal to={overlayPortalTarget}>
-      <div class="fixed inset-0 z-40 flex justify-end bg-[color:rgba(36,36,38,0.35)]">
+      <div class="app-backdrop fixed inset-0 z-40 flex justify-end">
         <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close details" onclick={() => closeDetails()}></button>
         <div class="agent-details-panel relative z-10 h-full w-full max-w-2xl overflow-auto border-l border-[var(--border)] bg-[var(--bg-panel-strong)] p-5 shadow-2xl" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
         <div class="flex items-start justify-between gap-3">

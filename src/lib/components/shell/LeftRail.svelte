@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ChevronLeft, ChevronRight } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
-  import { appMeta, sectionIcons, sectionOrder, type SectionName } from '$lib/design/tokens';
+  import { sectionIcons, sectionOrder, type SectionName } from '$lib/design/tokens';
 
   export let current: SectionName;
   export let quiet = false;
@@ -22,27 +22,15 @@
 
 <Tooltip.Provider delayDuration={120} skipDelayDuration={80}>
   <nav
-    class={`panel left-rail sticky top-6 self-start flex max-h-[calc(100vh-3rem)] flex-col gap-3 overflow-visible p-4 transition ${quiet ? 'opacity-55 hover:opacity-100 focus-within:opacity-100' : ''} ${collapsed ? 'left-rail-collapsed' : ''}`}
+    class={`panel left-rail sticky self-start flex max-h-[calc(100vh-2rem)] flex-col gap-3 overflow-visible p-4 transition ${quiet ? 'opacity-55 hover:opacity-100 focus-within:opacity-100' : ''} ${collapsed ? 'left-rail-collapsed' : ''}`}
     aria-label="Primary navigation"
   >
-    <div class="left-rail-header">
-      <div class="left-rail-brand">
-        <div class="left-rail-brand-mark" aria-hidden="true">Q</div>
-        {#if !collapsed}
-          <div class="left-rail-brand-copy">
-            <div class="text-sm font-medium text-[var(--accent)]">{appMeta.title}</div>
-            <div class="muted text-xs">{appMeta.subtitle}</div>
-          </div>
-        {:else}
-          <span class="left-rail-active-label">{current}</span>
-        {/if}
-      </div>
-
-      {#if onToggle}
+    {#if onToggle}
+      <div class={`left-rail-header ${collapsed ? 'left-rail-header-collapsed' : 'left-rail-header-expanded'}`}>
         <button
           class="left-rail-header-toggle"
           type="button"
-          aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+          aria-label={collapsed ? 'Expand navigation (Ctrl+B)' : 'Collapse navigation (Ctrl+B)'}
           aria-expanded={!collapsed}
           onclick={onToggle}
         >
@@ -52,8 +40,8 @@
             <ChevronLeft size={14} strokeWidth={1.8} />
           {/if}
         </button>
-      {/if}
-    </div>
+      </div>
+    {/if}
 
     <div class="left-rail-nav-items">
       {#each sectionOrder as section}

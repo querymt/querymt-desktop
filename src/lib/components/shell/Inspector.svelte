@@ -64,7 +64,7 @@
   });
 </script>
 
-<aside class="panel flex h-full flex-col gap-4 p-4">
+<aside class="panel flex flex-col gap-4 p-4">
   <div>
     <div class="text-sm font-medium">Inspector</div>
     <div class="muted text-xs">Context, alerts, and recent activity.</div>
