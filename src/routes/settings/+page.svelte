@@ -711,7 +711,7 @@
           </div>
           <div class="compact-toolbar justify-end">
             <button class="action-btn" type="button" onclick={() => closeDisconnectDialog()} disabled={!!actionLoading}>Cancel</button>
-            <button class="action-btn" type="button" onclick={() => confirmDisconnectProvider()} disabled={!!actionLoading}>Disconnect</button>
+            <button class="action-btn action-btn-danger" type="button" onclick={() => confirmDisconnectProvider()} disabled={!!actionLoading}>Disconnect</button>
           </div>
         </div>
       </div>
@@ -729,7 +729,7 @@
           </div>
           <div class="compact-toolbar justify-end">
             <button class="action-btn" type="button" onclick={() => closeClearKeyDialog()} disabled={!!actionLoading}>Cancel</button>
-            <button class="action-btn" type="button" onclick={() => confirmClearApiToken()} disabled={!!actionLoading}>Clear key</button>
+            <button class="action-btn action-btn-danger" type="button" onclick={() => confirmClearApiToken()} disabled={!!actionLoading}>Clear key</button>
           </div>
         </div>
       </div>

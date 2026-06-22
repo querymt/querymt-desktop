@@ -292,7 +292,7 @@
     <Portal to={overlayPortalTarget}>
       <div class="app-backdrop fixed inset-0 z-40 flex justify-end">
         <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close details" onclick={() => closeDetails()}></button>
-        <div class="agent-details-panel relative z-10 h-full w-full max-w-2xl overflow-auto border-l border-[var(--border)] bg-[var(--bg-panel-strong)] p-5 shadow-2xl" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
+        <div class="agent-details-panel relative z-10 h-full w-full max-w-2xl overflow-auto border-l border-[var(--border)] bg-[var(--bg-panel-strong)] p-5" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
         <div class="flex items-start justify-between gap-3">
           <div>
               <div class="flex items-center gap-3">

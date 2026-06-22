@@ -12,7 +12,7 @@
   }
 </script>
 
-<div class="space-y-4">
+<div class="space-y-4 page-width-wide">
   <SectionHeader
     eyebrow="Desktop context"
     title="Workspaces"
