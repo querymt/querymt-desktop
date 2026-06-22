@@ -105,7 +105,7 @@
   </div>
 
   {#if error}
-    <div class="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{error}</div>
+    <div class="alert-error">{error}</div>
   {/if}
 
   <div class="session-browser-body">

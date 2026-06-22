@@ -266,10 +266,10 @@
   {/if}
 
   {#if error}
-    <div class={`${unifiedShell ? 'mx-1' : 'mx-2'} flex items-start justify-between gap-3 rounded-[18px] border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-100`} role="alert" aria-live="polite">
+    <div class={`${unifiedShell ? 'mx-1' : 'mx-2'} alert-error flex items-start justify-between gap-3`} role="alert" aria-live="polite">
       <p class="min-w-0 flex-1">{error}</p>
       {#if onDismissError}
-        <button class="text-rose-200 transition hover:text-rose-50" type="button" aria-label="Dismiss error" onclick={dismissError}>
+        <button class="text-[var(--danger)] transition hover:text-[var(--text)]" type="button" aria-label="Dismiss error" onclick={dismissError}>
           <X size={14} />
         </button>
       {/if}
