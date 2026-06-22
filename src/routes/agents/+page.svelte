@@ -176,7 +176,7 @@
     </div>
   </div>
 
-  <section class="panel p-4">
+  <section>
     {#if agentCards.length === 0}
       <div class="empty-state">
         <div class="flex items-start gap-3">
@@ -188,10 +188,10 @@
         </div>
       </div>
     {:else}
-      <div class="space-y-3">
+      <div class="agent-list">
         {#each agentCards as card}
-          <article class="surface-muted p-3">
-            <div class="flex flex-wrap items-center justify-between gap-3">
+          <article class="agent-list-row">
+            <div class="agent-list-row-inner flex flex-wrap items-center justify-between gap-3">
               <div class="min-w-0 flex flex-1 items-center gap-3">
                 <span class={`status-dot ${statusClass(card.status?.state, card.connectionState, card.controlHealth.state)}`}></span>
                 <div class="min-w-0 flex-1">
@@ -225,7 +225,7 @@
             </div>
 
             {#if card.error}
-              <div class="alert-error mt-3">
+              <div class="agent-list-error alert-error">
                 {card.error}
               </div>
             {/if}

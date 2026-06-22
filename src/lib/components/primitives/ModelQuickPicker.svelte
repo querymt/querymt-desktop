@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, ChevronDown, RefreshCw, Search } from '@lucide/svelte';
+  import { Bot, Check, RefreshCw, Search } from '@lucide/svelte';
   import { getContext, tick } from 'svelte';
   import { Portal } from 'bits-ui';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
@@ -178,12 +178,20 @@
 
 <div class="inline-flex">
   <button
-    class="badge max-w-[22rem] justify-between gap-2 pr-2 text-left"
+    class="composer-model-pill"
     disabled={disabled}
     type="button"
     onclick={openPicker}
   >
-    <span class="truncate">
+    <span class="composer-split-pill-icon" aria-hidden="true">
+      {#if loading}
+        <RefreshCw size={14} strokeWidth={2} class="animate-spin" />
+      {:else}
+        <Bot size={14} strokeWidth={2} />
+      {/if}
+    </span>
+    <span class="composer-split-pill-divider" aria-hidden="true"></span>
+    <span class="composer-model-pill-label">
       {#if selectedModel}
         {selectedModel.label ?? selectedModel.model}
         <span class="muted">· {selectedModel.provider}</span>
@@ -194,7 +202,6 @@
         Select model
       {/if}
     </span>
-    <ChevronDown size={14} />
   </button>
 
   {#if open}

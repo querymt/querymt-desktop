@@ -233,7 +233,6 @@
         current={section}
         quiet={leftRailQuiet}
         collapsed={leftRailHidden}
-        onToggle={() => setLeftRailCollapsed(!leftRailHidden)}
       />
 
       <div class="flex min-w-0 flex-col gap-4">
