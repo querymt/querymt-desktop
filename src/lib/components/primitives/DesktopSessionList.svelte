@@ -2,6 +2,7 @@
   import { Accordion } from 'bits-ui';
   import { ChevronDown, ChevronRight, Clock3, FolderKanban, RefreshCw, Search } from '@lucide/svelte';
   import { formatSessionTimestamp, groupSessionsByWorkspace } from '$lib/domain/sessions';
+  import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
 
   let {
@@ -104,7 +105,7 @@
   </div>
 
   {#if error}
-    <div class="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{error}</div>
+    <div class="alert-error">{error}</div>
   {/if}
 
   <div class="session-browser-body">
@@ -140,19 +141,30 @@
                   <span class="session-agent-chip">{agent}</span>
                 {/each}
               </div>
-              <div class="session-workspace-session-list">
+              <div class="model-picker-list session-workspace-session-list">
                 {#each group.sessions as session}
-                  <button class="session-row" type="button" onclick={() => onOpenSession?.(session)}>
+                  {@const identicon = createRoundIdenticon(session.sessionId)}
+                  <button class="model-picker-row session-row" type="button" onclick={() => onOpenSession?.(session)}>
+                    <span class="session-row-identicon" aria-hidden="true">
+                      <svg width={identicon.width} height={identicon.width} viewBox={`0 0 ${identicon.width} ${identicon.width}`} preserveAspectRatio="xMinYMin">
+                        <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill={identicon.color} />
+                        {#each identicon.paths as path}
+                          <path d={path} fill={identicon.color} />
+                        {/each}
+                      </svg>
+                    </span>
                     <span class="session-row-main">
                       <span class="session-row-title">{session.title}</span>
                       <span class="session-row-meta">
-                        <span class="badge">{getStatusLabel(session.status)}</span>
                         <span>{session.agentName}</span>
                         <span>{formatSessionTimestamp(session.updatedAt)}</span>
                       </span>
                     </span>
-                    <span class="session-row-open" aria-hidden="true">
-                      <ChevronRight size={16} />
+                    <span class="session-row-side">
+                      <span class="badge">{getStatusLabel(session.status)}</span>
+                      <span class="session-row-open" aria-hidden="true">
+                        <ChevronRight size={15} />
+                      </span>
                     </span>
                   </button>
                 {/each}

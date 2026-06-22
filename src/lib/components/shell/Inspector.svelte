@@ -37,19 +37,7 @@
 
     for (const config of agentsStore.configs) {
       const status = agentsStore.statuses[config.id];
-      if (!status) {
-        continue;
-      }
-
-      if (status.state === 'running') {
-        events.push({
-          id: `inspector-${config.id}`,
-          title: `${config.name} online`,
-          detail: status.message,
-          when: 'Live',
-          kind: 'run'
-        });
-      } else if (status.state === 'failed') {
+      if (status?.state === 'failed') {
         events.push({
           id: `inspector-${config.id}-failed`,
           title: `${config.name} needs attention`,
@@ -64,7 +52,7 @@
   });
 </script>
 
-<aside class="panel flex h-full flex-col gap-4 p-4">
+<aside class="panel flex flex-col gap-4 p-4">
   <div>
     <div class="text-sm font-medium">Inspector</div>
     <div class="muted text-xs">Context, alerts, and recent activity.</div>

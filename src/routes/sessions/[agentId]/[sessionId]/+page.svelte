@@ -1,13 +1,14 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { ArrowLeft, MessagesSquare, RefreshCw } from '@lucide/svelte';
+  import { ArrowLeft, Bug, MessagesSquare, RefreshCw } from '@lucide/svelte';
   import { onMount, tick } from 'svelte';
   import ActiveSessionView from '$lib/components/primitives/ActiveSessionView.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
-  import StickySessionComposer from '$lib/components/session/StickySessionComposer.svelte';
+  import SessionScrollToBottomPill from '$lib/components/session/SessionScrollToBottomPill.svelte';
+  import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
   import { formatSessionTimestamp, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
   import { agentsStore } from '$lib/stores/agents.svelte';
 
@@ -16,14 +17,31 @@
   const selectedSession = $derived(getSessionById(agentsStore.sessionsByAgent[agentId] ?? [], sessionId, agentId));
   const showAgentBadges = $derived(agentsStore.configs.length > 1);
   let composerAnchor = $state<HTMLDivElement | null>(null);
-  let showStickyComposer = $state(false);
+  let showDockedComposer = $state(false);
+  let dockAlignLeft = $state<number | null>(null);
+  let dockAlignWidth = $state<number | null>(null);
+  let debugEventsOpen = $state(false);
+
+  const debugEventsTooltip = $derived.by(() => {
+    const count = agentsStore.activeSession.events.length;
+    return count === 0 ? 'Debug events' : `Debug events (${count})`;
+  });
+
+  function syncDockAlign() {
+    if (!composerAnchor) return;
+    const rect = composerAnchor.getBoundingClientRect();
+    dockAlignLeft = rect.left;
+    dockAlignWidth = rect.width;
+  }
 
   onMount(() => {
     let destroyed = false;
+    let anchorObserver: IntersectionObserver | null = null;
 
-    const updateStickyComposer = () => {
-      const nearBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 320;
-      showStickyComposer = !nearBottom;
+    const onLayoutChange = () => {
+      if (showDockedComposer) {
+        syncDockAlign();
+      }
     };
 
     const initialize = async () => {
@@ -34,17 +52,34 @@
       await tick();
       agentsStore.requestPromptFocus();
       composerAnchor?.scrollIntoView({ block: 'end' });
-      updateStickyComposer();
+
+      if (composerAnchor) {
+        anchorObserver = new IntersectionObserver(
+          ([entry]) => {
+            const anchorInView = entry.isIntersecting && entry.intersectionRatio > 0.12;
+            if (anchorInView) {
+              showDockedComposer = false;
+            } else {
+              syncDockAlign();
+              showDockedComposer = true;
+            }
+          },
+          { root: null, threshold: [0, 0.12, 0.35, 1], rootMargin: '0px 0px 0px 0px' }
+        );
+        anchorObserver.observe(composerAnchor);
+      }
     };
 
     void initialize();
-    window.addEventListener('scroll', updateStickyComposer, { passive: true });
-    window.addEventListener('resize', updateStickyComposer);
+    window.addEventListener('resize', onLayoutChange);
+    window.addEventListener('scroll', onLayoutChange, { passive: true });
 
     return () => {
       destroyed = true;
-      window.removeEventListener('scroll', updateStickyComposer);
-      window.removeEventListener('resize', updateStickyComposer);
+      anchorObserver?.disconnect();
+      anchorObserver = null;
+      window.removeEventListener('resize', onLayoutChange);
+      window.removeEventListener('scroll', onLayoutChange);
     };
   });
 
@@ -56,18 +91,33 @@
     await agentsStore.refreshSessionsForAgent(agentId);
     await ensureSessionLoaded();
   }
+
+  async function scrollToLatest() {
+    composerAnchor?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    await tick();
+    agentsStore.requestPromptFocus();
+  }
 </script>
 
-  <div class="session-page page-width-wide">
-
+<div class="session-page session-page-chat">
   <div class="page-toolbar">
     <button class="action-btn" type="button" onclick={() => goto('/sessions')}>
       <ArrowLeft size={16} />
       <span>Back to sessions</span>
     </button>
 
-    <IconTooltipButton label="Refresh session" icon={RefreshCw} size={16} onclick={() => refreshSession()} />
+    <div class="compact-toolbar">
+      <IconTooltipButton
+        label={debugEventsTooltip}
+        icon={Bug}
+        size={16}
+        onclick={() => (debugEventsOpen = true)}
+      />
+      <IconTooltipButton label="Refresh session" icon={RefreshCw} size={16} onclick={() => refreshSession()} />
+    </div>
   </div>
+
+  <SessionTechnicalDetails session={agentsStore.activeSession} bind:open={debugEventsOpen} />
 
   <div class="page-toolbar">
     <SectionHeader
@@ -90,53 +140,77 @@
   </div>
 
   <div class="session-page-content">
-    <ActiveSessionView
-      session={agentsStore.activeSession}
-      sessionConfigPending={agentsStore.sessionConfigPending}
-      onConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
-      onCancel={() => agentsStore.cancelActiveSession()}
-    />
+    <ActiveSessionView session={agentsStore.activeSession} onCancel={() => agentsStore.cancelActiveSession()} />
 
-     {#if selectedSession}
-       <div bind:this={composerAnchor} class="session-composer-anchor">
-         <SessionComposer
-           compact={true}
-           sessionOnly={true}
-           prompt={agentsStore.composerPrompt}
-           loading={agentsStore.loading}
-           error={agentsStore.error}
-           activeSessionId={agentsStore.activeSessionId}
-           promptFocusToken={agentsStore.promptFocusToken}
-           modelOptions={agentsStore.modelsByAgent[agentId] ?? []}
-           selectedModelId={agentsStore.composerModelId}
-           modelInfo={agentsStore.modelInfoByAgent[agentId] ?? {}}
-           recentModels={agentsStore.getRecentModels(agentId)}
-           modelLoading={!!agentsStore.modelLoadingByAgent[agentId]}
-           agentLabel={showAgentBadges ? selectedSession.agentName : null}
-           onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
-           onModelChange={(value) => agentsStore.setComposerModel(value)}
-            onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}
-            sessionConfigOptions={agentsStore.activeSession.configOptions}
-            sessionConfigPending={agentsStore.sessionConfigPending}
-            onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
-            onDismissError={() => agentsStore.clearError()}
-            onSendPrompt={() => agentsStore.sendPromptToActiveSession()}
+    {#if selectedSession}
+      <div
+        bind:this={composerAnchor}
+        class={`session-composer-anchor ${showDockedComposer ? 'session-composer-anchor-offscreen' : ''}`}
+      >
+        <SessionComposer
+          compact={true}
+          sessionOnly={true}
+          prompt={agentsStore.composerPrompt}
+          loading={agentsStore.loading}
+          error={agentsStore.error}
+          activeSessionId={agentsStore.activeSessionId}
+          promptFocusToken={agentsStore.promptFocusToken}
+          modelOptions={agentsStore.modelsByAgent[agentId] ?? []}
+          selectedModelId={agentsStore.composerModelId}
+          modelInfo={agentsStore.modelInfoByAgent[agentId] ?? {}}
+          recentModels={agentsStore.getRecentModels(agentId)}
+          modelLoading={!!agentsStore.modelLoadingByAgent[agentId]}
+          agentLabel={showAgentBadges ? selectedSession.agentName : null}
+          attachments={agentsStore.promptAttachments}
+          onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
+          onModelChange={(value) => agentsStore.setComposerModel(value)}
+          onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}
+          sessionConfigOptions={agentsStore.activeSession.configOptions}
+          sessionConfigPending={agentsStore.sessionConfigPending}
+          onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
+          onAddAttachments={(items) => agentsStore.addPromptAttachments(items)}
+          onRemoveAttachment={(id) => agentsStore.removePromptAttachment(id)}
+          onDismissError={() => agentsStore.clearError()}
+          onSendPrompt={() => agentsStore.sendPromptToActiveSession()}
+        />
+      </div>
 
-         />
-       </div>
-
-       <StickySessionComposer
-         visible={showStickyComposer}
-         prompt={agentsStore.composerPrompt}
-         loading={agentsStore.loading}
-         onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
-         onSendPrompt={() => agentsStore.sendPromptToActiveSession()}
-         onExpand={() => {
-           composerAnchor?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-           agentsStore.requestPromptFocus();
-         }}
-       />
-     {/if}
-
+      {#if showDockedComposer}
+        <SessionScrollToBottomPill
+          visible={showDockedComposer}
+          alignLeft={dockAlignLeft}
+          alignWidth={dockAlignWidth}
+          onScrollToBottom={() => void scrollToLatest()}
+        />
+        <SessionComposer
+          docked={true}
+          dockAlignLeft={dockAlignLeft}
+          dockAlignWidth={dockAlignWidth}
+          compact={true}
+          sessionOnly={true}
+          prompt={agentsStore.composerPrompt}
+          loading={agentsStore.loading}
+          error={agentsStore.error}
+          activeSessionId={agentsStore.activeSessionId}
+          modelOptions={agentsStore.modelsByAgent[agentId] ?? []}
+          selectedModelId={agentsStore.composerModelId}
+          modelInfo={agentsStore.modelInfoByAgent[agentId] ?? {}}
+          recentModels={agentsStore.getRecentModels(agentId)}
+          modelLoading={!!agentsStore.modelLoadingByAgent[agentId]}
+          agentLabel={showAgentBadges ? selectedSession.agentName : null}
+          attachments={agentsStore.promptAttachments}
+          onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
+          onModelChange={(value) => agentsStore.setComposerModel(value)}
+          onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}
+          sessionConfigOptions={agentsStore.activeSession.configOptions}
+          sessionConfigPending={agentsStore.sessionConfigPending}
+          onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
+          onAddAttachments={(items) => agentsStore.addPromptAttachments(items)}
+          onRemoveAttachment={(id) => agentsStore.removePromptAttachment(id)}
+          onDismissError={() => agentsStore.clearError()}
+          onSendPrompt={() => agentsStore.sendPromptToActiveSession()}
+        />
+      {/if}
+    {/if}
   </div>
 </div>

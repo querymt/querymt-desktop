@@ -349,44 +349,45 @@
               />
             </div>
 
-            <Command.List class="mt-3 max-h-[26rem] overflow-y-auto pr-1">
-              <Command.Empty>
-                <div class="surface-muted px-3 py-3 text-xs text-[var(--muted)]">
-                  No matching commands.
-                </div>
-              </Command.Empty>
+            <div class="picker-scroll-frame mt-3">
+              <Command.List class="picker-scroll-area max-h-[26rem]">
+                <Command.Empty>
+                  <div class="surface-muted px-3 py-3 text-xs text-[var(--muted)]">
+                    No matching commands.
+                  </div>
+                </Command.Empty>
 
-              <Command.Group value="create">
-                <Command.GroupHeading class="px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--muted)]">Create</Command.GroupHeading>
-                <Command.GroupItems class="mt-2 space-y-1">
-                  {#each commands.filter((item) => item.section === 'Create') as item}
-                    <Command.Item
+                <Command.Group value="create">
+                  <Command.GroupHeading class="px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--muted)]">Create</Command.GroupHeading>
+                  <Command.GroupItems class="model-picker-list mt-2">
+                    {#each commands.filter((item) => item.section === 'Create') as item, index}
+                      <Command.Item
                       value={item.title}
                       keywords={item.keywords}
                       disabled={item.disabled}
                       onSelect={() => item.run()}
-                      class={`model-picker-row ${item.disabled ? 'opacity-50' : ''}`}
+                      class={`model-picker-row ${index > 0 ? 'model-picker-row-separated' : ''} ${item.disabled ? 'opacity-50' : ''}`}
                     >
                       <div class="min-w-0 flex-1">
                         <div class="truncate text-sm font-medium">{item.title}</div>
                         <div class="muted truncate text-xs">{item.subtitle}</div>
                       </div>
                       <span class="badge">Create</span>
-                    </Command.Item>
-                  {/each}
-                </Command.GroupItems>
-              </Command.Group>
+                      </Command.Item>
+                    {/each}
+                  </Command.GroupItems>
+                </Command.Group>
 
-              <Command.Group value="mesh">
-                <Command.GroupHeading class="mt-4 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--muted)]">Mesh</Command.GroupHeading>
-                <Command.GroupItems class="mt-2 space-y-1">
-                  {#each commands.filter((item) => item.section === 'Mesh') as item}
+                <Command.Group value="mesh">
+                  <Command.GroupHeading class="mt-4 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--muted)]">Mesh</Command.GroupHeading>
+                  <Command.GroupItems class="model-picker-list mt-2">
+                  {#each commands.filter((item) => item.section === 'Mesh') as item, index}
                     <Command.Item
                       value={item.title}
                       keywords={item.keywords}
                       disabled={item.disabled}
                       onSelect={() => item.run()}
-                      class={`model-picker-row ${item.disabled ? 'opacity-50' : ''}`}
+                      class={`model-picker-row ${index > 0 ? 'model-picker-row-separated' : ''} ${item.disabled ? 'opacity-50' : ''}`}
                     >
                       <div class="min-w-0 flex-1">
                         <div class="truncate text-sm font-medium">{item.title}</div>
@@ -395,29 +396,30 @@
                       <span class="badge">Mesh</span>
                     </Command.Item>
                   {/each}
-                </Command.GroupItems>
-              </Command.Group>
+                  </Command.GroupItems>
+                </Command.Group>
 
-              <Command.Group value="navigate">
-                <Command.GroupHeading class="mt-4 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--muted)]">Navigate</Command.GroupHeading>
-                <Command.GroupItems class="mt-2 space-y-1">
-                  {#each commands.filter((item) => item.section === 'Navigate') as item}
-                    <Command.Item
-                      value={item.title}
-                      keywords={item.keywords}
-                      onSelect={() => item.run()}
-                      class="model-picker-row"
-                    >
-                      <div class="min-w-0 flex-1">
-                        <div class="truncate text-sm font-medium">{item.title}</div>
-                        <div class="muted truncate text-xs">{item.subtitle}</div>
-                      </div>
-                      <span class="badge">Navigate</span>
-                    </Command.Item>
-                  {/each}
-                </Command.GroupItems>
-              </Command.Group>
-            </Command.List>
+                <Command.Group value="navigate">
+                  <Command.GroupHeading class="mt-4 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--muted)]">Navigate</Command.GroupHeading>
+                  <Command.GroupItems class="model-picker-list mt-2">
+                    {#each commands.filter((item) => item.section === 'Navigate') as item, index}
+                      <Command.Item
+                        value={item.title}
+                        keywords={item.keywords}
+                        onSelect={() => item.run()}
+                        class={`model-picker-row ${index > 0 ? 'model-picker-row-separated' : ''}`}
+                      >
+                        <div class="min-w-0 flex-1">
+                          <div class="truncate text-sm font-medium">{item.title}</div>
+                          <div class="muted truncate text-xs">{item.subtitle}</div>
+                        </div>
+                        <span class="badge">Navigate</span>
+                      </Command.Item>
+                    {/each}
+                  </Command.GroupItems>
+                </Command.Group>
+              </Command.List>
+            </div>
           </Command.Root>
         {:else if commandPaletteStore.mode === 'schedule'}
           <div class="space-y-4">

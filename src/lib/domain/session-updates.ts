@@ -215,7 +215,7 @@ function readMessageId(value: unknown): string | null {
   return null;
 }
 
-function stringifyOptional(value: unknown): string | null {
+export function stringifyOptional(value: unknown): string | null {
   if (value === undefined || value === null || value === '') {
     return null;
   }

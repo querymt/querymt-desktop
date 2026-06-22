@@ -1,4 +1,4 @@
-import { createEmptyActiveSession } from '$lib/domain/session-updates';
+import { createEmptyActiveSession, stringifyOptional } from '$lib/domain/session-updates';
 import type { ActiveSessionViewModel, SessionToolCallItem } from '$lib/domain/types';
 
 type SnapshotEvent = {
@@ -64,12 +64,37 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
       continue;
     }
 
+    if (kind === 'assistant_thinking_delta') {
+      const messageId: string = readString(data.message_id) ?? lastAssistantMessageId ?? eventId;
+      lastAssistantMessageId = messageId;
+      const text = readString(data.content) ?? '';
+      if (text) {
+        session.transcript.push({
+          id: eventId,
+          kind: 'agent_thought_chunk',
+          text,
+          messageId,
+          eventIndex: event.seq
+        });
+        session.events.push({ id: eventId, kind: 'agent_thought_chunk', text, messageId });
+      }
+      continue;
+    }
+
     if (kind === 'assistant_message_stored') {
       const messageId: string = readString(data.message_id) ?? lastAssistantMessageId ?? eventId;
       lastAssistantMessageId = messageId;
       const text = readString(data.content) ?? '';
-      replaceTranscriptForMessage(session, messageId, text, eventId);
-      session.events.push({ id: eventId, kind, text, messageId });
+      const thinking = readString(data.thinking) ?? '';
+      if (thinking) {
+        const thinkingEventId = `${eventId}-thinking`;
+        replaceThinkingTranscriptForMessage(session, messageId, thinking, thinkingEventId, event.seq);
+        session.events.push({ id: thinkingEventId, kind: 'agent_thought_chunk', text: thinking, messageId });
+      }
+      if (text) {
+        replaceTranscriptForMessage(session, messageId, text, eventId, event.seq);
+        session.events.push({ id: eventId, kind, text, messageId });
+      }
       continue;
     }
 
@@ -81,10 +106,10 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
         status: 'in_progress',
         kind: readString(data.tool_name) ?? null,
         messageId,
-        arguments: readToolText(data.arguments ?? data.input),
+        arguments: stringifyOptional(data.arguments ?? data.input),
         eventIndex: event.seq
       });
-      session.events.push({ id: eventId, kind, text: readToolText(data.arguments ?? data.input) ?? '', messageId });
+      session.events.push({ id: eventId, kind, text: stringifyOptional(data.arguments ?? data.input) ?? '', messageId });
       continue;
     }
 
@@ -96,11 +121,11 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
         status: readBoolean(data.is_error) ? 'failed' : 'completed',
         kind: readString(data.tool_name) ?? null,
         messageId,
-        result: readToolText(data.result ?? data.output ?? data.content),
+        result: stringifyOptional(data.result ?? data.output ?? data.content),
         isError: readBoolean(data.is_error),
         eventIndex: event.seq
       });
-      session.events.push({ id: eventId, kind, text: readToolText(data.result ?? data.output ?? data.content) ?? '', messageId });
+      session.events.push({ id: eventId, kind, text: stringifyOptional(data.result ?? data.output ?? data.content) ?? '', messageId });
     }
   }
 
@@ -233,12 +258,14 @@ function replaceTranscriptForMessage(
   session: ActiveSessionViewModel,
   messageId: string,
   text: string,
-  eventId: string
+  eventId: string,
+  eventIndex?: number
 ) {
   const existing = session.transcript.find((item) => item.kind === 'agent_message_chunk' && item.messageId === messageId);
   if (existing) {
     existing.text = text || existing.text;
     existing.id = eventId;
+    existing.eventIndex = eventIndex ?? existing.eventIndex;
     return;
   }
 
@@ -247,20 +274,44 @@ function replaceTranscriptForMessage(
     kind: 'agent_message_chunk',
     text,
     messageId,
-    eventIndex: undefined
+    eventIndex
   });
+}
+
+function replaceThinkingTranscriptForMessage(
+  session: ActiveSessionViewModel,
+  messageId: string,
+  text: string,
+  eventId: string,
+  eventIndex?: number
+) {
+  const existing = session.transcript.find((item) => item.kind === 'agent_thought_chunk' && item.messageId === messageId);
+  if (existing) {
+    existing.text = text || existing.text;
+    existing.id = eventId;
+    existing.eventIndex = eventIndex ?? existing.eventIndex;
+    return;
+  }
+
+  const assistantIndex = session.transcript.findIndex((item) => item.kind === 'agent_message_chunk' && item.messageId === messageId);
+  const item = {
+    id: eventId,
+    kind: 'agent_thought_chunk' as const,
+    text,
+    messageId,
+    eventIndex
+  };
+
+  if (assistantIndex >= 0) {
+    session.transcript.splice(assistantIndex, 0, item);
+    return;
+  }
+
+  session.transcript.push(item);
 }
 
 function resolveAssistantMessageId(data: Record<string, unknown>, fallback: string | null): string | null {
   return readString(data.message_id) ?? readString(data.assistant_message_id) ?? fallback;
-}
-
-function readToolText(value: unknown): string | null {
-  if (value === undefined || value === null || value === '') {
-    return null;
-  }
-
-  return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 }
 
 function readString(value: unknown): string | undefined {

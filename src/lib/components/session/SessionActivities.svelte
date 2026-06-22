@@ -16,7 +16,7 @@
   let lastActivityStateKey = $state('');
 
   const hasRunningActivity = $derived.by(() =>
-    activities.some((activity) => activity.tool.id === activeToolCallId || activity.tool.status === 'in_progress' || activity.tool.status === 'failed')
+    activities.some((activity) => activity.tool.id === activeToolCallId || activity.tool.status === 'in_progress')
   );
   const runningCount = $derived(activities.filter((activity) => activity.tool.status === 'in_progress').length);
   const failedCount = $derived(activities.filter((activity) => activity.tool.status === 'failed').length);
@@ -24,6 +24,20 @@
   const activeLabel = $derived.by(() => {
     const active = activities.find((activity) => activity.tool.id === activeToolCallId) ?? activities.find((activity) => activity.tool.status === 'in_progress');
     return active?.tool.title ?? null;
+  });
+  const summaryState = $derived.by(() => {
+    if (failedCount > 0) return 'failed';
+    if (hasRunningActivity) return 'running';
+    if (completedCount === activities.length) return 'completed';
+    return 'idle';
+  });
+  const summaryText = $derived.by(() => {
+    const noun = activities.length === 1 ? 'activity' : 'activities';
+    if (activeLabel) return activeLabel;
+    if (runningCount > 0) return `${runningCount} running`;
+    if (failedCount > 0) return `${failedCount} failed${completedCount > 0 ? ` · ${completedCount} done` : ''}`;
+    if (completedCount === activities.length) return `${activities.length} ${noun} completed`;
+    return `${activities.length} ${noun}`;
   });
 
   $effect(() => {
@@ -50,39 +64,24 @@
   <details class="details-reset session-activities" bind:open={detailsOpen} ontoggle={handleToggle}>
     <summary class="session-activities-summary">
       <span class="session-activities-summary-main">
-        <span class="row-tight"><Wrench size={14} /> Activities</span>
-        <span class="badge">{activities.length}</span>
+        <span class={`session-activities-icon session-activities-icon-${summaryState}`} aria-label="Activities">
+          {#if summaryState === 'failed'}
+            <AlertTriangle size={14} />
+          {:else if summaryState === 'running'}
+            <LoaderCircle size={14} class="animate-spin" />
+          {:else if summaryState === 'completed'}
+            <CheckCircle2 size={14} />
+          {:else}
+            <Wrench size={14} />
+          {/if}
+        </span>
+        <span class="session-activities-preview">{summaryText}</span>
       </span>
-      <span class="session-activities-summary-status">
-        {#if activeLabel}
-          <span class="session-activities-status-chip session-activities-status-chip-running">
-            <LoaderCircle size={12} class="animate-spin" />
-            <span>{activeLabel}</span>
-          </span>
-        {/if}
-        {#if runningCount > 0}
-          <span class="session-activities-status-chip session-activities-status-chip-running">
-            <LoaderCircle size={12} class="animate-spin" />
-            <span>{runningCount} running</span>
-          </span>
-        {/if}
-        {#if failedCount > 0}
-          <span class="session-activities-status-chip session-activities-status-chip-failed">
-            <AlertTriangle size={12} />
-            <span>{failedCount} failed</span>
-          </span>
-        {/if}
-        {#if completedCount > 0}
-          <span class="session-activities-status-chip session-activities-status-chip-completed">
-            <CheckCircle2 size={12} />
-            <span>{completedCount} done</span>
-          </span>
-        {/if}
-      </span>
+      <span class="badge">{activities.length}</span>
     </summary>
     <div class="session-activities-list">
       {#each activities as activity}
-        <SessionToolBlock tool={activity.tool} open={activity.tool.id === activeToolCallId || activity.tool.status === 'in_progress' || activity.tool.status === 'failed'} />
+        <SessionToolBlock tool={activity.tool} open={activity.tool.id === activeToolCallId || activity.tool.status === 'in_progress'} />
       {/each}
     </div>
   </details>

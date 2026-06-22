@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Check, ChevronDown, RefreshCw, Search } from '@lucide/svelte';
-  import { tick } from 'svelte';
+  import { Bot, Check, RefreshCw, Search } from '@lucide/svelte';
+  import { getContext, tick } from 'svelte';
+  import { Portal } from 'bits-ui';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import type { ModelEntry, ModelInfo } from '$lib/domain/types';
 
@@ -35,6 +36,9 @@
   let query = $state('');
   let highlightedIndex = $state(0);
   let searchElement = $state<HTMLInputElement | null>(null);
+
+  const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
+  const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
 
   const selectedModel = $derived(
     modelOptions.find((entry) => entry.id === selectedModelId) ?? recentModels[0] ?? modelOptions[0] ?? null
@@ -174,12 +178,20 @@
 
 <div class="inline-flex">
   <button
-    class="badge max-w-[22rem] justify-between gap-2 pr-2 text-left"
+    class="composer-model-pill"
     disabled={disabled}
     type="button"
     onclick={openPicker}
   >
-    <span class="truncate">
+    <span class="composer-split-pill-icon" aria-hidden="true">
+      {#if loading}
+        <RefreshCw size={14} strokeWidth={2} class="animate-spin" />
+      {:else}
+        <Bot size={14} strokeWidth={2} />
+      {/if}
+    </span>
+    <span class="composer-split-pill-divider" aria-hidden="true"></span>
+    <span class="composer-model-pill-label">
       {#if selectedModel}
         {selectedModel.label ?? selectedModel.model}
         <span class="muted">· {selectedModel.provider}</span>
@@ -190,118 +202,125 @@
         Select model
       {/if}
     </span>
-    <ChevronDown size={14} />
   </button>
 
   {#if open}
-    <button class="model-picker-backdrop" type="button" aria-label="Close model picker" onclick={closePicker}></button>
-    <div class="model-picker-modal">
-      <div class="mb-3 flex items-center justify-between gap-3">
-        <div>
-          <div class="text-sm font-medium">Switch model</div>
-          <div class="muted text-xs">Search, press Enter, and continue typing.</div>
+    <Portal to={overlayPortalTarget}>
+      <button class="model-picker-backdrop" type="button" aria-label="Close model picker" onclick={closePicker}></button>
+      <div class="model-picker-modal !p-0" data-blocking-overlay="true">
+      <div class="border-b border-[var(--border)] px-4 py-4">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <div class="text-sm font-medium">Switch model</div>
+            <div class="muted text-xs">Search, press Enter, and continue typing.</div>
+          </div>
+          {#if onRefresh}
+            <IconTooltipButton label="Refresh models" icon={RefreshCw} size={14} iconClass={loading ? 'animate-spin' : ''} disabled={loading} onclick={onRefresh} />
+          {/if}
         </div>
-        {#if onRefresh}
-          <IconTooltipButton label="Refresh models" icon={RefreshCw} size={14} iconClass={loading ? 'animate-spin' : ''} disabled={loading} onclick={onRefresh} />
-        {/if}
       </div>
 
-      <div class="model-search-shell">
-        <Search size={15} />
-        <input
-          bind:this={searchElement}
-          class="model-search-input"
-          placeholder="Search models, providers, nodes…"
-          value={query}
-          oninput={(event) => {
-            query = (event.currentTarget as HTMLInputElement).value;
-            highlightedIndex = 0;
-          }}
-          onkeydown={handleSearchKeydown}
-        />
-      </div>
+      <div class="p-4">
+        <div class="model-search-shell">
+          <Search size={15} />
+          <input
+            bind:this={searchElement}
+            class="model-search-input"
+            placeholder="Search models, providers, nodes…"
+            value={query}
+            oninput={(event) => {
+              query = (event.currentTarget as HTMLInputElement).value;
+              highlightedIndex = 0;
+            }}
+            onkeydown={handleSearchKeydown}
+          />
+        </div>
 
-      <div class="mt-3 max-h-[24rem] space-y-3 overflow-y-auto pr-1">
-        {#each filteredGroups as group}
-          <section class="space-y-2">
-            <div class="px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--muted)]">{group.label}</div>
-            {#if group.items.length === 0 && group.label === 'Recent'}
+        <div class="picker-scroll-frame mt-3">
+          <div class="picker-scroll-area max-h-[24rem] space-y-3">
+            {#each filteredGroups as group}
+              <section class="space-y-2">
+                <div class="px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--muted)]">{group.label}</div>
+                {#if group.items.length === 0 && group.label === 'Recent'}
+                  <div class="surface-muted px-3 py-3 text-xs text-[var(--muted)]">
+                    No recent models yet.
+                  </div>
+                {:else if group.items.length > 0}
+                  <div class="model-picker-list">
+                    {#each group.items as model}
+                      {@const index = flatResults.findIndex((entry) => entry.id === model.id)}
+                      {@const info = modelInfo[model.id]}
+                      <button
+                        class="model-picker-row"
+                        class:model-picker-row-selected={selectedModelId === model.id || highlightedIndex === index}
+                        type="button"
+                        onclick={() => handleSelect(model.id)}
+                        onmousemove={() => (highlightedIndex = index)}
+                      >
+                        <div class="min-w-0 flex-1">
+                          <div class="truncate text-sm font-medium">{model.label ?? model.model}</div>
+                          <div class="muted truncate text-xs">
+                            {model.provider} · {model.model}
+                            {#if agentLabel}
+                              · {agentLabel}
+                            {/if}
+                            {#if model.node_label}
+                              · {model.node_label}
+                            {/if}
+                            {#if model.family}
+                              · {model.family}
+                            {/if}
+                          </div>
+                        </div>
+                        <div class="flex flex-wrap items-center justify-end gap-2">
+                          {#if agentLabel}
+                            <span class="badge">{agentLabel}</span>
+                          {/if}
+                          {#if model.node_id}
+                            <span class="badge">mesh</span>
+                          {/if}
+                          {#if model.node_label}
+                            <span class="badge">{model.node_label}</span>
+                          {/if}
+                          {#if info?.limits?.context}
+                            <span class="badge">{info.limits.context.toLocaleString()} ctx</span>
+                          {/if}
+                          {#if info?.capabilities?.reasoning}
+                            <span class="badge">reasoning</span>
+                          {/if}
+                          {#if info?.capabilities?.tool_call}
+                            <span class="badge">tools</span>
+                          {/if}
+                          {#if selectedModelId === model.id}
+                            <Check size={14} />
+                          {/if}
+                        </div>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </section>
+            {/each}
+
+            {#if flatResults.length === 0 && modelOptions.length > 0}
               <div class="surface-muted px-3 py-3 text-xs text-[var(--muted)]">
-                No recent models yet.
-              </div>
-            {:else if group.items.length > 0}
-              <div class="space-y-1">
-                {#each group.items as model}
-                  {@const index = flatResults.findIndex((entry) => entry.id === model.id)}
-                  {@const info = modelInfo[model.id]}
-                  <button
-                    class="model-picker-row"
-                    class:model-picker-row-selected={selectedModelId === model.id || highlightedIndex === index}
-                    type="button"
-                    onclick={() => handleSelect(model.id)}
-                    onmousemove={() => (highlightedIndex = index)}
-                  >
-                    <div class="min-w-0 flex-1">
-                      <div class="truncate text-sm font-medium">{model.label ?? model.model}</div>
-                      <div class="muted truncate text-xs">
-                        {model.provider} · {model.model}
-                        {#if agentLabel}
-                          · {agentLabel}
-                        {/if}
-                        {#if model.node_label}
-                          · {model.node_label}
-                        {/if}
-                        {#if model.family}
-                          · {model.family}
-                        {/if}
-                      </div>
-                    </div>
-                    <div class="flex flex-wrap items-center justify-end gap-2">
-                      {#if agentLabel}
-                        <span class="badge">{agentLabel}</span>
-                      {/if}
-                      {#if model.node_id}
-                        <span class="badge">mesh</span>
-                      {/if}
-                      {#if model.node_label}
-                        <span class="badge">{model.node_label}</span>
-                      {/if}
-                      {#if info?.limits?.context}
-                        <span class="badge">{info.limits.context.toLocaleString()} ctx</span>
-                      {/if}
-                      {#if info?.capabilities?.reasoning}
-                        <span class="badge">reasoning</span>
-                      {/if}
-                      {#if info?.capabilities?.tool_call}
-                        <span class="badge">tools</span>
-                      {/if}
-                      {#if selectedModelId === model.id}
-                        <Check size={14} />
-                      {/if}
-                    </div>
-                  </button>
-                {/each}
+                No models match "{query}".
               </div>
             {/if}
-          </section>
-        {/each}
 
-        {#if flatResults.length === 0 && modelOptions.length > 0}
-          <div class="surface-muted px-3 py-3 text-xs text-[var(--muted)]">
-            No models match "{query}".
-          </div>
-        {/if}
-
-        {#if modelOptions.length === 0}
-          <div class="surface-muted px-3 py-3 text-xs text-[var(--muted)]">
-            {#if loading}
-              Loading models...
-            {:else}
-              No models available from this agent.
+            {#if modelOptions.length === 0}
+              <div class="surface-muted px-3 py-3 text-xs text-[var(--muted)]">
+                {#if loading}
+                  Loading models...
+                {:else}
+                  No models available from this agent.
+                {/if}
+              </div>
             {/if}
           </div>
-        {/if}
+        </div>
       </div>
-    </div>
+      </div>
+    </Portal>
   {/if}
 </div>

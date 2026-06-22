@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ActiveSessionViewModel } from './types';
+import { buildSessionConversation } from './session-conversation';
 import { activeSessionFromLoadResponse, normalizeHistoricalSession } from './session-snapshot';
 
 describe('activeSessionFromLoadResponse', () => {
@@ -47,6 +48,77 @@ describe('activeSessionFromLoadResponse', () => {
       arguments: '{"path":"README.md"}',
       result: 'contents'
     });
+  });
+
+  it('hydrates stored assistant thinking as reasoning from QueryMT load snapshots', () => {
+    const session = activeSessionFromLoadResponse('session-1', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [
+              {
+                seq: 1,
+                kind: { type: 'prompt_received', data: { message_id: 'u1', content: 'plan the fix' } }
+              },
+              {
+                seq: 2,
+                kind: {
+                  type: 'assistant_message_stored',
+                  data: { message_id: 'a1', content: 'I have a plan.', thinking: '**Planning tests** and implementation steps.' }
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(session.transcript).toEqual([
+      expect.objectContaining({ kind: 'user_message_chunk', messageId: 'u1', text: 'plan the fix' }),
+      expect.objectContaining({ kind: 'agent_thought_chunk', messageId: 'a1', text: '**Planning tests** and implementation steps.' }),
+      expect.objectContaining({ kind: 'agent_message_chunk', messageId: 'a1', text: 'I have a plan.' })
+    ]);
+
+    const turns = buildSessionConversation(session);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].reasoning).toHaveLength(1);
+    expect(turns[0].reasoning[0].html).toContain('Planning tests');
+    expect(turns[0].assistant?.html).toContain('I have a plan.');
+  });
+
+  it('hydrates reasoning-only stored assistant messages without empty assistant output', () => {
+    const session = activeSessionFromLoadResponse('session-1', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [
+              {
+                seq: 1,
+                kind: { type: 'prompt_received', data: { message_id: 'u1', content: 'think only' } }
+              },
+              {
+                seq: 2,
+                kind: {
+                  type: 'assistant_message_stored',
+                  data: { message_id: 'a1', content: '', thinking: 'Need inspect existing session hydration.' }
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(session.transcript).toEqual([
+      expect.objectContaining({ kind: 'user_message_chunk', messageId: 'u1' }),
+      expect.objectContaining({ kind: 'agent_thought_chunk', messageId: 'a1', text: 'Need inspect existing session hydration.' })
+    ]);
+    expect(session.transcript.some((item) => item.kind === 'agent_message_chunk')).toBe(false);
+
+    const turns = buildSessionConversation(session);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].reasoning).toHaveLength(1);
+    expect(turns[0].assistant).toBeUndefined();
   });
 
   it('merges tool start and end events by tool_call_id even when the end arrives first', () => {
