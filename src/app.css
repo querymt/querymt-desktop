@@ -7,7 +7,7 @@
   --bg-panel: #fdfdfd;
   --bg-panel-strong: #ffffff;
   --bg-card: #ffffff;
-  --bg-card-hover: #f1f4f9;
+  --bg-card-hover: #f1efed;
   --border: #deddda;
   --border-strong: #c0bfbc;
   --text: #241f31;
@@ -19,20 +19,30 @@
   --accent-dim: rgba(249, 115, 22, 0.12);
   --hazard: rgba(249, 115, 22, 0.14);
   --rail: rgba(249, 115, 22, 0.22);
+  --subtle-border: rgba(36, 31, 49, 0.09);
+  --subtle-border-strong: rgba(36, 31, 49, 0.14);
+  --subtle-surface: rgba(255, 255, 255, 0.72);
+  --subtle-surface-hover: rgba(246, 245, 244, 0.92);
+  --recessed-surface: rgba(246, 245, 244, 0.66);
+  --row-surface: rgba(255, 255, 255, 0.74);
+  --row-surface-hover: rgba(249, 115, 22, 0.08);
+  --icon-surface: rgba(94, 92, 100, 0.08);
+  --selected-surface: rgba(249, 115, 22, 0.13);
+  --selected-border: rgba(249, 115, 22, 0.32);
   --amber: #fb923c;
   --yellow: #f6d32d;
   --success: #2ec27e;
   --warn: #f6d32d;
   --danger: #e01b24;
-  --body-bg: linear-gradient(180deg, #ffffff 0%, #f6f5f4 48%, #edeeef 100%);
+  --body-bg: linear-gradient(180deg, #ffffff 0%, #f7f6f4 46%, #eeeeec 100%);
   --nav-bg: rgba(255, 255, 255, 0.86);
   --nav-border: rgba(0, 0, 0, 0.08);
   --overlay-backdrop: rgba(0, 0, 0, 0.45);
-  --nav-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 16px 38px rgba(0, 0, 0, 0.06);
+  --nav-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 16px 34px rgba(36, 31, 49, 0.06);
   --code-bg: #f6f5f4;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.1);
+  --shadow-sm: 0 1px 2px rgba(36, 31, 49, 0.06);
+  --shadow-md: 0 8px 22px rgba(36, 31, 49, 0.07);
+  --shadow-lg: 0 18px 42px rgba(36, 31, 49, 0.09);
   --radius: 18px;
   --radius-sm: 10px;
   --app-shell-inset: 1rem;
@@ -62,6 +72,16 @@
   --accent-dim: rgba(251, 146, 60, 0.16);
   --hazard: rgba(251, 146, 60, 0.18);
   --rail: rgba(251, 146, 60, 0.28);
+  --subtle-border: rgba(255, 255, 255, 0.08);
+  --subtle-border-strong: rgba(255, 255, 255, 0.12);
+  --subtle-surface: rgba(255, 255, 255, 0.035);
+  --subtle-surface-hover: rgba(255, 255, 255, 0.05);
+  --recessed-surface: rgba(255, 255, 255, 0.018);
+  --row-surface: rgba(255, 255, 255, 0.035);
+  --row-surface-hover: rgba(255, 122, 26, 0.06);
+  --icon-surface: rgba(0, 0, 0, 0.1);
+  --selected-surface: rgba(255, 122, 26, 0.1);
+  --selected-border: rgba(255, 122, 26, 0.28);
   --body-bg: linear-gradient(180deg, #242426 0%, #1e1e20 56%, #19191b 100%);
   --nav-bg: rgba(36, 36, 38, 0.86);
   --nav-border: rgba(255, 255, 255, 0.08);
@@ -2304,18 +2324,19 @@ summary:focus-visible {
   align-items: center;
   gap: 0.75rem;
   border-radius: 16px;
-  color: rgb(203 213 225);
+  color: var(--muted);
   padding: 0.45rem 0.6rem;
   font-size: 0.88rem;
   transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 
 .left-rail-link:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--subtle-surface-hover);
+  color: var(--text);
 }
 
 .left-rail-link-active {
-  background: var(--accent-dim);
+  background: var(--selected-surface);
   color: var(--text);
 }
 
@@ -2335,9 +2356,9 @@ summary:focus-visible {
   height: 2rem;
   flex: 0 0 auto;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.1);
-  color: rgb(148 163 184);
+  border: 1px solid var(--subtle-border);
+  background: var(--icon-surface);
+  color: var(--text-dim);
 }
 
 .left-rail-agent-count {
@@ -2360,9 +2381,14 @@ summary:focus-visible {
 }
 
 .left-rail-link-icon-active {
-  border-color: var(--border-strong);
-  background: rgba(0, 0, 0, 0.2);
+  border-color: var(--selected-border);
+  background: var(--selected-surface);
   color: var(--accent);
+}
+
+:root[data-theme='dark'] .left-rail-link-icon-active {
+  background: rgba(0, 0, 0, 0.2);
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .left-rail-link-label {
@@ -2375,7 +2401,7 @@ summary:focus-visible {
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(13, 11, 8, 0.94);
-  color: var(--text);
+  color: #f6f5f4;
   padding: 0.45rem 0.65rem;
   font-size: 0.76rem;
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.32);
@@ -2417,10 +2443,11 @@ summary:focus-visible {
   gap: 0.55rem;
   min-width: 0;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid var(--subtle-border-strong);
+  background: var(--bg-card);
   color: var(--muted);
   padding: 0.62rem 0.85rem;
+  box-shadow: var(--shadow-sm);
 }
 
 .session-browser-search input {
@@ -2441,8 +2468,8 @@ summary:focus-visible {
 
 .session-browser-filter {
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--subtle-border);
+  background: var(--subtle-surface);
   color: var(--muted);
   padding: 0.45rem 0.7rem;
   font-size: 0.75rem;
@@ -2451,8 +2478,8 @@ summary:focus-visible {
 
 .session-browser-filter:hover,
 .session-browser-filter-active {
-  border-color: rgba(255, 122, 26, 0.28);
-  background: rgba(255, 122, 26, 0.1);
+  border-color: var(--selected-border);
+  background: var(--selected-surface);
   color: var(--text);
 }
 
@@ -2463,13 +2490,14 @@ summary:focus-visible {
 
 .session-workspace-accordion {
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--subtle-border-strong);
   border-radius: 18px;
-  background: rgba(0, 0, 0, 0.12);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
 }
 
 .session-workspace-item + .session-workspace-item {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--subtle-border);
 }
 
 .session-workspace-item {
@@ -2488,7 +2516,7 @@ summary:focus-visible {
 }
 
 .session-workspace-trigger:hover {
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--subtle-surface-hover);
 }
 
 .session-workspace-trigger-main,
@@ -2508,8 +2536,8 @@ summary:focus-visible {
   height: 2.2rem;
   flex: 0 0 auto;
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--subtle-border);
+  background: var(--icon-surface);
   color: var(--accent);
 }
 
@@ -2548,8 +2576,8 @@ summary:focus-visible {
 }
 
 .session-workspace-content {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.018);
+  border-top: 1px solid var(--subtle-border);
+  background: var(--recessed-surface);
   padding: 0;
 }
 
@@ -2562,7 +2590,8 @@ summary:focus-visible {
 
 .session-agent-chip {
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--subtle-border);
+  background: var(--subtle-surface);
   color: var(--muted);
   padding: 0.24rem 0.55rem;
   font-size: 0.68rem;
@@ -2575,19 +2604,19 @@ summary:focus-visible {
 }
 
 .session-workspace-session-list .session-row + .session-row {
-  border-top-color: rgba(255, 255, 255, 0.07);
+  border-top-color: var(--subtle-border);
 }
 
 .session-row {
   justify-content: space-between;
   gap: 0.75rem;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--row-surface);
   padding-block: 0.74rem;
   padding-left: 1rem;
 }
 
 .session-row:hover {
-  background: rgba(255, 122, 26, 0.06);
+  background: var(--row-surface-hover);
 }
 
 .session-row-identicon {
@@ -2599,8 +2628,8 @@ summary:focus-visible {
   flex: 0 0 auto;
   overflow: hidden;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--subtle-border);
+  background: var(--bg-card);
 }
 
 .session-row-identicon svg {
@@ -2676,21 +2705,23 @@ summary:focus-visible {
 
 .agent-list {
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--subtle-border-strong);
   border-radius: 18px;
-  background: rgba(0, 0, 0, 0.12);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
 }
 
 .agent-list-row {
+  background: var(--row-surface);
   transition: background 0.15s ease;
 }
 
 .agent-list-row + .agent-list-row {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--subtle-border);
 }
 
 .agent-list-row:hover {
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--subtle-surface-hover);
 }
 
 .agent-list-row-inner {
