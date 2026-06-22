@@ -44,6 +44,8 @@
   --status-muted: #5e5c64;
   --status-muted-bg: rgba(94, 92, 100, 0.08);
   --status-muted-border: rgba(94, 92, 100, 0.18);
+  --inline-code-bg: rgba(249, 115, 22, 0.11);
+  --inline-code-text: #7c2d12;
   --amber: #fb923c;
   --yellow: #f6d32d;
   --success: #2ec27e;
@@ -112,6 +114,8 @@
   --status-muted: #cbd5e1;
   --status-muted-bg: rgba(148, 163, 184, 0.06);
   --status-muted-border: rgba(148, 163, 184, 0.18);
+  --inline-code-bg: rgba(251, 146, 60, 0.13);
+  --inline-code-text: #fdba74;
   --body-bg: linear-gradient(180deg, #242426 0%, #1e1e20 56%, #19191b 100%);
   --nav-bg: rgba(36, 36, 38, 0.86);
   --nav-border: rgba(255, 255, 255, 0.08);
@@ -555,6 +559,18 @@ html:has(.app-shell-custom-titlebar) body {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
   color: #ffffff;
+}
+
+.action-btn-danger {
+  border-color: var(--status-danger-border);
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+}
+
+.action-btn-danger:hover:enabled {
+  border-color: color-mix(in srgb, var(--status-danger), transparent 35%);
+  background: color-mix(in srgb, var(--status-danger-bg), var(--status-danger) 10%);
+  color: var(--status-danger);
 }
 
 .icon-btn {
@@ -1477,11 +1493,15 @@ summary:focus-visible {
 }
 
 .markdown-body code {
-  border-radius: 0.45rem;
-  background: var(--code-bg);
-  padding: 0.12rem 0.35rem;
+  border-radius: 0.42rem;
+  background: var(--inline-code-bg);
+  color: var(--inline-code-text);
+  padding: 0.08rem 0.34rem 0.1rem;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
   font-family: var(--font-mono);
   font-size: 0.86em;
+  line-height: 1.45;
 }
 
 .markdown-body .markdown-table-wrap {
@@ -1584,6 +1604,7 @@ summary:focus-visible {
   display: block;
   max-width: 100%;
   background: transparent;
+  color: inherit;
   padding: 0;
   white-space: pre;
 }

@@ -281,7 +281,7 @@
           </div>
           <div class="compact-toolbar justify-end">
             <button class="action-btn" type="button" onclick={() => (pendingDeleteAgentId = null)}>Cancel</button>
-            <button class="action-btn" type="button" onclick={() => confirmDeleteAgent()}>Delete</button>
+            <button class="action-btn action-btn-danger" type="button" onclick={() => confirmDeleteAgent()}>Delete</button>
           </div>
         </div>
       </div>
