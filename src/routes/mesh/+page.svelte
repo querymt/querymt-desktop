@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { Link, Plus, RefreshCw, Ticket, Trash2, XCircle } from '@lucide/svelte';
+  import { Clipboard, Link, Plus, RefreshCw, Ticket, Trash2, XCircle } from '@lucide/svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
 
   const meshAgents = $derived.by(() =>
     agentsStore.configs.filter((config) => {
@@ -16,10 +17,7 @@
   let loading = $state(false);
   let inviteTtl = $state('24h');
   let inviteMaxUses = $state('1');
-  let remoteNodeId = $state('');
-  let remoteCwd = $state('');
-  let attachSessionId = $state('');
-  let attachNodeId = $state('');
+  let copiedInviteId = $state<string | null>(null);
   let actionError = $state<string | null>(null);
 
   $effect(() => {
@@ -28,12 +26,6 @@
     }
     if (selectedAgentId && !meshAgents.some((agent) => agent.id === selectedAgentId)) {
       selectedAgentId = meshAgents[0]?.id ?? '';
-    }
-    if (!remoteNodeId && meshNodes.length > 0) {
-      remoteNodeId = meshNodes[0].id;
-    }
-    if (!attachNodeId && meshNodes.length > 0) {
-      attachNodeId = meshNodes[0].id;
     }
   });
 
@@ -66,8 +58,49 @@
     return selectedCapabilities?.methods.includes(method) ?? false;
   }
 
+  function selectedCapabilitySummary() {
+    if (!selectedCapabilities) return loading ? 'Refreshing mesh capabilities' : 'No capabilities reported yet';
+
+    const details = [`API v${selectedCapabilities.querymt_control_version}`];
+    if (selectedCapabilities.features.mesh) details.push('Mesh');
+    if (selectedCapabilities.features.mesh_invites) details.push('Invites');
+    if (selectedCapabilities.features.remote_sessions) details.push('Remote sessions');
+    return details.join(' · ');
+  }
+
+  function meshStatusSummary() {
+    if (!meshStatus) return 'No mesh status loaded yet';
+    return meshStatus.enabled ? 'Enabled' : 'Disabled';
+  }
+
+  function meshPeerSummary() {
+    if (!meshStatus) return 'Refresh mesh data to inspect peer details';
+    const details = [];
+    if (meshStatus.peer_id) details.push(`Peer ${meshStatus.peer_id}`);
+    if (meshStatus.transport) details.push(meshStatus.transport);
+    details.push(`${meshStatus.known_peer_count} peers`);
+    return details.join(' · ');
+  }
+
+  function meshStoreSummary() {
+    if (!meshStatus) return 'Refresh mesh data to inspect local stores';
+    return `Invite store ${meshStatus.has_invite_store ? 'ready' : 'missing'} · State store ${meshStatus.has_mesh_state_store ? 'ready' : 'missing'}`;
+  }
+
   function remoteSessionsFor(nodeId: string) {
     return selectedAgentId ? agentsStore.remoteSessionsByAgent[selectedAgentId]?.[nodeId]?.sessions ?? [] : [];
+  }
+
+  async function copyInviteUrl(inviteId: string, url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      copiedInviteId = inviteId;
+      window.setTimeout(() => {
+        if (copiedInviteId === inviteId) copiedInviteId = null;
+      }, 1600);
+    } catch {
+      actionError = 'Failed to copy invite link.';
+    }
   }
 
   async function refreshMesh() {
@@ -118,38 +151,19 @@
     }
   }
 
-  async function createRemoteSession() {
-    if (!selectedAgentId || !remoteNodeId.trim()) {
-      actionError = 'Node id is required to create a remote session.';
-      return;
-    }
-    loading = true;
-    actionError = null;
-    try {
-      await agentsStore.createRemoteSession(selectedAgentId, remoteNodeId.trim(), remoteCwd.trim() || undefined);
-      remoteCwd = '';
-    } catch (error) {
-      actionError = error instanceof Error ? error.message : 'Failed to create remote session.';
-    } finally {
-      loading = false;
-    }
+  function openRemoteCreate(nodeId: string | null = null) {
+    commandPaletteStore.openRemoteCreate({
+      agentId: selectedAgentId || null,
+      nodeId
+    });
   }
 
-  async function attachRemoteSession() {
-    if (!selectedAgentId || !attachNodeId.trim() || !attachSessionId.trim()) {
-      actionError = 'Node id and session id are required to attach a remote session.';
-      return;
-    }
-    loading = true;
-    actionError = null;
-    try {
-      await agentsStore.attachRemoteSession(selectedAgentId, attachNodeId.trim(), attachSessionId.trim());
-      attachSessionId = '';
-    } catch (error) {
-      actionError = error instanceof Error ? error.message : 'Failed to attach remote session.';
-    } finally {
-      loading = false;
-    }
+  function openRemoteAttach(nodeId: string | null = null, sessionId: string | null = null) {
+    commandPaletteStore.openRemoteAttach({
+      agentId: selectedAgentId || null,
+      nodeId,
+      sessionId
+    });
   }
 
   async function revokeInvite(inviteId: string) {
@@ -183,213 +197,253 @@
   }
 </script>
 
-<div class="space-y-4 page-width-wide">
+<div class="settings-page">
   <div class="page-toolbar">
     <SectionHeader
-      eyebrow="Remote control"
       title="Mesh"
-      description="Live mesh topology, invite management, and remote session visibility for agents that expose QueryMT mesh controls."
+      description="Manage mesh status, invites, and remote sessions."
     />
-
-    <div class="compact-toolbar">
-      <IconTooltipButton label="Refresh mesh" icon={RefreshCw} size={16} disabled={!selectedAgentId || loading} onclick={() => refreshMesh()} />
-    </div>
   </div>
 
-  {#if meshAgents.length === 0}
-    <div class="panel empty-state p-6 text-sm text-[var(--muted)]">
-      No connected agents currently advertise `querymt/mesh/status`.
-    </div>
-  {:else}
-    <section class="panel p-4 space-y-4">
-      <div class="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)] lg:items-end">
-        <label class="space-y-2">
-          <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Agent</span>
-          <AppSelect bind:value={selectedAgentId} options={meshAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" />
-        </label>
-
-        <div class="flex flex-wrap gap-2 text-xs">
-          {#if selectedCapabilities}
-            <span class="badge">api v{selectedCapabilities.querymt_control_version}</span>
-            {#if selectedCapabilities.features.mesh}<span class="badge">mesh</span>{/if}
-            {#if selectedCapabilities.features.mesh_invites}<span class="badge">invites</span>{/if}
-            {#if selectedCapabilities.features.remote_sessions}<span class="badge">remote sessions</span>{/if}
-          {/if}
+  <div class="settings-unified-panel">
+    {#if meshAgents.length === 0}
+      <section class="settings-section">
+        <div class="settings-section-header">
+          <div>
+            <h2>Mesh</h2>
+            <p>No connected agents currently advertise `querymt/mesh/status`.</p>
+          </div>
         </div>
-      </div>
+      </section>
+    {:else}
+      <section class="settings-section">
+        <div class="settings-section-header settings-section-header-action">
+          <div>
+            <h2>Agent</h2>
+            <p>Choose the active agent and inspect mesh connectivity.</p>
+          </div>
+          <IconTooltipButton label="Refresh mesh" icon={RefreshCw} size={16} disabled={!selectedAgentId || loading} onclick={() => refreshMesh()} />
+        </div>
+
+        <div class="settings-preference-list">
+          <div class="settings-preference-row">
+            <div class="settings-preference-main">
+              <div class="settings-preference-title">Active agent</div>
+              <div class="settings-preference-description">{selectedCapabilitySummary()}</div>
+            </div>
+            <AppSelect bind:value={selectedAgentId} options={meshAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Agent" />
+          </div>
+
+          <div class="settings-preference-row">
+            <div class="settings-preference-main">
+              <div class="settings-preference-title">Status</div>
+              <div class="settings-preference-description">{meshStatusSummary()}</div>
+            </div>
+          </div>
+
+          <div class="settings-preference-row">
+            <div class="settings-preference-main">
+              <div class="settings-preference-title">Peer</div>
+              <div class="settings-preference-description">{meshPeerSummary()}</div>
+            </div>
+          </div>
+
+          <div class="settings-preference-row">
+            <div class="settings-preference-main">
+              <div class="settings-preference-title">Stores</div>
+              <div class="settings-preference-description">{meshStoreSummary()}</div>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {#if actionError}
-        <div class="alert-error">
+        <div class="alert-error settings-section-message">
           {actionError}
         </div>
       {/if}
 
-      {#if meshStatus}
-        <article class="surface-muted p-4 space-y-3">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="badge">{meshStatus.enabled ? 'enabled' : 'disabled'}</span>
-            {#if meshStatus.peer_id}<span class="badge">peer {meshStatus.peer_id}</span>{/if}
-            {#if meshStatus.transport}<span class="badge">{meshStatus.transport}</span>{/if}
-            <span class="badge">{meshStatus.known_peer_count} peers</span>
-          </div>
-          <div class="text-xs text-[var(--muted)]">
-            invite store {meshStatus.has_invite_store ? 'ready' : 'missing'} • state store {meshStatus.has_mesh_state_store ? 'ready' : 'missing'}
-          </div>
-        </article>
-      {/if}
-
-      <div class="grid gap-4 xl:grid-cols-2">
-        <article class="surface-muted p-4 space-y-3">
+      <section class="settings-section">
+        <div class="settings-section-header">
           <div>
-            <h2 class="panel-title">Invite controls</h2>
-            <p class="panel-copy mt-1">Create and revoke mesh invites from the selected agent.</p>
+            <h2>Invites</h2>
+            <p>Create and revoke mesh invites from the selected agent.</p>
+          </div>
+        </div>
+
+        <div class="settings-preference-list">
+          <div class="settings-preference-row">
+            <div class="settings-preference-main">
+              <div class="settings-preference-title">Invite TTL</div>
+              <div class="settings-preference-description">How long a generated invite remains valid.</div>
+            </div>
+            <div class="settings-preference-control">
+              <input class="input-shell" bind:value={inviteTtl} placeholder="24h" />
+            </div>
           </div>
 
-          <div class="flex flex-wrap items-end gap-3">
-            <label class="space-y-2">
-              <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Invite TTL</span>
-              <input class="input-shell" bind:value={inviteTtl} placeholder="24h" />
-            </label>
-            <label class="space-y-2">
-              <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Max Uses</span>
+          <div class="settings-preference-row">
+            <div class="settings-preference-main">
+              <div class="settings-preference-title">Max uses</div>
+              <div class="settings-preference-description">Limit how many times the invite can be consumed.</div>
+            </div>
+            <div class="settings-preference-control">
               <input class="input-shell" bind:value={inviteMaxUses} placeholder="1" />
-            </label>
-            <button class="action-btn action-btn-primary" type="button" disabled={!canRun('querymt/mesh/createInvite') || loading} onclick={() => createInvite()}>
-              <Ticket size={15} />
-              Create Invite
+            </div>
+          </div>
+
+          <div class="settings-preference-row">
+            <div class="settings-preference-main">
+              <div class="settings-preference-title">Create invite</div>
+              <div class="settings-preference-description">Generate a new invite with the values above.</div>
+            </div>
+            <div class="settings-preference-actions-single">
+              <button class="action-btn action-btn-primary" type="button" disabled={!canRun('querymt/mesh/createInvite') || loading} onclick={() => createInvite()}>
+                <Ticket size={15} />
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {#if lastInvite}
+          <div class="mesh-created-invite">
+            <div class="mesh-created-invite-main">
+              <div class="mesh-created-invite-eyebrow">Invite created</div>
+              <div class="mesh-created-invite-id">{lastInvite.invite_id}</div>
+              <div class="mesh-created-invite-url" title={lastInvite.url}>{lastInvite.url}</div>
+            </div>
+            <button class="action-btn" type="button" onclick={() => copyInviteUrl(lastInvite.invite_id, lastInvite.url)}>
+              <Clipboard size={15} />
+              {copiedInviteId === lastInvite.invite_id ? 'Copied' : 'Copy link'}
             </button>
           </div>
+        {/if}
+        {#if lastRevoke}
+          <div class="settings-inline-note">Last revoke: {lastRevoke.invite_id} ({lastRevoke.success ? 'ok' : 'failed'})</div>
+        {/if}
 
-          {#if lastInvite}
-            <div class="alert-success">
-              Created invite {lastInvite.invite_id}: {lastInvite.url}
-            </div>
-          {/if}
-          {#if lastRevoke}
-            <div class="text-xs text-[var(--muted)]">Last revoke: {lastRevoke.invite_id} ({lastRevoke.success ? 'ok' : 'failed'})</div>
-          {/if}
-        </article>
-
-        <article class="surface-muted p-4 space-y-4">
-          <div>
-            <h2 class="panel-title">Remote session controls</h2>
-            <p class="panel-copy mt-1">Create or attach remote sessions before loading their activity below.</p>
-          </div>
-
-          <div class="grid gap-3 lg:grid-cols-2">
-            <input class="input-shell" bind:value={remoteNodeId} placeholder="Node id" />
-            <input class="input-shell" bind:value={remoteCwd} placeholder="Working directory (optional)" />
-          </div>
-          <button class="action-btn action-btn-primary" type="button" disabled={!canRun('querymt/remote/createSession') || loading} onclick={() => createRemoteSession()}>
-            <Plus size={15} />
-            Create Remote Session
-          </button>
-
-          <div class="grid gap-3 lg:grid-cols-2">
-            <input class="input-shell" bind:value={attachNodeId} placeholder="Node id" />
-            <input class="input-shell" bind:value={attachSessionId} placeholder="Existing session id" />
-          </div>
-          <button class="action-btn" type="button" disabled={!canRun('querymt/remote/attachSession') || loading} onclick={() => attachRemoteSession()}>
-            <Link size={15} />
-            Attach Remote Session
-          </button>
-
-          {#if lastAttach}
-            <div class="text-xs text-[var(--muted)]">Last remote attach: {lastAttach.session_id} on {lastAttach.node_id} ({lastAttach.attached ? 'attached' : 'not attached'})</div>
-          {/if}
-        </article>
-      </div>
-
-      <div class="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
-        <section class="space-y-3">
-          <div>
-            <h2 class="panel-title">Nodes</h2>
-            <p class="panel-copy mt-1">Live remote nodes plus on-demand remote session lookup.</p>
-          </div>
-
-          {#if meshNodes.length === 0}
-            <div class="empty-state">No mesh nodes reported yet.</div>
-          {:else}
-            {#each meshNodes as node}
-              <article class="surface-muted p-4 space-y-3">
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div class="text-sm font-medium">{node.label}</div>
-                    <div class="mt-1 text-xs text-[var(--muted)]">{node.id}</div>
-                  </div>
-                  <div class="compact-toolbar">
-                    <span class="badge">{node.transport}</span>
-                    <span class="badge">{node.active_sessions} active</span>
-                    <IconTooltipButton label="Load remote sessions" icon={RefreshCw} disabled={!canRun('querymt/remote/sessions') || loading} onclick={() => loadRemoteSessions(node.id)} />
-                  </div>
-                </div>
-
-                <div class="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-                  {#each node.capabilities as capability}
-                    <span class="badge">{capability}</span>
-                  {/each}
-                  {#if node.last_seen_at}<span>last seen {node.last_seen_at}</span>{/if}
-                </div>
-
-                {#if remoteSessionsFor(node.id).length > 0}
-                  <details class="details-reset surface-muted px-4 py-3" open>
-                    <summary class="flex items-center justify-between gap-3 text-sm font-medium">
-                      <span>Remote sessions</span>
-                      <span class="panel-copy">{remoteSessionsFor(node.id).length}</span>
-                    </summary>
-                    <div class="mt-3 space-y-2">
-                      {#each remoteSessionsFor(node.id) as session}
-                        <div class="surface-muted flex flex-wrap items-center justify-between gap-3 px-3 py-3 text-sm">
-                          <div>
-                            <div class="font-medium">{session.title ?? session.id}</div>
-                            <div class="mt-1 text-xs text-[var(--muted)]">{session.cwd ?? 'No cwd'} • {session.updated_at ?? 'No activity yet'}</div>
-                          </div>
-                          <IconTooltipButton label="Dismiss" icon={XCircle} disabled={!canRun('querymt/remote/dismissSession') || loading} onclick={() => dismissRemoteSession(node.id, session.id)} />
-                        </div>
-                      {/each}
-                    </div>
-                  </details>
-                {/if}
-              </article>
-            {/each}
-          {/if}
-        </section>
-
-        <section class="space-y-3">
-          <div>
-            <h2 class="panel-title">Invites</h2>
-            <p class="panel-copy mt-1">Current invite tokens exposed by the selected agent.</p>
+        <div class="settings-subsection">
+          <div class="settings-subsection-header">
+            <h3>Current invites</h3>
+            <p>Invite tokens exposed by the selected agent.</p>
           </div>
 
           {#if meshInvites.length === 0}
             <div class="empty-state">No invites available yet.</div>
           {:else}
-            {#each meshInvites as invite}
-              <article class="surface-muted p-4 space-y-3">
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div class="text-sm font-medium">{invite.invite_id}</div>
-                    <div class="mt-1 text-xs text-[var(--muted)]">{invite.mesh_name ?? 'Default mesh'}</div>
+            <div class="mesh-item-list">
+              {#each meshInvites as invite}
+                <article class="mesh-item-row">
+                  <div class="mesh-item-main">
+                    <div class="mesh-item-title">{invite.invite_id}</div>
+                    <div class="mesh-item-description">{invite.mesh_name ?? 'Default mesh'}</div>
+                    <div class="mesh-item-meta">{invite.status} · uses left {invite.uses_remaining} · max uses {invite.max_uses} · expires {new Date(invite.expires_at * 1000).toLocaleString()}</div>
                   </div>
-                  <div class="compact-toolbar">
-                    <span class="badge">{invite.status}</span>
+                  <div class="mesh-item-actions">
                     <IconTooltipButton label="Revoke" icon={Trash2} tone="danger" disabled={!canRun('querymt/mesh/revokeInvite') || loading} onclick={() => revokeInvite(invite.invite_id)} />
                   </div>
+                </article>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="settings-section-header">
+          <div>
+            <h2>Remote sessions</h2>
+            <p>Create or attach remote sessions before loading their activity below.</p>
+          </div>
+        </div>
+
+        <div class="settings-preference-list">
+          <div class="settings-preference-row">
+            <div class="settings-preference-main">
+              <div class="settings-preference-title">Create remote session</div>
+              <div class="settings-preference-description">Open the remote session dialog with this agent preselected.</div>
+            </div>
+            <div class="settings-preference-actions-single">
+              <button class="action-btn action-btn-primary" type="button" disabled={!canRun('querymt/remote/createSession') || loading} onclick={() => openRemoteCreate()}>
+                <Plus size={15} />
+                Create
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-preference-row">
+            <div class="settings-preference-main">
+              <div class="settings-preference-title">Attach remote session</div>
+              <div class="settings-preference-description">Open the attach dialog with this agent preselected.</div>
+            </div>
+            <div class="settings-preference-actions-single">
+              <button class="action-btn" type="button" disabled={!canRun('querymt/remote/attachSession') || loading} onclick={() => openRemoteAttach()}>
+                <Link size={15} />
+                Attach
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {#if lastAttach}
+          <div class="settings-inline-note">Last remote attach: {lastAttach.session_id} on {lastAttach.node_id} ({lastAttach.attached ? 'attached' : 'not attached'})</div>
+        {/if}
+      </section>
+
+      <section class="settings-section">
+        <div class="settings-section-header">
+          <div>
+            <h2>Nodes</h2>
+            <p>Live remote nodes plus on-demand remote session lookup.</p>
+          </div>
+        </div>
+
+        {#if meshNodes.length === 0}
+          <div class="empty-state">No mesh nodes reported yet.</div>
+        {:else}
+          <div class="mesh-item-list">
+            {#each meshNodes as node}
+              <article class="mesh-item-row mesh-item-row-stacked">
+                <div class="mesh-item-main">
+                  <div class="mesh-item-title">{node.label}</div>
+                  <div class="mesh-item-description">{node.id}</div>
+                  <div class="mesh-item-meta">{node.transport} · {node.active_sessions} active{node.last_seen_at ? ` · last seen ${node.last_seen_at}` : ''}</div>
+                  {#if node.capabilities.length > 0}
+                    <div class="mesh-item-meta">{node.capabilities.join(' · ')}</div>
+                  {/if}
                 </div>
-                <div class="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-                  <span>uses left {invite.uses_remaining}</span>
-                  <span>• max uses {invite.max_uses}</span>
-                  <span>• expires {new Date(invite.expires_at * 1000).toLocaleString()}</span>
+                <div class="mesh-item-actions">
+                  <IconTooltipButton label="Create remote session" icon={Plus} disabled={!canRun('querymt/remote/createSession') || loading} onclick={() => openRemoteCreate(node.id)} />
+                  <IconTooltipButton label="Attach remote session" icon={Link} disabled={!canRun('querymt/remote/attachSession') || loading} onclick={() => openRemoteAttach(node.id)} />
+                  <IconTooltipButton label="Load remote sessions" icon={RefreshCw} disabled={!canRun('querymt/remote/sessions') || loading} onclick={() => loadRemoteSessions(node.id)} />
                 </div>
+
+                {#if remoteSessionsFor(node.id).length > 0}
+                  <div class="mesh-remote-session-list">
+                    {#each remoteSessionsFor(node.id) as session}
+                      <div class="mesh-remote-session-row">
+                        <div class="mesh-item-main">
+                          <div class="mesh-item-title">{session.title ?? session.id}</div>
+                          <div class="mesh-item-description">{session.cwd ?? 'No cwd'} · {session.updated_at ?? 'No activity yet'}</div>
+                        </div>
+                        <div class="mesh-item-actions">
+                          <IconTooltipButton label="Attach" icon={Link} disabled={!canRun('querymt/remote/attachSession') || loading} onclick={() => openRemoteAttach(node.id, session.id)} />
+                          <IconTooltipButton label="Dismiss" icon={XCircle} disabled={!canRun('querymt/remote/dismissSession') || loading} onclick={() => dismissRemoteSession(node.id, session.id)} />
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
               </article>
             {/each}
-          {/if}
-        </section>
-      </div>
+          </div>
+        {/if}
 
-      {#if lastDismiss}
-        <div class="text-xs text-[var(--muted)]">Last remote dismiss: {lastDismiss.session_id} ({lastDismiss.success ? 'ok' : 'failed'})</div>
-      {/if}
-    </section>
-  {/if}
+        {#if lastDismiss}
+          <div class="settings-inline-note">Last remote dismiss: {lastDismiss.session_id} ({lastDismiss.success ? 'ok' : 'failed'})</div>
+        {/if}
+      </section>
+    {/if}
+  </div>
 </div>

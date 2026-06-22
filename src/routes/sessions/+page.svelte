@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import DesktopSessionList from '$lib/components/primitives/DesktopSessionList.svelte';
+  import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import type { DesktopSessionSummary } from '$lib/domain/types';
   import { agentsStore } from '$lib/stores/agents.svelte';
 
@@ -9,15 +10,22 @@
   }
 </script>
 
-<div class="space-y-5 page-width-wide">
-  <h1 class="text-2xl font-semibold tracking-tight text-[var(--text)]">Sessions</h1>
+<div class="sessions-page">
+  <div class="page-toolbar">
+    <SectionHeader
+      title="Sessions"
+      description="Browse conversations grouped by workspace."
+    />
+  </div>
 
-  <DesktopSessionList
-    sessions={agentsStore.sessions}
-    loading={agentsStore.loading}
-    error={agentsStore.error}
-    emptyMessage="No sessions yet from the currently configured agents."
-    onRefresh={() => agentsStore.refreshAllSessions()}
-    onOpenSession={(session: DesktopSessionSummary) => openSession(session)}
-  />
+  <div class="sessions-unified-panel">
+    <DesktopSessionList
+      sessions={agentsStore.sessions}
+      loading={agentsStore.loading}
+      error={agentsStore.error}
+      emptyMessage="No sessions yet from the currently configured agents."
+      onRefresh={() => agentsStore.refreshAllSessions()}
+      onOpenSession={(session: DesktopSessionSummary) => openSession(session)}
+    />
+  </div>
 </div>

@@ -162,12 +162,11 @@
   }
 </script>
 
-<div class="space-y-4 page-width-wide">
+<div class="agents-page">
   <div class="page-toolbar">
     <SectionHeader
-      eyebrow="Configured ACP commands"
       title="Agents"
-      description="A simple list of configured agents with quick lifecycle controls. Open details only when you need capabilities, sessions, or logs."
+      description="Manage configured ACP agents and lifecycle controls."
     />
 
     <div class="compact-toolbar">
@@ -176,8 +175,16 @@
     </div>
   </div>
 
-  <section>
-    {#if agentCards.length === 0}
+  <div class="agents-unified-panel">
+    <section class="settings-section">
+      <div class="settings-section-header">
+        <div>
+          <h2>Configured agents</h2>
+          <p>Start, stop, edit, and inspect connected agents.</p>
+        </div>
+      </div>
+
+      {#if agentCards.length === 0}
       <div class="empty-state">
         <div class="flex items-start gap-3">
           <span class="icon-swatch"><Bot size={16} /></span>
@@ -232,8 +239,9 @@
           </article>
         {/each}
       </div>
-    {/if}
-  </section>
+      {/if}
+    </section>
+  </div>
 
   {#if agentDialogMode}
     <Portal to={overlayPortalTarget}>

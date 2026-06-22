@@ -127,6 +127,23 @@
     return details.length > 0 ? details.join(' · ') : 'No stored credentials detected';
   }
 
+  function selectedCapabilitySummary() {
+    if (!selectedCapabilities) return authLoading ? 'Refreshing provider capabilities' : 'No capabilities reported yet';
+
+    const details = [`API v${selectedCapabilities.querymt_control_version}`, 'Auth'];
+    if (selectedCapabilities.features.models) details.push('Models');
+    return details.join(' · ');
+  }
+
+  function providerMetadata(provider: AuthProviderEntry) {
+    const details = [];
+    if (provider.supports_oauth) details.push('OAuth');
+    if (provider.has_stored_api_key) details.push('Stored key');
+    if (provider.has_env_api_key) details.push(provider.env_var_name ?? 'Env key');
+    if (provider.preferred_method) details.push(`Preferred ${provider.preferred_method}`);
+    return details.join(' · ');
+  }
+
   function setBusy(value: string | null) {
     actionLoading = value;
   }
@@ -429,66 +446,62 @@
   }
 </script>
 
-<div class="space-y-4 page-width-wide">
+<div class="settings-page">
   <div class="page-toolbar">
     <SectionHeader
-      eyebrow="Providers + desktop"
       title="Settings"
-      description="Live provider authentication, preferred auth routing, and credential health for agents exposing QueryMT auth controls."
+      description="Manage appearance, bundled profiles, and provider authentication."
     />
-
-    <div class="compact-toolbar">
-      <button class="action-btn" type="button" disabled={!selectedAgentId || !!actionLoading || modelLoading} onclick={() => refreshModels()}>
-        Refresh models
-      </button>
-      <button class="action-btn" type="button" disabled={!selectedAgentId || !!actionLoading} onclick={() => updatePlugins()}>
-        Update plugins
-      </button>
-      <IconTooltipButton label="Refresh providers" icon={RefreshCw} size={16} disabled={!selectedAgentId || authLoading || actionLoading === 'refresh'} onclick={() => refreshProviders()} />
-    </div>
   </div>
 
-  <section class="panel p-4 space-y-4">
-    <div class="flex flex-wrap items-start justify-between gap-4">
+  <div class="settings-unified-panel">
+    <section class="settings-section">
+      <div class="settings-section-header">
       <div>
-        <h2 class="text-sm font-semibold">Appearance</h2>
-        <p class="muted mt-1 max-w-2xl text-sm">
-          Match the QueryMT website style while choosing whether Desktop owns the titlebar or leaves it to the operating system.
-        </p>
+        <h2>Appearance</h2>
+        <p>Match the QueryMT website style while choosing whether Desktop owns the titlebar or leaves it to the operating system.</p>
       </div>
-      <div class="compact-toolbar">
-        <label class="inline-flex items-center gap-2 text-sm">
-          <span class="text-[var(--muted)]">Theme</span>
-          <AppSelect value={appearanceStore.themeMode} options={themeOptions} pill ariaLabel="Theme" onValueChange={handleThemeChange} />
-        </label>
+    </div>
+
+    <div class="settings-preference-list">
+      <div class="settings-preference-row">
+        <div class="settings-preference-main">
+          <div class="settings-preference-title">Theme</div>
+          <div class="settings-preference-description">
+            {appearanceStore.themeMode === 'system' ? `Follow the system preference (${appearanceStore.resolvedTheme}).` : `Use ${appearanceStore.themeMode} mode.`}
+          </div>
+        </div>
+        <AppSelect value={appearanceStore.themeMode} options={themeOptions} pill ariaLabel="Theme" onValueChange={handleThemeChange} />
+      </div>
+
+      <div class="settings-preference-row">
+        <div class="settings-preference-main">
+          <div class="settings-preference-title">Custom titlebar</div>
+          <div class:settings-preference-error={windowDecorationsStore.error} class="settings-preference-description">
+            {#if windowDecorationsStore.error}
+              {windowDecorationsStore.error}
+            {:else if !windowDecorationsStore.supported}
+              Available in Tauri desktop builds.
+            {:else}
+              {windowDecorationsStore.mode === 'custom' ? 'QueryMT draws the window controls.' : 'Use the operating system window frame.'}
+            {/if}
+          </div>
+        </div>
         <AppCheckbox
           checked={windowDecorationsStore.mode === 'custom'}
           disabled={!windowDecorationsStore.supported}
-          label="Custom titlebar"
-          pill
+          ariaLabel="Custom titlebar"
           onCheckedChange={(checked) => void handleWindowDecorationChange(checked)}
         />
       </div>
-    </div>
-    <div class="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-      <span class="badge">Theme: {appearanceStore.themeMode === 'system' ? `system (${appearanceStore.resolvedTheme})` : appearanceStore.themeMode}</span>
-      <span class="badge">Window: {windowDecorationsStore.mode === 'custom' ? 'custom QueryMT titlebar' : 'OS titlebar'}</span>
-      {#if !windowDecorationsStore.supported}
-        <span class="badge">Available in Tauri desktop builds</span>
-      {/if}
-      {#if windowDecorationsStore.error}
-        <span class="badge text-[var(--danger)]">{windowDecorationsStore.error}</span>
-      {/if}
-    </div>
-  </section>
+      </div>
+    </section>
 
-  <section class="panel p-4 space-y-4">
-    <div class="flex items-start justify-between gap-3">
+    <section class="settings-section">
+      <div class="settings-section-header settings-section-header-action">
       <div>
-        <h2 class="text-sm font-semibold">Curated profiles</h2>
-        <p class="mt-1 text-sm text-[var(--muted)]">
-          Enable bundled TOML profile templates into Desktop app-data. Existing user copies are never overwritten.
-        </p>
+        <h2>Curated profiles</h2>
+        <p>Enable bundled TOML profile templates into Desktop app-data. Existing user copies are never overwritten.</p>
       </div>
       <IconTooltipButton label="Refresh profile templates" icon={RefreshCw} size={16} disabled={profileTemplatesLoading} onclick={() => refreshProfileTemplates()} />
     </div>
@@ -502,64 +515,101 @@
     {#if profileTemplates.length === 0 && !profileTemplatesLoading}
       <div class="surface-muted p-4 text-sm text-[var(--muted)]">No bundled profile templates found.</div>
     {:else}
-      <div class="grid gap-3 xl:grid-cols-3">
+      <div class="profile-template-list" aria-label="Curated profile templates">
         {#each profileTemplates as template}
-          <article class="surface-muted p-4 space-y-3">
-            <div class="flex items-start justify-between gap-3">
-              <div>
-                <div class="text-sm font-medium">{template.name}</div>
-                <div class="mt-1 text-xs text-[var(--muted)]">{template.id}</div>
+          <article class:profile-template-row-enabled={template.enabled} class="profile-template-row">
+            <div class="min-w-0 flex-1">
+              <div class="profile-template-row-header">
+                <h3>{template.name}</h3>
+                {#if template.tags.length > 0}
+                  <span>{template.tags[0]}</span>
+                {/if}
               </div>
-              <span class="badge">{template.enabled ? 'enabled' : 'template'}</span>
+              <p>{template.description}</p>
+              {#if template.userPath}
+                <div class="profile-template-path" title={template.userPath}>{template.userPath}</div>
+              {/if}
             </div>
-            <p class="text-sm text-[var(--muted)]">{template.description}</p>
-            <div class="flex flex-wrap gap-2 text-xs">
-              {#each template.tags as tag}
-                <span class="badge">{tag}</span>
-              {/each}
+
+            <div class="profile-template-action">
+              {#if template.enabled}
+                <span class="profile-template-state">Enabled</span>
+              {:else}
+                <button class="action-btn" type="button" disabled={actionLoading === `profile-template:${template.id}`} onclick={() => enableTemplate(template)}>
+                  Enable
+                </button>
+              {/if}
             </div>
-            {#if template.userPath}
-              <div class="truncate text-xs text-[var(--muted)]">{template.userPath}</div>
-            {/if}
-            <button class="action-btn" type="button" disabled={template.enabled || actionLoading === `profile-template:${template.id}`} onclick={() => enableTemplate(template)}>
-              {template.enabled ? 'Enabled' : 'Enable profile'}
-            </button>
           </article>
         {/each}
       </div>
-    {/if}
-  </section>
-
-  {#if authAgents.length === 0}
-    <section class="panel p-6 text-sm text-[var(--muted)]">
-      No connected agents currently advertise provider auth controls.
+      {/if}
     </section>
-  {:else}
-    <section class="panel p-4 space-y-4">
-      <div class="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)] lg:items-end">
-        <label class="space-y-2">
-          <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Agent</span>
-          <AppSelect bind:value={selectedAgentId} options={authAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" />
-        </label>
 
-        <div class="flex flex-wrap gap-2 text-xs">
-          {#if selectedCapabilities}
-            <span class="badge">api v{selectedCapabilities.querymt_control_version}</span>
-            <span class="badge">auth</span>
-            {#if selectedCapabilities.features.models}<span class="badge">models</span>{/if}
-          {/if}
-          {#if authLoading}<span class="badge">refreshing</span>{/if}
+    {#if authAgents.length === 0}
+      <section class="settings-section">
+      <div class="settings-section-header">
+        <div>
+          <h2>Providers</h2>
+          <p>No connected agents currently advertise provider auth controls.</p>
         </div>
-      </div>
+        </div>
+      </section>
+    {:else}
+      <section class="settings-section">
+        <div class="settings-section-header settings-section-header-action">
+          <div>
+            <h2>Providers</h2>
+            <p>Choose the active agent and manage provider authentication.</p>
+          </div>
+          <IconTooltipButton label="Refresh providers" icon={RefreshCw} size={16} disabled={!selectedAgentId || authLoading || actionLoading === 'refresh'} onclick={() => refreshProviders()} />
+        </div>
+
+        <div class="settings-subsection">
+          <div class="settings-preference-list">
+            <div class="settings-preference-row">
+              <div class="settings-preference-main">
+                <div class="settings-preference-title">Active agent</div>
+                <div class="settings-preference-description">{selectedCapabilitySummary()}</div>
+              </div>
+              <AppSelect bind:value={selectedAgentId} options={authAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Agent" />
+            </div>
+
+            <div class="settings-preference-row">
+              <div class="settings-preference-main">
+                <div class="settings-preference-title">Models</div>
+                <div class="settings-preference-description">Refresh available models for the selected agent.</div>
+              </div>
+              <div class="settings-preference-actions-single">
+                <button class="action-btn" type="button" disabled={!selectedAgentId || !!actionLoading || modelLoading} onclick={() => refreshModels()}>
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <div class="settings-preference-row">
+              <div class="settings-preference-main">
+                <div class="settings-preference-title">Plugins</div>
+                <div class="settings-preference-description">Update installed plugins for the selected agent.</div>
+              </div>
+              <div class="settings-preference-actions-single">
+                <button class="action-btn" type="button" disabled={!selectedAgentId || !!actionLoading} onclick={() => updatePlugins()}>
+                  Update
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
 
       {#if authError || pageError}
-        <div class="alert-error">
+        <div class="alert-error settings-section-message">
           {pageError ?? authError}
         </div>
       {/if}
 
       {#if pageMessage}
-        <div class="alert-success">
+        <div class="alert-success settings-section-message">
           {pageMessage}
         </div>
       {/if}
@@ -591,14 +641,20 @@
         </div>
       {/if}
 
-      {#if providers.length === 0 && !authLoading}
-        <div class="surface-muted p-4 text-sm text-[var(--muted)]">
-          No auth-enabled providers reported by this agent.
-        </div>
-      {:else}
-        <div class="settings-provider-list">
-            {#each providers as provider}
-            <article class="settings-provider-row">
+        <div class="settings-subsection">
+          <div class="settings-subsection-header">
+            <h3>Authentication</h3>
+            <p>Review provider credentials and choose preferred authentication methods.</p>
+          </div>
+
+          {#if providers.length === 0 && !authLoading}
+            <div class="surface-muted p-4 text-sm text-[var(--muted)]">
+              No auth-enabled providers reported by this agent.
+            </div>
+          {:else}
+            <div class="settings-provider-list">
+              {#each providers as provider}
+                <article class="settings-provider-row">
               <div class="settings-provider-main">
                 <div class="settings-provider-title">{provider.display_name}</div>
                 <div class="settings-provider-id">{provider.provider}</div>
@@ -607,13 +663,9 @@
               <div class="settings-provider-state">
                 <div class="settings-provider-status">{authStatusLabel(provider)}</div>
                 <div class="settings-provider-detail">{authDetail(provider)}</div>
-                <div class="settings-provider-badges">
-                  {#if provider.supports_oauth}<span class="badge">oauth</span>{/if}
-                  {#if provider.has_stored_api_key}<span class="badge">stored key</span>{/if}
-                  {#if provider.has_env_api_key}<span class="badge">env key</span>{/if}
-                  {#if provider.env_var_name}<span class="badge">{provider.env_var_name}</span>{/if}
-                  {#if provider.preferred_method}<span class="badge">preferred {provider.preferred_method}</span>{/if}
-                </div>
+                {#if providerMetadata(provider)}
+                  <div class="settings-provider-metadata">{providerMetadata(provider)}</div>
+                {/if}
                 {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}
                   <div class="settings-provider-hint">Use Sign in to open the browser, or complete OAuth manually if redirect capture is unavailable.</div>
                 {/if}
@@ -630,27 +682,29 @@
                 />
               </div>
 
-              <div class="settings-provider-actions">
-                  {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}
-                    <IconTooltipButton label="Sign in" icon={LogIn} disabled={!!actionLoading} onclick={() => handleOAuth(provider)} />
-                  {/if}
-                  {#if provider.supports_oauth && provider.oauth_status === OAuthStatus.Connected}
-                    <IconTooltipButton label="Disconnect OAuth" icon={LogOut} disabled={!!actionLoading} onclick={() => handleDisconnect(provider)} />
-                  {/if}
-                  {#if (provider.preferred_method ?? 'auto') === AuthMethod.ApiKey}
-                    <IconTooltipButton label="Set API key" icon={KeyRound} disabled={!!actionLoading} onclick={() => handleSetApiToken(provider)} />
-                  {/if}
-                  {#if provider.has_stored_api_key}
-                    <IconTooltipButton label="Clear stored API key" icon={Trash2} tone="danger" disabled={!!actionLoading} onclick={() => handleClearApiToken(provider)} />
-                  {/if}
-              </div>
-            </article>
-            {/each}
+                  <div class="settings-provider-actions">
+                    {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}
+                      <IconTooltipButton label="Sign in" icon={LogIn} disabled={!!actionLoading} onclick={() => handleOAuth(provider)} />
+                    {/if}
+                    {#if provider.supports_oauth && provider.oauth_status === OAuthStatus.Connected}
+                      <IconTooltipButton label="Disconnect OAuth" icon={LogOut} disabled={!!actionLoading} onclick={() => handleDisconnect(provider)} />
+                    {/if}
+                    {#if (provider.preferred_method ?? 'auto') === AuthMethod.ApiKey}
+                      <IconTooltipButton label="Set API key" icon={KeyRound} disabled={!!actionLoading} onclick={() => handleSetApiToken(provider)} />
+                    {/if}
+                    {#if provider.has_stored_api_key}
+                      <IconTooltipButton label="Clear stored API key" icon={Trash2} tone="danger" disabled={!!actionLoading} onclick={() => handleClearApiToken(provider)} />
+                    {/if}
+                  </div>
+                </article>
+              {/each}
+            </div>
+            <p class="settings-provider-footnote">OAuth sign-in opens your browser. API keys are stored in the desktop keyring.</p>
+          {/if}
         </div>
-        <p class="settings-provider-footnote">OAuth sign-in opens your browser. API keys are stored in the desktop keyring.</p>
-      {/if}
-    </section>
-  {/if}
+      </section>
+    {/if}
+  </div>
 
   {#if tokenDialogProvider}
     <Portal to={overlayPortalTarget}>
