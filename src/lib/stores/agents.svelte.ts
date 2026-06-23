@@ -773,12 +773,22 @@ export class AgentsStore {
       this.activeSession.activityLabel = 'Loading session history...';
       this.activeSession.lastError = null;
       await tick();
-      this.lastLoadedSession = await record.client.loadSession(target.sessionId, target.cwd);
+      const loadedSession = await record.client.loadSession(target.sessionId, target.cwd);
+      if (!this.isSelectedSession(agentId, sessionId)) {
+        return;
+      }
+      this.lastLoadedSession = loadedSession;
       await Promise.resolve();
       await tick();
       await new Promise((resolve) => setTimeout(resolve, 0));
+      if (!this.isSelectedSession(agentId, sessionId)) {
+        return;
+      }
       const liveReplayCount = this.activeSession.events.length;
       const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
+      if (!this.isSelectedSession(agentId, sessionId)) {
+        return;
+      }
 
       console.debug('querymt session/load replay', {
         agentId,
@@ -788,7 +798,7 @@ export class AgentsStore {
         totalEvents: this.activeSession.events.length
       });
 
-      const snapshotSession = activeSessionFromLoadResponse(sessionId, this.lastLoadedSession);
+      const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
       const hasReplayHistory =
         this.activeSession.transcript.length > 0 || this.activeSession.toolCalls.length > 0 || this.activeSession.events.length > 0;
       const hasSnapshotHistory =
@@ -797,7 +807,7 @@ export class AgentsStore {
         this.activeSession = snapshotSession;
       }
 
-      this.activeSession.configOptions = this.lastLoadedSession.configOptions ?? [];
+      this.activeSession.configOptions = loadedSession.configOptions ?? [];
       this.composerProfileId = getCurrentProfileId(this.activeSession.configOptions) ?? this.composerProfileId;
       this.composerModelId = getCurrentModelId(this.activeSession.configOptions) ?? this.composerModelId;
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });

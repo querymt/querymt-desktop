@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { ArrowLeft, Bug, MessagesSquare, RefreshCw } from '@lucide/svelte';
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import ActiveSessionView from '$lib/components/primitives/ActiveSessionView.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
@@ -21,6 +21,9 @@
   let dockAlignLeft = $state<number | null>(null);
   let dockAlignWidth = $state<number | null>(null);
   let debugEventsOpen = $state(false);
+  let anchorObserver: IntersectionObserver | null = null;
+  let sessionLoadToken = 0;
+  let lastRequestedSessionKey: string | null = null;
 
   const debugEventsTooltip = $derived.by(() => {
     const count = agentsStore.activeSession.events.length;
@@ -34,62 +37,102 @@
     dockAlignWidth = rect.width;
   }
 
-  onMount(() => {
-    let destroyed = false;
-    let anchorObserver: IntersectionObserver | null = null;
+  $effect(() => {
+    const nextAgentId = agentId;
+    const nextSessionId = sessionId;
+    if (!nextAgentId || !nextSessionId) {
+      return;
+    }
 
+    const sessionKey = `${nextAgentId}:${nextSessionId}`;
+    if (lastRequestedSessionKey === sessionKey) {
+      return;
+    }
+
+    lastRequestedSessionKey = sessionKey;
+    untrack(() => {
+      void loadCurrentSession(nextAgentId, nextSessionId);
+    });
+  });
+
+  onMount(() => {
     const onLayoutChange = () => {
       if (showDockedComposer) {
         syncDockAlign();
       }
     };
 
-    const initialize = async () => {
-      await ensureSessionLoaded();
-      if (destroyed) {
-        return;
-      }
-      await tick();
-      agentsStore.requestPromptFocus();
-      composerAnchor?.scrollIntoView({ block: 'end' });
-
-      if (composerAnchor) {
-        anchorObserver = new IntersectionObserver(
-          ([entry]) => {
-            const anchorInView = entry.isIntersecting && entry.intersectionRatio > 0.12;
-            if (anchorInView) {
-              showDockedComposer = false;
-            } else {
-              syncDockAlign();
-              showDockedComposer = true;
-            }
-          },
-          { root: null, threshold: [0, 0.12, 0.35, 1], rootMargin: '0px 0px 0px 0px' }
-        );
-        anchorObserver.observe(composerAnchor);
-      }
-    };
-
-    void initialize();
     window.addEventListener('resize', onLayoutChange);
     window.addEventListener('scroll', onLayoutChange, { passive: true });
 
     return () => {
-      destroyed = true;
-      anchorObserver?.disconnect();
-      anchorObserver = null;
+      sessionLoadToken += 1;
+      disconnectComposerObserver();
       window.removeEventListener('resize', onLayoutChange);
       window.removeEventListener('scroll', onLayoutChange);
     };
   });
 
-  async function ensureSessionLoaded() {
-    await agentsStore.loadSession(agentId, sessionId);
+  async function ensureSessionLoaded(agentIdToLoad = agentId, sessionIdToLoad = sessionId) {
+    await agentsStore.loadSession(agentIdToLoad, sessionIdToLoad);
+  }
+
+  async function loadCurrentSession(agentIdToLoad: string, sessionIdToLoad: string) {
+    if (!agentIdToLoad || !sessionIdToLoad) {
+      return;
+    }
+
+    const token = ++sessionLoadToken;
+    showDockedComposer = false;
+    dockAlignLeft = null;
+    dockAlignWidth = null;
+    disconnectComposerObserver();
+
+    await ensureSessionLoaded(agentIdToLoad, sessionIdToLoad);
+    if (token !== sessionLoadToken || agentId !== agentIdToLoad || sessionId !== sessionIdToLoad) {
+      return;
+    }
+
+    await tick();
+    if (token !== sessionLoadToken || agentId !== agentIdToLoad || sessionId !== sessionIdToLoad) {
+      return;
+    }
+
+    agentsStore.requestPromptFocus();
+    composerAnchor?.scrollIntoView({ block: 'end' });
+    observeComposerAnchor();
+  }
+
+  function disconnectComposerObserver() {
+    anchorObserver?.disconnect();
+    anchorObserver = null;
+  }
+
+  function observeComposerAnchor() {
+    disconnectComposerObserver();
+    if (!composerAnchor) {
+      return;
+    }
+
+    anchorObserver = new IntersectionObserver(
+      ([entry]) => {
+        const anchorInView = entry.isIntersecting && entry.intersectionRatio > 0.12;
+        if (anchorInView) {
+          showDockedComposer = false;
+        } else {
+          syncDockAlign();
+          showDockedComposer = true;
+        }
+      },
+      { root: null, threshold: [0, 0.12, 0.35, 1], rootMargin: '0px 0px 0px 0px' }
+    );
+    anchorObserver.observe(composerAnchor);
   }
 
   async function refreshSession() {
     await agentsStore.refreshSessionsForAgent(agentId);
-    await ensureSessionLoaded();
+    lastRequestedSessionKey = null;
+    await loadCurrentSession(agentId, sessionId);
   }
 
   async function scrollToLatest() {
