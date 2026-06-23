@@ -5,7 +5,7 @@
   import { onMount, setContext } from 'svelte';
   import { Maximize, Minimize, X } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
-  import LeftRail from '$lib/components/shell/LeftRail.svelte';
+  import RecentSessionRail from '$lib/components/shell/RecentSessionRail.svelte';
   import CommandPalette from '$lib/components/shell/CommandPalette.svelte';
   import Inspector from '$lib/components/shell/Inspector.svelte';
   import SessionContextRail from '$lib/components/session/SessionContextRail.svelte';
@@ -17,7 +17,6 @@
   import type { SessionRunState } from '$lib/domain/types';
   import type { Snippet } from 'svelte';
 
-  const LEFT_RAIL_HIDDEN_KEY = 'querymt.left-rail.hidden';
   const ESC_CANCEL_WINDOW_MS = 700;
   const CANCELLABLE_RUN_STATES = new Set<SessionRunState>(['submitting', 'thinking', 'streaming', 'tool-running']);
 
@@ -40,22 +39,16 @@
     '/settings': 'Settings'
   };
 
-  let leftRailHidden = $state(false);
   let lastEscapeAt = 0;
 
   const pathname = $derived(page.url.pathname);
   const isActiveSessionRoute = $derived(pathname.startsWith('/sessions/'));
-  const leftRailQuiet = $derived(pathname === '/' || isActiveSessionRoute);
+  const currentRailAgentId = $derived(isActiveSessionRoute ? decodeURIComponent(page.params.agentId ?? '') : null);
+  const currentRailSessionId = $derived(isActiveSessionRoute ? decodeURIComponent(page.params.sessionId ?? '') : null);
   const isSessionCancellable = $derived(
     isActiveSessionRoute && CANCELLABLE_RUN_STATES.has(agentsStore.activeSession.runState)
   );
-  const layoutClass = $derived.by(() => {
-    if (leftRailHidden) {
-      return 'grid min-h-[calc(100vh-2rem)] grid-cols-1 gap-4 lg:grid-cols-[56px_minmax(0,1fr)] 2xl:grid-cols-[56px_minmax(0,1fr)_280px]';
-    }
-
-    return 'grid min-h-[calc(100vh-2rem)] grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)] 2xl:grid-cols-[220px_minmax(0,1fr)_280px]';
-  });
+  const layoutClass = 'grid min-h-[calc(100vh-2rem)] grid-cols-1 gap-4 lg:grid-cols-[48px_minmax(0,1fr)] 2xl:grid-cols-[48px_minmax(0,1fr)_280px]';
 
   const section = $derived.by(() => {
     if (pathname.startsWith('/sessions/')) {
@@ -64,13 +57,6 @@
 
     return routeToSection[pathname] ?? 'Today';
   });
-
-  function setLeftRailCollapsed(value: boolean) {
-    leftRailHidden = value;
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(LEFT_RAIL_HIDDEN_KEY, value ? '1' : '0');
-    }
-  }
 
   onMount(() => {
     appearanceStore.initialize();
@@ -90,10 +76,6 @@
         unlistenResize = await appWindow.onResized(updateMaximized);
         unlistenFocus = await appWindow.onFocusChanged(updateMaximized);
       });
-    }
-
-    if (typeof localStorage !== 'undefined') {
-      leftRailHidden = localStorage.getItem(LEFT_RAIL_HIDDEN_KEY) === '1';
     }
 
     const onKeyDown = async (event: KeyboardEvent) => {
@@ -129,11 +111,6 @@
           commandPaletteStore.openCommands();
         }
         return;
-      }
-
-      if (key === 'b') {
-        event.preventDefault();
-        setLeftRailCollapsed(!leftRailHidden);
       }
     };
 
@@ -229,10 +206,13 @@
 <Tooltip.Provider>
   <div class={`app-shell min-h-screen p-4 lg:p-6 ${windowDecorationsStore.usesCustomTitlebar ? `app-shell-custom-titlebar ${windowMaximized ? 'app-shell-maximized' : ''}` : ''}`}>
     <div class={`app-grid grid ${layoutClass}`}>
-      <LeftRail
+      <RecentSessionRail
         current={section}
-        quiet={leftRailQuiet}
-        collapsed={leftRailHidden}
+        sessions={agentsStore.sessions}
+        attentionSessionKeys={agentsStore.attentionSessionKeys}
+        currentAgentId={currentRailAgentId}
+        currentSessionId={currentRailSessionId}
+        onOpenSession={(session) => agentsStore.acknowledgeSession(session.agentId, session.sessionId)}
       />
 
       <div class="flex min-w-0 flex-col gap-4">

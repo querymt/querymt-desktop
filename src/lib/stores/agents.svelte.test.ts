@@ -296,4 +296,91 @@ describe('AgentsStore prompt session start', () => {
     ]);
     expect(store.agentErrors['agent-2']).toBe('mesh failed');
   });
+
+  it('marks a background session for attention when it finishes after running', async () => {
+    const store = createStore();
+    (mockClient.listSessions as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([
+        {
+          sessionId: 'background-1',
+          title: 'Background task',
+          cwd: '/tmp/work',
+          updatedAt: '2026-06-17T12:00:00Z',
+          _meta: {
+            messageCount: 2,
+            userMessageCount: 1,
+            hasErrors: false,
+            runtimeStatus: 'running'
+          }
+        }
+      ])
+      .mockResolvedValueOnce([
+        {
+          sessionId: 'background-1',
+          title: 'Background task',
+          cwd: '/tmp/work',
+          updatedAt: '2026-06-17T12:01:00Z',
+          _meta: {
+            messageCount: 3,
+            userMessageCount: 1,
+            hasErrors: false,
+            runtimeStatus: 'idle'
+          }
+        }
+      ]);
+
+    await store.refreshSessionsForAgent('agent-1');
+    await store.refreshSessionsForAgent('agent-1');
+
+    expect(store.attentionSessionKeys).toEqual(['agent-1:background-1']);
+  });
+
+  it('does not mark the selected session for attention when its active run finishes', async () => {
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    (mockClient.listSessions as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([
+        {
+          sessionId: 'session-1',
+          title: 'Selected task',
+          cwd: '/tmp/work',
+          updatedAt: '2026-06-17T12:00:00Z',
+          _meta: {
+            messageCount: 2,
+            userMessageCount: 1,
+            hasErrors: false,
+            runtimeStatus: 'running'
+          }
+        }
+      ])
+      .mockResolvedValueOnce([
+        {
+          sessionId: 'session-1',
+          title: 'Selected task',
+          cwd: '/tmp/work',
+          updatedAt: '2026-06-17T12:01:00Z',
+          _meta: {
+            messageCount: 3,
+            userMessageCount: 1,
+            hasErrors: false,
+            runtimeStatus: 'idle'
+          }
+        }
+      ]);
+
+    await store.refreshSessionsForAgent('agent-1');
+    await store.refreshSessionsForAgent('agent-1');
+
+    expect(store.attentionSessionKeys).toEqual([]);
+  });
+
+  it('clears attention when a session is acknowledged', () => {
+    const store = createStore();
+    store.attentionSessionKeys = ['agent-1:session-1', 'agent-1:session-2'];
+
+    store.acknowledgeSession('agent-1', 'session-1');
+
+    expect(store.attentionSessionKeys).toEqual(['agent-1:session-2']);
+  });
 });

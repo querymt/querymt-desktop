@@ -9,7 +9,13 @@ import type {
 import { tick } from 'svelte';
 import { activeSessionFromLoadResponse, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import { createEmptyActiveSession, applySessionNotification } from '$lib/domain/session-updates';
-import { getSessionById, mapAcpSessionsToDesktopSessions } from '$lib/domain/sessions';
+import {
+  buildSessionKey,
+  getSessionById,
+  getSessionKey,
+  isActiveSessionStatus,
+  mapAcpSessionsToDesktopSessions
+} from '$lib/domain/sessions';
 import type {
   ActiveSessionViewModel,
   AgentConfig,
@@ -21,7 +27,8 @@ import type {
   ModelEntry,
   ModelInfo,
   PromptAttachment,
-  SessionRunState
+  SessionRunState,
+  SessionStatus
 } from '$lib/domain/types';
 import type {
   AuthMethod,
@@ -85,6 +92,7 @@ const DEFAULT_AGENTS: AgentConfig[] = [
 
 export class AgentsStore {
   private clients = new Map<string, AgentClientRecord>();
+  private sessionRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   configs = $state<AgentConfig[]>(loadInitialAgents());
   statuses = $state<Record<string, AgentRuntimeStatus>>({});
@@ -123,6 +131,7 @@ export class AgentsStore {
   lastRemoteAttachByAgent = $state<Record<string, RemoteSessionAttachInfo | null>>({});
   lastRemoteDismissByAgent = $state<Record<string, RemoteSessionDismissInfo | null>>({});
   sessionsByAgent = $state<Record<string, DesktopSessionSummary[]>>({});
+  attentionSessionKeys = $state<string[]>([]);
   logsByAgent = $state<Record<string, Awaited<ReturnType<typeof getAgentLogs>>>>({});
   activeAgentId = $state<string | null>(null);
   activeSessionId = $state<string | null>(null);
@@ -157,6 +166,11 @@ export class AgentsStore {
 
   get connectedAgents(): AgentConfig[] {
     return this.configs.filter((config) => this.statuses[config.id]?.state === 'running');
+  }
+
+  acknowledgeSession(agentId: string, sessionId: string) {
+    const key = buildSessionKey(agentId, sessionId);
+    this.attentionSessionKeys = this.attentionSessionKeys.filter((candidate) => candidate !== key);
   }
 
   async initialize() {
@@ -551,13 +565,21 @@ export class AgentsStore {
 
     try {
       const sessions = await record.client.listSessions();
+      const previousSessions = this.sessionsByAgent[agentId] ?? [];
+      const nextSessions = mapAcpSessionsToDesktopSessions(sessions, {
+        agentId: config.id,
+        agentName: config.name
+      });
+      this.updateSessionAttention(agentId, previousSessions, nextSessions);
       this.sessionsByAgent = {
         ...this.sessionsByAgent,
-        [agentId]: mapAcpSessionsToDesktopSessions(sessions, {
-          agentId: config.id,
-          agentName: config.name
-        })
+        [agentId]: nextSessions
       };
+      if (nextSessions.some((session) => isActiveSessionStatus(session.status))) {
+        this.scheduleSessionRefresh(agentId, 2500);
+      } else {
+        this.clearScheduledSessionRefresh(agentId);
+      }
       const models = await record.client.listModels().catch(() => this.modelsByAgent[agentId] ?? []);
       if (models.length > 0) {
         this.modelsByAgent = {
@@ -734,6 +756,8 @@ export class AgentsStore {
       this.error = `Unable to locate session ${sessionId}.`;
       return;
     }
+
+    this.acknowledgeSession(agentId, sessionId);
 
     const record = this.ensureClientRecord(agentId);
     await this.connectAgent(agentId);
@@ -1369,6 +1393,43 @@ export class AgentsStore {
     record.recentSessionUpdateKeys = [];
   }
 
+  private updateSessionAttention(
+    agentId: string,
+    previousSessions: DesktopSessionSummary[],
+    nextSessions: DesktopSessionSummary[]
+  ) {
+    const previousStatusByKey = new Map(previousSessions.map((session) => [getSessionKey(session), session.status]));
+    const nextKeys = new Set(nextSessions.map(getSessionKey));
+    const agentKeyPrefix = `${agentId}:`;
+    const attentionKeys = new Set(
+      this.attentionSessionKeys.filter((key) => !key.startsWith(agentKeyPrefix) || nextKeys.has(key))
+    );
+
+    for (const session of nextSessions) {
+      const key = getSessionKey(session);
+      if (isActiveSessionStatus(session.status)) {
+        attentionKeys.delete(key);
+        continue;
+      }
+
+      const previousStatus = previousStatusByKey.get(key);
+      if (
+        previousStatus &&
+        isActiveSessionStatus(previousStatus) &&
+        session.status === 'completed' &&
+        !this.isSelectedSession(session.agentId, session.sessionId)
+      ) {
+        attentionKeys.add(key);
+      }
+    }
+
+    this.attentionSessionKeys = [...attentionKeys];
+  }
+
+  private isSelectedSession(agentId: string, sessionId: string): boolean {
+    return this.activeAgentId === agentId && this.activeSessionId === sessionId;
+  }
+
   private addOptimisticUserPrompt(sessionId: string, prompt: string) {
     const eventIndex = this.activeSession.events.length;
     const id = `${sessionId}-optimistic-user-${eventIndex + 1}`;
@@ -1410,12 +1471,20 @@ export class AgentsStore {
   }
 
   private applySessionSummaryUpdate(agentId: string, notification: SessionNotification) {
-    const update = notification.update;
-    if (update.sessionUpdate !== 'session_info_update') {
+    const sessions = this.sessionsByAgent[agentId] ?? [];
+    if (sessions.length === 0) {
       return;
     }
 
-    const sessions = this.sessionsByAgent[agentId] ?? [];
+    const update = notification.update;
+    const inferredStatus = inferSessionStatusFromNotification(update);
+    const activityUpdatedAt = inferredStatus ? new Date().toISOString() : undefined;
+    const infoTitle = update.sessionUpdate === 'session_info_update' ? (update.title ?? 'Untitled session') : undefined;
+    const infoUpdatedAt = update.sessionUpdate === 'session_info_update' ? (update.updatedAt ?? null) : undefined;
+    if (!inferredStatus && infoTitle === undefined && infoUpdatedAt === undefined) {
+      return;
+    }
+
     const nextSessions = sessions.map((session) => {
       if (session.sessionId !== notification.sessionId) {
         return session;
@@ -1423,8 +1492,9 @@ export class AgentsStore {
 
       return {
         ...session,
-        title: update.title ?? 'Untitled session',
-        updatedAt: update.updatedAt ?? null
+        title: infoTitle ?? session.title,
+        status: inferredStatus ?? session.status,
+        updatedAt: infoUpdatedAt !== undefined ? infoUpdatedAt : (activityUpdatedAt ?? session.updatedAt)
       };
     });
 
@@ -1440,6 +1510,9 @@ export class AgentsStore {
     record: AgentClientRecord
   ) {
     this.applySessionSummaryUpdate(agentId, notification);
+    if (inferSessionStatusFromNotification(notification.update)) {
+      this.scheduleSessionRefresh(agentId);
+    }
 
     if (this.activeAgentId !== agentId || (this.activeSessionId && notification.sessionId !== this.activeSessionId)) {
       console.debug('querymt session/update dropped', {
@@ -1483,6 +1556,26 @@ export class AgentsStore {
     }
   }
 
+  private scheduleSessionRefresh(agentId: string, delayMs = 800) {
+    this.clearScheduledSessionRefresh(agentId);
+
+    const timer = setTimeout(() => {
+      this.sessionRefreshTimers.delete(agentId);
+      void this.refreshSessionsForAgent(agentId);
+    }, delayMs);
+    this.sessionRefreshTimers.set(agentId, timer);
+  }
+
+  private clearScheduledSessionRefresh(agentId: string) {
+    const existing = this.sessionRefreshTimers.get(agentId);
+    if (!existing) {
+      return;
+    }
+
+    clearTimeout(existing);
+    this.sessionRefreshTimers.delete(agentId);
+  }
+
   private async maybeNotifyForSessionUpdate(agentId: string, notification: SessionNotification) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     const update = notification.update;
@@ -1501,6 +1594,21 @@ export class AgentsStore {
         await sendDesktopNotification(`${config.name}: reply`, text.slice(0, 180));
       }
     }
+  }
+}
+
+function inferSessionStatusFromNotification(update: SessionNotification['update']): SessionStatus | null {
+  switch (update.sessionUpdate) {
+    case 'user_message_chunk':
+    case 'agent_message_chunk':
+    case 'agent_thought_chunk':
+    case 'tool_call':
+    case 'tool_call_update':
+    case 'plan':
+    case 'plan_update':
+      return 'thinking';
+    default:
+      return null;
   }
 }
 
