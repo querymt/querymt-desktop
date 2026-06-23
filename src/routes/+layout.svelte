@@ -48,7 +48,7 @@
   const isSessionCancellable = $derived(
     isActiveSessionRoute && CANCELLABLE_RUN_STATES.has(agentsStore.activeSession.runState)
   );
-  const layoutClass = 'grid min-h-[calc(100vh-2rem)] grid-cols-1 gap-4 lg:grid-cols-[48px_minmax(0,1fr)] 2xl:grid-cols-[48px_minmax(0,1fr)_280px]';
+  const layoutClass = 'grid grid-cols-1 gap-4 lg:grid-cols-[48px_minmax(0,1fr)] 2xl:grid-cols-[48px_minmax(0,1fr)_280px]';
 
   const section = $derived.by(() => {
     if (pathname.startsWith('/sessions/')) {
@@ -205,15 +205,17 @@
 
 <Tooltip.Provider>
   <div class={`app-shell min-h-screen p-4 lg:p-6 ${windowDecorationsStore.usesCustomTitlebar ? `app-shell-custom-titlebar ${windowMaximized ? 'app-shell-maximized' : ''}` : ''}`}>
+    <RecentSessionRail
+      current={section}
+      sessions={agentsStore.sessions}
+      attentionSessionKeys={agentsStore.attentionSessionKeys}
+      currentAgentId={currentRailAgentId}
+      currentSessionId={currentRailSessionId}
+      onOpenSession={(session) => agentsStore.acknowledgeSession(session.agentId, session.sessionId)}
+    />
+
     <div class={`app-grid grid ${layoutClass}`}>
-      <RecentSessionRail
-        current={section}
-        sessions={agentsStore.sessions}
-        attentionSessionKeys={agentsStore.attentionSessionKeys}
-        currentAgentId={currentRailAgentId}
-        currentSessionId={currentRailSessionId}
-        onOpenSession={(session) => agentsStore.acknowledgeSession(session.agentId, session.sessionId)}
-      />
+      <div class="app-icon-rail-spacer" aria-hidden="true"></div>
 
       <div class="flex min-w-0 flex-col gap-4">
         <main class="min-h-0 flex-1">

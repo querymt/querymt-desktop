@@ -180,6 +180,26 @@ select {
 
 .app-grid {
   align-items: start;
+  min-height: calc(100dvh - 2rem);
+}
+
+@media (min-width: 1024px) {
+  .app-grid {
+    min-height: calc(100dvh - 3rem);
+  }
+}
+
+.app-shell-custom-titlebar .app-grid {
+  min-height: 100%;
+}
+
+.app-shell-custom-titlebar.app-shell-maximized .app-grid {
+  min-height: 100%;
+}
+
+.app-icon-rail-spacer {
+  width: 48px;
+  min-width: 48px;
 }
 
 .page-width-wide {
@@ -380,6 +400,8 @@ html:has(.app-shell-custom-titlebar) body {
 
 @media (min-width: 1024px) {
   .app-shell-custom-titlebar {
+    display: flex;
+    flex-direction: column;
     padding-top: 3.5rem;
   }
 
@@ -2794,9 +2816,9 @@ summary:focus-visible {
 }
 
 .app-icon-rail {
-  position: sticky;
-  top: var(--app-shell-inset);
-  align-self: start;
+  position: fixed;
+  top: 1rem;
+  left: 0.5rem;
   display: flex;
   width: 48px;
   height: calc(100dvh - 2rem);
@@ -2806,7 +2828,6 @@ summary:focus-visible {
   align-items: center;
   gap: 0.65rem;
   overflow: hidden;
-  margin-left: -1rem;
   padding: 0.45rem 0;
   z-index: 25;
 }
@@ -3063,23 +3084,30 @@ summary:focus-visible {
 
 @media (min-width: 1024px) {
   .app-icon-rail {
+    top: 1.5rem;
+    left: 0.75rem;
     height: calc(100dvh - 3rem);
     max-height: calc(100dvh - 3rem);
   }
 
   .app-shell-custom-titlebar .app-icon-rail {
+    top: calc(12px + 3.5rem);
+    left: calc(12px + 0.75rem);
     height: calc(100dvh - 24px - 5rem);
     max-height: calc(100dvh - 24px - 5rem);
   }
 
   .app-shell-custom-titlebar.app-shell-maximized .app-icon-rail {
+    top: 3.5rem;
+    left: 0.75rem;
     height: calc(100dvh - 5rem);
     max-height: calc(100dvh - 5rem);
   }
 }
 
 @media (max-width: 1023px) {
-  .app-icon-rail {
+  .app-icon-rail,
+  .app-icon-rail-spacer {
     display: none;
   }
 }
