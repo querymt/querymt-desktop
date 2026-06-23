@@ -7,6 +7,7 @@
     formatSessionTimestamp,
     getRecentSessionRailItems,
     getSessionWorkspaceName,
+    type SessionRailItem,
     type SessionRailTone
   } from '$lib/domain/sessions';
   import { agentsStore } from '$lib/stores/agents.svelte';
@@ -23,7 +24,8 @@
     attentionSessionKeys = [],
     currentAgentId = null,
     currentSessionId = null,
-    onOpenSession = null
+    onOpenSession = null,
+    onVisibleSessionItemsChange = null
   }: {
     current: SectionName;
     sessions: DesktopSessionSummary[];
@@ -31,6 +33,7 @@
     currentAgentId?: string | null;
     currentSessionId?: string | null;
     onOpenSession?: ((session: DesktopSessionSummary) => void) | null;
+    onVisibleSessionItemsChange?: ((items: SessionRailItem[]) => void) | null;
   } = $props();
 
   const routeMap: Record<SectionName, string> = {
@@ -60,6 +63,10 @@
       limit: sessionIconLimit
     })
   );
+
+  $effect(() => {
+    onVisibleSessionItemsChange?.(railItems);
+  });
 
   onMount(() => {
     const updateSessionIconLimit = () => {
@@ -99,6 +106,14 @@
     }
 
     return section;
+  }
+
+  function getSessionShortcutLabel(index: number): string {
+    return index === 9 ? 'Ctrl/Cmd+0' : `Ctrl/Cmd+${index + 1}`;
+  }
+
+  function getSessionAriaShortcut(index: number): string {
+    return index === 9 ? 'Control+0 Meta+0' : `Control+${index + 1} Meta+${index + 1}`;
   }
 
   function getStatusLabel(status: SessionStatus, tone: SessionRailTone): string {
@@ -189,7 +204,7 @@
           {#if railItems.length === 0}
             <span class="session-icon-rail-empty" aria-label="No recent active sessions"></span>
           {:else}
-            {#each railItems as item (item.key)}
+            {#each railItems as item, index (item.key)}
               {@const session = item.session}
               {@const identicon = createRoundIdenticon(session.sessionId)}
               <Tooltip.Root>
@@ -199,7 +214,8 @@
                       {...props}
                       class={`session-icon-link session-icon-link-${item.tone}`}
                       href={getSessionHref(session)}
-                      aria-label={`${session.title}, ${getStatusLabel(session.status, item.tone)}`}
+                      aria-label={`${session.title}, ${getStatusLabel(session.status, item.tone)}, ${getSessionShortcutLabel(index)}`}
+                      aria-keyshortcuts={getSessionAriaShortcut(index)}
                       onclick={() => onOpenSession?.(session)}
                     >
                       <span class="app-icon-activity-pill" aria-hidden="true"></span>
@@ -227,7 +243,7 @@
                     <div class="session-icon-tooltip-meta">
                       {getStatusLabel(session.status, item.tone)} / {session.agentName} / {getSessionWorkspaceName(session.cwd)}
                     </div>
-                    <div class="session-icon-tooltip-meta">{formatSessionTimestamp(session.updatedAt)}</div>
+                    <div class="session-icon-tooltip-meta">{formatSessionTimestamp(session.updatedAt)} / {getSessionShortcutLabel(index)}</div>
                     <Tooltip.Arrow class="session-icon-tooltip-arrow" />
                   </Tooltip.Content>
                 </Tooltip.Portal>

@@ -14,6 +14,7 @@
   import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
   import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
   import type { SectionName } from '$lib/design/tokens';
+  import type { SessionRailItem } from '$lib/domain/sessions';
   import type { SessionRunState } from '$lib/domain/types';
   import type { Snippet } from 'svelte';
 
@@ -25,6 +26,7 @@
   let windowMaximized = $state(false);
   let isMacPlatform = $state(false);
   let overlayPortalTarget = $state<HTMLElement | null>(null);
+  let visibleRailSessionItems = $state<SessionRailItem[]>([]);
 
   setContext('app-overlay-target', () => overlayPortalTarget);
 
@@ -95,6 +97,24 @@
       }
 
       const key = event.key.toLowerCase();
+      const railShortcutIndex = getRailShortcutIndex(key);
+      if (railShortcutIndex !== null) {
+        const item = visibleRailSessionItems[railShortcutIndex];
+        if (!item || document.querySelector('[data-blocking-overlay="true"]')) {
+          return;
+        }
+
+        event.preventDefault();
+        const { agentId, sessionId } = item.session;
+        agentsStore.acknowledgeSession(agentId, sessionId);
+        if (currentRailAgentId === agentId && currentRailSessionId === sessionId) {
+          return;
+        }
+
+        await goto(`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}`);
+        return;
+      }
+
       if (key === 'n') {
         event.preventDefault();
         await goto('/');
@@ -121,6 +141,18 @@
       unlistenFocus?.();
     };
   });
+
+  function getRailShortcutIndex(key: string): number | null {
+    if (key === '0') {
+      return 9;
+    }
+
+    if (/^[1-9]$/.test(key)) {
+      return Number(key) - 1;
+    }
+
+    return null;
+  }
 
   async function currentWindow() {
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -212,6 +244,7 @@
       currentAgentId={currentRailAgentId}
       currentSessionId={currentRailSessionId}
       onOpenSession={(session) => agentsStore.acknowledgeSession(session.agentId, session.sessionId)}
+      onVisibleSessionItemsChange={(items) => (visibleRailSessionItems = items)}
     />
 
     <div class={`app-grid grid ${layoutClass}`}>
