@@ -5,6 +5,8 @@ import {
   type SessionMeta as QuerymtSessionMeta
 } from '$lib/querymt/generated/types';
 
+export type SessionRailTone = 'attention' | 'active' | 'recent';
+
 export interface WorkspaceSessionGroup {
   key: string;
   name: string;
@@ -12,6 +14,31 @@ export interface WorkspaceSessionGroup {
   sessions: DesktopSessionSummary[];
   latestActivity: string | null;
   agents: string[];
+}
+
+export interface SessionRailItem {
+  key: string;
+  session: DesktopSessionSummary;
+  tone: SessionRailTone;
+}
+
+export interface SessionRailOptions {
+  attentionSessionKeys?: Iterable<string>;
+  limit?: number;
+}
+
+const ACTIVE_SESSION_STATUSES = new Set<SessionStatus>(['thinking', 'waiting', 'cancelling']);
+
+export function buildSessionKey(agentId: string, sessionId: string): string {
+  return `${agentId}:${sessionId}`;
+}
+
+export function getSessionKey(session: Pick<DesktopSessionSummary, 'agentId' | 'sessionId'>): string {
+  return buildSessionKey(session.agentId, session.sessionId);
+}
+
+export function isActiveSessionStatus(status: SessionStatus): boolean {
+  return ACTIVE_SESSION_STATUSES.has(status);
 }
 
 export function mapAcpSessionsToDesktopSessions(
@@ -80,6 +107,27 @@ export function getSessionWorkspaceKey(cwd: string): string {
   return cwd.trim() || '__no_workspace__';
 }
 
+export function getRecentSessionRailItems(
+  sessions: DesktopSessionSummary[],
+  options: SessionRailOptions = {}
+): SessionRailItem[] {
+  const attentionKeys = new Set(options.attentionSessionKeys ?? []);
+  const limit = options.limit ?? 12;
+
+  return sessions
+    .map((session) => {
+      const key = getSessionKey(session);
+      const tone: SessionRailTone = attentionKeys.has(key)
+        ? 'attention'
+        : isActiveSessionStatus(session.status)
+          ? 'active'
+          : 'recent';
+      return { key, session, tone };
+    })
+    .sort(compareSessionRailItems)
+    .slice(0, limit);
+}
+
 export function groupSessionsByWorkspace(sessions: DesktopSessionSummary[]): WorkspaceSessionGroup[] {
   const groups = new Map<string, DesktopSessionSummary[]>();
 
@@ -105,6 +153,32 @@ export function groupSessionsByWorkspace(sessions: DesktopSessionSummary[]): Wor
       };
     })
     .sort((a, b) => compareNullableTimestamps(b.latestActivity, a.latestActivity));
+}
+
+function compareSessionRailItems(a: SessionRailItem, b: SessionRailItem): number {
+  const priorityDifference = getSessionRailPriority(a.tone) - getSessionRailPriority(b.tone);
+  if (priorityDifference !== 0) {
+    return priorityDifference;
+  }
+
+  const activityDifference = compareNullableTimestamps(b.session.updatedAt, a.session.updatedAt);
+  if (activityDifference !== 0) {
+    return activityDifference;
+  }
+
+  return a.session.title.localeCompare(b.session.title);
+}
+
+function getSessionRailPriority(tone: SessionRailTone): number {
+  switch (tone) {
+    case 'attention':
+      return 0;
+    case 'active':
+      return 1;
+    case 'recent':
+    default:
+      return 2;
+  }
 }
 
 function compareSessionsByActivity(a: DesktopSessionSummary, b: DesktopSessionSummary): number {

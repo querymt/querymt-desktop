@@ -21,9 +21,9 @@
   } = $props();
 </script>
 
-<Tooltip.Root delayDuration={250} disableHoverableContent disabled={disabled}>
-  <Tooltip.Trigger>
-    <button
+<Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+  <Tooltip.Root disableHoverableContent disabled={disabled}>
+    <Tooltip.Trigger
       class={`icon-btn ${tone === 'primary' ? 'icon-btn-primary' : tone === 'danger' ? 'icon-btn-danger' : ''}`}
       type="button"
       aria-label={label}
@@ -31,11 +31,11 @@
       onclick={() => onclick?.()}
     >
       <Icon {size} strokeWidth={2} class={iconClass} />
-    </button>
-  </Tooltip.Trigger>
-  <Tooltip.Portal>
-    <Tooltip.Content class="app-tooltip-content" sideOffset={6}>
-      {label}
-    </Tooltip.Content>
-  </Tooltip.Portal>
-</Tooltip.Root>
+    </Tooltip.Trigger>
+    <Tooltip.Portal>
+      <Tooltip.Content class="app-tooltip-content" sideOffset={6}>
+        {label}
+      </Tooltip.Content>
+    </Tooltip.Portal>
+  </Tooltip.Root>
+</Tooltip.Provider>

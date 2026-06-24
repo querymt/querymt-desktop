@@ -214,8 +214,8 @@
               </div>
 
               <div class="compact-toolbar">
-                <IconTooltipButton label="Details" icon={Info} onclick={() => openDetails(card.config.id)} />
-                <IconTooltipButton label="Edit" icon={Pencil} onclick={() => openEditDialog(card)} />
+                <IconTooltipButton label={`Details for ${card.config.name}`} icon={Info} onclick={() => openDetails(card.config.id)} />
+                <IconTooltipButton label={`Edit ${card.config.name}`} icon={Pencil} onclick={() => openEditDialog(card)} />
                 {#if card.status?.state === 'running' || card.status?.state === 'starting' || card.status?.state === 'stopping'}
                   <IconTooltipButton label="Stop" icon={Square} onclick={() => agentsStore.stopConfiguredAgent(card.config.id)} />
                   <IconTooltipButton label="Restart" icon={RotateCcw} onclick={() => agentsStore.restartConfiguredAgent(card.config.id)} />
