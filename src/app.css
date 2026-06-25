@@ -3369,6 +3369,7 @@ summary:focus-visible {
   display: block;
   width: 100%;
   height: 100%;
+  shape-rendering: geometricPrecision;
 }
 
 .app-icon-activity-pill {
@@ -3725,6 +3726,7 @@ summary:focus-visible {
   display: block;
   width: 100%;
   height: 100%;
+  shape-rendering: geometricPrecision;
 }
 
 .session-row-main {

@@ -5,12 +5,17 @@ export interface RoundIdenticonOptions {
   symmetricAxisAngle?: number;
 }
 
+export interface RoundIdenticonArc {
+  d: string;
+  strokeWidth: number;
+}
+
 export interface RoundIdenticon {
   width: number;
   center: number;
   centerRadius: number;
   color: string;
-  paths: string[];
+  arcs: RoundIdenticonArc[];
 }
 
 const DEFAULT_WIDTH = 32;
@@ -30,7 +35,7 @@ export function createRoundIdenticon(seed: string, options: RoundIdenticonOption
   const color = `#${bytes.slice(bytes.length - 3).map(int2ByteString).join('')}`;
   const segmentWidth = Math.floor(width / (size * 2 + 1));
   const center = width / 2;
-  const paths: string[] = [];
+  const arcs: RoundIdenticonArc[] = [];
   const segmentStep = Number.isFinite(segments) && segments > 0 ? 360 / segments : 0;
 
   for (let i = 1; i < size; ++i) {
@@ -43,11 +48,11 @@ export function createRoundIdenticon(seed: string, options: RoundIdenticonOption
       theta2 = temp;
     }
 
-    paths.push(buildArc(center, center, segmentWidth * i, segmentWidth * (i + 1) + 1, theta1, theta2));
+    arcs.push(buildRoundedArc(center, center, segmentWidth * i, segmentWidth * (i + 1) + 1, theta1, theta2));
 
     if (symmetricAxisAngle !== undefined) {
-      paths.push(
-        buildArc(
+      arcs.push(
+        buildRoundedArc(
           center,
           center,
           segmentWidth * i,
@@ -64,7 +69,7 @@ export function createRoundIdenticon(seed: string, options: RoundIdenticonOption
     center,
     centerRadius: segmentWidth + 1,
     color,
-    paths
+    arcs
   };
 }
 
@@ -130,17 +135,16 @@ function reverse<T>(arr: T[]): T[] {
   return newArr;
 }
 
-function buildArc(cx: number, cy: number, r1: number, r2: number, theta1: number, theta2: number): string {
-  const largeArcFlag = theta2 - theta1 < 180 ? 0 : 1;
-  const points = [polar(r2, theta1), polar(r2, theta2), polar(r1, theta2), polar(r1, theta1)];
+function buildRoundedArc(cx: number, cy: number, r1: number, r2: number, theta1: number, theta2: number): RoundIdenticonArc {
+  const radius = (r1 + r2) / 2;
+  const strokeWidth = Math.max(1, r2 - r1 - 0.35);
+  const largeArcFlag = Math.abs(theta2 - theta1) < 180 ? 0 : 1;
+  const points = [polar(radius, theta1), polar(radius, theta2)];
 
-  return (
-    `M ${cx + points[0].x} ${cy + points[0].y} ` +
-    `A ${r2} ${r2} 0 ${largeArcFlag} 1 ${cx + points[1].x} ${cy + points[1].y} ` +
-    `L ${cx + points[2].x} ${cy + points[2].y} ` +
-    `A ${r1} ${r1} 0 ${largeArcFlag} 0 ${cx + points[3].x} ${cy + points[3].y} ` +
-    'Z'
-  );
+  return {
+    d: `M ${cx + points[0].x} ${cy + points[0].y} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${cx + points[1].x} ${cy + points[1].y}`,
+    strokeWidth
+  };
 }
 
 function floorToCongruent(n: number, m: number): number {

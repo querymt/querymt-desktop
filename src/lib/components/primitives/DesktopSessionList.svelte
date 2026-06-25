@@ -148,9 +148,11 @@
                     <span class="session-row-identicon" aria-hidden="true">
                       <svg width={identicon.width} height={identicon.width} viewBox={`0 0 ${identicon.width} ${identicon.width}`} preserveAspectRatio="xMinYMin">
                         <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill={identicon.color} />
-                        {#each identicon.paths as path}
-                          <path d={path} fill={identicon.color} />
-                        {/each}
+                        <g fill="none" stroke={identicon.color} stroke-linecap="round" stroke-linejoin="round">
+                          {#each identicon.arcs as arc}
+                            <path d={arc.d} stroke-width={arc.strokeWidth} />
+                          {/each}
+                        </g>
                       </svg>
                     </span>
                     <span class="session-row-main">
