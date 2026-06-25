@@ -17,6 +17,7 @@
     "core:window:allow-set-decorations",
     "core:window:allow-set-shadow",
     "core:webview:default",
-    "dialog:default"
+    "dialog:default",
+    "shell:allow-open"
   ]
 }

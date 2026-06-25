@@ -1,3 +1,4 @@
+import { open } from '@tauri-apps/plugin-shell';
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -54,6 +55,10 @@ const agentsStore = vi.hoisted(() => ({
   refreshManagedProfiles: vi.fn(async () => {})
 }));
 
+vi.mock('@tauri-apps/plugin-shell', () => ({
+  open: vi.fn(async () => {})
+}));
+
 vi.mock('$lib/stores/agents.svelte', () => ({ agentsStore }));
 
 vi.mock('$lib/stores/appearance.svelte', () => ({
@@ -66,6 +71,13 @@ vi.mock('$lib/stores/appearance.svelte', () => ({
   }
 }));
 
+Object.defineProperty(navigator, 'clipboard', {
+  value: {
+    writeText: vi.fn(async () => {})
+  },
+  configurable: true
+});
+
 vi.mock('$lib/stores/window-decorations.svelte', () => ({
   windowDecorationsStore: {
     mode: 'os',
@@ -77,14 +89,27 @@ vi.mock('$lib/stores/window-decorations.svelte', () => ({
   }
 }));
 
-Object.defineProperty(window, 'open', {
-  value: vi.fn(),
-  writable: true
-});
-
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  agentsStore.authProvidersByAgent['agent-1'] = [
+    {
+      provider: 'anthropic',
+      display_name: 'Anthropic',
+      oauth_status: 'not_authenticated',
+      has_stored_api_key: false,
+      has_env_api_key: false,
+      supports_oauth: true,
+      preferred_method: 'api_key'
+    }
+  ];
+  agentsStore.pluginUpdateStatusByAgent['agent-1'] = null;
+  agentsStore.refreshAuthProviders = vi.fn(async () => []);
+  agentsStore.startProviderSignIn = vi.fn(async () => ({
+    flow_id: 'flow-1',
+    provider: 'anthropic',
+    flow_kind: 'device_poll'
+  }));
 });
 
 describe('Settings provider controls', () => {
@@ -99,16 +124,118 @@ describe('Settings provider controls', () => {
     expect(agentsStore.setProviderApiToken).toHaveBeenCalledWith('agent-1', 'anthropic', 'sk-test');
   });
 
-  it('opens manual OAuth completion in-app for non-redirect flows', async () => {
+  it('checks device-poll OAuth completion without pasted input', async () => {
+    agentsStore.startProviderSignIn = vi.fn(async () => ({
+      flow_id: 'flow-1',
+      provider: 'anthropic',
+      authorization_url: 'https://example.com/device',
+      flow_kind: 'device_poll'
+    }));
+
     render(SettingsPage);
 
     await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
-    const textarea = screen.getByPlaceholderText('https://... or pasted code');
-    await fireEvent.input(textarea, { target: { value: 'device-code' } });
-    await fireEvent.click(screen.getByRole('button', { name: 'Complete sign-in' }));
+    expect(screen.queryByPlaceholderText('https://... or pasted code')).not.toBeInTheDocument();
+    expect(screen.getByText(/Open or copy the device authorization URL/)).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Authorization URL' })).toHaveValue('https://example.com/device');
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy URL' }));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://example.com/device');
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Check authentication' }));
 
     expect(agentsStore.startProviderSignIn).toHaveBeenCalledWith('agent-1', 'anthropic');
-    expect(agentsStore.completeProviderSignIn).toHaveBeenCalledWith('agent-1', 'flow-1', 'device-code');
+    expect(agentsStore.completeProviderSignIn).toHaveBeenCalledWith('agent-1', 'flow-1', '');
+  });
+
+  it('requires pasted input for manual redirect OAuth completion', async () => {
+    agentsStore.startProviderSignIn = vi.fn(async () => ({
+      flow_id: 'flow-manual',
+      provider: 'anthropic',
+      flow_kind: 'redirect_code'
+    }));
+
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    const completeButton = screen.getByRole('button', { name: 'Complete sign-in' });
+    expect(completeButton).toBeDisabled();
+
+    const textarea = screen.getByPlaceholderText('https://... or pasted code');
+    await fireEvent.input(textarea, { target: { value: 'https://localhost/callback?code=abc' } });
+    await fireEvent.click(completeButton);
+
+    expect(agentsStore.completeProviderSignIn).toHaveBeenCalledWith(
+      'agent-1',
+      'flow-manual',
+      'https://localhost/callback?code=abc'
+    );
+  });
+
+  it('opens browser from the OAuth dialog for redirect OAuth flows', async () => {
+    agentsStore.startProviderSignIn = vi.fn(async () => ({
+      flow_id: 'flow-2',
+      provider: 'anthropic',
+      authorization_url: 'https://example.com/oauth',
+      flow_kind: 'redirect_code'
+    }));
+    agentsStore.refreshAuthProviders = vi.fn(async () => [
+      { provider: 'anthropic', oauth_status: 'not_authenticated', supports_oauth: true }
+    ]) as any;
+
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(open).not.toHaveBeenCalled();
+    await fireEvent.click(await screen.findByRole('button', { name: 'Open in browser' }));
+
+    expect(open).toHaveBeenCalledWith('https://example.com/oauth');
+  });
+
+  it('allows cancelling an in-progress redirect OAuth wait', async () => {
+    agentsStore.authProvidersByAgent['agent-1'] = [
+      {
+        provider: 'anthropic',
+        display_name: 'Anthropic',
+        oauth_status: 'not_authenticated',
+        has_stored_api_key: false,
+        has_env_api_key: false,
+        supports_oauth: true,
+        preferred_method: 'oauth'
+      },
+      {
+        provider: 'google',
+        display_name: 'Google',
+        oauth_status: null as any,
+        has_stored_api_key: false,
+        has_env_api_key: false,
+        supports_oauth: false,
+        preferred_method: 'api_key'
+      }
+    ];
+    agentsStore.startProviderSignIn = vi.fn(async () => ({
+      flow_id: 'flow-3',
+      provider: 'anthropic',
+      authorization_url: 'https://example.com/oauth',
+      flow_kind: 'redirect_code'
+    }));
+    agentsStore.refreshAuthProviders = vi.fn(async () => [
+      { provider: 'anthropic', oauth_status: 'not_authenticated', supports_oauth: true }
+    ]) as any;
+
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    const cancelButtons = await screen.findAllByRole('button', { name: 'Cancel sign-in' });
+    expect(cancelButtons[0]).toBeEnabled();
+    expect(cancelButtons[1]).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Signing in' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Set API key' })).toBeDisabled();
+
+    await fireEvent.click(cancelButtons[1]);
+
+    expect(await screen.findByText('Cancelled sign-in for Anthropic.')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeEnabled();
   });
 
   it('renders live plugin update progress without blocking controls', async () => {
