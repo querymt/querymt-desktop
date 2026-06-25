@@ -54,6 +54,7 @@
     selectedAgentId ? agentsStore.controlCapabilitiesByAgent[selectedAgentId] ?? null : null
   );
   const providers = $derived.by(() => (selectedAgentId ? agentsStore.authProvidersByAgent[selectedAgentId] ?? [] : []));
+  const sortedProviders = $derived.by(() => sortProviders(providers));
   const authLoading = $derived.by(() => (selectedAgentId ? agentsStore.authLoadingByAgent[selectedAgentId] ?? false : false));
   const authError = $derived.by(() => (selectedAgentId ? agentsStore.authErrorsByAgent[selectedAgentId] ?? null : null));
   const modelLoading = $derived.by(() => (selectedAgentId ? agentsStore.modelLoadingByAgent[selectedAgentId] ?? false : false));
@@ -112,19 +113,56 @@
     }
   }
 
+  function sortProviders(entries: AuthProviderEntry[]) {
+    return [...entries].sort((left, right) => {
+      const leftRank = providerSortRank(left);
+      const rightRank = providerSortRank(right);
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      return left.display_name.localeCompare(right.display_name);
+    });
+  }
+
+  function hasUsableCredential(provider: AuthProviderEntry) {
+    return provider.oauth_status === OAuthStatus.Connected || provider.has_stored_api_key || provider.has_env_api_key;
+  }
+
+  function providerSortRank(provider: AuthProviderEntry) {
+    if (hasUsableCredential(provider)) return 0;
+    if (provider.oauth_status === OAuthStatus.Expired) return 1;
+    return 2;
+  }
+
+  function authStatusTone(provider: AuthProviderEntry) {
+    if (hasUsableCredential(provider)) return 'connected';
+    if (provider.oauth_status === OAuthStatus.Expired) return 'warning';
+    return 'muted';
+  }
+
   function authStatusLabel(provider: AuthProviderEntry) {
-    if (provider.oauth_status === OAuthStatus.Connected) return 'OAuth connected';
+    if (provider.oauth_status === OAuthStatus.Connected) return 'Connected';
+    if (provider.has_stored_api_key) return 'API key stored';
+    if (provider.has_env_api_key) return 'Env key available';
     if (provider.oauth_status === OAuthStatus.Expired) return 'OAuth expired';
-    if (provider.oauth_status === OAuthStatus.NotAuthenticated) return 'OAuth not authenticated';
-    return provider.supports_oauth ? 'OAuth available' : 'Token or env var only';
+    if (provider.oauth_status === OAuthStatus.NotAuthenticated) return 'Not signed in';
+    return 'Not configured';
   }
 
   function authDetail(provider: AuthProviderEntry) {
-    const details = [];
-    if (provider.has_stored_api_key) details.push('stored API key');
-    if (provider.has_env_api_key) details.push(provider.env_var_name ? `env ${provider.env_var_name}` : 'env key');
-    if (provider.preferred_method) details.push(`preferred ${provider.preferred_method}`);
-    return details.length > 0 ? details.join(' · ') : 'No stored credentials detected';
+    if (provider.oauth_status === OAuthStatus.Connected) return 'OAuth credentials saved';
+    if (provider.has_stored_api_key) return 'Stored in desktop keyring';
+    if (provider.has_env_api_key) return provider.env_var_name ? `Environment key ${provider.env_var_name}` : 'Environment key available';
+    if (provider.oauth_status === OAuthStatus.Expired) return 'Sign in again to refresh OAuth';
+    if (provider.supports_oauth) return 'OAuth available';
+    return provider.env_var_name ? 'Environment variable supported' : 'API key authentication supported';
+  }
+
+  function authHint(provider: AuthProviderEntry) {
+    if (hasUsableCredential(provider)) return '';
+    if (provider.oauth_status === OAuthStatus.Expired) return 'Reconnect this provider to resume OAuth access.';
+    if (provider.oauth_status === OAuthStatus.NotAuthenticated) return 'Sign in with OAuth to enable this provider.';
+    if (provider.env_var_name && provider.preferred_method === AuthMethod.EnvVar) return `Set ${provider.env_var_name} in your environment.`;
+    if (provider.preferred_method === AuthMethod.ApiKey) return 'Store an API key in the desktop keyring.';
+    return provider.env_var_name ? `Set ${provider.env_var_name} or store an API key.` : 'Store an API key to enable this provider.';
   }
 
   function selectedCapabilitySummary() {
@@ -132,15 +170,6 @@
 
     const details = [`API v${selectedCapabilities.querymt_control_version}`, 'Auth'];
     if (selectedCapabilities.features.models) details.push('Models');
-    return details.join(' · ');
-  }
-
-  function providerMetadata(provider: AuthProviderEntry) {
-    const details = [];
-    if (provider.supports_oauth) details.push('OAuth');
-    if (provider.has_stored_api_key) details.push('Stored key');
-    if (provider.has_env_api_key) details.push(provider.env_var_name ?? 'Env key');
-    if (provider.preferred_method) details.push(`Preferred ${provider.preferred_method}`);
     return details.join(' · ');
   }
 
@@ -653,34 +682,39 @@
             </div>
           {:else}
             <div class="settings-provider-list">
-              {#each providers as provider}
-                <article class="settings-provider-row">
-              <div class="settings-provider-main">
-                <div class="settings-provider-title">{provider.display_name}</div>
-                <div class="settings-provider-id">{provider.provider}</div>
-              </div>
+              {#each sortedProviders as provider}
+                <article
+                  class:settings-provider-row-connected={hasUsableCredential(provider)}
+                  class:settings-provider-row-warning={provider.oauth_status === OAuthStatus.Expired}
+                  class:settings-provider-row-unconfigured={!hasUsableCredential(provider) && provider.oauth_status !== OAuthStatus.Expired}
+                  class="settings-provider-row"
+                >
+                  <div class="settings-provider-main">
+                    <div class="settings-provider-title">{provider.display_name}</div>
+                    <div class="settings-provider-id">{provider.provider}</div>
+                  </div>
 
-              <div class="settings-provider-state">
-                <div class="settings-provider-status">{authStatusLabel(provider)}</div>
-                <div class="settings-provider-detail">{authDetail(provider)}</div>
-                {#if providerMetadata(provider)}
-                  <div class="settings-provider-metadata">{providerMetadata(provider)}</div>
-                {/if}
-                {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}
-                  <div class="settings-provider-hint">Use Sign in to open the browser, or complete OAuth manually if redirect capture is unavailable.</div>
-                {/if}
-              </div>
+                  <div class="settings-provider-state">
+                    <div class={`settings-provider-status settings-provider-status-${authStatusTone(provider)}`}>
+                      <span class="settings-provider-status-dot" aria-hidden="true"></span>
+                      <span>{authStatusLabel(provider)}</span>
+                    </div>
+                    <div class="settings-provider-detail">{authDetail(provider)}</div>
+                    {#if authHint(provider)}
+                      <div class="settings-provider-hint">{authHint(provider)}</div>
+                    {/if}
+                  </div>
 
-              <div class="settings-provider-method">
-                <AppSelect
-                  value={provider.preferred_method ?? 'auto'}
-                  options={authMethodOptions}
-                  disabled={actionLoading === `method:${provider.provider}`}
-                  pill
-                  ariaLabel="Preferred auth"
-                  onValueChange={(value) => void handleAuthMethodChange(provider, value)}
-                />
-              </div>
+                  <div class="settings-provider-method">
+                    <AppSelect
+                      value={provider.preferred_method ?? 'auto'}
+                      options={authMethodOptions}
+                      disabled={actionLoading === `method:${provider.provider}`}
+                      pill
+                      ariaLabel="Preferred auth"
+                      onValueChange={(value) => void handleAuthMethodChange(provider, value)}
+                    />
+                  </div>
 
                   <div class="settings-provider-actions">
                     {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}

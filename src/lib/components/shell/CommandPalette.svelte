@@ -1,9 +1,10 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { Bot, CalendarClock, Link, MessageSquarePlus, Network, Plus, Search, SendHorizontal, X } from '@lucide/svelte';
+  import { Bot, CalendarClock, Link, MessageSquarePlus, Network, Plus, RefreshCw, Search, SendHorizontal, X } from '@lucide/svelte';
   import { Command, Dialog } from 'bits-ui';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import type { CommandPalettePrefill, DesktopSessionSummary } from '$lib/domain/types';
+  import type { RemoteSessionInfo } from '$lib/querymt/generated/types';
   import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
 
@@ -36,6 +37,7 @@
   let attachSessionId = $state('');
   let formError = $state<string | null>(null);
   let submitting = $state(false);
+  let loadingRemoteSessions = $state(false);
 
   const onlineAgents = $derived.by(() =>
     agentsStore.configs.filter((config) => agentsStore.statuses[config.id]?.state === 'running')
@@ -59,6 +61,28 @@
     const sessions = scheduleAgentId ? agentsStore.sessionsByAgent[scheduleAgentId] ?? [] : [];
     return sessions.slice().sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
   });
+
+  const remoteNodeChoices = $derived.by(() => {
+    const nodes = scheduleAgentId ? agentsStore.meshNodesByAgent[scheduleAgentId]?.nodes ?? [] : [];
+    return nodes
+      .slice()
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .map((node) => ({
+        value: node.id,
+        label: `${node.label || node.id}${node.active_sessions ? ` · ${node.active_sessions} active` : ''}`
+      }));
+  });
+
+  const loadedRemoteSessionList = $derived.by(() =>
+    scheduleAgentId && attachNodeId ? agentsStore.remoteSessionsByAgent[scheduleAgentId]?.[attachNodeId] ?? null : null
+  );
+
+  const remoteSessionChoices = $derived.by(() =>
+    (loadedRemoteSessionList?.sessions ?? [])
+      .slice()
+      .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''))
+      .map((session) => ({ value: session.id, label: remoteSessionLabel(session) }))
+  );
 
   const commands = $derived.by(() => {
     const actions: CommandAction[] = [
@@ -178,6 +202,7 @@
     if (!commandPaletteStore.open) {
       formError = null;
       submitting = false;
+      loadingRemoteSessions = false;
       return;
     }
 
@@ -204,16 +229,18 @@
   }
 
   function hydrateRemoteCreateState(prefill: CommandPalettePrefill | null) {
-    scheduleAgentId = prefill?.agentId ?? remoteCapableAgents[0]?.id ?? '';
-    remoteNodeId = prefill?.nodeId ?? remoteNodeId ?? '';
+    const agentId = ((prefill?.agentId ?? scheduleAgentId) || remoteCapableAgents[0]?.id) ?? '';
+    scheduleAgentId = agentId;
+    remoteNodeId = resolveNodeSelection(agentId, prefill?.nodeId ?? remoteNodeId);
     remoteWorkspace = prefill?.cwd ?? remoteWorkspace ?? '';
     formError = null;
   }
 
   function hydrateRemoteAttachState(prefill: CommandPalettePrefill | null) {
-    scheduleAgentId = prefill?.agentId ?? remoteCapableAgents[0]?.id ?? '';
-    attachNodeId = prefill?.nodeId ?? attachNodeId ?? '';
-    attachSessionId = prefill?.sessionId ?? attachSessionId ?? '';
+    const agentId = ((prefill?.agentId ?? scheduleAgentId) || remoteCapableAgents[0]?.id) ?? '';
+    scheduleAgentId = agentId;
+    attachNodeId = resolveNodeSelection(agentId, prefill?.nodeId ?? attachNodeId);
+    attachSessionId = resolveSessionSelection(agentId, attachNodeId, prefill?.sessionId ?? attachSessionId);
     formError = null;
   }
 
@@ -286,6 +313,24 @@
     }
   }
 
+  async function loadAttachRemoteSessions() {
+    if (!scheduleAgentId || !attachNodeId) {
+      formError = 'Select an agent and node first.';
+      return;
+    }
+
+    loadingRemoteSessions = true;
+    formError = null;
+    try {
+      const result = await agentsStore.refreshRemoteSessionsForAgent(scheduleAgentId, attachNodeId);
+      attachSessionId = resolveSessionSelection(scheduleAgentId, attachNodeId, attachSessionId) || (result.sessions[0]?.id ?? '');
+    } catch (error) {
+      formError = error instanceof Error ? error.message : 'Failed to load remote sessions.';
+    } finally {
+      loadingRemoteSessions = false;
+    }
+  }
+
   async function submitRemoteAttach() {
     if (!scheduleAgentId || !attachNodeId.trim() || !attachSessionId.trim()) {
       formError = 'Agent, node, and session are required.';
@@ -312,6 +357,48 @@
 
   function sessionLabel(session: DesktopSessionSummary) {
     return `${session.title || session.sessionId} · ${session.cwd || 'No workspace'} · ${session.updatedAt || 'No activity yet'}`;
+  }
+
+  function remoteSessionLabel(session: RemoteSessionInfo) {
+    const title = session.title || session.id;
+    const details = [session.cwd, session.updated_at].filter(Boolean);
+    return details.length > 0 ? `${title} · ${details.join(' · ')}` : title;
+  }
+
+  function remoteNodesFor(agentId: string) {
+    return agentsStore.meshNodesByAgent[agentId]?.nodes ?? [];
+  }
+
+  function resolveNodeSelection(agentId: string, preferredNodeId: string | null | undefined) {
+    const nodes = remoteNodesFor(agentId);
+    if (preferredNodeId && (nodes.length === 0 || nodes.some((node) => node.id === preferredNodeId))) {
+      return preferredNodeId;
+    }
+    return nodes.slice().sort((a, b) => a.label.localeCompare(b.label))[0]?.id ?? '';
+  }
+
+  function resolveSessionSelection(agentId: string, nodeId: string, preferredSessionId: string | null | undefined) {
+    const sessions = agentsStore.remoteSessionsByAgent[agentId]?.[nodeId]?.sessions ?? [];
+    if (preferredSessionId && (sessions.length === 0 || sessions.some((session) => session.id === preferredSessionId))) {
+      return preferredSessionId;
+    }
+    return '';
+  }
+
+  function handleRemoteCreateAgentChange(agentId: string) {
+    scheduleAgentId = agentId;
+    remoteNodeId = resolveNodeSelection(agentId, remoteNodeId);
+  }
+
+  function handleRemoteAttachAgentChange(agentId: string) {
+    scheduleAgentId = agentId;
+    attachNodeId = resolveNodeSelection(agentId, attachNodeId);
+    attachSessionId = resolveSessionSelection(agentId, attachNodeId, attachSessionId);
+  }
+
+  function handleAttachNodeChange(nodeId: string) {
+    attachNodeId = nodeId;
+    attachSessionId = resolveSessionSelection(scheduleAgentId, nodeId, attachSessionId);
   }
 </script>
 
@@ -516,10 +603,14 @@
 
             <label class="space-y-2">
               <span class="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Agent</span>
-              <AppSelect class="w-full" bind:value={scheduleAgentId} options={remoteCapableAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" />
+              <AppSelect class="w-full" value={scheduleAgentId} options={remoteCapableAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" onValueChange={handleRemoteCreateAgentChange} />
             </label>
 
-            <input class="input-shell w-full" bind:value={remoteNodeId} placeholder="Node id" />
+            <label class="space-y-2">
+              <span class="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Node</span>
+              <AppSelect class="w-full" bind:value={remoteNodeId} options={remoteNodeChoices.length > 0 ? remoteNodeChoices : [{ value: '', label: 'No mesh nodes loaded' }]} ariaLabel="Node" disabled={remoteNodeChoices.length === 0} />
+            </label>
+
             <input class="input-shell w-full" bind:value={remoteWorkspace} placeholder="Working directory (optional)" />
 
             {#if formError}
@@ -528,7 +619,7 @@
 
             <div class="flex justify-end gap-3">
               <button class="action-btn" type="button" onclick={() => commandPaletteStore.close()}>Cancel</button>
-              <button class="action-btn action-btn-primary" type="button" disabled={submitting} onclick={() => submitRemoteCreate()}>
+              <button class="action-btn action-btn-primary" type="button" disabled={submitting || !scheduleAgentId || !remoteNodeId} onclick={() => submitRemoteCreate()}>
                 <MessageSquarePlus size={15} />
                 Create remote session
               </button>
@@ -546,11 +637,43 @@
 
             <label class="space-y-2">
               <span class="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Agent</span>
-              <AppSelect class="w-full" bind:value={scheduleAgentId} options={remoteCapableAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" />
+              <AppSelect class="w-full" value={scheduleAgentId} options={remoteCapableAgents.map((agent) => ({ value: agent.id, label: agent.name }))} ariaLabel="Agent" onValueChange={handleRemoteAttachAgentChange} />
             </label>
 
-            <input class="input-shell w-full" bind:value={attachNodeId} placeholder="Node id" />
-            <input class="input-shell w-full" bind:value={attachSessionId} placeholder="Session id" />
+            <label class="space-y-2">
+              <span class="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Node</span>
+              <AppSelect class="w-full" value={attachNodeId} options={remoteNodeChoices.length > 0 ? remoteNodeChoices : [{ value: '', label: 'No mesh nodes loaded' }]} ariaLabel="Node" disabled={remoteNodeChoices.length === 0} onValueChange={handleAttachNodeChange} />
+            </label>
+
+            <div class="surface-muted space-y-3 px-4 py-3">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <div class="text-sm font-medium">Remote sessions</div>
+                  <div class="muted text-xs">
+                    {#if !attachNodeId}
+                      Select a node to inspect its sessions.
+                    {:else if loadedRemoteSessionList}
+                      {loadedRemoteSessionList.total_count} session{loadedRemoteSessionList.total_count === 1 ? '' : 's'} found on this node.
+                    {:else}
+                      Load sessions from the selected node.
+                    {/if}
+                  </div>
+                </div>
+                <button class="action-btn !px-3 !py-1.5 text-xs" type="button" disabled={!scheduleAgentId || !attachNodeId || loadingRemoteSessions} onclick={() => loadAttachRemoteSessions()}>
+                  <RefreshCw size={14} class={loadingRemoteSessions ? 'animate-spin' : ''} />
+                  {loadedRemoteSessionList ? 'Reload' : 'Load'}
+                </button>
+              </div>
+
+              {#if loadedRemoteSessionList && remoteSessionChoices.length === 0}
+                <div class="muted text-xs">No remote sessions found on this node.</div>
+              {:else if remoteSessionChoices.length > 0}
+                <label class="space-y-2">
+                  <span class="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">Session</span>
+                  <AppSelect class="w-full" bind:value={attachSessionId} options={[{ value: '', label: 'Select session...' }, ...remoteSessionChoices]} ariaLabel="Remote session" />
+                </label>
+              {/if}
+            </div>
 
             {#if formError}
               <div class="alert-error">{formError}</div>
@@ -558,7 +681,7 @@
 
             <div class="flex justify-end gap-3">
               <button class="action-btn" type="button" onclick={() => commandPaletteStore.close()}>Cancel</button>
-              <button class="action-btn action-btn-primary" type="button" disabled={submitting} onclick={() => submitRemoteAttach()}>
+              <button class="action-btn action-btn-primary" type="button" disabled={submitting || loadingRemoteSessions || !scheduleAgentId || !attachNodeId || !attachSessionId} onclick={() => submitRemoteAttach()}>
                 <Link size={15} />
                 Attach remote session
               </button>
