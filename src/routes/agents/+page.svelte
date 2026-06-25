@@ -313,9 +313,9 @@
           <div class="dialog-body">
             <div class="dialog-form">
               <div class="dialog-row-group">
-                <div class="dialog-row dialog-row-muted">
+                <div class="dialog-row dialog-row-muted dialog-row-full">
                   <div class="dialog-row-main">
-                    <div class="dialog-row-title">This cannot be undone.</div>
+                    <div class="dialog-row-title">This cannot be undone</div>
                     <div class="dialog-row-description">Sessions remain on disk, but this desktop configuration will be removed.</div>
                   </div>
                 </div>

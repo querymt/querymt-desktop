@@ -1886,6 +1886,10 @@ summary:focus-visible {
   gap: 0.65rem;
 }
 
+.dialog-row-full {
+  grid-template-columns: 1fr;
+}
+
 .dialog-row + .dialog-row,
 .dialog-row-group + .dialog-row-group {
   border-top: 1px solid var(--border);
@@ -1912,6 +1916,26 @@ summary:focus-visible {
 .dialog-row-control {
   width: 100%;
   min-width: 0;
+}
+
+.dialog-code-field {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+}
+
+.dialog-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  border: 1px solid var(--status-muted-border);
+  border-radius: 14px;
+  background: var(--status-muted-bg);
+  color: var(--muted);
+  padding: 0.7rem 0.85rem;
+  font-size: 0.84rem;
 }
 
 .dialog-segmented {
