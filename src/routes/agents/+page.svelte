@@ -247,31 +247,46 @@
     <Portal to={overlayPortalTarget}>
       <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
         <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close agent dialog" onclick={() => closeAgentDialog()}></button>
-        <div class="panel relative z-10 w-full max-w-3xl p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-          <div class="flex items-start justify-between gap-3">
-            <div>
-              <div class="text-lg font-semibold">{agentDialogMode === 'add' ? 'Add agent' : 'Edit agent'}</div>
-              <div class="text-sm text-[var(--muted)]">Set the display name and ACP command line.</div>
+        <div class="dialog-modal-panel relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
+          <div class="dialog-header">
+            <div class="dialog-header-title-block">
+              <div class="dialog-title">{agentDialogMode === 'add' ? 'Add Agent' : 'Edit Agent'}</div>
+              <div class="dialog-subtitle">Set the display name and ACP command line.</div>
             </div>
-            <IconTooltipButton label="Close agent dialog" icon={X} onclick={() => closeAgentDialog()} />
+            <div class="dialog-header-actions">
+              <button class="dialog-close-button" type="button" aria-label="Close agent dialog" onclick={() => closeAgentDialog()}>
+                <X size={16} />
+              </button>
+            </div>
           </div>
 
-          <div class="grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
-            <label class="block space-y-2">
-              <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Agent name</span>
-              <input class="input-shell w-full" placeholder="Agent name" bind:value={draftName} />
-            </label>
-            <label class="block space-y-2">
-              <span class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Command line</span>
-              <input class="input-shell w-full" placeholder="/path/to/executable --acp" bind:value={draftCommandLine} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="text" />
-            </label>
-          </div>
+          <div class="dialog-body">
+            <div class="dialog-form">
+              <div class="dialog-row-group">
+                <label class="dialog-row">
+                  <div class="dialog-row-main">
+                    <div class="dialog-row-title">Agent name</div>
+                    <div class="dialog-row-description">Shown in sidebars, settings, and session controls.</div>
+                  </div>
+                  <input class="input-shell dialog-row-control" placeholder="Agent name" bind:value={draftName} />
+                </label>
 
-          <div class="compact-toolbar justify-end">
-            <button class="action-btn" type="button" onclick={() => closeAgentDialog()}>Cancel</button>
-            <button class="action-btn action-btn-primary" type="button" onclick={() => saveAgentDialog()} disabled={!draftName.trim() || !draftCommandLine.trim()}>
-              {agentDialogMode === 'add' ? 'Add agent' : 'Save changes'}
-            </button>
+                <label class="dialog-row dialog-row-stacked">
+                  <div class="dialog-row-main">
+                    <div class="dialog-row-title">Command line</div>
+                    <div class="dialog-row-description">Executable and arguments used to start the ACP agent.</div>
+                  </div>
+                  <input class="input-shell w-full" placeholder="/path/to/executable --acp" bind:value={draftCommandLine} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="text" />
+                </label>
+              </div>
+
+              <div class="dialog-footer">
+                <button class="action-btn" type="button" onclick={() => closeAgentDialog()}>Cancel</button>
+                <button class="action-btn action-btn-primary" type="button" onclick={() => saveAgentDialog()} disabled={!draftName.trim() || !draftCommandLine.trim()}>
+                  {agentDialogMode === 'add' ? 'Add' : 'Save'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -282,14 +297,35 @@
     <Portal to={overlayPortalTarget}>
       <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
         <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close delete confirmation" onclick={() => (pendingDeleteAgentId = null)}></button>
-        <div class="panel relative z-10 w-full max-w-md p-5 space-y-4" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-          <div>
-            <div class="text-lg font-semibold">Delete agent</div>
-            <div class="text-sm text-[var(--muted)]">Remove this configured agent from the desktop app?</div>
+        <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
+          <div class="dialog-header">
+            <div class="dialog-header-title-block">
+              <div class="dialog-title">Delete Agent</div>
+              <div class="dialog-subtitle">Remove this configured agent from the desktop app?</div>
+            </div>
+            <div class="dialog-header-actions">
+              <button class="dialog-close-button" type="button" aria-label="Close delete confirmation" onclick={() => (pendingDeleteAgentId = null)}>
+                <X size={16} />
+              </button>
+            </div>
           </div>
-          <div class="compact-toolbar justify-end">
-            <button class="action-btn" type="button" onclick={() => (pendingDeleteAgentId = null)}>Cancel</button>
-            <button class="action-btn action-btn-danger" type="button" onclick={() => confirmDeleteAgent()}>Delete</button>
+
+          <div class="dialog-body">
+            <div class="dialog-form">
+              <div class="dialog-row-group">
+                <div class="dialog-row dialog-row-muted">
+                  <div class="dialog-row-main">
+                    <div class="dialog-row-title">This cannot be undone.</div>
+                    <div class="dialog-row-description">Sessions remain on disk, but this desktop configuration will be removed.</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="dialog-footer">
+                <button class="action-btn" type="button" onclick={() => (pendingDeleteAgentId = null)}>Cancel</button>
+                <button class="action-btn action-btn-danger" type="button" onclick={() => confirmDeleteAgent()}>Delete</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

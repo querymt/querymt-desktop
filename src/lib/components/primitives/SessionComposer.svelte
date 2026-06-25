@@ -36,6 +36,7 @@
     docked = false,
     dockAlignLeft = null,
     dockAlignWidth = null,
+    chatView = false,
     modelOptions = [],
     selectedModelId = '',
     modelInfo = {},
@@ -76,6 +77,7 @@
     docked?: boolean;
     dockAlignLeft?: number | null;
     dockAlignWidth?: number | null;
+    chatView?: boolean;
     modelOptions?: ModelEntry[];
     selectedModelId?: string;
     modelInfo?: Record<string, ModelInfo | null>;
@@ -109,6 +111,14 @@
 
   const unifiedShell = $derived(launch || sessionOnly);
   const sessionPlaceholder = 'Write a reply for this session...';
+  const promptMinHeightClass = $derived.by(() => {
+    if (chatView && sessionOnly) return 'min-h-[76px]';
+    if (launch) return 'min-h-[132px]';
+    if (sessionOnly) return 'min-h-[116px]';
+    if (minimal) return 'min-h-[168px]';
+    if (compact) return 'min-h-[116px]';
+    return 'min-h-[156px]';
+  });
 
   const dockPositionStyle = $derived.by(() => {
     if (!docked || dockAlignLeft == null || dockAlignWidth == null) return '';
@@ -306,7 +316,7 @@
   >
     <textarea
       bind:this={promptElement}
-      class={`block w-full resize-none border-0 bg-transparent px-1 py-2 text-sm text-[var(--text)] outline-none ${launch ? 'min-h-[132px] text-base' : sessionOnly ? 'min-h-[116px]' : minimal ? 'min-h-[168px]' : compact ? 'min-h-[116px]' : 'min-h-[156px]'}`}
+      class={`block w-full resize-none border-0 bg-transparent px-1 py-2 text-sm text-[var(--text)] outline-none ${promptMinHeightClass} ${launch ? 'text-base' : ''}`}
       placeholder={sessionOnly ? sessionPlaceholder : launch ? 'Ask QueryMT to inspect, change, debug, explain, or plan something.' : minimal ? 'What should QueryMT do in this workspace?' : 'Ask QueryMT to inspect, plan, change, or explain something in this workspace.'}
       value={prompt}
       oninput={(event) => onPromptInput((event.currentTarget as HTMLTextAreaElement).value)}
