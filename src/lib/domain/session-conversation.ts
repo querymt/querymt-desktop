@@ -13,6 +13,7 @@ export type SessionConversationTurn = {
   user?: {
     id: string;
     html: string;
+    text: string;
   };
   reasoning: Array<{
     id: string;
@@ -22,6 +23,7 @@ export type SessionConversationTurn = {
   assistant?: {
     id: string;
     html: string;
+    text: string;
     relatedEvents: Array<{ kind: string; text: string }>;
   };
   activities: SessionActivityItem[];
@@ -44,7 +46,8 @@ function buildTurns(groups: SessionTranscriptGroup[], session: ActiveSessionView
         id: `turn-${group.id}`,
         user: {
           id: group.id,
-          html: renderMarkdownToHtml(group.text)
+          html: renderMarkdownToHtml(group.text),
+          text: group.text
         },
         reasoning: [],
         assistant: undefined,
@@ -77,6 +80,7 @@ function buildTurns(groups: SessionTranscriptGroup[], session: ActiveSessionView
       current.assistant = {
         id: group.id,
         html: renderMarkdownToHtml(group.text),
+        text: group.text,
         relatedEvents: session.events
           .filter((event) => group.eventIds.includes(event.id) || event.messageId === group.messageId)
           .map((event) => ({ kind: event.kind, text: event.text }))

@@ -193,6 +193,7 @@
         <SessionComposer
           compact={true}
           sessionOnly={true}
+          chatView={true}
           prompt={agentsStore.composerPrompt}
           loading={agentsStore.loading}
           error={agentsStore.error}
@@ -231,6 +232,7 @@
           dockAlignWidth={dockAlignWidth}
           compact={true}
           sessionOnly={true}
+          chatView={true}
           prompt={agentsStore.composerPrompt}
           loading={agentsStore.loading}
           error={agentsStore.error}
