@@ -199,6 +199,17 @@
     return actionLoading === `oauth:${provider.provider}`;
   }
 
+  function isOAuthCompleting(provider: AuthProviderEntry) {
+    return actionLoading === `oauth-complete:${provider.provider}`;
+  }
+
+  function isManualOAuthSubmitDisabled() {
+    if (!manualOAuthProvider) return true;
+    if (isOAuthCompleting(manualOAuthProvider)) return true;
+    if (actionLoading && !isOAuthLoading(manualOAuthProvider)) return true;
+    return !manualOAuthIsDevicePoll && !manualOAuthValue.trim();
+  }
+
   function requestOAuthCancel(provider: AuthProviderEntry) {
     if (!isOAuthLoading(provider)) return;
 
@@ -406,25 +417,30 @@
       return;
     }
 
+    const agentId = selectedAgentId;
+    const provider = manualOAuthProvider;
+    const flowId = manualOAuthFlowId;
     const response = manualOAuthIsDevicePoll ? '' : manualOAuthValue.trim();
-    setBusy(`oauth-complete:${manualOAuthProvider.provider}`);
+
+    if (isOAuthLoading(provider)) {
+      oauthCancelRequested = true;
+      oauthCancelResolver?.();
+    }
+
+    setBusy(`oauth-complete:${provider.provider}`);
     pageError = null;
     pageMessage = null;
 
     try {
-      const result = await agentsStore.completeProviderSignIn(
-        selectedAgentId,
-        manualOAuthFlowId,
-        response
-      );
+      const result = await agentsStore.completeProviderSignIn(agentId, flowId, response);
       if (result.success) {
-        pageMessage = result.message || `Successfully authenticated with ${manualOAuthProvider.display_name}.`;
+        pageMessage = result.message || `Successfully authenticated with ${provider.display_name}.`;
         closeManualOAuthDialog();
       } else {
-        pageError = result.message || `Failed to complete sign-in for ${manualOAuthProvider.display_name}.`;
+        pageError = result.message || `Failed to complete sign-in for ${provider.display_name}.`;
       }
     } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to complete sign-in for ${manualOAuthProvider.display_name}.`;
+      pageError = error instanceof Error ? error.message : `Failed to complete sign-in for ${provider.display_name}.`;
     } finally {
       setBusy(null);
     }
@@ -516,12 +532,13 @@
       const start = await agentsStore.startProviderSignIn(agentId, provider.provider);
       const providerName = start.provider || provider.provider;
 
-      const needsManualCompletion =
-        !start.authorization_url || !start.flow_kind || start.flow_kind !== OAuthFlowKindTs.RedirectCode;
+      const flowKind = start.flow_kind ?? null;
+      const waitsForRedirectCallback = Boolean(start.authorization_url && flowKind === OAuthFlowKindTs.RedirectCode);
+      const showsCallbackInput = flowKind !== OAuthFlowKindTs.DevicePoll;
 
-      showOAuthDialog(provider, start.flow_id, start.flow_kind, start.authorization_url, needsManualCompletion && !start.authorization_url);
+      showOAuthDialog(provider, start.flow_id, flowKind, start.authorization_url, showsCallbackInput);
 
-      if (needsManualCompletion) {
+      if (!waitsForRedirectCallback) {
         return;
       }
 
@@ -544,7 +561,9 @@
     } finally {
       oauthCancelRequested = false;
       oauthCancelResolver = null;
-      setBusy(null);
+      if (actionLoading === `oauth:${provider.provider}`) {
+        setBusy(null);
+      }
     }
   }
 
@@ -918,6 +937,8 @@
               <div class="dialog-subtitle">
                 {#if manualOAuthIsDevicePoll}
                   Open or copy the device authorization URL for {manualOAuthProvider.display_name}, approve access, then check whether authentication completed.
+                {:else if manualOAuthNeedsCallbackInput && manualOAuthHasAuthorizationUrl}
+                  Open or copy the authorization URL for {manualOAuthProvider.display_name}. We'll detect completion automatically, or you can paste a callback URL/code.
                 {:else if manualOAuthNeedsCallbackInput}
                   Paste the callback URL or returned code for {manualOAuthProvider.display_name}.
                 {:else}
@@ -955,7 +976,9 @@
                   <label class="dialog-row dialog-row-stacked">
                     <div class="dialog-row-main">
                       <div class="dialog-row-title">Callback URL or code</div>
-                      <div class="dialog-row-description">Paste the browser callback URL or authorization code to complete sign-in manually.</div>
+                      <div class="dialog-row-description">
+                        {manualOAuthHasAuthorizationUrl ? 'Paste it here if the local callback does not complete automatically.' : 'Paste the browser callback URL or authorization code to complete sign-in manually.'}
+                      </div>
                     </div>
                     <textarea class="input-shell w-full min-h-28" bind:value={manualOAuthValue} placeholder="https://... or pasted code"></textarea>
                   </label>
@@ -965,7 +988,7 @@
               {#if actionLoading?.startsWith('oauth:')}
                 <div class="dialog-status-row" role="status">
                   <LoaderCircle size={15} class="animate-spin" />
-                  <span>Waiting for authentication...</span>
+                  <span>Waiting for authentication. Paste a code below if the browser does not return automatically.</span>
                 </div>
               {/if}
 
@@ -976,8 +999,8 @@
                   <button class="action-btn" type="button" onclick={() => closeManualOAuthDialog()} disabled={!!actionLoading}>Cancel</button>
                 {/if}
                 {#if manualOAuthIsDevicePoll || manualOAuthNeedsCallbackInput}
-                  <button class="action-btn action-btn-primary" type="button" onclick={() => submitManualOAuth()} disabled={!!actionLoading || (!manualOAuthIsDevicePoll && !manualOAuthValue.trim())}>
-                    {manualOAuthIsDevicePoll ? 'Check authentication' : 'Complete sign-in'}
+                  <button class="action-btn action-btn-primary" type="button" onclick={() => submitManualOAuth()} disabled={isManualOAuthSubmitDisabled()}>
+                    {manualOAuthIsDevicePoll ? 'Check authentication' : isOAuthCompleting(manualOAuthProvider) ? 'Completing...' : 'Complete sign-in'}
                   </button>
                 {/if}
               </div>
