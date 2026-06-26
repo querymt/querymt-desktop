@@ -4,6 +4,10 @@ import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
+  server: {
+    port: 5173,
+    strictPort: true
+  },
   resolve: {
     conditions: ['browser']
   },

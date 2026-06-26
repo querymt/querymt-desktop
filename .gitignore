@@ -21,7 +21,7 @@ pnpm-debug.log*
 # Tauri / Rust build artifacts
 src-tauri/target/
 src-tauri/gen/
-Cargo.lock
+/Cargo.lock
 
 # Tauri generated capability / schema outputs
 src-tauri/*.schema.json
