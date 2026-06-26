@@ -18,6 +18,7 @@
     loading = false,
     disabled = false,
     agentLabel = null,
+    class: className = '',
     onSelect,
     onRefresh = null
   }: {
@@ -28,6 +29,7 @@
     loading?: boolean;
     disabled?: boolean;
     agentLabel?: string | null;
+    class?: string;
     onSelect: (modelId: string) => void | Promise<void>;
     onRefresh?: (() => void | Promise<void>) | null;
   } = $props();
@@ -178,7 +180,7 @@
 
 <div class="inline-flex">
   <button
-    class="composer-model-pill"
+    class={`composer-model-pill ${className}`}
     disabled={disabled}
     type="button"
     onclick={openPicker}

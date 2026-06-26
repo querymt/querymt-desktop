@@ -4,6 +4,25 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>QueryMT Desktop</title>
+    <script>
+      (() => {
+        const storageKey = 'querymt.themeMode';
+        const darkQuery = '(prefers-color-scheme: dark)';
+
+        try {
+          const savedMode = window.localStorage.getItem(storageKey);
+          const themeMode = savedMode === 'system' || savedMode === 'light' || savedMode === 'dark' ? savedMode : 'system';
+          const prefersDark = window.matchMedia?.(darkQuery).matches ?? false;
+          const resolvedTheme = themeMode === 'system' ? (prefersDark ? 'dark' : 'light') : themeMode;
+
+          document.documentElement.dataset.theme = resolvedTheme;
+          document.documentElement.style.colorScheme = resolvedTheme;
+        } catch {
+          document.documentElement.dataset.theme = 'light';
+          document.documentElement.style.colorScheme = 'light';
+        }
+      })();
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

@@ -257,17 +257,19 @@
         <CommandPalette portalTarget={overlayPortalTarget} />
       </div>
 
-      <div class="app-inspector-column hidden min-h-0 2xl:grid">
-        <Inspector />
-        {#if isActiveSessionRoute && agentsStore.activeSessionId}
-          <aside class="session-side-rail session-side-rail-inspector">
-            <SessionContextRail
-              session={agentsStore.activeSession}
-              sessionConfigPending={agentsStore.sessionConfigPending}
-              onConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
-            />
-          </aside>
-        {/if}
+      <div class="app-inspector-column hidden min-h-0 2xl:block">
+        <div class="app-inspector-sticky">
+          <Inspector />
+          {#if isActiveSessionRoute && agentsStore.activeSessionId}
+            <aside class="session-side-rail session-side-rail-inspector">
+              <SessionContextRail
+                session={agentsStore.activeSession}
+                sessionConfigPending={agentsStore.sessionConfigPending}
+                onConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
+              />
+            </aside>
+          {/if}
+        </div>
       </div>
     </div>
     <div bind:this={overlayPortalTarget} class="app-overlay-root"></div>

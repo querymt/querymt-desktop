@@ -5,7 +5,7 @@ export type WindowDecorationMode = 'os' | 'custom';
 const storageKey = 'querymt.windowDecorationMode';
 
 class WindowDecorationsStore {
-  mode = $state<WindowDecorationMode>('custom');
+  mode = $state<WindowDecorationMode>('os');
   supported = $state(false);
   initialized = $state(false);
   error = $state<string | null>(null);

@@ -113,6 +113,14 @@ afterEach(() => {
 });
 
 describe('Settings provider controls', () => {
+  it('marks the custom titlebar setting as beta and keeps it off by default', () => {
+    render(SettingsPage);
+
+    expect(screen.getByText('Custom titlebar')).toBeInTheDocument();
+    expect(screen.getByText('Beta')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Custom titlebar' })).not.toBeChecked();
+  });
+
   it('keeps API key entry interactive and saves through the store', async () => {
     render(SettingsPage);
 

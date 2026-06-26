@@ -1,8 +1,7 @@
 <script lang="ts">
   import { fly } from 'svelte/transition';
-  import { Brain, FilePlus2, Paperclip, Plus, SendHorizontal, SlidersHorizontal, X } from '@lucide/svelte';
+  import { Brain, FilePlus2, Paperclip, Plus, SendHorizontal, SlidersHorizontal, UserRound, X } from '@lucide/svelte';
   import { tick } from 'svelte';
-  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import ComposerSplitPillSelect from '$lib/components/primitives/ComposerSplitPillSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import ModelQuickPicker from '$lib/components/primitives/ModelQuickPicker.svelte';
@@ -292,7 +291,10 @@
         value={cwd}
         disabled={false}
         recentPaths={recentWorkspaces}
+        targetOptions={targetOptions}
+        selectedTargetId={selectedTargetId}
         onInput={(value) => onCwdInput?.(value)}
+        onTargetChange={(targetId) => onTargetChange?.(targetId)}
       />
     </div>
   {/if}
@@ -344,10 +346,14 @@
         <IconTooltipButton label="Blank session" icon={Plus} size={16} disabled={loading} onclick={onCreateSession} />
       {/if}
       {#if !sessionOnly && profileOptions.length > 0}
-        <AppSelect value={selectedProfileId} options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))} pill ariaLabel="Profile" onValueChange={(value) => onProfileChange?.(value)} />
-      {/if}
-      {#if !sessionOnly && targetOptions.length > 1}
-        <AppSelect value={selectedTargetId} options={targetOptions.map((target) => ({ value: target.id, label: target.label }))} pill ariaLabel="Session target" onValueChange={(value) => onTargetChange?.(value)} />
+        <ComposerSplitPillSelect
+          value={selectedProfileId}
+          options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))}
+          icon={UserRound}
+          ariaLabel="Profile"
+          class="composer-control-pill"
+          onValueChange={(value) => onProfileChange?.(value)}
+        />
       {/if}
       {#if modeOption}
         <ComposerSplitPillSelect
@@ -357,6 +363,7 @@
           pending={!!sessionConfigPending[modeOption.id]}
           disabled={!!sessionConfigPending[modeOption.id]}
           ariaLabel={modeOption.name}
+          class="composer-control-pill"
           onValueChange={(value) => onSessionConfigChange?.(modeOption.id, value)}
         />
       {/if}
@@ -368,6 +375,7 @@
           pending={!!sessionConfigPending[reasoningOption.id]}
           disabled={!!sessionConfigPending[reasoningOption.id]}
           ariaLabel={reasoningOption.name}
+          class="composer-control-pill"
           onValueChange={(value) => onSessionConfigChange?.(reasoningOption.id, value)}
         />
       {/if}
@@ -380,6 +388,7 @@
         loading={modelLoading}
         disabled={false}
         agentLabel={agentLabel}
+        class="composer-control-pill"
         onSelect={(value) => onModelChange?.(value)}
         onRefresh={onRefreshModels}
       />

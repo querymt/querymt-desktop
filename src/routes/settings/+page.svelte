@@ -644,7 +644,10 @@
 
       <div class="settings-preference-row">
         <div class="settings-preference-main">
-          <div class="settings-preference-title">Custom titlebar</div>
+          <div class="settings-preference-title">
+            Custom titlebar
+            <span class="badge">Beta</span>
+          </div>
           <div class:settings-preference-error={windowDecorationsStore.error} class="settings-preference-description">
             {#if windowDecorationsStore.error}
               {windowDecorationsStore.error}

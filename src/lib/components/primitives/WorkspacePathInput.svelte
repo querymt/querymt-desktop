@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { FolderSearch } from '@lucide/svelte';
+  import { FolderSearch, Monitor } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
+  import ComposerSplitPillSelect from '$lib/components/primitives/ComposerSplitPillSelect.svelte';
   import { suggestWorkspacePaths } from '$lib/querymt/sidecar';
-  import type { WorkspaceSuggestion } from '$lib/domain/types';
+  import type { ComposerOption, WorkspaceSuggestion } from '$lib/domain/types';
 
   const RECENT_PREFIX = '__recent__:';
 
@@ -9,12 +11,18 @@
     value = '',
     disabled = false,
     recentPaths = [],
-    onInput
+    targetOptions = [],
+    selectedTargetId = 'local',
+    onInput,
+    onTargetChange = null
   }: {
     value?: string;
     disabled?: boolean;
     recentPaths?: string[];
+    targetOptions?: ComposerOption[];
+    selectedTargetId?: string;
     onInput: (value: string) => void;
+    onTargetChange?: ((targetId: string) => void) | null;
   } = $props();
 
   let suggestions = $state<WorkspaceSuggestion[]>([]);
@@ -22,6 +30,8 @@
   let highlightedIndex = $state(0);
   let loading = $state(false);
   let requestToken = 0;
+
+  const hasTargetSelector = $derived(targetOptions.length > 1);
 
   async function updateSuggestions(query: string) {
     const trimmed = query.trim();
@@ -118,7 +128,33 @@
       onfocus={() => void updateSuggestions(value)}
     />
     {#if loading}
-      <span class="muted text-xs">...</span>
+      <span class="muted workspace-input-loading text-xs">...</span>
+    {/if}
+    {#if hasTargetSelector}
+      <div class="workspace-target-select-wrap">
+        <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+          <Tooltip.Root disableHoverableContent>
+            <Tooltip.Trigger>
+              {#snippet child({ props })}
+                <div {...props} class="workspace-target-tooltip-trigger">
+                  <ComposerSplitPillSelect
+                    value={selectedTargetId}
+                    options={targetOptions.map((target) => ({ value: target.id, label: target.label }))}
+                    icon={Monitor}
+                    ariaLabel="Session target"
+                    showLabelTitle={false}
+                    class="composer-control-pill workspace-target-pill"
+                    onValueChange={(nextTargetId) => onTargetChange?.(nextTargetId)}
+                  />
+                </div>
+              {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class="app-tooltip-content" sideOffset={6}>Session target</Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+        </Tooltip.Provider>
+      </div>
     {/if}
   </div>
 
