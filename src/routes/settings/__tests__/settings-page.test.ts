@@ -172,7 +172,7 @@ describe('Settings provider controls', () => {
     );
   });
 
-  it('opens browser from the OAuth dialog for redirect OAuth flows', async () => {
+  it('opens browser and allows manual completion during redirect OAuth polling', async () => {
     agentsStore.startProviderSignIn = vi.fn(async () => ({
       flow_id: 'flow-2',
       provider: 'anthropic',
@@ -188,8 +188,13 @@ describe('Settings provider controls', () => {
 
     expect(open).not.toHaveBeenCalled();
     await fireEvent.click(await screen.findByRole('button', { name: 'Open in browser' }));
-
     expect(open).toHaveBeenCalledWith('https://example.com/oauth');
+
+    const textarea = screen.getByPlaceholderText('https://... or pasted code');
+    await fireEvent.input(textarea, { target: { value: 'manual-code' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Complete sign-in' }));
+
+    expect(agentsStore.completeProviderSignIn).toHaveBeenCalledWith('agent-1', 'flow-2', 'manual-code');
   });
 
   it('allows cancelling an in-progress redirect OAuth wait', async () => {
