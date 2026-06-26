@@ -35,7 +35,7 @@
   "dependencies": {
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-shell": "^2.2.0",
-    "isomorphic-dompurify": "^2.22.0",
+    "isomorphic-dompurify": "^3.0.0",
     "marked": "^18.0.0",
     "shiki": "^4.2.0"
   }
