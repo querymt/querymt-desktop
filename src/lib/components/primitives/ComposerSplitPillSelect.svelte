@@ -17,6 +17,7 @@
     disabled = false,
     pending = false,
     ariaLabel = undefined,
+    showLabelTitle = true,
     class: className = '',
     onValueChange = undefined
   }: {
@@ -27,6 +28,7 @@
     disabled?: boolean;
     pending?: boolean;
     ariaLabel?: string;
+    showLabelTitle?: boolean;
     class?: string;
     onValueChange?: (value: string) => void;
   } = $props();
@@ -49,7 +51,7 @@
       {/if}
     </span>
     <span class="composer-split-pill-divider" aria-hidden="true"></span>
-    <span class="composer-split-pill-label" title={selectedLabel}>{selectedLabel}</span>
+    <span class="composer-split-pill-label" title={showLabelTitle ? selectedLabel : undefined}>{selectedLabel}</span>
   </Select.Trigger>
 
   <Select.Portal>

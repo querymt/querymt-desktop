@@ -67,6 +67,7 @@
   --radius: 18px;
   --radius-sm: 10px;
   --app-shell-inset: 1rem;
+  --app-sticky-top: var(--app-shell-inset);
   --session-composer-bottom-offset: 0.25rem;
   --session-chat-min: 48rem;
   --session-chat-max: 52rem;
@@ -348,6 +349,7 @@ html:has(.app-shell-custom-titlebar) body {
 }
 
 .app-shell-custom-titlebar {
+  --app-sticky-top: 1rem;
   position: relative;
   height: calc(100vh - 24px);
   min-height: calc(100vh - 24px);
@@ -939,6 +941,11 @@ summary:focus-visible {
   font-size: 0.93rem;
   font-weight: 650;
   line-height: 1.25;
+}
+
+.settings-preference-title .badge {
+  margin-left: 0.5rem;
+  vertical-align: middle;
 }
 
 .settings-preference-description {
@@ -1611,6 +1618,20 @@ summary:focus-visible {
   color: var(--accent);
 }
 
+.composer-control-pill.composer-split-pill,
+.composer-control-pill.composer-model-pill {
+  padding-block: 0.18rem;
+}
+
+.composer-control-pill .composer-split-pill-icon {
+  width: 1.48rem;
+  height: 1.48rem;
+}
+
+.composer-control-pill .composer-split-pill-divider {
+  margin-left: 0.2rem;
+}
+
 .composer-split-pill-divider {
   flex: 0 0 auto;
   align-self: stretch;
@@ -2089,12 +2110,15 @@ summary:focus-visible {
 
 .workspace-input-shell {
   display: flex;
+  box-sizing: border-box;
+  min-width: 0;
+  height: 2.75rem;
   align-items: center;
   gap: 0.65rem;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg-card);
-  padding: 0.7rem 0.9rem;
+  padding: 0.54rem 0.54rem 0.54rem 0.9rem;
   color: var(--muted);
 }
 
@@ -2103,12 +2127,40 @@ summary:focus-visible {
 }
 
 .workspace-input {
+  min-width: 0;
+  flex: 1 1 auto;
   width: 100%;
   border: 0;
   background: transparent;
   color: var(--text);
   outline: none;
   font: inherit;
+}
+
+.workspace-input-loading {
+  flex: 0 0 auto;
+}
+
+.workspace-target-select-wrap,
+.workspace-target-tooltip-trigger {
+  display: inline-flex;
+  flex: 0 0 auto;
+  max-height: 100%;
+  align-items: center;
+}
+
+.workspace-target-select-wrap {
+  border-left: 1px solid var(--border);
+  padding-left: 0.6rem;
+}
+
+.workspace-target-pill.composer-split-pill {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: clamp(7rem, 22vw, 10.5rem);
+  max-height: 2rem;
+  flex: 0 0 auto;
+  background: var(--subtle-surface);
 }
 
 .workspace-suggestion-popover {
@@ -2444,13 +2496,18 @@ summary:focus-visible {
 
 .app-inspector-column,
 .session-side-rail {
-  gap: 1rem;
   position: relative;
   z-index: 1;
 }
 
+.app-inspector-sticky,
 .session-side-rail {
   display: grid;
+  gap: 1rem;
+}
+
+.session-side-rail {
+  min-width: 0;
 }
 
 .session-activity-bar {
@@ -3920,9 +3977,17 @@ summary:focus-visible {
 
 @media (min-width: 1536px) {
   .app-inspector-column {
+    align-self: stretch;
+  }
+
+  .app-inspector-sticky {
     position: sticky;
-    top: var(--app-shell-inset);
-    align-self: start;
+    top: var(--app-sticky-top);
+    align-content: start;
+    max-height: calc(100dvh - var(--app-sticky-top) - var(--app-shell-inset));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
   }
 }
 
