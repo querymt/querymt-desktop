@@ -4,6 +4,7 @@ import { AgentsStore } from './agents.svelte';
 
 const mockClient = vi.hoisted(() => {
   let sessionUpdateHandler: ((notification: SessionNotification) => void) | null = null;
+  let connectionLossHandler: ((reason: string) => void) | null = null;
 
   return {
     connect: vi.fn(async () => ({
@@ -27,6 +28,14 @@ const mockClient = vi.hoisted(() => {
     getControlHealth: vi.fn(() => ({ state: 'unknown', summary: 'unknown', missingMethods: [], missingFeatures: [] })),
     listModels: vi.fn(async () => []),
     getModelInfo: vi.fn(async () => ({})),
+    onConnectionLost: vi.fn((handler: (reason: string) => void) => {
+      connectionLossHandler = handler;
+      return () => {
+        connectionLossHandler = null;
+      };
+    }),
+    emitConnectionLoss: (reason: string) => connectionLossHandler?.(reason),
+    disconnect: vi.fn(async () => undefined),
     onSessionUpdate: vi.fn((handler: (notification: SessionNotification) => void) => {
       sessionUpdateHandler = handler;
     }),
@@ -34,9 +43,9 @@ const mockClient = vi.hoisted(() => {
     resetSessionUpdateHandler: () => {
       sessionUpdateHandler = null;
     },
-    onExtensionNotification: vi.fn(() => undefined),
-    onPermissionRequest: vi.fn(() => undefined),
-    onElicitationRequest: vi.fn(() => undefined),
+    onExtensionNotification: vi.fn(() => () => undefined),
+    onPermissionRequest: vi.fn(() => () => undefined),
+    onElicitationRequest: vi.fn(() => () => undefined),
     setSessionConfigOption: vi.fn(async () => [])
   };
 });
@@ -63,6 +72,7 @@ function createStore() {
     {
       id: 'agent-1',
       name: 'QMTCODE',
+      transport: 'stdio',
       commandLine: '/usr/local/bin/qmtcode --acp',
       enabled: true,
       autoStart: true
@@ -256,6 +266,53 @@ describe('AgentsStore prompt session start', () => {
     expect(store.sessionConfigPending.mode).toBe(false);
   });
 
+  it('connects WebSocket agents without invoking the local sidecar lifecycle', async () => {
+    const store = createStore();
+    store.configs = [
+      {
+        id: 'remote-agent',
+        name: 'Remote QueryMT',
+        transport: 'websocket',
+        commandLine: '',
+        websocketUrl: '127.0.0.1:3030',
+        enabled: true,
+        autoStart: true
+      }
+    ];
+
+    await store.startConfiguredAgent('remote-agent');
+
+    expect(mockClient.connect).toHaveBeenCalled();
+    expect(mockClient.listSessions).toHaveBeenCalled();
+  });
+
+  it('marks WebSocket loss immediately and reconnects with backoff', async () => {
+    vi.useFakeTimers();
+    const store = createStore();
+    store.configs = [
+      {
+        id: 'remote-agent',
+        name: 'Remote QueryMT',
+        transport: 'websocket',
+        commandLine: '',
+        websocketUrl: '127.0.0.1:3030',
+        enabled: true,
+        autoStart: true
+      }
+    ];
+
+    await store.connectAgent('remote-agent');
+    const connectCallsBeforeLoss = mockClient.connect.mock.calls.length;
+    mockClient.emitConnectionLoss('WebSocket closed (code 1006).');
+
+    expect(store.connectionStates['remote-agent']).toBe('reconnecting');
+    expect(store.agentErrors['remote-agent']).toBe('WebSocket closed (code 1006).');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(mockClient.connect.mock.calls.length).toBeGreaterThan(connectCallsBeforeLoss);
+    expect(store.connectionStates['remote-agent']).toBe('initialized');
+    vi.useRealTimers();
+  });
+
   it('continues refreshing other agents when one session refresh fails', async () => {
     const store = createStore();
     store.configs = [
@@ -263,6 +320,7 @@ describe('AgentsStore prompt session start', () => {
       {
         id: 'agent-2',
         name: 'Mesh Agent',
+        transport: 'stdio',
         commandLine: '/usr/local/bin/qmtcode --acp --mesh',
         enabled: true,
         autoStart: true

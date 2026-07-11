@@ -9,6 +9,7 @@ function createAgentsStore() {
       {
         id: 'agent-1',
         name: 'QMTCODE',
+        transport: 'stdio',
         commandLine: '/usr/local/bin/qmtcode --acp',
         enabled: true,
         autoStart: true
@@ -77,10 +78,12 @@ function createAgentsStore() {
     restartConfiguredAgent: vi.fn(async () => undefined),
     deleteConfig: vi.fn(async () => undefined),
     updateConfig: vi.fn(),
-    createConfig: vi.fn((name: string, commandLine: string) => ({
+    createConfig: vi.fn((name: string, transport: 'stdio' | 'websocket', endpoint: string) => ({
       id: 'agent-2',
       name,
-      commandLine,
+      transport,
+      commandLine: transport === 'stdio' ? endpoint : '',
+      websocketUrl: transport === 'websocket' ? endpoint : undefined,
       enabled: true,
       autoStart: true
     })),
@@ -122,7 +125,7 @@ describe('Agents page', () => {
     });
     await fireEvent.click(screen.getAllByRole('button', { name: 'Add agent' })[1]);
 
-    expect(agentsStore.createConfig).toHaveBeenCalledWith('QueryMT Dev', '/opt/querymt --acp');
+    expect(agentsStore.createConfig).toHaveBeenCalledWith('QueryMT Dev', 'stdio', '/opt/querymt --acp');
     expect(agentsStore.saveConfig).toHaveBeenCalled();
     expect(agentsStore.refreshAgent).toHaveBeenCalled();
     expect(agentsStore.startConfiguredAgent).toHaveBeenCalledWith('agent-2');
@@ -144,7 +147,9 @@ describe('Agents page', () => {
 
     expect(agentsStore.updateConfig).toHaveBeenCalledWith('agent-1', {
       name: 'QMTCODE Local',
-      commandLine: '/usr/bin/qmtcode --acp --mesh'
+      transport: 'stdio',
+      commandLine: '/usr/bin/qmtcode --acp --mesh',
+      websocketUrl: undefined
     });
     expect(agentsStore.refreshAgent).toHaveBeenCalled();
   });

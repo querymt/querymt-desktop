@@ -13,13 +13,16 @@ export type SessionRunState =
   | 'failed';
 export type InboxSeverity = 'high' | 'medium' | 'low';
 export type AgentLifecycle = 'idle' | 'starting' | 'running' | 'failed' | 'stopping' | 'stopped';
-export type AgentConnectionState = 'idle' | 'connecting' | 'initialized' | 'loading-sessions' | 'failed';
+export type AgentConnectionState = 'idle' | 'connecting' | 'reconnecting' | 'initialized' | 'loading-sessions' | 'failed';
 export type AgentControlState = 'unknown' | 'ready' | 'legacy' | 'degraded' | 'failed';
+export type AgentTransport = 'stdio' | 'websocket';
 
 export interface AgentConfig {
   id: string;
   name: string;
+  transport: AgentTransport;
   commandLine: string;
+  websocketUrl?: string;
   enabled: boolean;
   autoStart: boolean;
 }

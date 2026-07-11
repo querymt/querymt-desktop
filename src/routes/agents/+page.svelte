@@ -15,6 +15,7 @@
   } from '@lucide/svelte';
   import { getContext, onMount } from 'svelte';
   import { Portal } from 'bits-ui';
+  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import SidecarLogList from '$lib/components/primitives/SidecarLogList.svelte';
@@ -35,7 +36,14 @@
   let selectedAgentId = $state<string | null>(null);
   let pendingDeleteAgentId = $state<string | null>(null);
   let draftName = $state('');
+  let draftTransport = $state<AgentConfig['transport']>('stdio');
   let draftCommandLine = $state('');
+  let draftWebSocketUrl = $state('');
+
+  const transportOptions = [
+    { value: 'stdio', label: 'Local process' },
+    { value: 'websocket', label: 'WebSocket endpoint' }
+  ];
 
   const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
@@ -71,24 +79,37 @@
       return 'status-dot-degraded';
     }
     if (state === 'running' && connectionState !== 'failed' && controlState !== 'failed') return 'status-dot-running';
-    if (state === 'starting' || state === 'stopping') return 'status-dot-starting';
+    if (connectionState === 'connecting' || connectionState === 'reconnecting' || state === 'starting' || state === 'stopping') return 'status-dot-starting';
     return 'status-dot-stopped';
   }
 
   function statusLabel(config: AgentConfig) {
+    if (config.transport === 'websocket') {
+      return agentsStore.connectionStates[config.id] ?? 'idle';
+    }
     const status = agentsStore.statuses[config.id];
-    if (status?.state) return status.state;
-    return agentsStore.connectionStates[config.id] ?? 'idle';
+    return status?.state ?? agentsStore.connectionStates[config.id] ?? 'idle';
+  }
+
+  function endpointLabel(config: AgentConfig) {
+    return config.transport === 'websocket' ? config.websocketUrl ?? 'WebSocket endpoint missing' : config.commandLine;
+  }
+
+  function isConnected(config: AgentConfig) {
+    return config.transport === 'websocket'
+      ? agentsStore.connectionStates[config.id] === 'initialized' || agentsStore.connectionStates[config.id] === 'loading-sessions'
+      : ['running', 'starting', 'stopping'].includes(agentsStore.statuses[config.id]?.state ?? '');
   }
 
   function isAttentionCard(card: (typeof agentCards)[number]) {
     return (
-      card.status?.state === 'failed' ||
+      card.connectionState !== 'reconnecting' &&
+      (card.status?.state === 'failed' ||
       Boolean(card.status?.lastError) ||
       Boolean(card.error) ||
       card.connectionState === 'failed' ||
       card.controlHealth.state === 'failed' ||
-      card.controlHealth.state === 'degraded'
+      card.controlHealth.state === 'degraded')
     );
   }
 
@@ -178,20 +199,26 @@
   function openAddDialog() {
     agentDialogMode = 'add';
     draftName = '';
+    draftTransport = 'stdio';
     draftCommandLine = '';
+    draftWebSocketUrl = '';
   }
 
   function openEditDialog(card: (typeof agentCards)[number]) {
     agentDialogMode = 'edit';
     selectedAgentId = card.config.id;
     draftName = card.config.name;
+    draftTransport = card.config.transport;
     draftCommandLine = card.config.commandLine;
+    draftWebSocketUrl = card.config.websocketUrl ?? '';
   }
 
   function closeAgentDialog() {
     agentDialogMode = null;
     draftName = '';
+    draftTransport = 'stdio';
     draftCommandLine = '';
+    draftWebSocketUrl = '';
   }
 
   function openDetails(agentId: string) {
@@ -236,24 +263,26 @@
 
   async function saveAgentDialog() {
     const name = draftName.trim();
-    const commandLine = draftCommandLine.trim();
-    if (!name || !commandLine) return;
+    const endpoint = draftTransport === 'websocket' ? draftWebSocketUrl.trim() : draftCommandLine.trim();
+    if (!name || !endpoint) return;
 
     if (agentDialogMode === 'add') {
-      const config = agentsStore.createConfig(name, commandLine);
+      const config = agentsStore.createConfig(name, draftTransport, endpoint);
       agentsStore.saveConfig(config);
       closeAgentDialog();
       await agentsStore.refreshAgent(config);
-      if (config.autoStart) {
-        await agentsStore.startConfiguredAgent(config.id);
-      }
+      if (config.autoStart) await agentsStore.startConfiguredAgent(config.id);
       return;
     }
 
     if (agentDialogMode === 'edit' && selectedCard) {
-      agentsStore.updateConfig(selectedCard.config.id, { name, commandLine });
+      const updates =
+        draftTransport === 'websocket'
+          ? { name, transport: draftTransport, commandLine: '', websocketUrl: endpoint }
+          : { name, transport: draftTransport, commandLine: endpoint, websocketUrl: undefined };
+      agentsStore.updateConfig(selectedCard.config.id, updates);
       closeAgentDialog();
-      await agentsStore.refreshAgent(selectedCard.config);
+      await agentsStore.refreshAgent({ ...selectedCard.config, ...updates });
     }
   }
 
@@ -320,18 +349,18 @@
                         </button>
                       {/if}
                     </div>
-                    <div class="mt-1 truncate text-xs text-[var(--muted)]">{card.config.commandLine}</div>
+                    <div class="mt-1 truncate text-xs text-[var(--muted)]">{endpointLabel(card.config)}</div>
                   </div>
                 </div>
 
                 <div class="compact-toolbar">
                   <IconTooltipButton label={`Details for ${card.config.name}`} icon={Info} onclick={() => openDetails(card.config.id)} />
                   <IconTooltipButton label={`Edit ${card.config.name}`} icon={Pencil} onclick={() => openEditDialog(card)} />
-                  {#if card.status?.state === 'running' || card.status?.state === 'starting' || card.status?.state === 'stopping'}
-                    <IconTooltipButton label="Stop" icon={Square} onclick={() => agentsStore.stopConfiguredAgent(card.config.id)} />
-                    <IconTooltipButton label="Restart" icon={RotateCcw} onclick={() => agentsStore.restartConfiguredAgent(card.config.id)} />
+                  {#if isConnected(card.config)}
+                    <IconTooltipButton label={card.config.transport === 'websocket' ? 'Disconnect' : 'Stop'} icon={Square} onclick={() => agentsStore.stopConfiguredAgent(card.config.id)} />
+                    <IconTooltipButton label={card.config.transport === 'websocket' ? 'Reconnect' : 'Restart'} icon={RotateCcw} onclick={() => agentsStore.restartConfiguredAgent(card.config.id)} />
                   {:else}
-                    <IconTooltipButton label="Start" icon={Play} onclick={() => agentsStore.startConfiguredAgent(card.config.id)} />
+                    <IconTooltipButton label={card.config.transport === 'websocket' ? 'Connect' : 'Start'} icon={Play} onclick={() => agentsStore.startConfiguredAgent(card.config.id)} />
                   {/if}
                   <IconTooltipButton
                     label={card.config.autoStart ? 'Disable auto-start' : 'Enable auto-start'}
@@ -388,7 +417,7 @@
           <div class="dialog-header">
             <div class="dialog-header-title-block">
               <div class="dialog-title">{agentDialogMode === 'add' ? 'Add Agent' : 'Edit Agent'}</div>
-              <div class="dialog-subtitle">Set the display name and ACP command line.</div>
+              <div class="dialog-subtitle">Choose a local process or an already-running ACP WebSocket endpoint.</div>
             </div>
             <div class="dialog-header-actions">
               <button class="dialog-close-button" type="button" aria-label="Close agent dialog" onclick={() => closeAgentDialog()}>
@@ -408,18 +437,36 @@
                   <input class="input-shell dialog-row-control" placeholder="Agent name" bind:value={draftName} />
                 </label>
 
-                <label class="dialog-row dialog-row-stacked">
+                <div class="dialog-row">
                   <div class="dialog-row-main">
-                    <div class="dialog-row-title">Command line</div>
-                    <div class="dialog-row-description">Executable and arguments used to start the ACP agent.</div>
+                    <div class="dialog-row-title">Connection type</div>
+                    <div class="dialog-row-description">Local processes are managed by Desktop. WebSocket agents run independently.</div>
                   </div>
-                  <input class="input-shell w-full" placeholder="/path/to/executable --acp" bind:value={draftCommandLine} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="text" />
-                </label>
+                  <AppSelect bind:value={draftTransport} options={transportOptions} ariaLabel="Agent connection type" />
+                </div>
+
+                {#if draftTransport === 'stdio'}
+                  <label class="dialog-row dialog-row-stacked">
+                    <div class="dialog-row-main">
+                      <div class="dialog-row-title">Command line</div>
+                      <div class="dialog-row-description">Executable and arguments used to start the ACP agent.</div>
+                    </div>
+                    <input class="input-shell w-full" placeholder="/path/to/executable --acp" bind:value={draftCommandLine} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="text" />
+                  </label>
+                {:else}
+                  <label class="dialog-row dialog-row-stacked">
+                    <div class="dialog-row-main">
+                      <div class="dialog-row-title">Agent address</div>
+                      <div class="dialog-row-description">Host and port for an already-running ACP server. Desktop always connects with WebSocket ACP.</div>
+                    </div>
+                    <input class="input-shell w-full" placeholder="127.0.0.1:3030" bind:value={draftWebSocketUrl} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="url" />
+                  </label>
+                {/if}
               </div>
 
               <div class="dialog-footer">
                 <button class="action-btn" type="button" onclick={() => closeAgentDialog()}>Cancel</button>
-                <button class="action-btn action-btn-primary" type="button" onclick={() => saveAgentDialog()} disabled={!draftName.trim() || !draftCommandLine.trim()}>
+                <button class="action-btn action-btn-primary" type="button" onclick={() => saveAgentDialog()} disabled={!draftName.trim() || !(draftTransport === 'websocket' ? draftWebSocketUrl.trim() : draftCommandLine.trim())}>
                   {agentDialogMode === 'add' ? 'Add agent' : 'Save changes'}
                 </button>
               </div>
@@ -481,18 +528,23 @@
 
               <div class="text-lg font-semibold">{selectedCard.config.name}</div>
             </div>
-            <div class="mt-1 text-sm text-[var(--muted)]">{selectedCard.config.commandLine}</div>
+            <div class="mt-1 text-sm text-[var(--muted)]">{endpointLabel(selectedCard.config)}</div>
           </div>
           <IconTooltipButton label="Close details" icon={X} onclick={() => closeDetails()} />
         </div>
 
         <div class="mt-5 space-y-4">
           <section class="surface-muted p-4 space-y-2">
-            <div class="text-sm font-medium">Runtime</div>
+            <div class="text-sm font-medium">{selectedCard.config.transport === 'websocket' ? 'Connection' : 'Runtime'}</div>
             <div class="text-sm text-[var(--muted)]">State: {selectedCard.status?.state ?? selectedCard.connectionState}</div>
-            {#if selectedCard.status?.pid != null}<div class="text-sm text-[var(--muted)]">PID: {selectedCard.status.pid}</div>{/if}
-            {#if selectedCard.status?.version}<div class="text-sm text-[var(--muted)]">Version: {selectedCard.status.version}</div>{/if}
-            {#if selectedCard.status?.message}<div class="text-sm text-[var(--muted)]">{selectedCard.status.message}</div>{/if}
+            {#if selectedCard.config.transport === 'websocket'}
+              {#if selectedCard.status?.message}<div class="text-sm text-[var(--muted)]">{selectedCard.status.message}</div>{/if}
+              <div class="text-sm text-[var(--muted)]">This server is managed independently. Desktop can only connect or disconnect.</div>
+            {:else}
+              {#if selectedCard.status?.pid != null}<div class="text-sm text-[var(--muted)]">PID: {selectedCard.status.pid}</div>{/if}
+              {#if selectedCard.status?.version}<div class="text-sm text-[var(--muted)]">Version: {selectedCard.status.version}</div>{/if}
+              {#if selectedCard.status?.message}<div class="text-sm text-[var(--muted)]">{selectedCard.status.message}</div>{/if}
+            {/if}
           </section>
 
           <section class="surface-muted p-4 space-y-3">
@@ -579,10 +631,12 @@
             {/if}
           </section>
 
-          <section class="space-y-3">
-            <div class="text-sm font-medium">Logs</div>
-            <SidecarLogList logs={selectedCard.logs} title={`${selectedCard.config.name} logs`} emptyMessage="No logs yet for this agent." />
-          </section>
+          {#if selectedCard.config.transport === 'stdio'}
+            <section class="space-y-3">
+              <div class="text-sm font-medium">Logs</div>
+              <SidecarLogList logs={selectedCard.logs} title={`${selectedCard.config.name} logs`} emptyMessage="No logs yet for this agent." />
+            </section>
+          {/if}
         </div>
         </div>
       </div>

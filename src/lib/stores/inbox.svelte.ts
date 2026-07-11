@@ -28,8 +28,6 @@ interface PendingElicitationRequest {
 }
 
 class InboxStore {
-  private unsubscribePermissionRequests: (() => void) | null = null;
-  private unsubscribeElicitationRequests: (() => void) | null = null;
   private nextLiveItemId = 1;
   private pendingPermissionRequests = new Map<string, PendingPermissionRequest>();
   private pendingElicitationRequests = new Map<string, PendingElicitationRequest>();
@@ -52,18 +50,18 @@ class InboxStore {
     return this.actionableItems.filter((item) => item.id.startsWith('live-')).length;
   }
 
-  bindClient(client: DesktopAcpClient, agentId: string, agentName: string) {
-    if (!this.unsubscribePermissionRequests) {
-      this.unsubscribePermissionRequests = client.onPermissionRequest((request) => {
-        return this.enqueuePermissionRequest(request, agentId, agentName);
-      });
-    }
+    bindClient(client: DesktopAcpClient, agentId: string, agentName: string): () => void {
+    const unsubscribePermissionRequests = client.onPermissionRequest((request) => {
+      return this.enqueuePermissionRequest(request, agentId, agentName);
+    });
+    const unsubscribeElicitationRequests = client.onElicitationRequest((request) => {
+      return this.enqueueElicitationRequest(request, agentId, agentName);
+    });
 
-    if (!this.unsubscribeElicitationRequests) {
-      this.unsubscribeElicitationRequests = client.onElicitationRequest((request) => {
-        return this.enqueueElicitationRequest(request, agentId, agentName);
-      });
-    }
+    return () => {
+      unsubscribePermissionRequests();
+      unsubscribeElicitationRequests();
+    };
   }
 
   async handleAction(itemId: string, actionId: string) {
