@@ -168,6 +168,21 @@ export class AgentsStore {
     return this.configs.filter((config) => this.statuses[config.id]?.state === 'running');
   }
 
+  get agentsNeedingAttention(): AgentConfig[] {
+    return this.configs.filter((config) => {
+      const status = this.statuses[config.id];
+      const controlState = this.controlHealthByAgent[config.id]?.state;
+      return (
+        status?.state === 'failed' ||
+        Boolean(status?.lastError) ||
+        Boolean(this.agentErrors[config.id]) ||
+        this.connectionStates[config.id] === 'failed' ||
+        controlState === 'failed' ||
+        controlState === 'degraded'
+      );
+    });
+  }
+
   acknowledgeSession(agentId: string, sessionId: string) {
     const key = buildSessionKey(agentId, sessionId);
     this.attentionSessionKeys = this.attentionSessionKeys.filter((candidate) => candidate !== key);

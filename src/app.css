@@ -234,6 +234,11 @@ select {
   box-shadow: var(--shadow-sm);
 }
 
+.agents-unified-panel {
+  display: grid;
+  gap: 1.45rem;
+}
+
 .settings-page > * + * {
   margin-top: 1.1rem;
 }
@@ -3367,6 +3372,7 @@ summary:focus-visible {
 
 .app-nav-icon-surface,
 .session-icon-avatar {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3379,6 +3385,10 @@ summary:focus-visible {
   color: var(--text-dim);
   box-shadow: var(--shadow-sm);
   transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.app-nav-icon-surface {
+  overflow: visible;
 }
 
 .app-icon-link:hover .app-nav-icon-surface,
@@ -3436,6 +3446,18 @@ summary:focus-visible {
   font-weight: 750;
   line-height: 1;
   padding: 0 0.28rem;
+}
+
+.app-icon-agent-attention {
+  position: absolute;
+  right: -0.18rem;
+  bottom: -0.18rem;
+  width: 0.72rem;
+  height: 0.72rem;
+  border: 2px solid var(--bg);
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim), 0 6px 16px rgba(249, 115, 22, 0.28);
 }
 
 .app-icon-divider,
@@ -3874,6 +3896,92 @@ summary:focus-visible {
   color: var(--text);
 }
 
+.agent-attention-section {
+  padding-top: 0.1rem;
+}
+
+.agent-attention-list,
+.agent-message-list {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.agent-attention-row,
+.agent-message-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  background: var(--row-surface);
+  padding: 0.78rem 1rem;
+}
+
+.agent-attention-row + .agent-attention-row,
+.agent-message-row + .agent-message-row {
+  border-top: 1px solid var(--subtle-border);
+}
+
+.agent-attention-kind,
+.agent-issue-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--rail);
+  border-radius: 999px;
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+  font-size: 0.7rem;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.agent-attention-kind {
+  padding: 0.22rem 0.58rem;
+}
+
+.agent-issue-chip {
+  cursor: pointer;
+  padding: 0.21rem 0.56rem;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.agent-issue-chip::before {
+  content: '';
+  width: 0.38rem;
+  height: 0.38rem;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.agent-issue-chip:hover,
+.agent-issue-chip:focus-visible {
+  border-color: var(--accent);
+  background: var(--bg-card);
+  color: var(--accent);
+}
+
+.agent-message-row {
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+.agent-message-label {
+  flex: 0 0 8.5rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.agent-message-detail {
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
 .agent-list {
   overflow: hidden;
   border: 1px solid var(--border);
@@ -3896,10 +4004,6 @@ summary:focus-visible {
 
 .agent-list-row-inner {
   padding: 0.9rem 1rem;
-}
-
-.agent-list-error {
-  margin: 0 1rem 0.9rem calc(1rem + 1.5rem + 0.75rem);
 }
 
 .session-composer-anchor {

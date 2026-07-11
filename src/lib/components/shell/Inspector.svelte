@@ -1,7 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import type { InboxItem, TimelineEvent } from '$lib/domain/types';
-  import { agentsStore } from '$lib/stores/agents.svelte';
+  import type { InboxItem } from '$lib/domain/types';
   import { inboxStore } from '$lib/stores/inbox.svelte';
 
   async function openSession(item: InboxItem) {
@@ -12,44 +11,6 @@
     await goto(`/sessions/${encodeURIComponent(item.agentId)}/${encodeURIComponent(item.sessionId)}`);
   }
 
-  const recentEvents = $derived.by(() => {
-    const events: TimelineEvent[] = [];
-
-    if (inboxStore.actionableItems.length > 0) {
-      events.push({
-        id: 'inspector-inbox',
-        title: 'Inbox waiting',
-        detail: `${inboxStore.actionableItems.length} live request(s) need approval or input.`,
-        when: 'Now',
-        kind: 'approval'
-      });
-    }
-
-    if (agentsStore.activeSessionId && agentsStore.activeAgentId) {
-      events.push({
-        id: 'inspector-session',
-        title: 'Active session',
-        detail: `${agentsStore.activeSession.events.length} event(s) have streamed into the current session.`,
-        when: 'Live',
-        kind: 'run'
-      });
-    }
-
-    for (const config of agentsStore.configs) {
-      const status = agentsStore.statuses[config.id];
-      if (status?.state === 'failed') {
-        events.push({
-          id: `inspector-${config.id}-failed`,
-          title: `${config.name} needs attention`,
-          detail: status.lastError || status.message,
-          when: 'Now',
-          kind: 'warning'
-        });
-      }
-    }
-
-    return events.slice(0, 3);
-  });
 </script>
 
 <aside class="panel flex flex-col gap-4 p-4">
@@ -92,23 +53,4 @@
     {/if}
   </section>
 
-  <section class="space-y-3">
-    <div class="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Recent events</div>
-    {#if recentEvents.length === 0}
-      <div class="surface-muted p-3">
-        <div class="text-sm font-medium">No live activity</div>
-        <div class="muted mt-1 text-xs">Start a configured agent to populate live activity here.</div>
-      </div>
-    {:else}
-      {#each recentEvents as event}
-        <div class="surface-muted p-3">
-          <div class="flex items-center justify-between gap-2 text-sm">
-            <span>{event.title}</span>
-            <span class="muted text-xs">{event.when}</span>
-          </div>
-          <div class="muted mt-1 text-xs">{event.detail}</div>
-        </div>
-      {/each}
-    {/if}
-  </section>
 </aside>
