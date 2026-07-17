@@ -54,6 +54,7 @@
   let sessionListElement = $state<HTMLElement | null>(null);
   let sessionIconLimit = $state(MAX_SESSION_ICONS);
   const onlineAgentCount = $derived(agentsStore.connectedAgents.length);
+  const agentAttentionCount = $derived(agentsStore.agentsNeedingAttention.length);
   const visibleSessions = $derived.by(() =>
     sessions.filter((session) => !(session.agentId === currentAgentId && session.sessionId === currentSessionId))
   );
@@ -101,11 +102,19 @@
   }
 
   function getSectionLabel(section: SectionName): string {
-    if (section === 'Agents' && onlineAgentCount > 0) {
-      return `Agents, ${onlineAgentCount} online`;
+    if (section !== 'Agents') {
+      return section;
     }
 
-    return section;
+    const details: string[] = [];
+    if (onlineAgentCount > 0) {
+      details.push(`${onlineAgentCount} online`);
+    }
+    if (agentAttentionCount > 0) {
+      details.push(`${agentAttentionCount} need attention`);
+    }
+
+    return details.length > 0 ? `Agents, ${details.join(', ')}` : 'Agents';
   }
 
   function getSessionShortcutLabel(index: number): string {
@@ -180,6 +189,9 @@
                     <Icon size={16} />
                     {#if section === 'Agents' && onlineAgentCount > 0}
                       <span class="app-icon-agent-count" aria-hidden="true">{onlineAgentCount}</span>
+                    {/if}
+                    {#if section === 'Agents' && agentAttentionCount > 0}
+                      <span class="app-icon-agent-attention" aria-hidden="true"></span>
                     {/if}
                   </span>
                 </a>

@@ -68,6 +68,7 @@ const RECENT_MODELS_STORAGE_KEY = 'querymt-desktop.recent-models';
 const RECENT_WORKSPACES_STORAGE_KEY = 'querymt-desktop.recent-workspaces';
 const RECENT_MODELS_LIMIT = 5;
 const RECENT_WORKSPACES_LIMIT = 8;
+const WEBSOCKET_RECONNECT_MAX_DELAY_MS = 8_000;
 const PROMPT_ACTIVE_RUN_STATES = new Set<SessionRunState>(['thinking', 'streaming', 'tool-running']);
 
 interface AgentClientRecord {
@@ -77,6 +78,8 @@ interface AgentClientRecord {
   error: string | null;
   unsubscribeSessionUpdates: (() => void) | null;
   unsubscribeExtensionNotifications: (() => void) | null;
+  unsubscribeConnectionLoss: (() => void) | null;
+  unsubscribeInbox: (() => void) | null;
   recentSessionUpdateKeys: string[];
 }
 
@@ -84,6 +87,7 @@ const DEFAULT_AGENTS: AgentConfig[] = [
   {
     id: 'qmtcode-default',
     name: 'QMTCODE',
+    transport: 'stdio',
     commandLine: 'qmtcode --acp',
     enabled: true,
     autoStart: true
@@ -93,6 +97,8 @@ const DEFAULT_AGENTS: AgentConfig[] = [
 export class AgentsStore {
   private clients = new Map<string, AgentClientRecord>();
   private sessionRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private reconnectAttempts = new Map<string, number>();
 
   configs = $state<AgentConfig[]>(loadInitialAgents());
   statuses = $state<Record<string, AgentRuntimeStatus>>({});
@@ -166,6 +172,21 @@ export class AgentsStore {
 
   get connectedAgents(): AgentConfig[] {
     return this.configs.filter((config) => this.statuses[config.id]?.state === 'running');
+  }
+
+  get agentsNeedingAttention(): AgentConfig[] {
+    return this.configs.filter((config) => {
+      const status = this.statuses[config.id];
+      const controlState = this.controlHealthByAgent[config.id]?.state;
+      return (
+        status?.state === 'failed' ||
+        Boolean(status?.lastError) ||
+        Boolean(this.agentErrors[config.id]) ||
+        this.connectionStates[config.id] === 'failed' ||
+        controlState === 'failed' ||
+        controlState === 'degraded'
+      );
+    });
   }
 
   acknowledgeSession(agentId: string, sessionId: string) {
@@ -298,6 +319,11 @@ export class AgentsStore {
   }
 
   updateConfig(agentId: string, updates: Partial<Omit<AgentConfig, 'id'>>) {
+    const current = this.configs.find((config) => config.id === agentId);
+    if (current?.transport === 'websocket' && (updates.transport || updates.websocketUrl !== undefined || updates.enabled === false)) {
+      this.cancelReconnect(agentId);
+      this.disposeClient(agentId);
+    }
     this.configs = this.configs.map((config) =>
       config.id === agentId
         ? {
@@ -335,129 +361,126 @@ export class AgentsStore {
     delete this.lastRemoteDismissByAgent[agentId];
     delete this.sessionsByAgent[agentId];
     delete this.logsByAgent[agentId];
-    this.clients.delete(agentId);
+    this.disposeClient(agentId);
     persistAgents(this.configs);
   }
 
-  createConfig(name: string, commandLine: string): AgentConfig {
+  createConfig(name: string, transport: AgentConfig['transport'], endpoint: string): AgentConfig {
     return {
       id: slugify(`${name}-${Date.now()}`),
       name,
-      commandLine,
+      transport,
+      commandLine: transport === 'stdio' ? endpoint : '',
+      websocketUrl: transport === 'websocket' ? normalizeAcpWebSocketEndpoint(endpoint) : undefined,
       enabled: true,
       autoStart: true
     };
   }
 
   async refreshAgent(config: AgentConfig) {
-    const [status, logs] = await Promise.all([getAgentStatus(config), getAgentLogs(config.id)]);
-    this.statuses = {
-      ...this.statuses,
-      [config.id]: status
-    };
-      this.logsByAgent = {
-        ...this.logsByAgent,
-        [config.id]: await getAgentLogs(config.id)
+    if (config.transport === 'websocket') {
+      this.statuses = {
+        ...this.statuses,
+        [config.id]: websocketStatus(config, this.connectionStates[config.id] ?? 'idle')
       };
-      this.connectionStates = {
-        ...this.connectionStates,
-        [config.id]: 'initialized'
-      };
-
+      this.logsByAgent = { ...this.logsByAgent, [config.id]: [] };
       this.connectionStates = {
         ...this.connectionStates,
         [config.id]: this.connectionStates[config.id] ?? 'idle'
       };
-      this.agentErrors = {
-        ...this.agentErrors,
-        [config.id]: this.agentErrors[config.id] ?? null
-      };
-
-  }
-
-  async startConfiguredAgent(agentId: string) {
-    const config = this.configs.find((candidate) => candidate.id === agentId);
-    if (!config) {
+      this.agentErrors = { ...this.agentErrors, [config.id]: this.agentErrors[config.id] ?? null };
       return;
     }
 
-    this.error = null;
+    const [status, logs] = await Promise.all([getAgentStatus(config), getAgentLogs(config.id)]);
+    this.statuses = { ...this.statuses, [config.id]: status };
+    this.logsByAgent = { ...this.logsByAgent, [config.id]: logs };
+    this.connectionStates = {
+      ...this.connectionStates,
+      [config.id]: this.connectionStates[config.id] ?? 'idle'
+    };
+    this.agentErrors = { ...this.agentErrors, [config.id]: this.agentErrors[config.id] ?? null };
+  }
 
+    async startConfiguredAgent(agentId: string) {
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) return;
+
+    this.error = null;
     try {
-      const status = await startAgent(config);
-      this.statuses = {
-        ...this.statuses,
-        [config.id]: status
-      };
-      await this.connectAgent(config.id);
+      if (config.transport === 'websocket') {
+        await this.connectAgent(config.id, true);
+        await this.refreshAgent(config);
+      } else {
+        const status = await startAgent(config);
+        this.statuses = { ...this.statuses, [config.id]: status };
+        await this.connectAgent(config.id);
+      }
       await Promise.allSettled([
         this.refreshSessionsForAgent(config.id),
         this.refreshMeshForAgent(config.id),
         this.refreshAuthProviders(config.id)
       ]);
-      this.logsByAgent = {
-        ...this.logsByAgent,
-        [config.id]: await getAgentLogs(config.id)
-      };
+      if (config.transport === 'stdio') {
+        this.logsByAgent = { ...this.logsByAgent, [config.id]: await getAgentLogs(config.id) };
+      }
     } catch (error) {
-      this.error = error instanceof Error ? error.message : `Failed to start ${config.name}.`;
+      this.error = error instanceof Error ? error.message : `Failed to connect ${config.name}.`;
     }
   }
 
-  async stopConfiguredAgent(agentId: string) {
+    async stopConfiguredAgent(agentId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
-    if (!config) {
-      return;
-    }
+    if (!config) return;
 
+    this.cancelReconnect(agentId);
+    this.reconnectAttempts.delete(agentId);
     try {
-      const status = await stopAgent(agentId);
-      this.statuses = {
-        ...this.statuses,
-        [config.id]: status
-      };
-      this.sessionsByAgent = {
-        ...this.sessionsByAgent,
-        [config.id]: []
-      };
-      this.connectionStates = {
-        ...this.connectionStates,
-        [config.id]: 'idle'
-      };
+      if (config.transport === 'websocket') {
+        this.disposeClient(agentId);
+        this.statuses = { ...this.statuses, [config.id]: websocketStatus(config, 'idle') };
+      } else {
+        const status = await stopAgent(agentId);
+        this.statuses = { ...this.statuses, [config.id]: status };
+      }
+      this.sessionsByAgent = { ...this.sessionsByAgent, [config.id]: [] };
+      this.connectionStates = { ...this.connectionStates, [config.id]: 'idle' };
       if (this.activeAgentId === config.id) {
         this.activeAgentId = null;
         this.activeSessionId = null;
         this.activeSession = createEmptyActiveSession();
       }
     } catch (error) {
-      this.error = error instanceof Error ? error.message : `Failed to stop ${config.name}.`;
+      this.error = error instanceof Error ? error.message : `Failed to disconnect ${config.name}.`;
     }
   }
 
-  async restartConfiguredAgent(agentId: string) {
+    async restartConfiguredAgent(agentId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
-    if (!config) {
-      return;
-    }
+    if (!config) return;
 
+    this.cancelReconnect(agentId);
+    this.reconnectAttempts.delete(agentId);
     try {
-      const status = await restartAgent(config);
-      this.statuses = {
-        ...this.statuses,
-        [config.id]: status
-      };
-      await this.connectAgent(config.id, true);
+      if (config.transport === 'websocket') {
+        this.disposeClient(agentId);
+        await this.connectAgent(config.id, true);
+        await this.refreshAgent(config);
+      } else {
+        const status = await restartAgent(config);
+        this.statuses = { ...this.statuses, [config.id]: status };
+        await this.connectAgent(config.id, true);
+      }
       await Promise.allSettled([
         this.refreshSessionsForAgent(config.id),
         this.refreshMeshForAgent(config.id),
         this.refreshAuthProviders(config.id)
       ]);
-      this.logsByAgent = {
-        ...this.logsByAgent,
-        [config.id]: await getAgentLogs(config.id)
-      };
+      if (config.transport === 'stdio') {
+        this.logsByAgent = { ...this.logsByAgent, [config.id]: await getAgentLogs(config.id) };
+      }
     } catch (error) {
-      this.error = error instanceof Error ? error.message : `Failed to restart ${config.name}.`;
+      this.error = error instanceof Error ? error.message : `Failed to reconnect ${config.name}.`;
     }
   }
 
@@ -472,9 +495,12 @@ export class AgentsStore {
     record.error = null;
 
     try {
-      inboxStore.bindClient(record.client, config.id, config.name);
+      record.unsubscribeInbox?.();
+      record.unsubscribeInbox = inboxStore.bindClient(record.client, config.id, config.name);
       record.initializeResponse = await record.client.connect();
       record.connectionState = 'initialized';
+      this.cancelReconnect(agentId);
+      this.reconnectAttempts.delete(agentId);
       this.controlCapabilitiesByAgent = {
         ...this.controlCapabilitiesByAgent,
         [config.id]: record.client.getControlCapabilities()
@@ -512,6 +538,9 @@ export class AgentsStore {
         [config.id]: record.error
       };
       this.error = record.error;
+      if (config.transport === 'websocket') {
+        this.scheduleReconnect(agentId);
+      }
     }
   }
 
@@ -619,9 +648,11 @@ export class AgentsStore {
       throw new Error('Working directory is required to create a session.');
     }
 
-    const isDirectory = await validateWorkspaceDirectory(normalizedCwd).catch(() => false);
-    if (!isDirectory) {
-      throw new Error('Workspace must point to an existing directory.');
+    if (config.transport === 'stdio') {
+      const isDirectory = await validateWorkspaceDirectory(normalizedCwd).catch(() => false);
+      if (!isDirectory) {
+        throw new Error('Workspace must point to an existing directory.');
+      }
     }
 
     const record = this.ensureClientRecord(agentId);
@@ -829,21 +860,51 @@ export class AgentsStore {
     if (existing && !force) {
       return existing;
     }
+    if (existing) {
+      this.disposeClient(agentId);
+    }
+
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) {
+      throw new Error(`Agent ${agentId} is not configured.`);
+    }
 
     const record: AgentClientRecord = {
-      client: new DesktopAcpClient(agentId),
+      client: new DesktopAcpClient(config),
       connectionState: 'idle',
       initializeResponse: null,
       error: null,
       unsubscribeSessionUpdates: null,
       unsubscribeExtensionNotifications: null,
+      unsubscribeConnectionLoss: null,
+      unsubscribeInbox: null,
       recentSessionUpdateKeys: []
     };
 
     this.clients.set(agentId, record);
     this.ensureSessionUpdateSubscription(agentId, record);
     this.ensureExtensionNotificationSubscription(agentId, record);
+    this.ensureConnectionLossSubscription(agentId, record);
     return record;
+  }
+
+  private disposeClient(agentId: string) {
+    const record = this.clients.get(agentId);
+    if (!record) return;
+    record.unsubscribeSessionUpdates?.();
+    record.unsubscribeExtensionNotifications?.();
+    record.unsubscribeConnectionLoss?.();
+    record.unsubscribeInbox?.();
+    void record.client.disconnect();
+    this.clients.delete(agentId);
+  }
+
+  private ensureConnectionLossSubscription(agentId: string, record: AgentClientRecord) {
+    if (!record.unsubscribeConnectionLoss) {
+      record.unsubscribeConnectionLoss = record.client.onConnectionLost((reason) => {
+        this.handleUnexpectedConnectionLoss(agentId, record, reason);
+      });
+    }
   }
 
   private ensureSessionUpdateSubscription(agentId: string, record: AgentClientRecord) {
@@ -1566,6 +1627,61 @@ export class AgentsStore {
     }
   }
 
+  private handleUnexpectedConnectionLoss(agentId: string, record: AgentClientRecord, reason: string) {
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config || config.transport !== 'websocket' || this.clients.get(agentId) !== record) return;
+
+    this.clearScheduledSessionRefresh(agentId);
+    record.connectionState = 'failed';
+    record.error = reason;
+    this.connectionStates = { ...this.connectionStates, [agentId]: 'failed' };
+    this.agentErrors = { ...this.agentErrors, [agentId]: reason };
+    this.statuses = { ...this.statuses, [agentId]: websocketStatus(config, 'failed') };
+    this.disposeClient(agentId);
+    this.scheduleReconnect(agentId);
+  }
+
+  private scheduleReconnect(agentId: string) {
+    this.cancelReconnect(agentId);
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config || config.transport !== 'websocket' || !config.enabled || !config.autoStart) return;
+
+    const attempt = (this.reconnectAttempts.get(agentId) ?? 0) + 1;
+    const delayMs = reconnectDelayMs(attempt - 1);
+    this.reconnectAttempts.set(agentId, attempt);
+    this.connectionStates = { ...this.connectionStates, [agentId]: 'reconnecting' };
+    this.statuses = { ...this.statuses, [agentId]: websocketStatus(config, 'reconnecting', attempt, delayMs) };
+    const timer = setTimeout(() => {
+      this.reconnectTimers.delete(agentId);
+      void this.reconnectAgent(agentId);
+    }, delayMs);
+    this.reconnectTimers.set(agentId, timer);
+  }
+
+  private async reconnectAgent(agentId: string) {
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config || config.transport !== 'websocket' || !config.enabled || !config.autoStart) return;
+
+    await this.connectAgent(agentId, true);
+    const record = this.clients.get(agentId);
+    if (record?.connectionState === 'initialized') {
+      await Promise.allSettled([
+        this.refreshSessionsForAgent(agentId),
+        this.refreshMeshForAgent(agentId),
+        this.refreshAuthProviders(agentId)
+      ]);
+      await this.refreshAgent(config);
+    } else {
+      this.scheduleReconnect(agentId);
+    }
+  }
+
+  private cancelReconnect(agentId: string) {
+    const timer = this.reconnectTimers.get(agentId);
+    if (timer) clearTimeout(timer);
+    this.reconnectTimers.delete(agentId);
+  }
+
   private scheduleSessionRefresh(agentId: string, delayMs = 800) {
     this.clearScheduledSessionRefresh(agentId);
 
@@ -1622,6 +1738,62 @@ function inferSessionStatusFromNotification(update: SessionNotification['update'
   }
 }
 
+function reconnectDelayMs(attempt: number): number {
+  return Math.min(250 * 2 ** Math.min(attempt, 5), WEBSOCKET_RECONNECT_MAX_DELAY_MS);
+}
+
+function websocketStatus(
+  config: AgentConfig,
+  connectionState: AgentConnectionState,
+  reconnectAttempt?: number,
+  reconnectDelayMs?: number
+): AgentRuntimeStatus {
+  const connected = connectionState === 'initialized' || connectionState === 'loading-sessions';
+  const reconnecting = connectionState === 'reconnecting';
+  const failed = connectionState === 'failed';
+  return {
+    agentId: config.id,
+    state: connected ? 'running' : failed ? 'failed' : 'stopped',
+    commandLine: config.websocketUrl ?? '',
+    pid: null,
+    version: null,
+    message: connected
+      ? 'Connected over WebSocket.'
+      : reconnecting
+        ? `Reconnecting (attempt ${reconnectAttempt ?? 1} in ${Math.ceil((reconnectDelayMs ?? 0) / 1000)}s).`
+        : failed
+          ? 'WebSocket connection failed.'
+          : 'Disconnected WebSocket agent.',
+    lastError: failed ? 'WebSocket connection failed.' : null
+  };
+}
+
+export function normalizeAcpWebSocketEndpoint(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const url = new URL(/^wss?:\/\//i.test(trimmed) ? trimmed : `ws://${trimmed}`);
+  if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+    throw new Error('Enter an ACP host and port.');
+  }
+  if (url.pathname !== '/' && url.pathname !== '/ws') {
+    throw new Error('The ACP WebSocket path is fixed and must not be configured.');
+  }
+  if (url.search || url.hash) {
+    throw new Error('WebSocket query parameters and fragments are not supported.');
+  }
+  return url.host;
+}
+
+function normalizeAgentConfig(config: AgentConfig): AgentConfig {
+  const transport = config.transport === 'websocket' ? 'websocket' : 'stdio';
+  return {
+    ...config,
+    transport,
+    commandLine: config.commandLine ?? '',
+    websocketUrl: transport === 'websocket' ? normalizeAcpWebSocketEndpoint(config.websocketUrl ?? '') : undefined
+  };
+}
+
 function loadInitialAgents(): AgentConfig[] {
   if (typeof localStorage === 'undefined') {
     return DEFAULT_AGENTS;
@@ -1634,7 +1806,7 @@ function loadInitialAgents(): AgentConfig[] {
     }
 
     const parsed = JSON.parse(raw) as AgentConfig[];
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_AGENTS;
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed.map(normalizeAgentConfig) : DEFAULT_AGENTS;
   } catch {
     return DEFAULT_AGENTS;
   }

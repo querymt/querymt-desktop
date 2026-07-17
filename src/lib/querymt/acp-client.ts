@@ -17,7 +17,7 @@ import {
   type SessionInfo,
   type SetSessionConfigOptionRequest
 } from '@agentclientprotocol/sdk';
-import type { AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment } from '$lib/domain/types';
+import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment } from '$lib/domain/types';
 import type {
   AttachRemoteSessionRequest,
   AuthMethod,
@@ -76,17 +76,21 @@ import {
   type QuerymtExtensionNotification,
   type QuerymtLogicalMethod
 } from '$lib/querymt/querymt-extensions';
-import { createTauriAcpStream } from '$lib/querymt/transport';
+import { createTauriAcpStream, createWebSocketAcpStream } from '$lib/querymt/transport';
+import type { Stream } from '@agentclientprotocol/sdk';
 
 const PROTOCOL_VERSION = 1;
 
 export class DesktopAcpClient {
-  private agentId: string;
+  private config: AgentConfig;
   private browserClient = new BrowserClient();
   private connection: ClientSideConnection | null = null;
+  private stream: Stream | null = null;
   private initializeResponse: InitializeResponse | null = null;
   private querymtExtensions: QuerymtExtensions | null = null;
   private controlCapabilities: CapabilitiesInfo | null = null;
+  private connectionLossHandlers = new Set<(reason: string) => void>();
+  private intentionallyDisconnected = false;
   private controlHealth: AgentControlHealth = {
     state: 'unknown',
     summary: 'Capabilities not checked yet.',
@@ -94,18 +98,22 @@ export class DesktopAcpClient {
     missingFeatures: []
   };
 
-  constructor(agentId: string) {
-    this.agentId = agentId;
+  constructor(config: AgentConfig) {
+    this.config = config;
   }
 
   async connect(): Promise<InitializeResponse> {
+    this.intentionallyDisconnected = false;
     if (this.connection && this.initializeResponse) {
       return this.initializeResponse;
     }
 
-    const stream = await createTauriAcpStream(this.agentId);
+    this.stream =
+      this.config.transport === 'websocket'
+        ? await createWebSocketAcpStream(requireWebSocketUrl(this.config), (reason) => this.handleConnectionLoss(reason))
+        : await createTauriAcpStream(this.config.id);
     const browserClient = this.browserClient;
-    this.connection = new ClientSideConnection(() => browserClient, stream);
+    this.connection = new ClientSideConnection(() => browserClient, this.stream);
 
     const request: InitializeRequest = {
       protocolVersion: PROTOCOL_VERSION,
@@ -470,6 +478,22 @@ export class DesktopAcpClient {
     await this.connection!.cancel({ sessionId });
   }
 
+  async disconnect() {
+    this.intentionallyDisconnected = true;
+    await this.stream?.readable.cancel().catch(() => undefined);
+    await this.stream?.writable.abort().catch(() => undefined);
+    this.stream = null;
+    this.connection = null;
+    this.initializeResponse = null;
+    this.querymtExtensions = null;
+    this.controlCapabilities = null;
+  }
+
+  onConnectionLost(handler: (reason: string) => void): () => void {
+    this.connectionLossHandlers.add(handler);
+    return () => this.connectionLossHandlers.delete(handler);
+  }
+
   onSessionUpdate(handler: Parameters<BrowserClient['onSessionUpdate']>[0]): () => void {
     this.browserClient.onSessionUpdate(handler);
     return () => this.browserClient.offSessionUpdate(handler);
@@ -504,6 +528,16 @@ export class DesktopAcpClient {
     return () => this.browserClient.offExtensionNotification(wrapped);
   }
 
+  private handleConnectionLoss(reason: string) {
+    if (this.intentionallyDisconnected) return;
+    this.connection = null;
+    this.stream = null;
+    this.initializeResponse = null;
+    this.querymtExtensions = null;
+    this.controlCapabilities = null;
+    for (const handler of this.connectionLossHandlers) handler(reason);
+  }
+
   private assertQuerymtMethod(method: QuerymtLogicalMethod) {
     if (!this.supportsQuerymtMethod(method)) {
       throw new Error(`Agent is missing required capability ${method}.`);
@@ -515,6 +549,14 @@ export class DesktopAcpClient {
       throw new Error(`Agent is missing required feature ${feature}.`);
     }
   }
+}
+
+function requireWebSocketUrl(config: AgentConfig): string {
+  const url = config.websocketUrl?.trim();
+  if (!url) {
+    throw new Error(`WebSocket URL is required for ${config.name}.`);
+  }
+  return `ws://${url.replace(/^wss?:\/\//i, '').replace(/\/ws\/?$/i, '').replace(/\/$/, '')}/ws`;
 }
 
 function buildClientCapabilities(): ClientCapabilities {
