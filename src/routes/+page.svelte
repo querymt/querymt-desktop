@@ -4,12 +4,12 @@
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
 
-  const onlineAgents = $derived(
-    agentsStore.configs.filter((config) => agentsStore.statuses[config.id]?.state === 'running')
-  );
+  const onlineAgents = $derived(agentsStore.connectedAgents);
 
-  const primaryAgentId = $derived(onlineAgents[0]?.id ?? agentsStore.configs[0]?.id ?? null);
-  const showAgentBadges = $derived(agentsStore.configs.length > 1);
+  const primaryAgentId = $derived(
+    onlineAgents[0]?.id ?? agentsStore.configs.find((config) => config.enabled)?.id ?? null
+  );
+  const showAgentBadges = $derived(onlineAgents.length > 1);
 
   const activeNowCount = $derived.by(() => {
     const localActive =

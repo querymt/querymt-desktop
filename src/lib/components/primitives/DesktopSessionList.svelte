@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Accordion } from 'bits-ui';
-  import { ChevronDown, ChevronRight, Clock3, FolderKanban, RefreshCw, Search } from '@lucide/svelte';
+  import { Check, ChevronDown, ChevronRight, Clock3, Copy, FolderKanban, RefreshCw, Search } from '@lucide/svelte';
   import { formatSessionTimestamp, groupSessionsByWorkspace } from '$lib/domain/sessions';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
@@ -25,6 +25,7 @@
   let statusFilter = $state<'all' | SessionStatus>('all');
   let openGroups = $state<string[]>([]);
   let lastWorkspaceKeySignature = $state('');
+  let copiedSessionId = $state<string | null>(null);
 
   const filteredSessions = $derived.by(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -73,6 +74,20 @@
       case 'idle':
       default:
         return 'Idle';
+    }
+  }
+
+  async function copySessionId(event: MouseEvent, sessionId: string) {
+    event.stopPropagation();
+
+    try {
+      await navigator.clipboard.writeText(sessionId);
+      copiedSessionId = sessionId;
+      window.setTimeout(() => {
+        if (copiedSessionId === sessionId) copiedSessionId = null;
+      }, 1200);
+    } catch (error) {
+      console.error('Failed to copy session ID', error);
     }
   }
 </script>
@@ -136,19 +151,27 @@
               </Accordion.Trigger>
             </Accordion.Header>
             <Accordion.Content class="session-workspace-content">
-              <div class="session-workspace-agents">
-                {#each group.agents as agent}
-                  <span class="session-agent-chip">{agent}</span>
-                {/each}
-              </div>
               <div class="model-picker-list session-workspace-session-list">
                 {#each group.sessions as session}
                   {@const identicon = createRoundIdenticon(session.sessionId)}
-                  <button class="model-picker-row session-row" type="button" onclick={() => onOpenSession?.(session)}>
+                  <div class="model-picker-row session-row">
+                    <button
+                      class="session-row-navigation"
+                      type="button"
+                      aria-label={`Open session ${session.title}`}
+                      onclick={() => onOpenSession?.(session)}
+                    ></button>
                     <span class="session-row-identicon" aria-hidden="true">
-                      <svg width={identicon.width} height={identicon.width} viewBox={`0 0 ${identicon.width} ${identicon.width}`} preserveAspectRatio="xMinYMin">
-                        <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill={identicon.color} />
-                        <g fill="none" stroke={identicon.color} stroke-linecap="round" stroke-linejoin="round">
+                      <svg
+                        class="session-identicon-svg"
+                        style={`--identicon-color: ${identicon.color}`}
+                        width={identicon.width}
+                        height={identicon.width}
+                        viewBox={`0 0 ${identicon.width} ${identicon.width}`}
+                        preserveAspectRatio="xMinYMin"
+                      >
+                        <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill="currentColor" />
+                        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
                           {#each identicon.arcs as arc}
                             <path d={arc.d} stroke-width={arc.strokeWidth} />
                           {/each}
@@ -160,6 +183,22 @@
                       <span class="session-row-meta">
                         <span>{session.agentName}</span>
                         <span>{formatSessionTimestamp(session.updatedAt)}</span>
+                        <span class="session-row-id">
+                          <code>{session.sessionId.slice(0, 8)}</code>
+                          <button
+                            class="session-row-copy-id"
+                            type="button"
+                            aria-label={copiedSessionId === session.sessionId ? 'Session ID copied' : 'Copy session ID'}
+                            title={copiedSessionId === session.sessionId ? 'Copied' : 'Copy full session ID'}
+                            onclick={(event) => copySessionId(event, session.sessionId)}
+                          >
+                            {#if copiedSessionId === session.sessionId}
+                              <Check size={12} />
+                            {:else}
+                              <Copy size={12} />
+                            {/if}
+                          </button>
+                        </span>
                       </span>
                     </span>
                     <span class="session-row-side">
@@ -168,7 +207,7 @@
                         <ChevronRight size={15} />
                       </span>
                     </span>
-                  </button>
+                  </div>
                 {/each}
               </div>
             </Accordion.Content>

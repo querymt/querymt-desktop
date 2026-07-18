@@ -25,6 +25,15 @@ function createAgentsStore() {
         lastError: null
       }
     },
+    connectedAgents: [
+      {
+        id: 'agent-1',
+        name: 'QMTCODE',
+        commandLine: '/usr/local/bin/qmtcode --acp',
+        enabled: true,
+        autoStart: true
+      }
+    ],
     meshNodesByAgent: {},
     activeSessionId: null as string | null,
     activeAgentId: null as string | null,
@@ -104,5 +113,43 @@ describe('Landing page session start', () => {
     await waitFor(() => {
       expect(goto).toHaveBeenCalledWith('/sessions/agent-1/session-1');
     });
+  });
+
+  it('hides the agent suffix when stopped or disabled agents are also configured', () => {
+    agentsStore.configs.push(
+      {
+        id: 'agent-stopped',
+        name: 'Stopped Agent',
+        commandLine: '/usr/local/bin/stopped-agent --acp',
+        enabled: true,
+        autoStart: false
+      },
+      {
+        id: 'agent-disabled',
+        name: 'Disabled Agent',
+        commandLine: '/usr/local/bin/disabled-agent --acp',
+        enabled: false,
+        autoStart: false
+      }
+    );
+
+    render(LandingPage);
+
+    expect(screen.getByRole('button', { name: /Claude Sonnet 4/i })).toHaveTextContent('Claude Sonnet 4 · anthropic');
+    expect(screen.getByRole('button', { name: /Claude Sonnet 4/i })).not.toHaveTextContent('QMTCODE');
+  });
+
+  it('shows the agent suffix when multiple agents are connected', () => {
+    agentsStore.connectedAgents.push({
+      id: 'agent-2',
+      name: 'WS-QMT',
+      commandLine: '/usr/local/bin/querymt --acp',
+      enabled: true,
+      autoStart: true
+    });
+
+    render(LandingPage);
+
+    expect(screen.getByRole('button', { name: /Claude Sonnet 4/i })).toHaveTextContent('QMTCODE');
   });
 });

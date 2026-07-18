@@ -232,9 +232,16 @@
                     >
                       <span class="app-icon-activity-pill" aria-hidden="true"></span>
                       <span class="session-icon-avatar" aria-hidden="true">
-                        <svg width={identicon.width} height={identicon.width} viewBox={`0 0 ${identicon.width} ${identicon.width}`} preserveAspectRatio="xMinYMin">
-                          <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill={identicon.color} />
-                          <g fill="none" stroke={identicon.color} stroke-linecap="round" stroke-linejoin="round">
+                        <svg
+                          class="session-identicon-svg"
+                          style={`--identicon-color: ${identicon.color}`}
+                          width={identicon.width}
+                          height={identicon.width}
+                          viewBox={`0 0 ${identicon.width} ${identicon.width}`}
+                          preserveAspectRatio="xMinYMin"
+                        >
+                          <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill="currentColor" />
+                          <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
                             {#each identicon.arcs as arc}
                               <path d={arc.d} stroke-width={arc.strokeWidth} />
                             {/each}

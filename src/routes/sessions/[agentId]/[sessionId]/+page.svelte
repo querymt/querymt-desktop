@@ -15,7 +15,7 @@
   const agentId = $derived(decodeURIComponent(page.params.agentId ?? ''));
   const sessionId = $derived(decodeURIComponent(page.params.sessionId ?? ''));
   const selectedSession = $derived(getSessionById(agentsStore.sessionsByAgent[agentId] ?? [], sessionId, agentId));
-  const showAgentBadges = $derived(agentsStore.configs.length > 1);
+  const showAgentBadges = $derived(agentsStore.connectedAgents.length > 1);
   let composerAnchor = $state<HTMLDivElement | null>(null);
   let showDockedComposer = $state(false);
   let dockAlignLeft = $state<number | null>(null);

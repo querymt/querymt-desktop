@@ -13,7 +13,6 @@ export interface WorkspaceSessionGroup {
   path: string;
   sessions: DesktopSessionSummary[];
   latestActivity: string | null;
-  agents: string[];
 }
 
 export interface SessionRailItem {
@@ -148,8 +147,7 @@ export function groupSessionsByWorkspace(sessions: DesktopSessionSummary[]): Wor
         name: key === '__no_workspace__' ? 'No workspace' : getSessionWorkspaceName(key),
         path,
         sessions: sortedSessions,
-        latestActivity,
-        agents: [...new Set(sortedSessions.map((session) => session.agentName))].sort((a, b) => a.localeCompare(b))
+        latestActivity
       };
     })
     .sort((a, b) => compareNullableTimestamps(b.latestActivity, a.latestActivity));

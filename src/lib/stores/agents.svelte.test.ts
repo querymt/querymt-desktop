@@ -99,6 +99,50 @@ beforeEach(() => {
   mockClient.resetSessionUpdateHandler();
 });
 
+describe('AgentsStore agent availability', () => {
+  it('only includes enabled agents that are running without a failed connection', () => {
+    const store = createStore();
+    const baseStatus = store.statuses['agent-1'];
+    store.configs = [
+      ...store.configs,
+      {
+        id: 'agent-stopped',
+        name: 'Stopped Agent',
+        transport: 'stdio',
+        commandLine: '/usr/local/bin/stopped-agent --acp',
+        enabled: true,
+        autoStart: false
+      },
+      {
+        id: 'agent-disabled',
+        name: 'Disabled Agent',
+        transport: 'stdio',
+        commandLine: '/usr/local/bin/disabled-agent --acp',
+        enabled: false,
+        autoStart: false
+      },
+      {
+        id: 'agent-disconnected',
+        name: 'Disconnected Agent',
+        transport: 'websocket',
+        commandLine: '',
+        websocketUrl: '127.0.0.1:3030',
+        enabled: true,
+        autoStart: true
+      }
+    ];
+    store.statuses = {
+      ...store.statuses,
+      'agent-stopped': { ...baseStatus, agentId: 'agent-stopped', state: 'stopped' },
+      'agent-disabled': { ...baseStatus, agentId: 'agent-disabled' },
+      'agent-disconnected': { ...baseStatus, agentId: 'agent-disconnected' }
+    };
+    store.connectionStates = { 'agent-disconnected': 'failed' };
+
+    expect(store.connectedAgents.map((config) => config.id)).toEqual(['agent-1']);
+  });
+});
+
 describe('AgentsStore prompt session start', () => {
   it('opens a new active session with the user prompt rendered while the agent reply is pending', async () => {
     let resolvePrompt!: () => void;

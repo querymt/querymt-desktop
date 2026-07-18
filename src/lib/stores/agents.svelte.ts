@@ -171,7 +171,12 @@ export class AgentsStore {
   }
 
   get connectedAgents(): AgentConfig[] {
-    return this.configs.filter((config) => this.statuses[config.id]?.state === 'running');
+    return this.configs.filter(
+      (config) =>
+        config.enabled &&
+        this.statuses[config.id]?.state === 'running' &&
+        this.connectionStates[config.id] !== 'failed'
+    );
   }
 
   get agentsNeedingAttention(): AgentConfig[] {

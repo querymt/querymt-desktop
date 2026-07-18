@@ -3391,6 +3391,14 @@ summary:focus-visible {
   overflow: visible;
 }
 
+.session-identicon-svg {
+  color: var(--identicon-color);
+}
+
+:root[data-theme='dark'] .session-identicon-svg {
+  color: color-mix(in srgb, var(--identicon-color), white 22%);
+}
+
 .app-icon-link:hover .app-nav-icon-surface,
 .app-icon-link:focus-visible .app-nav-icon-surface,
 .session-icon-link:hover .session-icon-avatar,
@@ -3774,22 +3782,6 @@ summary:focus-visible {
   padding: 0;
 }
 
-.session-workspace-agents {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  padding: 0.7rem 1rem 0.55rem 4rem;
-}
-
-.session-agent-chip {
-  border-radius: 999px;
-  border: 1px solid var(--subtle-border);
-  background: var(--subtle-surface);
-  color: var(--muted);
-  padding: 0.24rem 0.55rem;
-  font-size: 0.68rem;
-}
-
 .session-workspace-session-list {
   border: 0;
   border-radius: 0;
@@ -3801,6 +3793,7 @@ summary:focus-visible {
 }
 
 .session-row {
+  position: relative;
   justify-content: space-between;
   gap: 0.75rem;
   background: var(--row-surface);
@@ -3810,6 +3803,27 @@ summary:focus-visible {
 
 .session-row:hover {
   background: var(--row-surface-hover);
+}
+
+.session-row-navigation {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  border: 0;
+  background: transparent;
+}
+
+.session-row-navigation:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.session-row-identicon,
+.session-row-main,
+.session-row-side {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
 }
 
 .session-row-identicon {
@@ -3865,10 +3879,49 @@ summary:focus-visible {
   white-space: nowrap;
 }
 
-.session-row-meta span + span::before {
+.session-row-meta > span + span::before {
   content: '·';
   margin-right: 0.45rem;
   color: var(--text-dim);
+}
+
+.session-row-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.session-row-meta > .session-row-id::before {
+  margin-right: 0.225rem;
+}
+
+.session-row-id code {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+.session-row-copy-id {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--muted);
+  pointer-events: auto;
+}
+
+.session-row-copy-id:hover {
+  background: var(--subtle-surface);
+  color: var(--text);
+}
+
+.session-row-copy-id:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .session-row-side {
