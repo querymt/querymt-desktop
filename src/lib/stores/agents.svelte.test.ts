@@ -223,6 +223,56 @@ describe('AgentsStore prompt session start', () => {
     resolvePrompt();
   });
 
+  it('keeps the optimistic prompt position when its authoritative chunk arrives after a tool', async () => {
+    let resolvePrompt!: () => void;
+    mockClient.sendPrompt.mockImplementationOnce(
+      () =>
+        new Promise<PromptResponse>((resolve) => {
+          resolvePrompt = () => resolve({ stopReason: 'end_turn' });
+        })
+    );
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.transcript = [
+      { id: 'old-user', kind: 'user_message_chunk', text: 'Old prompt', messageId: 'old-user', eventIndex: 3 },
+      { id: 'old-answer', kind: 'agent_message_chunk', text: 'Old answer', messageId: 'old-answer', eventIndex: 18 }
+    ];
+    store.activeSession.events = [{ id: 'debug-1', kind: 'session_info_update', text: 'Loaded', messageId: null }];
+
+    void store.sendPromptToActiveSession();
+    await vi.waitFor(() => {
+      expect(mockClient.sendPrompt).toHaveBeenCalledWith('session-1', 'Fix the failing tests', []);
+    });
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'question-1',
+        title: 'Question',
+        status: 'in_progress',
+        content: []
+      }
+    });
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'Fix the failing tests' },
+        messageId: 'real-user'
+      }
+    });
+
+    expect(store.activeSession.transcript.find((item) => item.messageId === 'real-user')).toMatchObject({ eventIndex: 19 });
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ id: 'question-1', eventIndex: 20 });
+    expect(store.activeSession.transcript.filter((item) => item.text === 'Fix the failing tests')).toHaveLength(1);
+
+    resolvePrompt();
+  });
+
   it('marks a streaming prompt completed when the prompt response returns a stop reason', async () => {
     let resolvePrompt!: () => void;
     mockClient.sendPrompt.mockImplementationOnce(

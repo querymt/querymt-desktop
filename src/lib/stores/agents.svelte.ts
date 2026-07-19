@@ -8,7 +8,11 @@ import type {
 } from '@agentclientprotocol/sdk';
 import { tick } from 'svelte';
 import { activeSessionFromLoadResponse, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
-import { createEmptyActiveSession, applySessionNotification } from '$lib/domain/session-updates';
+import {
+  createEmptyActiveSession,
+  applySessionNotification,
+  getNextConversationEventIndex
+} from '$lib/domain/session-updates';
 import {
   buildSessionKey,
   getSessionById,
@@ -1544,7 +1548,7 @@ export class AgentsStore {
   }
 
   private addOptimisticUserPrompt(sessionId: string, prompt: string) {
-    const eventIndex = this.activeSession.events.length;
+    const eventIndex = getNextConversationEventIndex(this.activeSession);
     const id = `${sessionId}-optimistic-user-${eventIndex + 1}`;
     this.activeSession.transcript.push({
       id,
@@ -1561,10 +1565,10 @@ export class AgentsStore {
     });
   }
 
-  private removeMatchingOptimisticUserPrompt(notification: SessionNotification) {
+  private removeMatchingOptimisticUserPrompt(notification: SessionNotification): number | undefined {
     const update = notification.update;
     if (update.sessionUpdate !== 'user_message_chunk' || update.content.type !== 'text') {
-      return;
+      return undefined;
     }
 
     const contentText = update.content.text;
@@ -1576,11 +1580,12 @@ export class AgentsStore {
         item.text === contentText
     );
     if (!optimistic) {
-      return;
+      return undefined;
     }
 
     this.activeSession.transcript = this.activeSession.transcript.filter((item) => item.id !== optimistic.id);
     this.activeSession.events = this.activeSession.events.filter((event) => event.messageId !== optimistic.messageId);
+    return optimistic.eventIndex;
   }
 
   private applySessionSummaryUpdate(agentId: string, notification: SessionNotification) {
@@ -1652,9 +1657,9 @@ export class AgentsStore {
       this.activeSession.sessionId = notification.sessionId;
     }
 
-    this.removeMatchingOptimisticUserPrompt(notification);
+    const optimisticEventIndex = this.removeMatchingOptimisticUserPrompt(notification);
     const beforeEvents = this.activeSession.events.length;
-    this.activeSession = applySessionNotification(this.activeSession, notification);
+    this.activeSession = applySessionNotification(this.activeSession, notification, optimisticEventIndex);
     console.debug('querymt session/update applied', {
       agentId,
       sessionId: notification.sessionId,

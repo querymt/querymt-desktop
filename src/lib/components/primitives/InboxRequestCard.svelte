@@ -1,6 +1,5 @@
 <script lang="ts">
   import AppCheckbox from '$lib/components/primitives/AppCheckbox.svelte';
-  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import type { InboxFormField, InboxItem } from '$lib/domain/types';
 
   let {
@@ -58,8 +57,8 @@
   {#if item.formFields && item.formFields.length > 0 && item.status !== 'resolved'}
     <div class="mt-4 grid gap-3">
       {#each item.formFields as field}
-        <label class="grid gap-2">
-          <span class="muted text-xs uppercase tracking-[0.18em]">
+        <div class="grid gap-2">
+          <span id={`${item.id}-${field.key}-label`} class="muted text-xs uppercase tracking-[0.18em]">
             {field.label}{#if field.required} *{/if}
           </span>
           {#if field.kind === 'boolean'}
@@ -69,12 +68,12 @@
               onCheckedChange={(checked) => onFieldChange?.(item.id, field.key, checked)}
             />
           {:else if field.kind === 'array' && field.options}
-            <div class="flex flex-wrap gap-2">
+            <div class="elicitation-option-list" role="group" aria-labelledby={`${item.id}-${field.key}-label`}>
               {#each field.options as option}
                 <AppCheckbox
+                  class="elicitation-option-row"
                   checked={!field.customActive && Array.isArray(field.value) && field.value.includes(option.value)}
                   label={option.label}
-                  pill
                   onCheckedChange={(checked) => {
                     const current = field.customActive || !Array.isArray(field.value) ? [] : field.value;
                     const next = checked
@@ -86,9 +85,9 @@
               {/each}
               {#if field.allowCustom}
                 <AppCheckbox
+                  class="elicitation-option-row"
                   checked={Boolean(field.customActive)}
-                  label="Other…"
-                  pill
+                  label="Custom answer…"
                   onCheckedChange={(checked) => onCustomFieldToggle?.(item.id, field.key, checked)}
                 />
               {/if}
@@ -98,33 +97,47 @@
                 class="input-shell px-3 py-2 text-sm"
                 type="text"
                 aria-label={`${field.label} custom response`}
-                placeholder="Enter a custom response..."
+                placeholder="Custom answer…"
                 value={field.customValue ?? ''}
                 oninput={(event) =>
                   onCustomFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value)}
               />
             {/if}
           {:else if field.options}
-            <AppSelect
-              class="w-full"
-              value={field.customActive ? '__querymt_other__' : String(field.value)}
-              options={[
-                { value: '', label: 'Select...' },
-                ...field.options,
-                ...(field.allowCustom ? [{ value: '__querymt_other__', label: 'Other…' }] : [])
-              ]}
-              ariaLabel={field.label}
-              onValueChange={(value) => {
-                if (value === '__querymt_other__') onCustomFieldToggle?.(item.id, field.key, true);
-                else onFieldChange?.(item.id, field.key, value);
-              }}
-            />
+            <div class="elicitation-option-list" role="radiogroup" aria-labelledby={`${item.id}-${field.key}-label`}>
+              {#each field.options as option}
+                <label class="elicitation-option-row">
+                  <input
+                    class="elicitation-radio-input"
+                    type="radio"
+                    name={`${item.id}-${field.key}`}
+                    value={option.value}
+                    checked={!field.customActive && field.value === option.value}
+                    onchange={() => onFieldChange?.(item.id, field.key, option.value)}
+                  />
+                  <span class="elicitation-option-label">{option.label}</span>
+                </label>
+              {/each}
+              {#if field.allowCustom}
+                <label class="elicitation-option-row">
+                  <input
+                    class="elicitation-radio-input"
+                    type="radio"
+                    name={`${item.id}-${field.key}`}
+                    value="__querymt_custom__"
+                    checked={Boolean(field.customActive)}
+                    onchange={() => onCustomFieldToggle?.(item.id, field.key, true)}
+                  />
+                  <span class="elicitation-option-label">Custom answer…</span>
+                </label>
+              {/if}
+            </div>
             {#if field.customActive}
               <input
                 class="input-shell px-3 py-2 text-sm"
                 type="text"
                 aria-label={`${field.label} custom response`}
-                placeholder="Enter a custom response..."
+                placeholder="Custom answer…"
                 value={field.customValue ?? ''}
                 oninput={(event) =>
                   onCustomFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value)}
@@ -134,6 +147,7 @@
             <input
               class="input-shell px-3 py-2 text-sm"
               type="number"
+              aria-label={field.label}
               value={String(field.value)}
               onchange={(event) => onFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value)}
             />
@@ -141,14 +155,15 @@
             <input
               class="input-shell px-3 py-2 text-sm"
               type="text"
+              aria-label={field.label}
               value={String(field.value)}
               onchange={(event) => onFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value)}
             />
           {/if}
-          {#if field.description}
+          {#if field.description && field.description.trim() !== item.detail.trim()}
             <span class="muted text-xs">{field.description}</span>
           {/if}
-        </label>
+        </div>
       {/each}
     </div>
   {/if}

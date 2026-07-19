@@ -124,6 +124,26 @@ describe('buildSessionConversation', () => {
     expect(turns[0].content.map((item) => item.id)).toEqual(['r1', 't1', 'a1', 't2']);
   });
 
+  it('keeps a live elicitation turn after sparse reloaded history', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'First prompt', messageId: 'u1', eventIndex: 3 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'First answer', messageId: 'a1', eventIndex: 18 },
+      { id: 'u2', kind: 'user_message_chunk', text: 'Second prompt', messageId: 'u2', eventIndex: 19 },
+      { id: 'a2', kind: 'agent_message_chunk', text: 'Second answer', messageId: 'a2', eventIndex: 22 }
+    ];
+    session.toolCalls = [
+      { id: 'question-1', title: 'Question', status: 'completed', kind: 'other', eventIndex: 17 },
+      { id: 'question-2', title: 'Question', status: 'completed', kind: 'other', eventIndex: 20 }
+    ];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns.map((turn) => turn.user?.text)).toEqual(['First prompt', 'Second prompt']);
+    expect(turns[0].content.map((item) => item.id)).toEqual(['question-1', 'a1']);
+    expect(turns[1].content.map((item) => item.id)).toEqual(['question-2', 'a2']);
+  });
+
   it('starts a new turn for each user prompt without requiring assistant text', () => {
     const session = baseSession();
     session.transcript = [

@@ -24,9 +24,21 @@ export function createEmptyActiveSession(): ActiveSessionViewModel {
   };
 }
 
+export function getNextConversationEventIndex(session: ActiveSessionViewModel): number {
+  let maxIndex = -1;
+  for (const item of session.transcript) {
+    if (typeof item.eventIndex === 'number') maxIndex = Math.max(maxIndex, item.eventIndex);
+  }
+  for (const tool of session.toolCalls) {
+    if (typeof tool.eventIndex === 'number') maxIndex = Math.max(maxIndex, tool.eventIndex);
+  }
+  return maxIndex + 1;
+}
+
 export function applySessionNotification(
   current: ActiveSessionViewModel,
-  notification: SessionNotification
+  notification: SessionNotification,
+  conversationEventIndex = getNextConversationEventIndex(current)
 ): ActiveSessionViewModel {
   const next: ActiveSessionViewModel = {
     sessionId: current.sessionId,
@@ -58,7 +70,7 @@ export function applySessionNotification(
         kind: update.sessionUpdate,
         text: getTextContent(update.content),
         messageId: update.messageId ?? null,
-        eventIndex: next.events.length - 1
+        eventIndex: conversationEventIndex
       });
       next.runState = 'thinking';
       next.activityLabel = 'Waiting for the agent to respond…';
@@ -69,7 +81,7 @@ export function applySessionNotification(
         kind: update.sessionUpdate,
         text: getTextContent(update.content),
         messageId: update.messageId ?? null,
-        eventIndex: next.events.length - 1
+        eventIndex: conversationEventIndex
       });
       next.runState = 'streaming';
       next.activityLabel = 'Agent is replying…';
@@ -81,7 +93,7 @@ export function applySessionNotification(
         kind: update.sessionUpdate,
         text: getTextContent(update.content),
         messageId: update.messageId ?? null,
-        eventIndex: next.events.length - 1
+        eventIndex: conversationEventIndex
       });
       next.runState = 'thinking';
       next.activityLabel = 'Agent is thinking…';
@@ -97,7 +109,7 @@ export function applySessionNotification(
         target.messageId = target.messageId ?? readMessageId(update);
         target.arguments = stringifyOptional(update.rawInput) ?? target.arguments;
         target.result = stringifyToolContent(update.rawOutput ?? update.content) ?? target.result;
-        target.eventIndex = Math.min(target.eventIndex ?? Number.MAX_SAFE_INTEGER, next.events.length - 1);
+        target.eventIndex = target.eventIndex ?? conversationEventIndex;
       } else {
         next.toolCalls.push({
           id: update.toolCallId,
@@ -107,7 +119,7 @@ export function applySessionNotification(
           messageId: readMessageId(update),
           arguments: stringifyOptional(update.rawInput),
           result: stringifyToolContent(update.rawOutput ?? update.content),
-          eventIndex: next.events.length - 1
+          eventIndex: conversationEventIndex
         });
       }
       const current = next.toolCalls.find((tool) => tool.id === update.toolCallId);
@@ -129,7 +141,7 @@ export function applySessionNotification(
         target.kind = update.kind ?? target.kind;
         target.messageId = target.messageId ?? readMessageId(update);
         target.result = stringifyToolContent(update.rawOutput ?? update.content) ?? target.result;
-        target.eventIndex = target.eventIndex ?? next.events.length - 1;
+        target.eventIndex = target.eventIndex ?? conversationEventIndex;
       } else {
         target = {
           id: update.toolCallId,
@@ -138,7 +150,7 @@ export function applySessionNotification(
           kind: update.kind ?? null,
           messageId: readMessageId(update),
           result: stringifyToolContent(update.rawOutput ?? update.content),
-          eventIndex: next.events.length - 1
+          eventIndex: conversationEventIndex
         };
         next.toolCalls.push(target);
       }
