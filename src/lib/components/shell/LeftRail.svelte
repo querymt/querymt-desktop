@@ -1,7 +1,9 @@
 <script lang="ts">
   import { Tooltip } from 'bits-ui';
+  import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
   import { sectionIcons, sectionOrder, type SectionName } from '$lib/design/tokens';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { inboxStore } from '$lib/stores/inbox.svelte';
 
   let { current, quiet = false, collapsed = false } = $props<{
     current: SectionName;
@@ -21,10 +23,18 @@
   };
 
   const onlineAgentCount = $derived(agentsStore.connectedAgents.length);
+  const agentAttentionCount = $derived(agentsStore.agentsNeedingAttention.length);
+  const inboxActionCount = $derived(inboxStore.actionableItems.length);
 
   function getSectionLabel(section: SectionName): string {
-    if (section === 'Agents' && onlineAgentCount > 0) {
-      return `Agents, ${onlineAgentCount} online`;
+    if (section === 'Inbox' && inboxActionCount > 0) {
+      return `Inbox, ${inboxActionCount} ${inboxActionCount === 1 ? 'action' : 'actions'} required`;
+    }
+    if (section === 'Agents') {
+      const details: string[] = [];
+      if (onlineAgentCount > 0) details.push(`${onlineAgentCount} online`);
+      if (agentAttentionCount > 0) details.push(`${agentAttentionCount} need attention`);
+      return details.length > 0 ? `Agents, ${details.join(', ')}` : 'Agents';
     }
 
     return section;
@@ -53,6 +63,12 @@
                   {#if section === 'Agents' && onlineAgentCount > 0}
                     <span class="left-rail-agent-count" aria-hidden="true">{onlineAgentCount}</span>
                   {/if}
+                  {#if section === 'Inbox' && inboxActionCount > 0}
+                    <SidebarAttentionDot />
+                  {/if}
+                  {#if section === 'Agents' && agentAttentionCount > 0}
+                    <SidebarAttentionDot />
+                  {/if}
                 </span>
               </a>
             </Tooltip.Trigger>
@@ -73,6 +89,12 @@
               <Icon size={16} />
               {#if section === 'Agents' && onlineAgentCount > 0}
                 <span class="left-rail-agent-count" aria-label={`${onlineAgentCount} agents online`}>{onlineAgentCount}</span>
+              {/if}
+              {#if section === 'Inbox' && inboxActionCount > 0}
+                <SidebarAttentionDot />
+              {/if}
+              {#if section === 'Agents' && agentAttentionCount > 0}
+                <SidebarAttentionDot />
               {/if}
             </span>
             <span class="left-rail-link-label">{section}</span>

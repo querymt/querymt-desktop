@@ -3322,12 +3322,14 @@ summary:focus-visible {
   flex: 1 1 auto;
   justify-items: center;
   align-content: start;
-  overflow: hidden;
+  margin-top: -0.43rem;
+  overflow: visible;
 }
 
 .session-icon-rail-list {
   align-content: start;
-  overflow: hidden;
+  padding-top: 0.3rem;
+  overflow: visible;
 }
 
 .app-icon-link,
@@ -3391,6 +3393,17 @@ summary:focus-visible {
   overflow: visible;
 }
 
+.session-icon-surface {
+  position: relative;
+  display: inline-flex;
+  width: 2.4rem;
+  height: 2.4rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: inherit;
+  overflow: visible;
+}
+
 .session-identicon-svg {
   color: var(--identicon-color);
 }
@@ -3409,15 +3422,13 @@ summary:focus-visible {
 }
 
 .app-icon-link-current .app-icon-activity-pill,
-.session-icon-link-active .app-icon-activity-pill,
-.session-icon-link-attention .app-icon-activity-pill {
+.session-icon-link-active .app-icon-activity-pill {
   height: 1.45rem;
   opacity: 1;
   transform: scaleY(1);
 }
 
-.app-icon-link-current .app-icon-activity-pill,
-.session-icon-link-attention .app-icon-activity-pill {
+.app-icon-link-current .app-icon-activity-pill {
   background: var(--accent);
 }
 
@@ -3440,7 +3451,7 @@ summary:focus-visible {
 .app-icon-agent-count {
   position: absolute;
   top: -0.35rem;
-  right: -0.45rem;
+  left: -0.45rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3456,16 +3467,29 @@ summary:focus-visible {
   padding: 0 0.28rem;
 }
 
-.app-icon-agent-attention {
+.sidebar-attention-dot {
   position: absolute;
-  right: -0.18rem;
-  bottom: -0.18rem;
-  width: 0.72rem;
-  height: 0.72rem;
+  display: block;
+  box-sizing: border-box;
+  width: 0.7rem;
+  height: 0.7rem;
+  aspect-ratio: 1;
+  flex: 0 0 auto;
+  padding: 0;
   border: 2px solid var(--bg);
-  border-radius: 999px;
+  border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-dim), 0 6px 16px rgba(249, 115, 22, 0.28);
+  line-height: 0;
+}
+
+.sidebar-attention-dot-corner {
+  right: -0.1rem;
+  bottom: -0.1rem;
+}
+
+.left-rail-link-icon {
+  position: relative;
 }
 
 .app-icon-divider,
@@ -3508,15 +3532,8 @@ summary:focus-visible {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--success), transparent 82%);
 }
 
-.session-icon-link-attention .session-icon-avatar {
-  border-color: var(--selected-border);
-  box-shadow: 0 0 0 3px var(--accent-dim), 0 12px 26px rgba(249, 115, 22, 0.16);
-}
-
 .session-icon-status {
   position: absolute;
-  right: -0.12rem;
-  bottom: -0.08rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3527,14 +3544,12 @@ summary:focus-visible {
 }
 
 .session-icon-status-active {
+  top: -0.08rem;
+  right: -0.12rem;
   background: var(--success);
   color: #ffffff;
 }
 
-.session-icon-status-attention {
-  background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-dim);
-}
 
 .app-icon-tooltip,
 .session-icon-tooltip {

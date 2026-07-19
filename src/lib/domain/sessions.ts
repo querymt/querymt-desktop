@@ -19,10 +19,13 @@ export interface SessionRailItem {
   key: string;
   session: DesktopSessionSummary;
   tone: SessionRailTone;
+  isActive: boolean;
+  requiresAttention: boolean;
 }
 
 export interface SessionRailOptions {
   attentionSessionKeys?: Iterable<string>;
+  actionRequiredSessionKeys?: Iterable<string>;
   limit?: number;
 }
 
@@ -111,17 +114,16 @@ export function getRecentSessionRailItems(
   options: SessionRailOptions = {}
 ): SessionRailItem[] {
   const attentionKeys = new Set(options.attentionSessionKeys ?? []);
+  const actionRequiredKeys = new Set(options.actionRequiredSessionKeys ?? []);
   const limit = options.limit ?? 12;
 
   return sessions
     .map((session) => {
       const key = getSessionKey(session);
-      const tone: SessionRailTone = attentionKeys.has(key)
-        ? 'attention'
-        : isActiveSessionStatus(session.status)
-          ? 'active'
-          : 'recent';
-      return { key, session, tone };
+      const isActive = isActiveSessionStatus(session.status);
+      const requiresAttention = attentionKeys.has(key) || actionRequiredKeys.has(key);
+      const tone: SessionRailTone = requiresAttention ? 'attention' : isActive ? 'active' : 'recent';
+      return { key, session, tone, isActive, requiresAttention };
     })
     .sort(compareSessionRailItems)
     .slice(0, limit);
@@ -154,7 +156,7 @@ export function groupSessionsByWorkspace(sessions: DesktopSessionSummary[]): Wor
 }
 
 function compareSessionRailItems(a: SessionRailItem, b: SessionRailItem): number {
-  const priorityDifference = getSessionRailPriority(a.tone) - getSessionRailPriority(b.tone);
+  const priorityDifference = getSessionRailPriority(a) - getSessionRailPriority(b);
   if (priorityDifference !== 0) {
     return priorityDifference;
   }
@@ -167,16 +169,10 @@ function compareSessionRailItems(a: SessionRailItem, b: SessionRailItem): number
   return a.session.title.localeCompare(b.session.title);
 }
 
-function getSessionRailPriority(tone: SessionRailTone): number {
-  switch (tone) {
-    case 'attention':
-      return 0;
-    case 'active':
-      return 1;
-    case 'recent':
-    default:
-      return 2;
-  }
+function getSessionRailPriority(item: SessionRailItem): number {
+  if (item.requiresAttention) return 0;
+  if (item.isActive) return 1;
+  return 2;
 }
 
 function compareSessionsByActivity(a: DesktopSessionSummary, b: DesktopSessionSummary): number {
