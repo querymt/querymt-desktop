@@ -2,10 +2,7 @@
   import { Bot, MessageSquareQuote, Sparkles, UserRound } from '@lucide/svelte';
   import SessionToolBlock from '$lib/components/session/SessionToolBlock.svelte';
 
-  let {
-    item,
-    activeToolCallId = null
-  }: {
+  let { item }: {
     item: {
       role: 'user' | 'assistant' | 'thought';
       html: string;
@@ -19,7 +16,6 @@
       }>;
       relatedEvents: Array<{ kind: string; text: string }>;
     };
-    activeToolCallId?: string | null;
   } = $props();
 </script>
 
@@ -67,7 +63,7 @@
   {#if item.relatedTools.length > 0}
     <div class="session-message-tools">
       {#each item.relatedTools as tool}
-        <SessionToolBlock tool={tool} open={tool.id === activeToolCallId || tool.status === 'in_progress' || tool.status === 'failed'} />
+        <SessionToolBlock {tool} />
       {/each}
     </div>
   {/if}

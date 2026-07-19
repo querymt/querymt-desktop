@@ -10,6 +10,13 @@
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import SessionScrollToBottomPill from '$lib/components/session/SessionScrollToBottomPill.svelte';
   import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
+  import {
+    getDistanceFromBottom,
+    nextSessionChatPresentationState,
+    nextSessionScrollMode,
+    type SessionChatPresentationState,
+    type SessionScrollMode
+  } from '$lib/domain/session-scroll';
   import { formatSessionTimestamp, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
@@ -19,12 +26,19 @@
   const selectedSession = $derived(getSessionById(agentsStore.sessionsByAgent[agentId] ?? [], sessionId, agentId));
   const showAgentBadges = $derived(agentsStore.connectedAgents.length > 1);
   const pendingElicitations = $derived(inboxStore.pendingElicitationsForSession(agentId, sessionId));
-  let composerAnchor = $state<HTMLDivElement | null>(null);
-  let showDockedComposer = $state(false);
+  let sessionPage = $state<HTMLDivElement | null>(null);
+  let sessionPageContent = $state<HTMLDivElement | null>(null);
+  let scrollMode = $state<SessionScrollMode>('following');
+  let chatPresentationState = $state<SessionChatPresentationState>('fixed-following');
   let dockAlignLeft = $state<number | null>(null);
   let dockAlignWidth = $state<number | null>(null);
   let debugEventsOpen = $state(false);
-  let anchorObserver: IntersectionObserver | null = null;
+  let contentResizeObserver: ResizeObserver | null = null;
+  let scrollViewport: HTMLElement | null = null;
+  let viewportEventTarget: HTMLElement | Window | null = null;
+  let followFrame: number | null = null;
+  let programmaticScroll = false;
+  let lastViewportScrollTop = 0;
   let sessionLoadToken = 0;
   let lastRequestedSessionKey: string | null = null;
 
@@ -32,13 +46,23 @@
     const count = agentsStore.activeSession.events.length;
     return count === 0 ? 'Debug events' : `Debug events (${count})`;
   });
+  const composerCollapsed = $derived(chatPresentationState === 'fixed-free-compact');
+  const latestVisible = $derived(chatPresentationState === 'fixed-free-compact');
 
   function syncDockAlign() {
-    if (!composerAnchor) return;
-    const rect = composerAnchor.getBoundingClientRect();
+    if (!sessionPage) return;
+    const rect = sessionPage.getBoundingClientRect();
     dockAlignLeft = rect.left;
     dockAlignWidth = rect.width;
   }
+
+  $effect(() => {
+    composerCollapsed;
+    void tick().then(() => {
+      syncDockAlign();
+      if (scrollMode === 'following') scheduleFollowScroll();
+    });
+  });
 
   $effect(() => {
     const nextAgentId = agentId;
@@ -59,20 +83,15 @@
   });
 
   onMount(() => {
-    const onLayoutChange = () => {
-      if (showDockedComposer) {
-        syncDockAlign();
-      }
-    };
+    const onLayoutChange = () => syncDockAlign();
 
+    setupScrollTracking();
     window.addEventListener('resize', onLayoutChange);
-    window.addEventListener('scroll', onLayoutChange, { passive: true });
 
     return () => {
       sessionLoadToken += 1;
-      disconnectComposerObserver();
+      disconnectScrollTracking();
       window.removeEventListener('resize', onLayoutChange);
-      window.removeEventListener('scroll', onLayoutChange);
     };
   });
 
@@ -86,10 +105,10 @@
     }
 
     const token = ++sessionLoadToken;
-    showDockedComposer = false;
     dockAlignLeft = null;
     dockAlignWidth = null;
-    disconnectComposerObserver();
+    setScrollMode('following');
+    programmaticScroll = false;
 
     await ensureSessionLoaded(agentIdToLoad, sessionIdToLoad);
     if (token !== sessionLoadToken || agentId !== agentIdToLoad || sessionId !== sessionIdToLoad) {
@@ -102,34 +121,128 @@
     }
 
     agentsStore.requestPromptFocus();
-    composerAnchor?.scrollIntoView({ block: 'end' });
-    observeComposerAnchor();
+    setupScrollTracking();
+    syncDockAlign();
+    scrollToEnd('instant');
   }
 
-  function disconnectComposerObserver() {
-    anchorObserver?.disconnect();
-    anchorObserver = null;
+  function setupScrollTracking() {
+    disconnectScrollTracking();
+    const viewport = resolveScrollViewport();
+    scrollViewport = viewport.element;
+    viewportEventTarget = viewport.eventTarget;
+    lastViewportScrollTop = scrollViewport.scrollTop;
+    viewportEventTarget.addEventListener('scroll', handleViewportScroll, { passive: true });
+    viewportEventTarget.addEventListener('wheel', handleViewportWheel, { passive: true });
+    viewportEventTarget.addEventListener('touchstart', cancelProgrammaticScroll, { passive: true });
+    viewportEventTarget.addEventListener('pointerdown', cancelProgrammaticScroll, { passive: true });
+
+    if (sessionPageContent && typeof ResizeObserver !== 'undefined') {
+      contentResizeObserver = new ResizeObserver(() => {
+        if (scrollMode === 'following') {
+          scheduleFollowScroll();
+          return;
+        }
+
+        if (scrollViewport) updateChatPresentation(getDistanceFromBottom(scrollViewport));
+      });
+      contentResizeObserver.observe(sessionPageContent, { box: 'border-box' });
+    }
   }
 
-  function observeComposerAnchor() {
-    disconnectComposerObserver();
-    if (!composerAnchor) {
+  function disconnectScrollTracking() {
+    viewportEventTarget?.removeEventListener('scroll', handleViewportScroll);
+    viewportEventTarget?.removeEventListener('wheel', handleViewportWheel);
+    viewportEventTarget?.removeEventListener('touchstart', cancelProgrammaticScroll);
+    viewportEventTarget?.removeEventListener('pointerdown', cancelProgrammaticScroll);
+    contentResizeObserver?.disconnect();
+    contentResizeObserver = null;
+    scrollViewport = null;
+    viewportEventTarget = null;
+    if (followFrame !== null) {
+      cancelAnimationFrame(followFrame);
+      followFrame = null;
+    }
+  }
+
+  function resolveScrollViewport(): { element: HTMLElement; eventTarget: HTMLElement | Window } {
+    const customShell = sessionPage?.closest<HTMLElement>('.app-shell-custom-titlebar');
+    if (customShell) return { element: customShell, eventTarget: customShell };
+
+    const element = document.scrollingElement instanceof HTMLElement ? document.scrollingElement : document.documentElement;
+    return { element, eventTarget: window };
+  }
+
+  function handleViewportScroll() {
+    if (!scrollViewport) return;
+    const scrollTop = scrollViewport.scrollTop;
+    const direction = scrollTop < lastViewportScrollTop ? 'up' : scrollTop > lastViewportScrollTop ? 'down' : 'none';
+    const distanceFromBottom = getDistanceFromBottom(scrollViewport);
+    if (programmaticScroll) {
+      lastViewportScrollTop = scrollTop;
+      if (distanceFromBottom <= 16) {
+        programmaticScroll = false;
+      }
       return;
     }
 
-    anchorObserver = new IntersectionObserver(
-      ([entry]) => {
-        const anchorInView = entry.isIntersecting && entry.intersectionRatio > 0.12;
-        if (anchorInView) {
-          showDockedComposer = false;
-        } else {
-          syncDockAlign();
-          showDockedComposer = true;
-        }
-      },
-      { root: null, threshold: [0, 0.12, 0.35, 1], rootMargin: '0px 0px 0px 0px' }
+    if (scrollMode === 'following' && scrollTop >= lastViewportScrollTop) {
+      lastViewportScrollTop = scrollTop;
+      return;
+    }
+
+    lastViewportScrollTop = scrollTop;
+    setScrollMode(nextSessionScrollMode(scrollMode, distanceFromBottom, direction), distanceFromBottom);
+    if (scrollMode === 'free') syncDockAlign();
+  }
+
+  function handleViewportWheel(event: Event) {
+    programmaticScroll = false;
+    if (!scrollViewport || scrollMode !== 'free' || !(event instanceof WheelEvent) || event.deltaY <= 0) return;
+
+    const distanceFromBottom = getDistanceFromBottom(scrollViewport);
+    const nextMode = nextSessionScrollMode(scrollMode, distanceFromBottom, 'down');
+    setScrollMode(nextMode, distanceFromBottom);
+    if (nextMode === 'following') {
+      lastViewportScrollTop = scrollViewport.scrollTop;
+    }
+  }
+
+  function cancelProgrammaticScroll() {
+    programmaticScroll = false;
+  }
+
+  function setScrollMode(mode: SessionScrollMode, distanceFromBottom = 0) {
+    scrollMode = mode;
+    updateChatPresentation(distanceFromBottom);
+  }
+
+  function updateChatPresentation(distanceFromBottom: number) {
+    chatPresentationState = nextSessionChatPresentationState(
+      chatPresentationState,
+      scrollMode,
+      distanceFromBottom
     );
-    anchorObserver.observe(composerAnchor);
+  }
+
+  function scheduleFollowScroll() {
+    if (followFrame !== null) return;
+    followFrame = requestAnimationFrame(() => {
+      followFrame = null;
+      if (scrollMode === 'following') {
+        scrollToEnd('instant');
+      }
+    });
+  }
+
+  function scrollToEnd(behavior: ScrollBehavior | 'instant') {
+    const viewport = scrollViewport ?? resolveScrollViewport().element;
+    if (behavior === 'instant') {
+      viewport.scrollTop = viewport.scrollHeight;
+      return;
+    }
+
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior });
   }
 
   async function refreshSession() {
@@ -139,13 +252,25 @@
   }
 
   async function scrollToLatest() {
-    composerAnchor?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    setScrollMode('following');
+    programmaticScroll = true;
     await tick();
+    scrollToEnd('smooth');
     agentsStore.requestPromptFocus();
+  }
+
+  async function sendPrompt() {
+    setScrollMode('following');
+    await tick();
+    scrollToEnd('instant');
+    await agentsStore.sendPromptToActiveSession();
   }
 </script>
 
-<div class="session-page session-page-chat">
+<div
+  bind:this={sessionPage}
+  class={`session-page session-page-chat ${composerCollapsed ? 'session-page-composer-compact' : 'session-page-composer-expanded'}`}
+>
   <div class="page-toolbar">
     <button class="action-btn" type="button" onclick={() => goto('/sessions')}>
       <ArrowLeft size={16} />
@@ -185,7 +310,7 @@
     </div>
   </div>
 
-  <div class="session-page-content">
+  <div bind:this={sessionPageContent} class="session-page-content">
     <ActiveSessionView session={agentsStore.activeSession} onCancel={() => agentsStore.cancelActiveSession()} />
 
     {#if pendingElicitations.length > 0}
@@ -214,76 +339,48 @@
     {/if}
 
     {#if selectedSession}
-      <div
-        bind:this={composerAnchor}
-        class={`session-composer-anchor ${showDockedComposer ? 'session-composer-anchor-offscreen' : ''}`}
-      >
-        <SessionComposer
-          compact={true}
-          sessionOnly={true}
-          chatView={true}
-          prompt={agentsStore.composerPrompt}
-          loading={agentsStore.loading}
-          error={agentsStore.error}
-          activeSessionId={agentsStore.activeSessionId}
-          promptFocusToken={agentsStore.promptFocusToken}
-          modelOptions={agentsStore.modelsByAgent[agentId] ?? []}
-          selectedModelId={agentsStore.composerModelId}
-          modelInfo={agentsStore.modelInfoByAgent[agentId] ?? {}}
-          recentModels={agentsStore.getRecentModels(agentId)}
-          modelLoading={!!agentsStore.modelLoadingByAgent[agentId]}
-          agentLabel={showAgentBadges ? selectedSession.agentName : null}
-          attachments={agentsStore.promptAttachments}
-          onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
-          onModelChange={(value) => agentsStore.setComposerModel(value)}
-          onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}
-          sessionConfigOptions={agentsStore.activeSession.configOptions}
-          sessionConfigPending={agentsStore.sessionConfigPending}
-          onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
-          onAddAttachments={(items) => agentsStore.addPromptAttachments(items)}
-          onRemoveAttachment={(id) => agentsStore.removePromptAttachment(id)}
-          onDismissError={() => agentsStore.clearError()}
-          onSendPrompt={() => agentsStore.sendPromptToActiveSession()}
-        />
-      </div>
-
-      {#if showDockedComposer}
+      {#if latestVisible}
         <SessionScrollToBottomPill
-          visible={showDockedComposer}
+          visible={true}
           alignLeft={dockAlignLeft}
           alignWidth={dockAlignWidth}
           onScrollToBottom={() => void scrollToLatest()}
         />
-        <SessionComposer
-          docked={true}
-          dockAlignLeft={dockAlignLeft}
-          dockAlignWidth={dockAlignWidth}
-          compact={true}
-          sessionOnly={true}
-          chatView={true}
-          prompt={agentsStore.composerPrompt}
-          loading={agentsStore.loading}
-          error={agentsStore.error}
-          activeSessionId={agentsStore.activeSessionId}
-          modelOptions={agentsStore.modelsByAgent[agentId] ?? []}
-          selectedModelId={agentsStore.composerModelId}
-          modelInfo={agentsStore.modelInfoByAgent[agentId] ?? {}}
-          recentModels={agentsStore.getRecentModels(agentId)}
-          modelLoading={!!agentsStore.modelLoadingByAgent[agentId]}
-          agentLabel={showAgentBadges ? selectedSession.agentName : null}
-          attachments={agentsStore.promptAttachments}
-          onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
-          onModelChange={(value) => agentsStore.setComposerModel(value)}
-          onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}
-          sessionConfigOptions={agentsStore.activeSession.configOptions}
-          sessionConfigPending={agentsStore.sessionConfigPending}
-          onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
-          onAddAttachments={(items) => agentsStore.addPromptAttachments(items)}
-          onRemoveAttachment={(id) => agentsStore.removePromptAttachment(id)}
-          onDismissError={() => agentsStore.clearError()}
-          onSendPrompt={() => agentsStore.sendPromptToActiveSession()}
-        />
       {/if}
+
+      <SessionComposer
+        docked={true}
+        collapsed={composerCollapsed}
+        dockAlignLeft={dockAlignLeft}
+        dockAlignWidth={dockAlignWidth}
+        compact={true}
+        sessionOnly={true}
+        chatView={true}
+        prompt={agentsStore.composerPrompt}
+        loading={agentsStore.loading}
+        error={agentsStore.error}
+        activeSessionId={agentsStore.activeSessionId}
+        promptFocusToken={agentsStore.promptFocusToken}
+        modelOptions={agentsStore.modelsByAgent[agentId] ?? []}
+        selectedModelId={agentsStore.composerModelId}
+        modelInfo={agentsStore.modelInfoByAgent[agentId] ?? {}}
+        recentModels={agentsStore.getRecentModels(agentId)}
+        modelLoading={!!agentsStore.modelLoadingByAgent[agentId]}
+        agentLabel={showAgentBadges ? selectedSession.agentName : null}
+        attachments={agentsStore.promptAttachments}
+        onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
+        onModelChange={(value) => agentsStore.setComposerModel(value)}
+        onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}
+        sessionConfigOptions={agentsStore.activeSession.configOptions}
+        sessionConfigPending={agentsStore.sessionConfigPending}
+        onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
+        onAddAttachments={(items) => agentsStore.addPromptAttachments(items)}
+        onRemoveAttachment={(id) => agentsStore.removePromptAttachment(id)}
+        onDismissError={() => agentsStore.clearError()}
+        onSendPrompt={() => sendPrompt()}
+      />
     {/if}
+
+    <div class="session-chat-end-anchor" aria-hidden="true"></div>
   </div>
 </div>

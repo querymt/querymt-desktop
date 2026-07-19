@@ -2,44 +2,13 @@
   import { AlertTriangle, CheckCircle2, ChevronDown, LoaderCircle, TerminalSquare } from '@lucide/svelte';
   import type { SessionToolCallItem } from '$lib/domain/types';
 
-  let {
-    tool,
-    open = false
-  }: {
-    tool: SessionToolCallItem;
-    open?: boolean;
-  } = $props();
-
-  let detailsOpen = $state(false);
-  let userToggled = $state(false);
-  let lastToolStateKey = $state('');
-
-  $effect(() => {
-    const nextKey = `${tool.id}:${tool.status}:${open ? 'open' : 'closed'}`;
-    if (nextKey !== lastToolStateKey) {
-      lastToolStateKey = nextKey;
-      if (!userToggled || open) {
-        detailsOpen = open;
-      }
-      if (open) {
-        userToggled = false;
-      }
-    }
-  });
+  let { tool }: { tool: SessionToolCallItem } = $props();
 
   const statusLabel = $derived(tool.status.replace('_', ' '));
-
-  function handleToggle(event: Event) {
-    const target = event.currentTarget as HTMLDetailsElement;
-    detailsOpen = target.open;
-    userToggled = true;
-  }
 </script>
 
 <details
   class={`details-reset session-tool-block ${tool.status === 'failed' ? 'session-tool-block-failed' : tool.status === 'in_progress' ? 'session-tool-block-running' : tool.status === 'completed' ? 'session-tool-block-complete' : ''}`}
-  bind:open={detailsOpen}
-  ontoggle={handleToggle}
 >
   <summary class="session-tool-summary">
     <span class="session-tool-status-rail" aria-hidden="true"></span>

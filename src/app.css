@@ -69,6 +69,8 @@
   --app-shell-inset: 1rem;
   --app-sticky-top: var(--app-shell-inset);
   --session-composer-bottom-offset: 0.25rem;
+  --session-composer-expanded-clearance: 13rem;
+  --session-composer-compact-clearance: 4.75rem;
   --session-chat-min: 48rem;
   --session-chat-max: 52rem;
   --font-display: "Cantarell", "Inter", "Aptos", "Segoe UI", system-ui, sans-serif;
@@ -2471,7 +2473,21 @@ summary:focus-visible {
 .session-page-content {
   display: grid;
   gap: 1rem;
-  padding-bottom: var(--session-composer-bottom-offset);
+  padding-bottom: var(--session-composer-clearance, var(--session-composer-expanded-clearance));
+  transition: padding-bottom 180ms ease;
+}
+
+.session-page-composer-expanded {
+  --session-composer-clearance: var(--session-composer-expanded-clearance);
+}
+
+.session-page-composer-compact {
+  --session-composer-clearance: var(--session-composer-compact-clearance);
+}
+
+.session-chat-end-anchor {
+  height: 1px;
+  scroll-margin-block-end: var(--session-composer-clearance, var(--session-composer-expanded-clearance));
 }
 
 .session-detail-shell {
@@ -2579,6 +2595,17 @@ summary:focus-visible {
 .session-turn {
   display: grid;
   gap: 0.75rem;
+}
+
+.session-turn-content {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.session-turn-tool {
+  max-width: 100%;
+  padding: 0.15rem 0.25rem 0.15rem 1.03rem;
+  border-left: 1px solid var(--border);
 }
 
 .session-message-header {
@@ -4135,19 +4162,11 @@ summary:focus-visible {
   padding: 0.9rem 1rem;
 }
 
-.session-composer-anchor {
-  scroll-margin-block-end: calc(8rem + var(--session-composer-bottom-offset));
-}
-
-.session-composer-anchor-offscreen {
-  visibility: hidden;
-  pointer-events: none;
-}
-
 .session-scroll-bottom-pill-host {
   position: fixed;
   left: 50%;
   bottom: calc(var(--session-composer-bottom-offset) + 3.35rem + 0.55rem);
+  width: min(var(--session-chat-max), calc(100vw - 2rem));
   z-index: 35;
   display: flex;
   justify-content: center;
@@ -4179,9 +4198,22 @@ summary:focus-visible {
   left: 50%;
   bottom: var(--session-composer-bottom-offset);
   z-index: 35;
+  display: grid;
+  align-items: end;
   width: min(var(--session-chat-max), calc(100vw - 2rem));
   max-width: calc(100vw - 2rem);
   transform: translateX(-50%);
+}
+
+.session-composer-dock-expanded {
+  filter: drop-shadow(0 -0.75rem 1.75rem var(--body-bg-base));
+}
+
+.session-composer-morph-shell {
+  grid-area: 1 / 1;
+  width: 100%;
+  transform-origin: bottom center;
+  will-change: transform, opacity;
 }
 
 .session-composer-dock-collapsed {
@@ -4206,6 +4238,16 @@ summary:focus-visible {
   outline: none;
   font: inherit;
   font-size: 0.875rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-page-content {
+    transition: none;
+  }
+
+  .session-composer-morph-shell {
+    will-change: auto;
+  }
 }
 
 @media (min-width: 1536px) {

@@ -3,13 +3,7 @@
   import { Sparkles } from '@lucide/svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
 
-  let {
-    reasoning,
-    open = false
-  }: {
-    reasoning: Array<{ id: string; html: string; isLive: boolean }>;
-    open?: boolean;
-  } = $props();
+  let { reasoning }: { reasoning: Array<{ id: string; html: string; isLive: boolean }> } = $props();
 
   const previewMaxLength = 122;
 
@@ -37,19 +31,21 @@
 </script>
 
 {#if reasoning.length > 0}
-  <details class="details-reset session-reasoning" {open}>
+  <details class="details-reset session-reasoning">
     <summary class="session-reasoning-summary">
       <span class="session-reasoning-summary-main">
-        <Tooltip.Root delayDuration={250} disableHoverableContent>
-          <Tooltip.Trigger>
+        <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+          <Tooltip.Root disableHoverableContent>
+            <Tooltip.Trigger>
             {#snippet child({ props })}
               <span {...props} class="session-reasoning-icon" aria-label="Reasoning"><Sparkles size={14} /></span>
             {/snippet}
-          </Tooltip.Trigger>
-          <Tooltip.Portal>
-            <Tooltip.Content class="app-tooltip-content" sideOffset={6}>Reasoning</Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class="app-tooltip-content" sideOffset={6}>Reasoning</Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+        </Tooltip.Provider>
         <span class="session-reasoning-preview">{previewTitle}</span>
       </span>
       <span class="badge">{reasoning.length}</span>

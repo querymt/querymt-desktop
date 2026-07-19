@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { fly } from 'svelte/transition';
   import { Brain, FilePlus2, Paperclip, Plus, SendHorizontal, SlidersHorizontal, UserRound, X } from '@lucide/svelte';
   import { tick } from 'svelte';
+  import { cubicOut } from 'svelte/easing';
+  import type { TransitionConfig } from 'svelte/transition';
   import ComposerSplitPillSelect from '$lib/components/primitives/ComposerSplitPillSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import ModelQuickPicker from '$lib/components/primitives/ModelQuickPicker.svelte';
@@ -33,6 +34,7 @@
     promptFocusToken = 0,
     sessionOnly = false,
     docked = false,
+    collapsed = false,
     dockAlignLeft = null,
     dockAlignWidth = null,
     chatView = false,
@@ -74,6 +76,7 @@
     promptFocusToken?: number;
     sessionOnly?: boolean;
     docked?: boolean;
+    collapsed?: boolean;
     dockAlignLeft?: number | null;
     dockAlignWidth?: number | null;
     chatView?: boolean;
@@ -107,6 +110,26 @@
 
   let promptElement: HTMLTextAreaElement | null = null;
   let errorTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  const prefersReducedMotion = () =>
+    typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+  function composerMorph(node: Element, { compact }: { compact: boolean }): TransitionConfig {
+    const opacity = Number(getComputedStyle(node).opacity) || 1;
+
+    return {
+      duration: prefersReducedMotion() ? 0 : 220,
+      easing: cubicOut,
+      css: (t) => {
+        const hidden = 1 - t;
+        const translateY = hidden * (compact ? 8 : 4);
+        const clipTop = hidden * (compact ? 35 : 72);
+        const radius = compact ? 999 : 18 + hidden * 20;
+
+        return `opacity:${t * opacity};transform:translateY(${translateY}px);clip-path:inset(${clipTop}% 0 0 0 round ${radius}px);overflow:clip;`;
+      }
+    };
+  }
 
   const unifiedShell = $derived(launch || sessionOnly);
   const sessionPlaceholder = 'Write a reply for this session...';
@@ -223,7 +246,7 @@
   }
 
   $effect(() => {
-    if (!docked) {
+    if (!collapsed) {
       promptFocusToken;
       void focusPrompt();
     }
@@ -433,23 +456,29 @@
   </div>
 {/snippet}
 
-{#if docked}
-  <div class="session-composer-dock" style={dockPositionStyle} transition:fly={{ y: 18, duration: 180 }}>
-    <input
-      bind:this={fileInputElement}
-      class="hidden"
-      type="file"
-      multiple
-      onchange={(event) => {
-        const files = (event.currentTarget as HTMLInputElement).files;
-        if (files?.length) {
-          void readDroppedFiles(files);
-        }
-        (event.currentTarget as HTMLInputElement).value = '';
-      }}
-    />
+<div
+  class={docked ? 'session-composer-dock' : ''}
+  style={dockPositionStyle}
+>
+  {#if collapsed}
+    <div
+      class="session-composer-morph-shell session-composer-dock-compact session-composer-dock-collapsed"
+      transition:composerMorph={{ compact: true }}
+    >
+      <input
+        bind:this={fileInputElement}
+        class="hidden"
+        type="file"
+        multiple
+        onchange={(event) => {
+          const files = (event.currentTarget as HTMLInputElement).files;
+          if (files?.length) {
+            void readDroppedFiles(files);
+          }
+          (event.currentTarget as HTMLInputElement).value = '';
+        }}
+      />
 
-    <div class="session-composer-dock-collapsed">
       <input
         class="session-composer-dock-input"
         type="text"
@@ -460,13 +489,16 @@
       <IconTooltipButton label="Attach files" icon={Paperclip} size={16} onclick={handleAttachClick} />
       <IconTooltipButton label="Send reply" icon={SendHorizontal} tone="primary" size={16} disabled={loading} onclick={onSendPrompt} />
     </div>
-  </div>
-{:else}
-  <div class={`panel-strong ${unifiedShell ? 'p-4 md:p-6' : minimal ? 'p-4 md:p-5' : 'p-3 md:p-4'}`}>
+  {:else}
     <div
-      class={`flex flex-col ${unifiedShell ? 'gap-4 rounded-[24px] bg-[var(--bg-card)]' : 'gap-3 rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)]'} ${unifiedShell ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}
+      class={`session-composer-morph-shell session-composer-dock-expanded panel-strong ${unifiedShell ? 'p-4 md:p-6' : minimal ? 'p-4 md:p-5' : 'p-3 md:p-4'}`}
+      transition:composerMorph={{ compact: false }}
     >
-      {@render composerBody()}
+      <div
+        class={`flex flex-col ${unifiedShell ? 'gap-4 rounded-[24px] bg-[var(--bg-card)]' : 'gap-3 rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)]'} ${unifiedShell ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}
+      >
+        {@render composerBody()}
+      </div>
     </div>
-  </div>
-{/if}
+  {/if}
+</div>
