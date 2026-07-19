@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Accordion } from 'bits-ui';
-  import { Check, ChevronDown, ChevronRight, Clock3, Copy, FolderKanban, RefreshCw, Search } from '@lucide/svelte';
+  import { getContext } from 'svelte';
+  import { Accordion, Portal } from 'bits-ui';
+  import { Check, ChevronDown, ChevronRight, Clock3, Copy, FolderKanban, LoaderCircle, RefreshCw, Search, Trash2, X } from '@lucide/svelte';
   import { formatSessionTimestamp, groupSessionsByWorkspace } from '$lib/domain/sessions';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
@@ -11,7 +12,9 @@
     error = null,
     emptyMessage = 'No sessions returned yet.',
     onRefresh = null,
-    onOpenSession = null
+    onOpenSession = null,
+    canDeleteSession = null,
+    onDeleteSession = null
   }: {
     sessions: DesktopSessionSummary[];
     loading?: boolean;
@@ -19,6 +22,8 @@
     emptyMessage?: string;
     onRefresh?: (() => void) | null;
     onOpenSession?: ((session: DesktopSessionSummary) => void) | null;
+    canDeleteSession?: ((session: DesktopSessionSummary) => boolean) | null;
+    onDeleteSession?: ((session: DesktopSessionSummary) => Promise<void>) | null;
   } = $props();
 
   let query = $state('');
@@ -26,6 +31,12 @@
   let openGroups = $state<string[]>([]);
   let lastWorkspaceKeySignature = $state('');
   let copiedSessionId = $state<string | null>(null);
+  let pendingDeleteSession = $state<DesktopSessionSummary | null>(null);
+  let deletingSessionKey = $state<string | null>(null);
+  let deleteError = $state<string | null>(null);
+
+  const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
+  const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
 
   const filteredSessions = $derived.by(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -88,6 +99,35 @@
       }, 1200);
     } catch (error) {
       console.error('Failed to copy session ID', error);
+    }
+  }
+
+  function requestDeleteSession(event: MouseEvent, session: DesktopSessionSummary) {
+    event.stopPropagation();
+    deleteError = null;
+    pendingDeleteSession = session;
+  }
+
+  function closeDeleteDialog() {
+    if (deletingSessionKey) return;
+    pendingDeleteSession = null;
+    deleteError = null;
+  }
+
+  async function confirmDeleteSession() {
+    const session = pendingDeleteSession;
+    if (!session || !onDeleteSession) return;
+
+    const sessionKey = `${session.agentId}:${session.sessionId}`;
+    deletingSessionKey = sessionKey;
+    deleteError = null;
+    try {
+      await onDeleteSession(session);
+      pendingDeleteSession = null;
+    } catch (error) {
+      deleteError = error instanceof Error ? error.message : `Failed to delete ${session.title}.`;
+    } finally {
+      if (deletingSessionKey === sessionKey) deletingSessionKey = null;
     }
   }
 </script>
@@ -203,6 +243,28 @@
                     </span>
                     <span class="session-row-side">
                       <span class="badge">{getStatusLabel(session.status)}</span>
+                      {#if onDeleteSession}
+                        {@const sessionKey = `${session.agentId}:${session.sessionId}`}
+                        {@const canDelete = canDeleteSession?.(session) ?? false}
+                        <span class="session-row-delete-slot">
+                          {#if canDelete}
+                            <button
+                              class="session-row-delete"
+                              type="button"
+                              aria-label={deletingSessionKey === sessionKey ? `Deleting session ${session.title}` : `Delete session ${session.title}`}
+                              title="Delete session"
+                              disabled={deletingSessionKey !== null}
+                              onclick={(event) => requestDeleteSession(event, session)}
+                            >
+                              {#if deletingSessionKey === sessionKey}
+                                <LoaderCircle size={13} class="session-row-delete-spinner" />
+                              {:else}
+                                <Trash2 size={13} />
+                              {/if}
+                            </button>
+                          {/if}
+                        </span>
+                      {/if}
                       <span class="session-row-open" aria-hidden="true">
                         <ChevronRight size={15} />
                       </span>
@@ -216,4 +278,66 @@
       </Accordion.Root>
     {/if}
   </div>
+
+  {#if pendingDeleteSession}
+    <Portal to={overlayPortalTarget}>
+      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
+        <button
+          class="absolute inset-0 h-full w-full cursor-default"
+          type="button"
+          aria-label="Close delete session confirmation"
+          onclick={() => closeDeleteDialog()}
+          disabled={deletingSessionKey !== null}
+        ></button>
+        <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" aria-labelledby="delete-session-dialog-title" tabindex="-1" data-blocking-overlay="true">
+          <div class="dialog-header">
+            <div class="dialog-header-title-block">
+              <div class="dialog-title" id="delete-session-dialog-title">Delete Session</div>
+              <div class="dialog-subtitle">Permanently remove "{pendingDeleteSession.title}" from {pendingDeleteSession.agentName}?</div>
+            </div>
+            <div class="dialog-header-actions">
+              <button
+                class="dialog-close-button"
+                type="button"
+                aria-label="Close delete session confirmation"
+                onclick={() => closeDeleteDialog()}
+                disabled={deletingSessionKey !== null}
+              >
+                <X size={16} />
+              </button>
+            </div>
+          </div>
+
+          <div class="dialog-body">
+            <div class="dialog-form">
+              <div class="dialog-row-group">
+                <div class="dialog-row dialog-row-muted dialog-row-full">
+                  <div class="dialog-row-main">
+                    <div class="dialog-row-title">This cannot be undone</div>
+                    <div class="dialog-row-description">The session and its history will be permanently removed from the agent.</div>
+                  </div>
+                </div>
+              </div>
+
+              {#if deleteError}
+                <div class="alert-error" role="alert">{deleteError}</div>
+              {/if}
+
+              <div class="dialog-footer">
+                <button class="action-btn" type="button" onclick={() => closeDeleteDialog()} disabled={deletingSessionKey !== null}>Cancel</button>
+                <button class="action-btn action-btn-danger" type="button" onclick={() => confirmDeleteSession()} disabled={deletingSessionKey !== null}>
+                  {#if deletingSessionKey}
+                    <LoaderCircle size={14} class="animate-spin" />
+                    Deleting...
+                  {:else}
+                    Delete
+                  {/if}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Portal>
+  {/if}
 </div>

@@ -194,6 +194,10 @@ export class AgentsStore {
     });
   }
 
+  canDeleteSession(agentId: string): boolean {
+    return Boolean(this.clients.get(agentId)?.initializeResponse?.agentCapabilities?.sessionCapabilities?.delete);
+  }
+
   acknowledgeSession(agentId: string, sessionId: string) {
     const key = buildSessionKey(agentId, sessionId);
     this.attentionSessionKeys = this.attentionSessionKeys.filter((candidate) => candidate !== key);
@@ -649,6 +653,32 @@ export class AgentsStore {
         [config.id]: record.error
       };
       this.error = record.error;
+    }
+  }
+
+  async deleteSession(agentId: string, sessionId: string) {
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) {
+      throw new Error('Unable to locate the agent for this session.');
+    }
+
+    await this.connectAgent(agentId);
+    const record = this.ensureClientRecord(agentId);
+    if (!record.initializeResponse?.agentCapabilities?.sessionCapabilities?.delete) {
+      throw new Error(`${config.name} does not support deleting sessions.`);
+    }
+
+    await record.client.deleteSession(sessionId);
+    this.sessionsByAgent = {
+      ...this.sessionsByAgent,
+      [agentId]: (this.sessionsByAgent[agentId] ?? []).filter((session) => session.sessionId !== sessionId)
+    };
+    this.acknowledgeSession(agentId, sessionId);
+
+    if (this.isSelectedSession(agentId, sessionId)) {
+      this.activeAgentId = null;
+      this.activeSessionId = null;
+      this.activeSession = createEmptyActiveSession();
     }
   }
 

@@ -3948,6 +3948,67 @@ summary:focus-visible {
   color: var(--muted);
 }
 
+.session-row-delete-slot {
+  display: inline-flex;
+  width: 1.55rem;
+  height: 1.55rem;
+  flex: 0 0 auto;
+}
+
+.session-row-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: auto;
+  transform: scale(0.92);
+  transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.session-row:hover .session-row-delete,
+.session-row:focus-within .session-row-delete,
+.session-row-delete:focus-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.session-row-delete:hover:enabled {
+  background: color-mix(in srgb, var(--danger), transparent 88%);
+  color: var(--danger);
+}
+
+.session-row-delete:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 1px;
+}
+
+.session-row-delete:disabled {
+  cursor: wait;
+}
+
+.session-row-delete-spinner {
+  animation: session-row-spin 0.8s linear infinite;
+}
+
+@keyframes session-row-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (hover: none) {
+  .session-row-delete {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .session-row-open {
   display: inline-flex;
   align-items: center;

@@ -95,4 +95,64 @@ describe('DesktopSessionList', () => {
       expect(screen.queryByText('Fix tests')).not.toBeInTheDocument();
     });
   });
+
+  it('only offers delete for supported agents and confirms in-app without opening the session', async () => {
+    const onDeleteSession = vi.fn(async () => {});
+    const onOpenSession = vi.fn();
+    render(DesktopSessionList, {
+      sessions,
+      onOpenSession,
+      onDeleteSession,
+      canDeleteSession: (session) => session.agentId === 'agent-1'
+    });
+
+    const deleteButton = await screen.findByRole('button', { name: 'Delete session Inspect workspace' });
+    expect(screen.queryByRole('button', { name: 'Delete session Fix tests' })).not.toBeInTheDocument();
+
+    await fireEvent.click(deleteButton);
+
+    const dialog = screen.getByRole('dialog', { name: 'Delete Session' });
+    expect(dialog).toHaveTextContent('Permanently remove "Inspect workspace" from WS-QMT?');
+    expect(dialog).toHaveTextContent('This cannot be undone');
+    expect(onDeleteSession).not.toHaveBeenCalled();
+    expect(onOpenSession).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
+
+    expect(onDeleteSession).toHaveBeenCalledWith(sessions[0]);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete Session' })).not.toBeInTheDocument());
+  });
+
+  it('keeps the session when the in-app deletion dialog is cancelled', async () => {
+    const onDeleteSession = vi.fn(async () => {});
+    render(DesktopSessionList, {
+      sessions,
+      onDeleteSession,
+      canDeleteSession: () => true
+    });
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Delete session Inspect workspace' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(onDeleteSession).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: 'Delete Session' })).not.toBeInTheDocument();
+  });
+
+  it('reports a deletion failure in the dialog and restores the delete action', async () => {
+    const onDeleteSession = vi.fn(async () => {
+      throw new Error('Agent refused to delete the session.');
+    });
+    render(DesktopSessionList, {
+      sessions,
+      onDeleteSession,
+      canDeleteSession: () => true
+    });
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Delete session Inspect workspace' }));
+    await fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Agent refused to delete the session.');
+    expect(screen.getByRole('button', { name: /^Delete$/ })).toBeEnabled();
+    expect(screen.getByRole('dialog', { name: 'Delete Session' })).toBeInTheDocument();
+  });
 });

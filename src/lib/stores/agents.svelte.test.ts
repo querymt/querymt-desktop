@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PromptResponse, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
+import type { InitializeResponse, PromptResponse, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
 import { AgentsStore } from './agents.svelte';
 
 const mockClient = vi.hoisted(() => {
@@ -9,7 +9,7 @@ const mockClient = vi.hoisted(() => {
   let elicitationUnsubscribe = vi.fn();
 
   return {
-    connect: vi.fn(async () => ({
+    connect: vi.fn(async (): Promise<InitializeResponse> => ({
       protocolVersion: 1,
       agentCapabilities: { loadSession: true },
       authMethods: []
@@ -19,6 +19,7 @@ const mockClient = vi.hoisted(() => {
       configOptions: []
     })),
     listSessions: vi.fn(async () => []),
+    deleteSession: vi.fn(async () => undefined),
     loadSession: vi.fn(async () => ({ configOptions: [] })),
     sendPrompt: vi.fn(async (): Promise<PromptResponse> => ({ stopReason: 'end_turn' })),
     cancelSession: vi.fn(async () => undefined),
@@ -447,6 +448,56 @@ describe('AgentsStore prompt session start', () => {
       expect.objectContaining({ sessionId: 'session-1', title: 'Local session' })
     ]);
     expect(store.agentErrors['agent-2']).toBe('mesh failed');
+  });
+
+  it('deletes a supported session and clears its related state', async () => {
+    const store = createStore();
+    mockClient.connect.mockResolvedValueOnce({
+      protocolVersion: 1,
+      agentCapabilities: { sessionCapabilities: { delete: {} } },
+      authMethods: []
+    });
+    store.sessionsByAgent = {
+      'agent-1': [
+        {
+          agentId: 'agent-1',
+          agentName: 'QMTCODE',
+          sessionId: 'session-1',
+          title: 'Delete me',
+          cwd: '/tmp/work',
+          updatedAt: '2026-07-18T17:00:00Z',
+          runtimeId: 'agent-1',
+          runtimeName: 'QMTCODE',
+          source: 'acp',
+          status: 'idle'
+        }
+      ]
+    };
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.attentionSessionKeys = ['agent-1:session-1'];
+
+    await store.connectAgent('agent-1');
+    expect(store.canDeleteSession('agent-1')).toBe(true);
+    await store.deleteSession('agent-1', 'session-1');
+
+    expect(mockClient.deleteSession).toHaveBeenCalledWith('session-1');
+    expect(store.sessionsByAgent['agent-1']).toEqual([]);
+    expect(store.attentionSessionKeys).toEqual([]);
+    expect(store.activeAgentId).toBe(null);
+    expect(store.activeSessionId).toBe(null);
+    expect(store.activeSession.sessionId).toBe(null);
+  });
+
+  it('rejects deletion when the agent does not advertise session/delete', async () => {
+    const store = createStore();
+
+    await store.connectAgent('agent-1');
+
+    expect(store.canDeleteSession('agent-1')).toBe(false);
+    await expect(store.deleteSession('agent-1', 'session-1')).rejects.toThrow('QMTCODE does not support deleting sessions.');
+    expect(mockClient.deleteSession).not.toHaveBeenCalled();
   });
 
   it('marks a background session for attention when it finishes after running', async () => {
