@@ -37,6 +37,7 @@
   let scrollViewport: HTMLElement | null = null;
   let viewportEventTarget: HTMLElement | Window | null = null;
   let followFrame: number | null = null;
+  let followScrollVersion = 0;
   let programmaticScroll = false;
   let lastViewportScrollTop = 0;
   let sessionLoadToken = 0;
@@ -48,6 +49,19 @@
   });
   const composerCollapsed = $derived(chatPresentationState === 'fixed-free-compact');
   const latestVisible = $derived(chatPresentationState === 'fixed-free-compact');
+  const latestContentSignature = $derived.by(() => {
+    const transcript = agentsStore.activeSession.transcript;
+    const lastTranscriptItem = transcript.at(-1);
+    const tools = agentsStore.activeSession.toolCalls;
+    const pendingIds = pendingElicitations.map((item) => item.id).join(',');
+    return [
+      transcript.length,
+      lastTranscriptItem?.id ?? '',
+      lastTranscriptItem?.text.length ?? 0,
+      tools.map((tool) => `${tool.id}:${tool.status}:${tool.result?.length ?? 0}`).join(','),
+      pendingIds
+    ].join('|');
+  });
 
   function syncDockAlign() {
     if (!sessionPage) return;
@@ -60,6 +74,15 @@
     composerCollapsed;
     void tick().then(() => {
       syncDockAlign();
+      if (scrollMode === 'following') scheduleFollowScroll();
+    });
+  });
+
+  $effect(() => {
+    latestContentSignature;
+    if (scrollMode !== 'following') return;
+
+    void tick().then(() => {
       if (scrollMode === 'following') scheduleFollowScroll();
     });
   });
@@ -163,6 +186,7 @@
       cancelAnimationFrame(followFrame);
       followFrame = null;
     }
+    followScrollVersion += 1;
   }
 
   function resolveScrollViewport(): { element: HTMLElement; eventTarget: HTMLElement | Window } {
@@ -226,12 +250,27 @@
   }
 
   function scheduleFollowScroll() {
+    followScrollVersion += 1;
     if (followFrame !== null) return;
+    requestFollowScrollFrame();
+  }
+
+  function requestFollowScrollFrame() {
     followFrame = requestAnimationFrame(() => {
-      followFrame = null;
-      if (scrollMode === 'following') {
-        scrollToEnd('instant');
+      const requestedVersion = followScrollVersion;
+      if (scrollMode !== 'following') {
+        followFrame = null;
+        return;
       }
+
+      scrollToEnd('instant');
+      followFrame = requestAnimationFrame(() => {
+        if (scrollMode === 'following') scrollToEnd('instant');
+        followFrame = null;
+        if (scrollMode === 'following' && followScrollVersion !== requestedVersion) {
+          requestFollowScrollFrame();
+        }
+      });
     });
   }
 
@@ -239,10 +278,22 @@
     const viewport = scrollViewport ?? resolveScrollViewport().element;
     if (behavior === 'instant') {
       viewport.scrollTop = viewport.scrollHeight;
+      lastViewportScrollTop = viewport.scrollTop;
       return;
     }
 
     viewport.scrollTo({ top: viewport.scrollHeight, behavior });
+  }
+
+  function handleElicitationAction(itemId: string, actionId: string) {
+    const keepFollowing = scrollMode === 'following';
+    if (keepFollowing) programmaticScroll = true;
+    inboxStore.handleAction(itemId, actionId);
+    if (!keepFollowing) return;
+
+    void tick().then(() => {
+      if (scrollMode === 'following') scheduleFollowScroll();
+    });
   }
 
   async function refreshSession() {
@@ -326,7 +377,7 @@
             <InboxRequestCard
               {item}
               compact={true}
-              onAction={(itemId, actionId) => inboxStore.handleAction(itemId, actionId)}
+              onAction={handleElicitationAction}
               onFieldChange={(itemId, fieldKey, value) => inboxStore.updateField(itemId, fieldKey, value)}
               onCustomFieldToggle={(itemId, fieldKey, active) =>
                 inboxStore.setCustomFieldActive(itemId, fieldKey, active)}
