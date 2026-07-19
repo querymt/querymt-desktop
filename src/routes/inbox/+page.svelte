@@ -27,6 +27,8 @@
       items={inboxStore.items}
       onAction={(itemId, actionId) => inboxStore.handleAction(itemId, actionId)}
       onFieldChange={(itemId, fieldKey, value) => inboxStore.updateField(itemId, fieldKey, value)}
+      onCustomFieldToggle={(itemId, fieldKey, active) => inboxStore.setCustomFieldActive(itemId, fieldKey, active)}
+      onCustomFieldChange={(itemId, fieldKey, value) => inboxStore.updateCustomField(itemId, fieldKey, value)}
       onOpenSession={(item) => openSession(item)}
     />
   </div>

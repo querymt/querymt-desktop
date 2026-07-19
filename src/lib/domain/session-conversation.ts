@@ -32,7 +32,7 @@ export type SessionConversationTurn = {
 export function buildSessionConversation(session: ActiveSessionViewModel): SessionConversationTurn[] {
   const groups = groupTranscriptItems(session.transcript);
   const turns = buildTurns(groups, session);
-  attachTools(turns, session.toolCalls, groups);
+  attachTools(turns, canonicalizeTools(session.toolCalls), groups);
   return turns.filter((turn) => turn.user || turn.reasoning.length > 0 || turn.assistant || turn.activities.length > 0);
 }
 
@@ -90,6 +90,34 @@ function buildTurns(groups: SessionTranscriptGroup[], session: ActiveSessionView
   }
 
   return turns;
+}
+
+function canonicalizeTools(tools: SessionToolCallItem[]): SessionToolCallItem[] {
+  const canonicalById = new Map<string, SessionToolCallItem>();
+
+  for (const tool of tools) {
+    const existing = canonicalById.get(tool.id);
+    if (!existing) {
+      canonicalById.set(tool.id, { ...tool });
+      continue;
+    }
+
+    const existingTerminal = existing.status === 'completed' || existing.status === 'failed';
+    const toolTerminal = tool.status === 'completed' || tool.status === 'failed';
+    if (!existingTerminal && toolTerminal) existing.status = tool.status;
+    existing.title = existing.title || tool.title;
+    existing.kind = existing.kind ?? tool.kind;
+    existing.messageId = existing.messageId ?? tool.messageId;
+    existing.arguments = existing.arguments ?? tool.arguments;
+    existing.result = existing.result ?? tool.result;
+    existing.isError = existing.isError ?? tool.isError;
+    existing.eventIndex = Math.min(
+      existing.eventIndex ?? Number.MAX_SAFE_INTEGER,
+      tool.eventIndex ?? Number.MAX_SAFE_INTEGER
+    );
+  }
+
+  return [...canonicalById.values()];
 }
 
 function attachTools(turns: SessionConversationTurn[], tools: SessionToolCallItem[], groups: SessionTranscriptGroup[]) {

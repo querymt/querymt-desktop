@@ -79,6 +79,42 @@ describe('buildSessionConversation', () => {
     expect(turns[0].activities[0].attachedBy).toBe('nearest-previous');
   });
 
+  it('renders duplicate tool IDs once and prefers terminal data', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'ask me', messageId: 'm-user', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'You selected Option B.', messageId: 'm-assistant', eventIndex: 4 }
+    ];
+    session.toolCalls = [
+      {
+        id: 'question-1',
+        title: 'Run question',
+        status: 'completed',
+        kind: 'other',
+        arguments: '{"questions":[]}',
+        result: '{"answers":["Option B"]}',
+        eventIndex: 2
+      },
+      {
+        id: 'question-1',
+        title: 'Run question',
+        status: 'in_progress',
+        kind: 'other',
+        arguments: '{"questions":[]}',
+        eventIndex: 3
+      }
+    ];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns[0].activities).toHaveLength(1);
+    expect(turns[0].activities[0].tool).toMatchObject({
+      id: 'question-1',
+      status: 'completed',
+      result: '{"answers":["Option B"]}'
+    });
+  });
+
   it('preserves tool execution order within a turn', () => {
     const session = baseSession();
     session.transcript = [

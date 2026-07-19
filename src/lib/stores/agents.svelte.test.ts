@@ -5,11 +5,13 @@ import { AgentsStore } from './agents.svelte';
 const mockClient = vi.hoisted(() => {
   let sessionUpdateHandler: ((notification: SessionNotification) => void) | null = null;
   let connectionLossHandler: ((reason: string) => void) | null = null;
+  let permissionUnsubscribe = vi.fn();
+  let elicitationUnsubscribe = vi.fn();
 
   return {
     connect: vi.fn(async () => ({
       protocolVersion: 1,
-      agentCapabilities: {},
+      agentCapabilities: { loadSession: true },
       authMethods: []
     })),
     createSession: vi.fn(async () => ({
@@ -17,6 +19,7 @@ const mockClient = vi.hoisted(() => {
       configOptions: []
     })),
     listSessions: vi.fn(async () => []),
+    loadSession: vi.fn(async () => ({ configOptions: [] })),
     sendPrompt: vi.fn(async (): Promise<PromptResponse> => ({ stopReason: 'end_turn' })),
     cancelSession: vi.fn(async () => undefined),
     getInitializeResponse: vi.fn(() => ({
@@ -42,10 +45,14 @@ const mockClient = vi.hoisted(() => {
     emitSessionUpdate: (notification: SessionNotification) => sessionUpdateHandler?.(notification),
     resetSessionUpdateHandler: () => {
       sessionUpdateHandler = null;
+      permissionUnsubscribe = vi.fn();
+      elicitationUnsubscribe = vi.fn();
     },
+    permissionUnsubscribe: () => permissionUnsubscribe,
+    elicitationUnsubscribe: () => elicitationUnsubscribe,
     onExtensionNotification: vi.fn(() => () => undefined),
-    onPermissionRequest: vi.fn(() => () => undefined),
-    onElicitationRequest: vi.fn(() => () => undefined),
+    onPermissionRequest: vi.fn(() => permissionUnsubscribe),
+    onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
     setSessionConfigOption: vi.fn(async () => [])
   };
 });
@@ -97,6 +104,49 @@ function createStore() {
 beforeEach(() => {
   vi.clearAllMocks();
   mockClient.resetSessionUpdateHandler();
+});
+
+describe('AgentsStore connections', () => {
+  it('does not reconnect or replace inbox handlers when already initialized', async () => {
+    const store = createStore();
+
+    await store.connectAgent('agent-1');
+    await store.connectAgent('agent-1');
+
+    expect(mockClient.connect).toHaveBeenCalledTimes(1);
+    expect(mockClient.onPermissionRequest).toHaveBeenCalledTimes(1);
+    expect(mockClient.onElicitationRequest).toHaveBeenCalledTimes(1);
+    expect(mockClient.permissionUnsubscribe()).not.toHaveBeenCalled();
+    expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
+  });
+
+  it('loads a session without unbinding inbox handlers', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [
+        {
+          agentId: 'agent-1',
+          agentName: 'QMTCODE',
+          sessionId: 'session-1',
+          title: 'Question session',
+          cwd: '/tmp/work',
+          updatedAt: '2026-07-18T17:00:00Z',
+          runtimeId: 'agent-1',
+          runtimeName: 'QMTCODE',
+          source: 'acp',
+          status: 'idle'
+        }
+      ]
+    };
+
+    await store.connectAgent('agent-1');
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(mockClient.connect).toHaveBeenCalledTimes(1);
+    expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '/tmp/work');
+    expect(mockClient.permissionUnsubscribe()).not.toHaveBeenCalled();
+    expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
+  });
 });
 
 describe('AgentsStore agent availability', () => {

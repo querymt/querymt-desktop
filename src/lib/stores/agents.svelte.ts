@@ -495,13 +495,19 @@ export class AgentsStore {
       return;
     }
 
+    const existing = this.clients.get(agentId);
+    if (!force && existing?.connectionState === 'initialized' && existing.initializeResponse) {
+      return;
+    }
+
     const record = this.ensureClientRecord(agentId, force);
     record.connectionState = 'connecting';
     record.error = null;
 
     try {
-      record.unsubscribeInbox?.();
-      record.unsubscribeInbox = inboxStore.bindClient(record.client, config.id, config.name);
+      if (!record.unsubscribeInbox) {
+        record.unsubscribeInbox = inboxStore.bindClient(record.client, config.id, config.name);
+      }
       record.initializeResponse = await record.client.connect();
       record.connectionState = 'initialized';
       this.cancelReconnect(agentId);
@@ -795,8 +801,8 @@ export class AgentsStore {
 
     this.acknowledgeSession(agentId, sessionId);
 
-    const record = this.ensureClientRecord(agentId);
     await this.connectAgent(agentId);
+    const record = this.ensureClientRecord(agentId);
 
     if (!record.initializeResponse?.agentCapabilities?.loadSession) {
       this.error = 'This agent does not support session/load.';
@@ -900,6 +906,7 @@ export class AgentsStore {
     record.unsubscribeExtensionNotifications?.();
     record.unsubscribeConnectionLoss?.();
     record.unsubscribeInbox?.();
+    inboxStore.disconnectAgent(agentId);
     void record.client.disconnect();
     this.clients.delete(agentId);
   }
@@ -1601,7 +1608,7 @@ export class AgentsStore {
       return;
     }
 
-    const notificationKey = `${notification.sessionId}:${JSON.stringify(notification.update)}`;
+    const notificationKey = getSessionNotificationKey(notification);
     if (record.recentSessionUpdateKeys.includes(notificationKey)) {
       console.debug('querymt session/update duplicate', {
         agentId,
@@ -1726,6 +1733,26 @@ export class AgentsStore {
       }
     }
   }
+}
+
+function getSessionNotificationKey(notification: SessionNotification): string {
+  const update = notification.update;
+  const prefix = `${notification.sessionId}:${update.sessionUpdate}`;
+
+  if (update.sessionUpdate === 'tool_call') return `${prefix}:${update.toolCallId}`;
+  if (update.sessionUpdate === 'tool_call_update') {
+    return `${prefix}:${update.toolCallId}:${update.status ?? 'updated'}`;
+  }
+  if (
+    update.sessionUpdate === 'user_message_chunk' ||
+    update.sessionUpdate === 'agent_message_chunk' ||
+    update.sessionUpdate === 'agent_thought_chunk'
+  ) {
+    const content = update.content.type === 'text' ? update.content.text : JSON.stringify(update.content);
+    return `${prefix}:${update.messageId ?? ''}:${content}`;
+  }
+
+  return `${prefix}:${JSON.stringify(update)}`;
 }
 
 function inferSessionStatusFromNotification(update: SessionNotification['update']): SessionStatus | null {

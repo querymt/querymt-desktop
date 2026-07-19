@@ -41,7 +41,8 @@ export function mapElicitationRequestToInboxItem(
   agentId?: string,
   agentName?: string
 ): InboxItem {
-  const formFields = request.mode === 'form' ? mapElicitationFormFields(request.requestedSchema) : [];
+  const allowCustom = allowsCustomResponses(request);
+  const formFields = request.mode === 'form' ? mapElicitationFormFields(request.requestedSchema, allowCustom) : [];
   const owner = 'sessionId' in request ? request.sessionId : `request ${String(request.requestId)}`;
   const title = request.mode === 'form' ? request.requestedSchema.title || 'Elicitation request' : 'Elicitation request';
 
@@ -116,6 +117,12 @@ export function buildElicitationResponse(actionId: string, fields: InboxFormFiel
 
   const content: Record<string, ElicitationContentValue> = {};
   for (const field of fields) {
+    if (field.customActive) {
+      const customValue = field.customValue?.trim() ?? '';
+      content[field.key] = field.kind === 'array' ? [customValue] : customValue;
+      continue;
+    }
+
     if (field.kind === 'string') {
       content[field.key] = String(field.value);
       continue;
@@ -149,19 +156,32 @@ function mapPermissionOption(option: PermissionOption): InboxAction {
   };
 }
 
-function mapElicitationFormFields(schema: ElicitationSchema): InboxFormField[] {
+function mapElicitationFormFields(schema: ElicitationSchema, allowCustom: boolean): InboxFormField[] {
   const properties = (schema.properties ?? {}) as Record<string, ElicitationPropertySchema>;
   const required = new Set(schema.required ?? []);
 
-  return Object.entries(properties).map(([key, property]) => ({
-    key,
-    label: property.title || key,
-    kind: property.type,
-    required: required.has(key),
-    description: property.description ?? null,
-    options: mapPropertyOptions(property),
-    value: getDefaultFieldValue(property)
-  }));
+  return Object.entries(properties).map(([key, property]) => {
+    const options = mapPropertyOptions(property);
+    return {
+      key,
+      label: property.title || key,
+      kind: property.type,
+      required: required.has(key),
+      description: property.description ?? null,
+      options,
+      value: getDefaultFieldValue(property),
+      allowCustom: allowCustom && Boolean(options?.length),
+      customActive: false,
+      customValue: ''
+    };
+  });
+}
+
+function allowsCustomResponses(request: CreateElicitationRequest): boolean {
+  const querymtMeta = request._meta?.querymt;
+  if (!querymtMeta || typeof querymtMeta !== 'object') return false;
+  const metadata = querymtMeta as Record<string, unknown>;
+  return metadata.source === 'builtin:question' || metadata.allow_custom === true || metadata.allowCustom === true;
 }
 
 function mapPropertyOptions(property: ElicitationPropertySchema): InboxFormOption[] | undefined {
@@ -176,9 +196,14 @@ function mapPropertyOptions(property: ElicitationPropertySchema): InboxFormOptio
   }
 
   if (property.type === 'array') {
-    const items = property.items as { oneOf?: Array<{ const: string; title: string }>; enum?: string[] };
-    if (items.oneOf?.length) {
-      return items.oneOf.map((option) => ({ value: option.const, label: option.title }));
+    const items = property.items as {
+      anyOf?: Array<{ const: string; title: string }>;
+      oneOf?: Array<{ const: string; title: string }>;
+      enum?: string[];
+    };
+    const titledOptions = items.anyOf ?? items.oneOf;
+    if (titledOptions?.length) {
+      return titledOptions.map((option) => ({ value: option.const, label: option.title }));
     }
 
     if (items.enum?.length) {

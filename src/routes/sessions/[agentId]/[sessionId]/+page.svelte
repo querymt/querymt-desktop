@@ -5,17 +5,20 @@
   import { onMount, tick, untrack } from 'svelte';
   import ActiveSessionView from '$lib/components/primitives/ActiveSessionView.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
+  import InboxRequestCard from '$lib/components/primitives/InboxRequestCard.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import SessionScrollToBottomPill from '$lib/components/session/SessionScrollToBottomPill.svelte';
   import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
   import { formatSessionTimestamp, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { inboxStore } from '$lib/stores/inbox.svelte';
 
   const agentId = $derived(decodeURIComponent(page.params.agentId ?? ''));
   const sessionId = $derived(decodeURIComponent(page.params.sessionId ?? ''));
   const selectedSession = $derived(getSessionById(agentsStore.sessionsByAgent[agentId] ?? [], sessionId, agentId));
   const showAgentBadges = $derived(agentsStore.connectedAgents.length > 1);
+  const pendingElicitations = $derived(inboxStore.pendingElicitationsForSession(agentId, sessionId));
   let composerAnchor = $state<HTMLDivElement | null>(null);
   let showDockedComposer = $state(false);
   let dockAlignLeft = $state<number | null>(null);
@@ -184,6 +187,31 @@
 
   <div class="session-page-content">
     <ActiveSessionView session={agentsStore.activeSession} onCancel={() => agentsStore.cancelActiveSession()} />
+
+    {#if pendingElicitations.length > 0}
+      <section class="settings-section session-elicitation-panel" aria-label="Session questions">
+        <div class="settings-section-header">
+          <div>
+            <h2>Input needed</h2>
+            <p>The agent is waiting for your response before it can continue.</p>
+          </div>
+        </div>
+        <div class="space-y-3">
+          {#each pendingElicitations as item}
+            <InboxRequestCard
+              {item}
+              compact={true}
+              onAction={(itemId, actionId) => inboxStore.handleAction(itemId, actionId)}
+              onFieldChange={(itemId, fieldKey, value) => inboxStore.updateField(itemId, fieldKey, value)}
+              onCustomFieldToggle={(itemId, fieldKey, active) =>
+                inboxStore.setCustomFieldActive(itemId, fieldKey, active)}
+              onCustomFieldChange={(itemId, fieldKey, value) =>
+                inboxStore.updateCustomField(itemId, fieldKey, value)}
+            />
+          {/each}
+        </div>
+      </section>
+    {/if}
 
     {#if selectedSession}
       <div
