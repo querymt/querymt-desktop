@@ -3,6 +3,7 @@ import type {
   ActiveSessionViewModel,
   SessionEventItem,
   SessionPlanEntry,
+  SessionToolCallItem,
   SessionTranscriptGroup,
   SessionTranscriptItem
 } from '$lib/domain/types';
@@ -23,9 +24,21 @@ export function createEmptyActiveSession(): ActiveSessionViewModel {
   };
 }
 
+export function getNextConversationEventIndex(session: ActiveSessionViewModel): number {
+  let maxIndex = -1;
+  for (const item of session.transcript) {
+    if (typeof item.eventIndex === 'number') maxIndex = Math.max(maxIndex, item.eventIndex);
+  }
+  for (const tool of session.toolCalls) {
+    if (typeof tool.eventIndex === 'number') maxIndex = Math.max(maxIndex, tool.eventIndex);
+  }
+  return maxIndex + 1;
+}
+
 export function applySessionNotification(
   current: ActiveSessionViewModel,
-  notification: SessionNotification
+  notification: SessionNotification,
+  conversationEventIndex = getNextConversationEventIndex(current)
 ): ActiveSessionViewModel {
   const next: ActiveSessionViewModel = {
     sessionId: current.sessionId,
@@ -57,7 +70,7 @@ export function applySessionNotification(
         kind: update.sessionUpdate,
         text: getTextContent(update.content),
         messageId: update.messageId ?? null,
-        eventIndex: next.events.length - 1
+        eventIndex: conversationEventIndex
       });
       next.runState = 'thinking';
       next.activityLabel = 'Waiting for the agent to respond…';
@@ -68,7 +81,7 @@ export function applySessionNotification(
         kind: update.sessionUpdate,
         text: getTextContent(update.content),
         messageId: update.messageId ?? null,
-        eventIndex: next.events.length - 1
+        eventIndex: conversationEventIndex
       });
       next.runState = 'streaming';
       next.activityLabel = 'Agent is replying…';
@@ -80,54 +93,73 @@ export function applySessionNotification(
         kind: update.sessionUpdate,
         text: getTextContent(update.content),
         messageId: update.messageId ?? null,
-        eventIndex: next.events.length - 1
+        eventIndex: conversationEventIndex
       });
       next.runState = 'thinking';
       next.activityLabel = 'Agent is thinking…';
       next.lastError = null;
       break;
-    case 'tool_call':
-      next.toolCalls.push({
-        id: update.toolCallId,
-        title: update.title,
-        status: update.status ?? 'pending',
-        kind: update.kind ?? null,
-        messageId: readMessageId(update),
-        arguments: stringifyOptional(update.rawInput),
-        result: stringifyToolContent(update.rawOutput ?? update.content),
-        eventIndex: next.events.length - 1
-      });
-      next.runState = 'tool-running';
-      next.activeToolCallId = update.toolCallId;
-      next.activityLabel = `Running tool: ${update.title}`;
-      next.lastError = null;
+    case 'tool_call': {
+      const incomingStatus = update.status ?? 'pending';
+      const target = canonicalizeToolCall(next.toolCalls, update.toolCallId);
+      if (target) {
+        target.title = update.title || target.title;
+        target.status = mergeToolStatus(target.status, incomingStatus);
+        target.kind = update.kind ?? target.kind;
+        target.messageId = target.messageId ?? readMessageId(update);
+        target.arguments = stringifyOptional(update.rawInput) ?? target.arguments;
+        target.result = stringifyToolContent(update.rawOutput ?? update.content) ?? target.result;
+        target.eventIndex = target.eventIndex ?? conversationEventIndex;
+      } else {
+        next.toolCalls.push({
+          id: update.toolCallId,
+          title: update.title,
+          status: incomingStatus,
+          kind: update.kind ?? null,
+          messageId: readMessageId(update),
+          arguments: stringifyOptional(update.rawInput),
+          result: stringifyToolContent(update.rawOutput ?? update.content),
+          eventIndex: conversationEventIndex
+        });
+      }
+      const current = next.toolCalls.find((tool) => tool.id === update.toolCallId);
+      if (current && isTerminalToolStatus(current.status)) {
+        if (next.activeToolCallId === update.toolCallId) next.activeToolCallId = null;
+      } else {
+        next.runState = 'tool-running';
+        next.activeToolCallId = update.toolCallId;
+        next.activityLabel = `Running tool: ${update.title}`;
+        next.lastError = null;
+      }
       break;
+    }
     case 'tool_call_update': {
-      const target = next.toolCalls.find((tool) => tool.id === update.toolCallId);
+      let target = canonicalizeToolCall(next.toolCalls, update.toolCallId);
       if (target) {
         target.title = update.title ?? target.title;
-        target.status = update.status ?? target.status;
+        target.status = mergeToolStatus(target.status, update.status ?? target.status);
         target.kind = update.kind ?? target.kind;
         target.messageId = target.messageId ?? readMessageId(update);
         target.result = stringifyToolContent(update.rawOutput ?? update.content) ?? target.result;
-        target.eventIndex = target.eventIndex ?? next.events.length - 1;
+        target.eventIndex = target.eventIndex ?? conversationEventIndex;
       } else {
-        next.toolCalls.push({
+        target = {
           id: update.toolCallId,
           title: update.title ?? 'Tool call',
           status: update.status ?? 'pending',
           kind: update.kind ?? null,
           messageId: readMessageId(update),
           result: stringifyToolContent(update.rawOutput ?? update.content),
-          eventIndex: next.events.length - 1
-        });
+          eventIndex: conversationEventIndex
+        };
+        next.toolCalls.push(target);
       }
-      if (update.status === 'completed') {
+      if (target.status === 'completed') {
         next.runState = 'streaming';
         next.activeToolCallId = null;
         next.activityLabel = 'Tool finished. Continuing reply…';
         next.lastError = null;
-      } else if (update.status === 'failed') {
+      } else if (target.status === 'failed') {
         next.runState = 'failed';
         next.activeToolCallId = update.toolCallId;
         next.lastError = update.title ? `${update.title} failed.` : 'Tool call failed.';
@@ -164,6 +196,44 @@ export function applySessionNotification(
   }
 
   return next;
+}
+
+function canonicalizeToolCall(toolCalls: SessionToolCallItem[], toolCallId: string): SessionToolCallItem | null {
+  const matches = toolCalls.filter((tool) => tool.id === toolCallId);
+  if (matches.length === 0) return null;
+
+  const canonical = matches[0];
+  for (const duplicate of matches.slice(1)) {
+    canonical.title = canonical.title || duplicate.title;
+    canonical.status = mergeToolStatus(canonical.status, duplicate.status);
+    canonical.kind = canonical.kind ?? duplicate.kind;
+    canonical.messageId = canonical.messageId ?? duplicate.messageId;
+    canonical.arguments = canonical.arguments ?? duplicate.arguments;
+    canonical.result = canonical.result ?? duplicate.result;
+    canonical.isError = canonical.isError ?? duplicate.isError;
+    canonical.eventIndex = Math.min(
+      canonical.eventIndex ?? Number.MAX_SAFE_INTEGER,
+      duplicate.eventIndex ?? Number.MAX_SAFE_INTEGER
+    );
+  }
+
+  if (matches.length > 1) {
+    const firstIndex = toolCalls.indexOf(canonical);
+    toolCalls.splice(0, toolCalls.length, ...toolCalls.filter((tool, index) => tool.id !== toolCallId || index === firstIndex));
+  }
+  return canonical;
+}
+
+function mergeToolStatus(
+  current: SessionToolCallItem['status'],
+  incoming: SessionToolCallItem['status']
+): SessionToolCallItem['status'] {
+  if (isTerminalToolStatus(current) && !isTerminalToolStatus(incoming)) return current;
+  return incoming;
+}
+
+function isTerminalToolStatus(status: SessionToolCallItem['status']): boolean {
+  return status === 'completed' || status === 'failed';
 }
 
 export function groupTranscriptItems(items: SessionTranscriptItem[]): SessionTranscriptGroup[] {

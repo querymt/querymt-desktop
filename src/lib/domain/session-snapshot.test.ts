@@ -81,9 +81,9 @@ describe('activeSessionFromLoadResponse', () => {
 
     const turns = buildSessionConversation(session);
     expect(turns).toHaveLength(1);
-    expect(turns[0].reasoning).toHaveLength(1);
-    expect(turns[0].reasoning[0].html).toContain('Planning tests');
-    expect(turns[0].assistant?.html).toContain('I have a plan.');
+    expect(turns[0].content.map((item) => item.type)).toEqual(['reasoning', 'assistant']);
+    expect(turns[0].content[0]).toMatchObject({ type: 'reasoning', html: expect.stringContaining('Planning tests') });
+    expect(turns[0].content[1]).toMatchObject({ type: 'assistant', html: expect.stringContaining('I have a plan.') });
   });
 
   it('hydrates reasoning-only stored assistant messages without empty assistant output', () => {
@@ -117,8 +117,7 @@ describe('activeSessionFromLoadResponse', () => {
 
     const turns = buildSessionConversation(session);
     expect(turns).toHaveLength(1);
-    expect(turns[0].reasoning).toHaveLength(1);
-    expect(turns[0].assistant).toBeUndefined();
+    expect(turns[0].content).toEqual([expect.objectContaining({ type: 'reasoning' })]);
   });
 
   it('merges tool start and end events by tool_call_id even when the end arrives first', () => {

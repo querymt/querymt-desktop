@@ -229,6 +229,9 @@ export interface InboxFormField {
   description?: string | null;
   options?: InboxFormOption[];
   value: string | number | boolean | string[];
+  allowCustom?: boolean;
+  customActive?: boolean;
+  customValue?: string;
 }
 
 export interface InboxItem {

@@ -1,7 +1,12 @@
 <script lang="ts">
   import { AlertTriangle, CheckCircle2, LoaderCircle, Wrench } from '@lucide/svelte';
   import SessionToolBlock from '$lib/components/session/SessionToolBlock.svelte';
-  import type { SessionActivityItem } from '$lib/domain/session-conversation';
+  import type { SessionToolCallItem } from '$lib/domain/types';
+
+  type SessionActivityItem = {
+    id: string;
+    tool: SessionToolCallItem;
+  };
 
   let {
     activities,
@@ -81,7 +86,7 @@
     </summary>
     <div class="session-activities-list">
       {#each activities as activity}
-        <SessionToolBlock tool={activity.tool} open={activity.tool.id === activeToolCallId || activity.tool.status === 'in_progress'} />
+        <SessionToolBlock tool={activity.tool} />
       {/each}
     </div>
   </details>

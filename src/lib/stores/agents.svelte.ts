@@ -8,7 +8,11 @@ import type {
 } from '@agentclientprotocol/sdk';
 import { tick } from 'svelte';
 import { activeSessionFromLoadResponse, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
-import { createEmptyActiveSession, applySessionNotification } from '$lib/domain/session-updates';
+import {
+  createEmptyActiveSession,
+  applySessionNotification,
+  getNextConversationEventIndex
+} from '$lib/domain/session-updates';
 import {
   buildSessionKey,
   getSessionById,
@@ -192,6 +196,10 @@ export class AgentsStore {
         controlState === 'degraded'
       );
     });
+  }
+
+  canDeleteSession(agentId: string): boolean {
+    return Boolean(this.clients.get(agentId)?.initializeResponse?.agentCapabilities?.sessionCapabilities?.delete);
   }
 
   acknowledgeSession(agentId: string, sessionId: string) {
@@ -495,13 +503,19 @@ export class AgentsStore {
       return;
     }
 
+    const existing = this.clients.get(agentId);
+    if (!force && existing?.connectionState === 'initialized' && existing.initializeResponse) {
+      return;
+    }
+
     const record = this.ensureClientRecord(agentId, force);
     record.connectionState = 'connecting';
     record.error = null;
 
     try {
-      record.unsubscribeInbox?.();
-      record.unsubscribeInbox = inboxStore.bindClient(record.client, config.id, config.name);
+      if (!record.unsubscribeInbox) {
+        record.unsubscribeInbox = inboxStore.bindClient(record.client, config.id, config.name);
+      }
       record.initializeResponse = await record.client.connect();
       record.connectionState = 'initialized';
       this.cancelReconnect(agentId);
@@ -643,6 +657,32 @@ export class AgentsStore {
         [config.id]: record.error
       };
       this.error = record.error;
+    }
+  }
+
+  async deleteSession(agentId: string, sessionId: string) {
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) {
+      throw new Error('Unable to locate the agent for this session.');
+    }
+
+    await this.connectAgent(agentId);
+    const record = this.ensureClientRecord(agentId);
+    if (!record.initializeResponse?.agentCapabilities?.sessionCapabilities?.delete) {
+      throw new Error(`${config.name} does not support deleting sessions.`);
+    }
+
+    await record.client.deleteSession(sessionId);
+    this.sessionsByAgent = {
+      ...this.sessionsByAgent,
+      [agentId]: (this.sessionsByAgent[agentId] ?? []).filter((session) => session.sessionId !== sessionId)
+    };
+    this.acknowledgeSession(agentId, sessionId);
+
+    if (this.isSelectedSession(agentId, sessionId)) {
+      this.activeAgentId = null;
+      this.activeSessionId = null;
+      this.activeSession = createEmptyActiveSession();
     }
   }
 
@@ -795,8 +835,8 @@ export class AgentsStore {
 
     this.acknowledgeSession(agentId, sessionId);
 
-    const record = this.ensureClientRecord(agentId);
     await this.connectAgent(agentId);
+    const record = this.ensureClientRecord(agentId);
 
     if (!record.initializeResponse?.agentCapabilities?.loadSession) {
       this.error = 'This agent does not support session/load.';
@@ -900,6 +940,7 @@ export class AgentsStore {
     record.unsubscribeExtensionNotifications?.();
     record.unsubscribeConnectionLoss?.();
     record.unsubscribeInbox?.();
+    inboxStore.disconnectAgent(agentId);
     void record.client.disconnect();
     this.clients.delete(agentId);
   }
@@ -1507,7 +1548,7 @@ export class AgentsStore {
   }
 
   private addOptimisticUserPrompt(sessionId: string, prompt: string) {
-    const eventIndex = this.activeSession.events.length;
+    const eventIndex = getNextConversationEventIndex(this.activeSession);
     const id = `${sessionId}-optimistic-user-${eventIndex + 1}`;
     this.activeSession.transcript.push({
       id,
@@ -1524,10 +1565,10 @@ export class AgentsStore {
     });
   }
 
-  private removeMatchingOptimisticUserPrompt(notification: SessionNotification) {
+  private removeMatchingOptimisticUserPrompt(notification: SessionNotification): number | undefined {
     const update = notification.update;
     if (update.sessionUpdate !== 'user_message_chunk' || update.content.type !== 'text') {
-      return;
+      return undefined;
     }
 
     const contentText = update.content.text;
@@ -1539,11 +1580,12 @@ export class AgentsStore {
         item.text === contentText
     );
     if (!optimistic) {
-      return;
+      return undefined;
     }
 
     this.activeSession.transcript = this.activeSession.transcript.filter((item) => item.id !== optimistic.id);
     this.activeSession.events = this.activeSession.events.filter((event) => event.messageId !== optimistic.messageId);
+    return optimistic.eventIndex;
   }
 
   private applySessionSummaryUpdate(agentId: string, notification: SessionNotification) {
@@ -1601,7 +1643,7 @@ export class AgentsStore {
       return;
     }
 
-    const notificationKey = `${notification.sessionId}:${JSON.stringify(notification.update)}`;
+    const notificationKey = getSessionNotificationKey(notification);
     if (record.recentSessionUpdateKeys.includes(notificationKey)) {
       console.debug('querymt session/update duplicate', {
         agentId,
@@ -1615,9 +1657,9 @@ export class AgentsStore {
       this.activeSession.sessionId = notification.sessionId;
     }
 
-    this.removeMatchingOptimisticUserPrompt(notification);
+    const optimisticEventIndex = this.removeMatchingOptimisticUserPrompt(notification);
     const beforeEvents = this.activeSession.events.length;
-    this.activeSession = applySessionNotification(this.activeSession, notification);
+    this.activeSession = applySessionNotification(this.activeSession, notification, optimisticEventIndex);
     console.debug('querymt session/update applied', {
       agentId,
       sessionId: notification.sessionId,
@@ -1726,6 +1768,26 @@ export class AgentsStore {
       }
     }
   }
+}
+
+function getSessionNotificationKey(notification: SessionNotification): string {
+  const update = notification.update;
+  const prefix = `${notification.sessionId}:${update.sessionUpdate}`;
+
+  if (update.sessionUpdate === 'tool_call') return `${prefix}:${update.toolCallId}`;
+  if (update.sessionUpdate === 'tool_call_update') {
+    return `${prefix}:${update.toolCallId}:${update.status ?? 'updated'}`;
+  }
+  if (
+    update.sessionUpdate === 'user_message_chunk' ||
+    update.sessionUpdate === 'agent_message_chunk' ||
+    update.sessionUpdate === 'agent_thought_chunk'
+  ) {
+    const content = update.content.type === 'text' ? update.content.text : JSON.stringify(update.content);
+    return `${prefix}:${update.messageId ?? ''}:${content}`;
+  }
+
+  return `${prefix}:${JSON.stringify(update)}`;
 }
 
 function inferSessionStatusFromNotification(update: SessionNotification['update']): SessionStatus | null {

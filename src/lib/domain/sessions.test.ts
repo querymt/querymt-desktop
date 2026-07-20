@@ -119,6 +119,22 @@ describe('getRecentSessionRailItems', () => {
       'recent-newer'
     ]);
     expect(items.map((item) => item.tone)).toEqual(['attention', 'active', 'active', 'recent']);
+    expect(items.map((item) => item.requiresAttention)).toEqual([true, false, false, false]);
+  });
+
+  it('keeps active and action-required states simultaneously', () => {
+    const sessions = [
+      createDesktopSession({ sessionId: 'active-normal', status: 'thinking', updatedAt: '2026-06-17T12:05:00Z' }),
+      createDesktopSession({ sessionId: 'active-question', status: 'waiting', updatedAt: '2026-06-17T12:01:00Z' })
+    ];
+
+    const items = getRecentSessionRailItems(sessions, {
+      actionRequiredSessionKeys: ['agent-1:active-question']
+    });
+
+    expect(items.map((item) => item.session.sessionId)).toEqual(['active-question', 'active-normal']);
+    expect(items[0]).toMatchObject({ isActive: true, requiresAttention: true, tone: 'attention' });
+    expect(items[1]).toMatchObject({ isActive: true, requiresAttention: false, tone: 'active' });
   });
 
   it('limits rail items after priority sorting', () => {

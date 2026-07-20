@@ -2,21 +2,24 @@
   import { onMount } from 'svelte';
   import { Tooltip } from 'bits-ui';
   import { LoaderCircle } from '@lucide/svelte';
+  import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
   import { sectionIcons, sectionOrder, type SectionName } from '$lib/design/tokens';
   import {
     formatSessionTimestamp,
     getRecentSessionRailItems,
     getSessionWorkspaceName,
-    type SessionRailItem,
-    type SessionRailTone
+    type SessionRailItem
   } from '$lib/domain/sessions';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { inboxStore } from '$lib/stores/inbox.svelte';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
 
   const MAX_SESSION_ICONS = 10;
   const SESSION_ICON_REM = 2.4;
   const SESSION_ICON_GAP_REM = 0.52;
+  const SESSION_LIST_TOP_OFFSET_REM = 0.3;
+  const SESSION_LIST_BOTTOM_OFFSET_REM = 0.3;
 
   let {
     current,
@@ -55,12 +58,19 @@
   let sessionIconLimit = $state(MAX_SESSION_ICONS);
   const onlineAgentCount = $derived(agentsStore.connectedAgents.length);
   const agentAttentionCount = $derived(agentsStore.agentsNeedingAttention.length);
+  const inboxActionCount = $derived(inboxStore.actionableItems.length);
+  const actionRequiredSessionKeys = $derived(
+    inboxStore.actionableItems.flatMap((item) =>
+      item.agentId && item.sessionId ? [`${item.agentId}:${item.sessionId}`] : []
+    )
+  );
   const visibleSessions = $derived.by(() =>
     sessions.filter((session) => !(session.agentId === currentAgentId && session.sessionId === currentSessionId))
   );
   const railItems = $derived(
     getRecentSessionRailItems(visibleSessions, {
       attentionSessionKeys,
+      actionRequiredSessionKeys,
       limit: sessionIconLimit
     })
   );
@@ -78,7 +88,9 @@
       const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
       const iconHeight = SESSION_ICON_REM * rootFontSize;
       const iconGap = SESSION_ICON_GAP_REM * rootFontSize;
-      const availableHeight = sessionListElement.clientHeight;
+      const topOffset = SESSION_LIST_TOP_OFFSET_REM * rootFontSize;
+      const bottomOffset = SESSION_LIST_BOTTOM_OFFSET_REM * rootFontSize;
+      const availableHeight = Math.max(0, sessionListElement.clientHeight - topOffset - bottomOffset);
       const nextLimit = Math.max(0, Math.min(MAX_SESSION_ICONS, Math.floor((availableHeight + iconGap) / (iconHeight + iconGap))));
       sessionIconLimit = nextLimit;
     };
@@ -102,6 +114,9 @@
   }
 
   function getSectionLabel(section: SectionName): string {
+    if (section === 'Inbox' && inboxActionCount > 0) {
+      return `Inbox, ${inboxActionCount} ${inboxActionCount === 1 ? 'action' : 'actions'} required`;
+    }
     if (section !== 'Agents') {
       return section;
     }
@@ -125,23 +140,27 @@
     return index === 9 ? 'Control+0 Meta+0' : `Control+${index + 1} Meta+${index + 1}`;
   }
 
-  function getStatusLabel(status: SessionStatus, tone: SessionRailTone): string {
-    if (tone === 'attention') {
-      return 'Needs review';
+  function getStatusLabel(status: SessionStatus, item: SessionRailItem): string {
+    const activity = (() => {
+      switch (status) {
+        case 'thinking':
+          return 'Active';
+        case 'waiting':
+          return 'Waiting';
+        case 'cancelling':
+          return 'Cancelling';
+        case 'completed':
+        case 'idle':
+        default:
+          return item.requiresAttention ? null : 'Recent';
+      }
+    })();
+
+    if (item.requiresAttention) {
+      return activity ? `${activity}, action required` : 'Action required';
     }
 
-    switch (status) {
-      case 'thinking':
-        return 'Active';
-      case 'waiting':
-        return 'Waiting';
-      case 'cancelling':
-        return 'Cancelling';
-      case 'completed':
-      case 'idle':
-      default:
-        return 'Recent';
-    }
+    return activity ?? 'Recent';
   }
 </script>
 
@@ -191,7 +210,10 @@
                       <span class="app-icon-agent-count" aria-hidden="true">{onlineAgentCount}</span>
                     {/if}
                     {#if section === 'Agents' && agentAttentionCount > 0}
-                      <span class="app-icon-agent-attention" aria-hidden="true"></span>
+                      <SidebarAttentionDot />
+                    {/if}
+                    {#if section === 'Inbox' && inboxActionCount > 0}
+                      <SidebarAttentionDot />
                     {/if}
                   </span>
                 </a>
@@ -224,37 +246,40 @@
                   {#snippet child({ props })}
                     <a
                       {...props}
-                      class={`session-icon-link session-icon-link-${item.tone}`}
+                      class={`session-icon-link ${item.isActive ? 'session-icon-link-active' : ''}`}
                       href={getSessionHref(session)}
-                      aria-label={`${session.title}, ${getStatusLabel(session.status, item.tone)}, ${getSessionShortcutLabel(index)}`}
+                      aria-label={`${session.title}, ${getStatusLabel(session.status, item)}, ${getSessionShortcutLabel(index)}`}
                       aria-keyshortcuts={getSessionAriaShortcut(index)}
                       onclick={() => onOpenSession?.(session)}
                     >
                       <span class="app-icon-activity-pill" aria-hidden="true"></span>
-                      <span class="session-icon-avatar" aria-hidden="true">
-                        <svg
-                          class="session-identicon-svg"
-                          style={`--identicon-color: ${identicon.color}`}
-                          width={identicon.width}
-                          height={identicon.width}
-                          viewBox={`0 0 ${identicon.width} ${identicon.width}`}
-                          preserveAspectRatio="xMinYMin"
-                        >
-                          <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill="currentColor" />
-                          <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                            {#each identicon.arcs as arc}
-                              <path d={arc.d} stroke-width={arc.strokeWidth} />
-                            {/each}
-                          </g>
-                        </svg>
-                      </span>
-                      {#if item.tone === 'active'}
-                        <span class="session-icon-status session-icon-status-active" aria-hidden="true">
-                          <LoaderCircle size={10} class="animate-spin" />
+                      <span class="session-icon-surface" aria-hidden="true">
+                        <span class="session-icon-avatar">
+                          <svg
+                            class="session-identicon-svg"
+                            style={`--identicon-color: ${identicon.color}`}
+                            width={identicon.width}
+                            height={identicon.width}
+                            viewBox={`0 0 ${identicon.width} ${identicon.width}`}
+                            preserveAspectRatio="xMinYMin"
+                          >
+                            <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill="currentColor" />
+                            <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                              {#each identicon.arcs as arc}
+                                <path d={arc.d} stroke-width={arc.strokeWidth} />
+                              {/each}
+                            </g>
+                          </svg>
                         </span>
-                      {:else if item.tone === 'attention'}
-                        <span class="session-icon-status session-icon-status-attention" aria-hidden="true"></span>
-                      {/if}
+                        {#if item.isActive}
+                          <span class="session-icon-status session-icon-status-active">
+                            <LoaderCircle size={10} class="animate-spin" />
+                          </span>
+                        {/if}
+                        {#if item.requiresAttention}
+                          <SidebarAttentionDot />
+                        {/if}
+                      </span>
                     </a>
                   {/snippet}
                 </Tooltip.Trigger>
@@ -262,7 +287,7 @@
                   <Tooltip.Content class="session-icon-tooltip" side="right" sideOffset={10}>
                     <div class="session-icon-tooltip-title">{session.title}</div>
                     <div class="session-icon-tooltip-meta">
-                      {getStatusLabel(session.status, item.tone)} / {session.agentName} / {getSessionWorkspaceName(session.cwd)}
+                      {getStatusLabel(session.status, item)} / {session.agentName} / {getSessionWorkspaceName(session.cwd)}
                     </div>
                     <div class="session-icon-tooltip-meta">{formatSessionTimestamp(session.updatedAt)} / {getSessionShortcutLabel(index)}</div>
                     <Tooltip.Arrow class="session-icon-tooltip-arrow" />

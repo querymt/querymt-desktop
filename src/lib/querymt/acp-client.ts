@@ -159,6 +159,14 @@ export class DesktopAcpClient {
     return response.sessions;
   }
 
+  async deleteSession(sessionId: string): Promise<void> {
+    if (!this.connection) {
+      await this.connect();
+    }
+
+    await this.connection!.deleteSession({ sessionId });
+  }
+
   async createSession(cwd: string, profileId?: string | null): Promise<NewSessionResponse> {
     if (!this.connection) {
       await this.connect();

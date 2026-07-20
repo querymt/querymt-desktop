@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PromptResponse, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
+import type { InitializeResponse, PromptResponse, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
 import { AgentsStore } from './agents.svelte';
 
 const mockClient = vi.hoisted(() => {
   let sessionUpdateHandler: ((notification: SessionNotification) => void) | null = null;
   let connectionLossHandler: ((reason: string) => void) | null = null;
+  let permissionUnsubscribe = vi.fn();
+  let elicitationUnsubscribe = vi.fn();
 
   return {
-    connect: vi.fn(async () => ({
+    connect: vi.fn(async (): Promise<InitializeResponse> => ({
       protocolVersion: 1,
-      agentCapabilities: {},
+      agentCapabilities: { loadSession: true },
       authMethods: []
     })),
     createSession: vi.fn(async () => ({
@@ -17,6 +19,8 @@ const mockClient = vi.hoisted(() => {
       configOptions: []
     })),
     listSessions: vi.fn(async () => []),
+    deleteSession: vi.fn(async () => undefined),
+    loadSession: vi.fn(async () => ({ configOptions: [] })),
     sendPrompt: vi.fn(async (): Promise<PromptResponse> => ({ stopReason: 'end_turn' })),
     cancelSession: vi.fn(async () => undefined),
     getInitializeResponse: vi.fn(() => ({
@@ -42,10 +46,14 @@ const mockClient = vi.hoisted(() => {
     emitSessionUpdate: (notification: SessionNotification) => sessionUpdateHandler?.(notification),
     resetSessionUpdateHandler: () => {
       sessionUpdateHandler = null;
+      permissionUnsubscribe = vi.fn();
+      elicitationUnsubscribe = vi.fn();
     },
+    permissionUnsubscribe: () => permissionUnsubscribe,
+    elicitationUnsubscribe: () => elicitationUnsubscribe,
     onExtensionNotification: vi.fn(() => () => undefined),
-    onPermissionRequest: vi.fn(() => () => undefined),
-    onElicitationRequest: vi.fn(() => () => undefined),
+    onPermissionRequest: vi.fn(() => permissionUnsubscribe),
+    onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
     setSessionConfigOption: vi.fn(async () => [])
   };
 });
@@ -97,6 +105,49 @@ function createStore() {
 beforeEach(() => {
   vi.clearAllMocks();
   mockClient.resetSessionUpdateHandler();
+});
+
+describe('AgentsStore connections', () => {
+  it('does not reconnect or replace inbox handlers when already initialized', async () => {
+    const store = createStore();
+
+    await store.connectAgent('agent-1');
+    await store.connectAgent('agent-1');
+
+    expect(mockClient.connect).toHaveBeenCalledTimes(1);
+    expect(mockClient.onPermissionRequest).toHaveBeenCalledTimes(1);
+    expect(mockClient.onElicitationRequest).toHaveBeenCalledTimes(1);
+    expect(mockClient.permissionUnsubscribe()).not.toHaveBeenCalled();
+    expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
+  });
+
+  it('loads a session without unbinding inbox handlers', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [
+        {
+          agentId: 'agent-1',
+          agentName: 'QMTCODE',
+          sessionId: 'session-1',
+          title: 'Question session',
+          cwd: '/tmp/work',
+          updatedAt: '2026-07-18T17:00:00Z',
+          runtimeId: 'agent-1',
+          runtimeName: 'QMTCODE',
+          source: 'acp',
+          status: 'idle'
+        }
+      ]
+    };
+
+    await store.connectAgent('agent-1');
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(mockClient.connect).toHaveBeenCalledTimes(1);
+    expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '/tmp/work');
+    expect(mockClient.permissionUnsubscribe()).not.toHaveBeenCalled();
+    expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
+  });
 });
 
 describe('AgentsStore agent availability', () => {
@@ -169,6 +220,56 @@ describe('AgentsStore prompt session start', () => {
     await vi.waitFor(() => {
       expect(mockClient.sendPrompt).toHaveBeenCalledWith('session-1', 'Fix the failing tests', []);
     });
+    resolvePrompt();
+  });
+
+  it('keeps the optimistic prompt position when its authoritative chunk arrives after a tool', async () => {
+    let resolvePrompt!: () => void;
+    mockClient.sendPrompt.mockImplementationOnce(
+      () =>
+        new Promise<PromptResponse>((resolve) => {
+          resolvePrompt = () => resolve({ stopReason: 'end_turn' });
+        })
+    );
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.transcript = [
+      { id: 'old-user', kind: 'user_message_chunk', text: 'Old prompt', messageId: 'old-user', eventIndex: 3 },
+      { id: 'old-answer', kind: 'agent_message_chunk', text: 'Old answer', messageId: 'old-answer', eventIndex: 18 }
+    ];
+    store.activeSession.events = [{ id: 'debug-1', kind: 'session_info_update', text: 'Loaded', messageId: null }];
+
+    void store.sendPromptToActiveSession();
+    await vi.waitFor(() => {
+      expect(mockClient.sendPrompt).toHaveBeenCalledWith('session-1', 'Fix the failing tests', []);
+    });
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'question-1',
+        title: 'Question',
+        status: 'in_progress',
+        content: []
+      }
+    });
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'Fix the failing tests' },
+        messageId: 'real-user'
+      }
+    });
+
+    expect(store.activeSession.transcript.find((item) => item.messageId === 'real-user')).toMatchObject({ eventIndex: 19 });
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ id: 'question-1', eventIndex: 20 });
+    expect(store.activeSession.transcript.filter((item) => item.text === 'Fix the failing tests')).toHaveLength(1);
+
     resolvePrompt();
   });
 
@@ -397,6 +498,56 @@ describe('AgentsStore prompt session start', () => {
       expect.objectContaining({ sessionId: 'session-1', title: 'Local session' })
     ]);
     expect(store.agentErrors['agent-2']).toBe('mesh failed');
+  });
+
+  it('deletes a supported session and clears its related state', async () => {
+    const store = createStore();
+    mockClient.connect.mockResolvedValueOnce({
+      protocolVersion: 1,
+      agentCapabilities: { sessionCapabilities: { delete: {} } },
+      authMethods: []
+    });
+    store.sessionsByAgent = {
+      'agent-1': [
+        {
+          agentId: 'agent-1',
+          agentName: 'QMTCODE',
+          sessionId: 'session-1',
+          title: 'Delete me',
+          cwd: '/tmp/work',
+          updatedAt: '2026-07-18T17:00:00Z',
+          runtimeId: 'agent-1',
+          runtimeName: 'QMTCODE',
+          source: 'acp',
+          status: 'idle'
+        }
+      ]
+    };
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.attentionSessionKeys = ['agent-1:session-1'];
+
+    await store.connectAgent('agent-1');
+    expect(store.canDeleteSession('agent-1')).toBe(true);
+    await store.deleteSession('agent-1', 'session-1');
+
+    expect(mockClient.deleteSession).toHaveBeenCalledWith('session-1');
+    expect(store.sessionsByAgent['agent-1']).toEqual([]);
+    expect(store.attentionSessionKeys).toEqual([]);
+    expect(store.activeAgentId).toBe(null);
+    expect(store.activeSessionId).toBe(null);
+    expect(store.activeSession.sessionId).toBe(null);
+  });
+
+  it('rejects deletion when the agent does not advertise session/delete', async () => {
+    const store = createStore();
+
+    await store.connectAgent('agent-1');
+
+    expect(store.canDeleteSession('agent-1')).toBe(false);
+    await expect(store.deleteSession('agent-1', 'session-1')).rejects.toThrow('QMTCODE does not support deleting sessions.');
+    expect(mockClient.deleteSession).not.toHaveBeenCalled();
   });
 
   it('marks a background session for attention when it finishes after running', async () => {

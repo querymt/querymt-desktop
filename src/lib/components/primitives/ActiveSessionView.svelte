@@ -26,12 +26,8 @@
       emptyTitle="No conversation yet"
       emptyDescription="Send a prompt below to start streaming messages, reasoning, and activities into this view."
     >
-      {#each turns as turn, index}
-        <SessionTurn
-          {turn}
-          activeToolCallId={session.activeToolCallId}
-          openReasoning={session.runState === 'thinking' && index === turns.length - 1}
-        />
+      {#each turns as turn}
+        <SessionTurn {turn} />
       {/each}
     </Conversation>
   </section>

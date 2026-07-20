@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SessionComposer from './SessionComposer.svelte';
 
+const elementAnimateDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'animate');
+
 const modelOptions = [
   {
     id: 'anthropic/claude-sonnet-4',
@@ -15,7 +17,43 @@ const modelOptions = [
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  if (elementAnimateDescriptor) {
+    Object.defineProperty(Element.prototype, 'animate', elementAnimateDescriptor);
+  } else {
+    Reflect.deleteProperty(Element.prototype, 'animate');
+  }
 });
+
+function captureAnimationKeyframes() {
+  const captured: Keyframe[][] = [];
+  const animate = vi.fn((keyframes: Keyframe[] | PropertyIndexedKeyframes | null) => {
+    captured.push(Array.from(keyframes as Iterable<Keyframe>));
+    let finish: Animation['onfinish'] = null;
+    const animation = {
+      cancel: vi.fn(),
+      currentTime: 0,
+      effect: null,
+      playState: 'finished',
+      get onfinish() {
+        return finish;
+      },
+      set onfinish(callback) {
+        finish = callback;
+        if (callback) {
+          const event = new Event('finish') as AnimationPlaybackEvent;
+          queueMicrotask(() => callback.call(animation as unknown as Animation, event));
+        }
+      }
+    } as unknown as Animation;
+    return animation;
+  });
+  Object.defineProperty(Element.prototype, 'animate', {
+    configurable: true,
+    value: animate
+  });
+  return captured;
+}
 
 function renderComposer(props: Record<string, unknown> = {}) {
   return render(SessionComposer, {
@@ -127,6 +165,63 @@ describe('SessionComposer', () => {
     await fireEvent.keyDown(screen.getAllByPlaceholderText(/Ask QueryMT/i)[0], { key: 'Enter', metaKey: true });
 
     expect(onSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('renders the full composer while fixed and following', () => {
+    const { container } = renderComposer({ docked: true, collapsed: false, sessionOnly: true, chatView: true });
+
+    expect(container.querySelector('.session-composer-dock-expanded')).not.toBeNull();
+    expect(screen.getByPlaceholderText('Write a reply for this session...').tagName).toBe('TEXTAREA');
+    expect(container.querySelector('textarea')).not.toBeNull();
+  });
+
+  it('renders the compact composer while fixed and free-scrolling', () => {
+    const { container } = renderComposer({ docked: true, collapsed: true, sessionOnly: true, chatView: true });
+
+    expect(container.querySelector('.session-composer-dock-compact')).not.toBeNull();
+    expect(container.querySelector('.session-composer-dock-input')).not.toBeNull();
+    expect(container.querySelector('textarea')).toBeNull();
+  });
+
+  it('preserves the prompt while morphing between composer states', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+    const prompt = 'Keep this draft';
+    const { container, rerender } = renderComposer({
+      docked: true,
+      collapsed: false,
+      sessionOnly: true,
+      chatView: true,
+      prompt
+    });
+
+    expect(screen.getByPlaceholderText('Write a reply for this session...')).toHaveValue(prompt);
+
+    await rerender({ collapsed: true });
+    expect(container.querySelector('.session-composer-dock-compact')).not.toBeNull();
+    expect(screen.getByPlaceholderText('Write a reply for this session...')).toHaveValue(prompt);
+
+    await rerender({ collapsed: false });
+    expect(container.querySelector('.session-composer-dock-expanded')).not.toBeNull();
+    expect(screen.getByPlaceholderText('Write a reply for this session...')).toHaveValue(prompt);
+  });
+
+  it('morphs without scaling text or icons', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false })));
+    const keyframes = captureAnimationKeyframes();
+    const { rerender } = renderComposer({
+      docked: true,
+      collapsed: false,
+      sessionOnly: true,
+      chatView: true
+    });
+
+    await rerender({ collapsed: true });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const transforms = keyframes.flat().map((frame) => String(frame.transform ?? ''));
+    expect(transforms.some((transform) => transform.includes('translateY'))).toBe(true);
+    expect(transforms.every((transform) => !transform.includes('scale'))).toBe(true);
   });
 
   it('dismisses composer errors', async () => {

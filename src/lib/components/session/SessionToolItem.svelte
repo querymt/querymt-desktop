@@ -5,11 +5,9 @@
 
   let {
     tool,
-    activeToolCallId = null,
     orphaned = false
   }: {
     tool: SessionToolCallItem;
-    activeToolCallId?: string | null;
     orphaned?: boolean;
   } = $props();
 </script>
@@ -34,5 +32,5 @@
     {/if}
   </div>
 
-  <SessionToolBlock tool={tool} open={tool.id === activeToolCallId || tool.status === 'in_progress' || tool.status === 'failed'} />
+  <SessionToolBlock {tool} />
 </article>

@@ -26,6 +26,8 @@
       emptyMessage="No sessions yet from the currently configured agents."
       onRefresh={() => agentsStore.refreshAllSessions()}
       onOpenSession={(session: DesktopSessionSummary) => openSession(session)}
+      canDeleteSession={(session: DesktopSessionSummary) => agentsStore.canDeleteSession(session.agentId)}
+      onDeleteSession={(session: DesktopSessionSummary) => agentsStore.deleteSession(session.agentId, session.sessionId)}
     />
   </div>
 </div>
