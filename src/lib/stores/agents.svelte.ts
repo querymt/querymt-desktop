@@ -1,5 +1,6 @@
 import type {
   InitializeResponse,
+  ListSessionsResponse,
   LoadSessionResponse,
   NewSessionResponse,
   PromptResponse,
@@ -17,8 +18,12 @@ import {
   buildSessionKey,
   getSessionById,
   getSessionKey,
+  getSessionWorkspaceKey,
+  getSessionWorkspaceName,
   isActiveSessionStatus,
-  mapAcpSessionsToDesktopSessions
+  mapAcpSessionsToDesktopSessions,
+  type WorkspaceSessionGroup,
+  type WorkspaceSessionSource
 } from '$lib/domain/sessions';
 import type {
   ActiveSessionViewModel,
@@ -73,6 +78,7 @@ const RECENT_WORKSPACES_STORAGE_KEY = 'querymt-desktop.recent-workspaces';
 const RECENT_MODELS_LIMIT = 5;
 const RECENT_WORKSPACES_LIMIT = 8;
 const WEBSOCKET_RECONNECT_MAX_DELAY_MS = 8_000;
+const WORKSPACE_SESSION_PAGE_SIZE = 10;
 const PROMPT_ACTIVE_RUN_STATES = new Set<SessionRunState>(['thinking', 'streaming', 'tool-running']);
 
 interface AgentClientRecord {
@@ -103,6 +109,10 @@ export class AgentsStore {
   private sessionRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectAttempts = new Map<string, number>();
+  private workspaceSourceVersions = new Map<string, number>();
+  private seenWorkspaceCursors = new Map<string, Set<string>>();
+  private completedWorkspaceDiscoveries = new Set<string>();
+  private workspaceDiscoveryPromises = new Map<string, Promise<void>>();
 
   configs = $state<AgentConfig[]>(loadInitialAgents());
   statuses = $state<Record<string, AgentRuntimeStatus>>({});
@@ -141,6 +151,8 @@ export class AgentsStore {
   lastRemoteAttachByAgent = $state<Record<string, RemoteSessionAttachInfo | null>>({});
   lastRemoteDismissByAgent = $state<Record<string, RemoteSessionDismissInfo | null>>({});
   sessionsByAgent = $state<Record<string, DesktopSessionSummary[]>>({});
+  workspaceSessionSources = $state<Record<string, Record<string, WorkspaceSessionSource>>>({});
+  workspaceVisibleLimits = $state<Record<string, number>>({});
   attentionSessionKeys = $state<string[]>([]);
   logsByAgent = $state<Record<string, Awaited<ReturnType<typeof getAgentLogs>>>>({});
   activeAgentId = $state<string | null>(null);
@@ -172,6 +184,37 @@ export class AgentsStore {
       const bValue = b.updatedAt ?? '';
       return bValue.localeCompare(aValue);
     });
+  }
+
+  get workspaceSessionGroups(): WorkspaceSessionGroup[] {
+    const sourceGroups = new Map<string, WorkspaceSessionSource[]>();
+    for (const sourcesByWorkspace of Object.values(this.workspaceSessionSources)) {
+      for (const source of Object.values(sourcesByWorkspace)) {
+        const sources = sourceGroups.get(source.cwd) ?? [];
+        sources.push(source);
+        sourceGroups.set(source.cwd, sources);
+      }
+    }
+
+    return [...sourceGroups.entries()]
+      .map(([cwd, sources]) => {
+        const sessions = deduplicateSessions(sources.flatMap((source) => source.sessions)).sort(compareSessionsByActivity);
+        const visibleLimit = this.workspaceVisibleLimits[cwd] ?? WORKSPACE_SESSION_PAGE_SIZE;
+        const latestActivity = maxTimestamp(sources.map((source) => source.latestActivity));
+        return {
+          key: getSessionWorkspaceKey(cwd),
+          cwd,
+          name: cwd ? getSessionWorkspaceName(cwd) : 'No workspace',
+          path: cwd || 'No workspace path recorded',
+          sessions: sessions.slice(0, visibleLimit),
+          latestActivity,
+          initialized: sources.every((source) => source.initialized),
+          loading: sources.some((source) => source.loading),
+          hasMore: sessions.length > visibleLimit || sources.some((source) => source.nextCursor !== null),
+          error: sources.find((source) => source.error)?.error ?? null
+        };
+      })
+      .sort((a, b) => (b.latestActivity ?? '').localeCompare(a.latestActivity ?? ''));
   }
 
   get connectedAgents(): AgentConfig[] {
@@ -212,15 +255,21 @@ export class AgentsStore {
     this.error = null;
 
     try {
-      await Promise.all(this.configs.map((config) => this.refreshAgent(config)));
-      await Promise.all(
+      await Promise.allSettled(this.configs.map((config) => this.refreshAgent(config)));
+      await Promise.allSettled(
         this.configs
           .filter((config) => config.enabled && config.autoStart)
           .map((config) => this.startConfiguredAgent(config.id))
       );
-      await this.refreshManagedProfiles();
-      await this.refreshAllSessions();
-      await this.preloadModelsForRunningAgents();
+
+      const undiscoveredAgents = this.configs.filter(
+        (config) => this.statuses[config.id]?.state === 'running' && !this.completedWorkspaceDiscoveries.has(config.id)
+      );
+      await Promise.allSettled([
+        this.refreshManagedProfiles(),
+        ...undiscoveredAgents.map((config) => this.refreshSessionsForAgent(config.id, true)),
+        this.preloadModelsForRunningAgents()
+      ]);
     } catch (error) {
       this.error = error instanceof Error ? error.message : 'Failed to initialize configured agents.';
     } finally {
@@ -373,6 +422,9 @@ export class AgentsStore {
     delete this.lastRemoteAttachByAgent[agentId];
     delete this.lastRemoteDismissByAgent[agentId];
     delete this.sessionsByAgent[agentId];
+    this.completedWorkspaceDiscoveries.delete(agentId);
+    this.invalidateWorkspaceSources(agentId);
+    delete this.workspaceSessionSources[agentId];
     delete this.logsByAgent[agentId];
     this.disposeClient(agentId);
     persistAgents(this.configs);
@@ -430,7 +482,7 @@ export class AgentsStore {
         await this.connectAgent(config.id);
       }
       await Promise.allSettled([
-        this.refreshSessionsForAgent(config.id),
+        this.refreshSessionsForAgent(config.id, true),
         this.refreshMeshForAgent(config.id),
         this.refreshAuthProviders(config.id)
       ]);
@@ -457,6 +509,9 @@ export class AgentsStore {
         this.statuses = { ...this.statuses, [config.id]: status };
       }
       this.sessionsByAgent = { ...this.sessionsByAgent, [config.id]: [] };
+      this.completedWorkspaceDiscoveries.delete(config.id);
+      this.invalidateWorkspaceSources(config.id);
+      this.workspaceSessionSources = { ...this.workspaceSessionSources, [config.id]: {} };
       this.connectionStates = { ...this.connectionStates, [config.id]: 'idle' };
       if (this.activeAgentId === config.id) {
         this.activeAgentId = null;
@@ -474,6 +529,7 @@ export class AgentsStore {
 
     this.cancelReconnect(agentId);
     this.reconnectAttempts.delete(agentId);
+    this.completedWorkspaceDiscoveries.delete(agentId);
     try {
       if (config.transport === 'websocket') {
         this.disposeClient(agentId);
@@ -485,7 +541,7 @@ export class AgentsStore {
         await this.connectAgent(config.id, true);
       }
       await Promise.allSettled([
-        this.refreshSessionsForAgent(config.id),
+        this.refreshSessionsForAgent(config.id, true),
         this.refreshMeshForAgent(config.id),
         this.refreshAuthProviders(config.id)
       ]);
@@ -564,10 +620,11 @@ export class AgentsStore {
   }
 
   async refreshAllSessions() {
+    this.workspaceVisibleLimits = {};
     await Promise.allSettled(
       this.configs
         .filter((config) => this.statuses[config.id]?.state === 'running')
-        .map((config) => this.refreshSessionsForAgent(config.id))
+        .map((config) => this.refreshSessionsForAgent(config.id, true))
     );
   }
 
@@ -597,7 +654,28 @@ export class AgentsStore {
     }
   }
 
-  async refreshSessionsForAgent(agentId: string) {
+    async refreshSessionsForAgent(agentId: string, discoverAll = false) {
+    if (discoverAll) {
+      const existingDiscovery = this.workspaceDiscoveryPromises.get(agentId);
+      if (existingDiscovery) {
+        await existingDiscovery;
+        return;
+      }
+
+      const discovery = this.refreshSessionsForAgentRequest(agentId, true).finally(() => {
+        if (this.workspaceDiscoveryPromises.get(agentId) === discovery) {
+          this.workspaceDiscoveryPromises.delete(agentId);
+        }
+      });
+      this.workspaceDiscoveryPromises.set(agentId, discovery);
+      await discovery;
+      return;
+    }
+
+    await this.refreshSessionsForAgentRequest(agentId, false);
+  }
+
+  private async refreshSessionsForAgentRequest(agentId: string, discoverAll: boolean) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) {
       return;
@@ -612,17 +690,22 @@ export class AgentsStore {
     record.error = null;
 
     try {
-      const sessions = await record.client.listSessions();
+      const firstPage = await record.client.listSessions({});
+      const pages = discoverAll ? await this.collectSessionPages(record.client, firstPage) : [firstPage];
+      const listedSessions = pages.flatMap((page) => page.sessions);
       const previousSessions = this.sessionsByAgent[agentId] ?? [];
-      const nextSessions = mapAcpSessionsToDesktopSessions(sessions, {
+      const nextSessions = mapAcpSessionsToDesktopSessions(listedSessions, {
         agentId: config.id,
         agentName: config.name
       });
-      this.updateSessionAttention(agentId, previousSessions, nextSessions);
+      const mergedSessions = discoverAll ? nextSessions : mergeSessions(previousSessions, nextSessions);
+      this.updateSessionAttention(agentId, previousSessions, mergedSessions);
       this.sessionsByAgent = {
         ...this.sessionsByAgent,
-        [agentId]: nextSessions
+        [agentId]: mergedSessions
       };
+      this.updateWorkspaceDiscovery(config, nextSessions, discoverAll);
+      if (discoverAll) this.completedWorkspaceDiscoveries.add(agentId);
       if (nextSessions.some((session) => isActiveSessionStatus(session.status))) {
         this.scheduleSessionRefresh(agentId, 2500);
       } else {
@@ -646,6 +729,7 @@ export class AgentsStore {
         [config.id]: null
       };
     } catch (error) {
+      if (discoverAll) this.completedWorkspaceDiscoveries.delete(agentId);
       record.error = error instanceof Error ? error.message : `Failed to load sessions for ${config.name}.`;
       record.connectionState = 'failed';
       this.connectionStates = {
@@ -658,6 +742,173 @@ export class AgentsStore {
       };
       this.error = record.error;
     }
+  }
+
+  async loadWorkspaceSessions(cwd: string) {
+    const target = this.workspaceVisibleLimits[cwd] ?? WORKSPACE_SESSION_PAGE_SIZE;
+    while (true) {
+      const group = this.workspaceSessionGroups.find((candidate) => candidate.cwd === cwd);
+      const sources = this.getWorkspaceSources(cwd);
+      if (sources.length === 0 || (group && group.sessions.length >= target)) return;
+      const candidates = sources.filter((source) => !source.initialized || source.nextCursor !== null);
+      if (candidates.length === 0) return;
+      await Promise.all(candidates.map((source) => this.loadWorkspaceSourcePage(source)));
+    }
+  }
+
+  async loadMoreWorkspaceSessions(cwd: string) {
+    const currentLimit = this.workspaceVisibleLimits[cwd] ?? WORKSPACE_SESSION_PAGE_SIZE;
+    const nextLimit = currentLimit + WORKSPACE_SESSION_PAGE_SIZE;
+    this.workspaceVisibleLimits = { ...this.workspaceVisibleLimits, [cwd]: nextLimit };
+    try {
+      await this.loadWorkspaceSessions(cwd);
+    } catch (error) {
+      this.workspaceVisibleLimits = { ...this.workspaceVisibleLimits, [cwd]: currentLimit };
+      throw error;
+    }
+  }
+
+  private async collectSessionPages(client: DesktopAcpClient, firstPage: ListSessionsResponse): Promise<ListSessionsResponse[]> {
+    const pages = [firstPage];
+    const seenCursors = new Set<string>();
+    let nextCursor = firstPage.nextCursor ?? null;
+
+    while (nextCursor && !seenCursors.has(nextCursor)) {
+      seenCursors.add(nextCursor);
+      const page = await client.listSessions({ cursor: nextCursor });
+      pages.push(page);
+      nextCursor = page.nextCursor ?? null;
+    }
+
+    return pages;
+  }
+
+  private updateWorkspaceDiscovery(config: AgentConfig, sessions: DesktopSessionSummary[], replace: boolean) {
+    if (replace) this.invalidateWorkspaceSources(config.id);
+    const currentSources = this.workspaceSessionSources[config.id] ?? {};
+    const discovered = new Map<string, DesktopSessionSummary[]>();
+    for (const session of sessions) {
+      const workspaceSessions = discovered.get(session.cwd) ?? [];
+      workspaceSessions.push(session);
+      discovered.set(session.cwd, workspaceSessions);
+    }
+
+    const nextSources: Record<string, WorkspaceSessionSource> = replace ? {} : { ...currentSources };
+    for (const [cwd, workspaceSessions] of discovered) {
+      const current = currentSources[cwd];
+      const latestActivity = maxTimestamp(workspaceSessions.map((session) => session.updatedAt));
+      const fallbackSessions = cwd ? [] : workspaceSessions;
+      nextSources[cwd] = {
+        agentId: config.id,
+        agentName: config.name,
+        cwd,
+        sessions: current
+          ? cwd
+            ? updateKnownSessions(current.sessions, workspaceSessions)
+            : mergeSessions(current.sessions, workspaceSessions)
+          : fallbackSessions,
+        latestActivity,
+        nextCursor: current && !replace ? current.nextCursor : null,
+        initialized: current && !replace ? current.initialized : !cwd,
+        loading: false,
+        error: null
+      };
+    }
+
+    this.workspaceSessionSources = {
+      ...this.workspaceSessionSources,
+      [config.id]: nextSources
+    };
+  }
+
+  private getWorkspaceSources(cwd: string): WorkspaceSessionSource[] {
+    return Object.values(this.workspaceSessionSources).flatMap((sources) => (sources[cwd] ? [sources[cwd]] : []));
+  }
+
+  private async loadWorkspaceSourcePage(source: WorkspaceSessionSource) {
+    let current = this.workspaceSessionSources[source.agentId]?.[source.cwd];
+    if (!current || current.loading || (current.initialized && current.nextCursor === null)) {
+      return;
+    }
+
+    this.updateWorkspaceSource(source.agentId, source.cwd, { loading: true, error: null });
+    const sourceVersion = this.workspaceSourceVersions.get(source.agentId) ?? 0;
+    const sourceKey = buildWorkspaceSourceKey(source.agentId, source.cwd);
+    const seenCursors = this.seenWorkspaceCursors.get(sourceKey) ?? new Set<string>();
+    this.seenWorkspaceCursors.set(sourceKey, seenCursors);
+    try {
+      const config = this.configs.find((candidate) => candidate.id === source.agentId);
+      if (!config) throw new Error(`Unable to locate ${source.agentName} for workspace sessions.`);
+      const record = this.ensureClientRecord(source.agentId);
+      await this.connectAgent(source.agentId);
+      current = this.workspaceSessionSources[source.agentId]?.[source.cwd];
+
+      const requestCursor = current?.initialized ? current.nextCursor : null;
+      if (requestCursor && seenCursors.has(requestCursor)) {
+        throw new Error(`${source.agentName} returned a repeated session cursor.`);
+      }
+      if (requestCursor) seenCursors.add(requestCursor);
+      const response = await record.client.listSessions({
+        cwd: source.cwd,
+        cursor: requestCursor ?? undefined
+      });
+      if ((this.workspaceSourceVersions.get(source.agentId) ?? 0) !== sourceVersion || !current) return;
+      const pageSessions = mapAcpSessionsToDesktopSessions(response.sessions, {
+        agentId: config.id,
+        agentName: config.name
+      });
+      current = {
+        ...current,
+        sessions: mergeSessions(current.sessions, pageSessions),
+        latestActivity: maxTimestamp([current.latestActivity, ...pageSessions.map((session) => session.updatedAt)]),
+        nextCursor: response.nextCursor ?? null,
+        initialized: true,
+        loading: true,
+        error: null
+      };
+      this.setWorkspaceSource(current);
+
+      if (current) {
+        this.sessionsByAgent = {
+          ...this.sessionsByAgent,
+          [source.agentId]: mergeSessions(this.sessionsByAgent[source.agentId] ?? [], current.sessions)
+        };
+      }
+    } catch (error) {
+      if ((this.workspaceSourceVersions.get(source.agentId) ?? 0) === sourceVersion) {
+        const message = error instanceof Error ? error.message : `Failed to load sessions for ${source.agentName}.`;
+        this.updateWorkspaceSource(source.agentId, source.cwd, { error: message });
+        throw error instanceof Error ? error : new Error(message);
+      }
+    } finally {
+      if ((this.workspaceSourceVersions.get(source.agentId) ?? 0) === sourceVersion) {
+        this.updateWorkspaceSource(source.agentId, source.cwd, { loading: false });
+      }
+    }
+  }
+
+  private invalidateWorkspaceSources(agentId: string) {
+    this.workspaceSourceVersions.set(agentId, (this.workspaceSourceVersions.get(agentId) ?? 0) + 1);
+    const prefix = `${agentId}\u0000`;
+    for (const key of this.seenWorkspaceCursors.keys()) {
+      if (key.startsWith(prefix)) this.seenWorkspaceCursors.delete(key);
+    }
+  }
+
+  private updateWorkspaceSource(agentId: string, cwd: string, updates: Partial<WorkspaceSessionSource>) {
+    const current = this.workspaceSessionSources[agentId]?.[cwd];
+    if (!current) return;
+    this.setWorkspaceSource({ ...current, ...updates });
+  }
+
+  private setWorkspaceSource(source: WorkspaceSessionSource) {
+    this.workspaceSessionSources = {
+      ...this.workspaceSessionSources,
+      [source.agentId]: {
+        ...(this.workspaceSessionSources[source.agentId] ?? {}),
+        [source.cwd]: source
+      }
+    };
   }
 
   async deleteSession(agentId: string, sessionId: string) {
@@ -677,6 +928,15 @@ export class AgentsStore {
       ...this.sessionsByAgent,
       [agentId]: (this.sessionsByAgent[agentId] ?? []).filter((session) => session.sessionId !== sessionId)
     };
+    const source = Object.values(this.workspaceSessionSources[agentId] ?? {}).find((candidate) =>
+      candidate.sessions.some((session) => session.sessionId === sessionId)
+    );
+    if (source) {
+      this.setWorkspaceSource({
+        ...source,
+        sessions: source.sessions.filter((session) => session.sessionId !== sessionId)
+      });
+    }
     this.acknowledgeSession(agentId, sessionId);
 
     if (this.isSelectedSession(agentId, sessionId)) {
@@ -1709,11 +1969,12 @@ export class AgentsStore {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config || config.transport !== 'websocket' || !config.enabled || !config.autoStart) return;
 
+    this.completedWorkspaceDiscoveries.delete(agentId);
     await this.connectAgent(agentId, true);
     const record = this.clients.get(agentId);
     if (record?.connectionState === 'initialized') {
       await Promise.allSettled([
-        this.refreshSessionsForAgent(agentId),
+        this.refreshSessionsForAgent(agentId, true),
         this.refreshMeshForAgent(agentId),
         this.refreshAuthProviders(agentId)
       ]);
@@ -1950,6 +2211,40 @@ function slugify(value: string): string {
 
 function getDefaultModelId(models: ModelEntry[]): string {
   return models[0]?.id ?? '';
+}
+
+function buildWorkspaceSourceKey(agentId: string, cwd: string): string {
+  return `${agentId}\u0000${cwd}`;
+}
+
+function compareSessionsByActivity(a: DesktopSessionSummary, b: DesktopSessionSummary): number {
+  const activityDifference = (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '');
+  if (activityDifference !== 0) return activityDifference;
+  return getSessionKey(a).localeCompare(getSessionKey(b));
+}
+
+function deduplicateSessions(sessions: DesktopSessionSummary[]): DesktopSessionSummary[] {
+  return [...new Map(sessions.map((session) => [getSessionKey(session), session])).values()];
+}
+
+function mergeSessions(current: DesktopSessionSummary[], incoming: DesktopSessionSummary[]): DesktopSessionSummary[] {
+  const sessions = new Map(current.map((session) => [getSessionKey(session), session]));
+  for (const session of incoming) {
+    sessions.set(getSessionKey(session), session);
+  }
+  return [...sessions.values()].sort(compareSessionsByActivity);
+}
+
+function updateKnownSessions(current: DesktopSessionSummary[], incoming: DesktopSessionSummary[]): DesktopSessionSummary[] {
+  const updates = new Map(incoming.map((session) => [getSessionKey(session), session]));
+  return current.map((session) => updates.get(getSessionKey(session)) ?? session).sort(compareSessionsByActivity);
+}
+
+function maxTimestamp(values: Array<string | null>): string | null {
+  return values.reduce<string | null>((latest, value) => {
+    if (!value) return latest;
+    return !latest || value > latest ? value : latest;
+  }, null);
 }
 
 function delay(ms: number): Promise<void> {

@@ -7,12 +7,29 @@ import {
 
 export type SessionRailTone = 'attention' | 'active' | 'recent';
 
+export interface WorkspaceSessionSource {
+  agentId: string;
+  agentName: string;
+  cwd: string;
+  sessions: DesktopSessionSummary[];
+  latestActivity: string | null;
+  nextCursor: string | null;
+  initialized: boolean;
+  loading: boolean;
+  error: string | null;
+}
+
 export interface WorkspaceSessionGroup {
   key: string;
+  cwd: string;
   name: string;
   path: string;
   sessions: DesktopSessionSummary[];
   latestActivity: string | null;
+  initialized: boolean;
+  loading: boolean;
+  hasMore: boolean;
+  error: string | null;
 }
 
 export interface SessionRailItem {
@@ -146,10 +163,15 @@ export function groupSessionsByWorkspace(sessions: DesktopSessionSummary[]): Wor
       const path = key === '__no_workspace__' ? 'No workspace path recorded' : key;
       return {
         key,
+        cwd: key === '__no_workspace__' ? '' : key,
         name: key === '__no_workspace__' ? 'No workspace' : getSessionWorkspaceName(key),
         path,
         sessions: sortedSessions,
-        latestActivity
+        latestActivity,
+        initialized: true,
+        loading: false,
+        hasMore: false,
+        error: null
       };
     })
     .sort((a, b) => compareNullableTimestamps(b.latestActivity, a.latestActivity));

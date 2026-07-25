@@ -3866,6 +3866,16 @@ summary:focus-visible {
   font-size: 0.72rem;
 }
 
+.session-workspace-count-loading,
+.session-workspace-count-pending {
+  min-width: 2rem;
+  justify-content: center;
+}
+
+.session-workspace-count-pending {
+  color: var(--muted);
+}
+
 .session-workspace-chevron {
   transition: transform 0.15s ease;
 }
@@ -3888,6 +3898,25 @@ summary:focus-visible {
 
 .session-workspace-session-list .session-row + .session-row {
   border-top-color: var(--subtle-border);
+}
+
+.session-workspace-loading,
+.session-workspace-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  padding: 0.8rem 1rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.session-workspace-pagination {
+  border-top: 1px solid var(--subtle-border);
+}
+
+.session-workspace-pagination .alert-error {
+  flex: 1 1 auto;
 }
 
 .session-row {

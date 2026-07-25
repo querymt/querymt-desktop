@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InitializeResponse, PromptResponse, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
 import { AgentsStore } from './agents.svelte';
 
+const mockListManagedProfiles = vi.hoisted(() => vi.fn(async () => []));
+
 const mockClient = vi.hoisted(() => {
   let sessionUpdateHandler: ((notification: SessionNotification) => void) | null = null;
   let connectionLossHandler: ((reason: string) => void) | null = null;
@@ -18,7 +20,7 @@ const mockClient = vi.hoisted(() => {
       sessionId: 'session-1',
       configOptions: []
     })),
-    listSessions: vi.fn(async () => []),
+    listSessions: vi.fn(async () => ({ sessions: [] })),
     deleteSession: vi.fn(async () => undefined),
     loadSession: vi.fn(async () => ({ configOptions: [] })),
     sendPrompt: vi.fn(async (): Promise<PromptResponse> => ({ stopReason: 'end_turn' })),
@@ -57,6 +59,10 @@ const mockClient = vi.hoisted(() => {
     setSessionConfigOption: vi.fn(async () => [])
   };
 });
+
+vi.mock('$lib/querymt/profile-templates', () => ({
+  listManagedProfiles: mockListManagedProfiles
+}));
 
 vi.mock('$lib/querymt/acp-client', () => ({
   DesktopAcpClient: vi.fn(function () {
@@ -104,10 +110,31 @@ function createStore() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockListManagedProfiles.mockResolvedValue([]);
   mockClient.resetSessionUpdateHandler();
 });
 
 describe('AgentsStore connections', () => {
+  it('completes workspace discovery during initialization when profile loading fails', async () => {
+    const store = createStore();
+    mockListManagedProfiles.mockRejectedValueOnce(new Error('profile service unavailable'));
+    (mockClient.listSessions as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        sessions: [{ sessionId: 'session-a', title: 'A', cwd: '/tmp/a', updatedAt: '2026-07-18T12:00:00Z' }],
+        nextCursor: 'opaque-global-page-2'
+      })
+      .mockResolvedValueOnce({
+        sessions: [{ sessionId: 'session-b', title: 'B', cwd: '/tmp/b', updatedAt: '2026-07-17T12:00:00Z' }]
+      });
+
+    await store.initialize();
+
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, {});
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { cursor: 'opaque-global-page-2' });
+    expect(store.workspaceSessionGroups.map((group) => group.cwd)).toEqual(['/tmp/a', '/tmp/b']);
+    expect(store.loading).toBe(false);
+  });
+
   it('does not reconnect or replace inbox handlers when already initialized', async () => {
     const store = createStore();
 
@@ -411,7 +438,7 @@ describe('AgentsStore prompt session start', () => {
     expect(store.sessionConfigPending.mode).toBe(false);
   });
 
-  it('connects WebSocket agents without invoking the local sidecar lifecycle', async () => {
+  it('connects WebSocket agents and completes workspace discovery', async () => {
     const store = createStore();
     store.configs = [
       {
@@ -424,14 +451,18 @@ describe('AgentsStore prompt session start', () => {
         autoStart: true
       }
     ];
+    (mockClient.listSessions as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ sessions: [], nextCursor: 'remote-page-2' })
+      .mockResolvedValueOnce({ sessions: [] });
 
     await store.startConfiguredAgent('remote-agent');
 
     expect(mockClient.connect).toHaveBeenCalled();
-    expect(mockClient.listSessions).toHaveBeenCalled();
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, {});
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { cursor: 'remote-page-2' });
   });
 
-  it('marks WebSocket loss immediately and reconnects with backoff', async () => {
+  it('marks WebSocket loss immediately and completes discovery after reconnecting', async () => {
     vi.useFakeTimers();
     const store = createStore();
     store.configs = [
@@ -448,12 +479,16 @@ describe('AgentsStore prompt session start', () => {
 
     await store.connectAgent('remote-agent');
     const connectCallsBeforeLoss = mockClient.connect.mock.calls.length;
+    (mockClient.listSessions as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ sessions: [], nextCursor: 'reconnect-page-2' })
+      .mockResolvedValueOnce({ sessions: [] });
     mockClient.emitConnectionLoss('WebSocket closed (code 1006).');
 
     expect(store.connectionStates['remote-agent']).toBe('reconnecting');
     expect(store.agentErrors['remote-agent']).toBe('WebSocket closed (code 1006).');
     await vi.advanceTimersByTimeAsync(250);
     expect(mockClient.connect.mock.calls.length).toBeGreaterThan(connectCallsBeforeLoss);
+    expect(mockClient.listSessions).toHaveBeenCalledWith({ cursor: 'reconnect-page-2' });
     expect(store.connectionStates['remote-agent']).toBe('initialized');
     vi.useRealTimers();
   });
@@ -489,7 +524,7 @@ describe('AgentsStore prompt session start', () => {
       if (listSessionsCalls === 2) {
         throw new Error('mesh failed');
       }
-      return [{ sessionId: 'session-1', title: 'Local session', cwd: '/tmp/work', updatedAt: '2026-06-16T12:00:00Z' }];
+      return { sessions: [{ sessionId: 'session-1', title: 'Local session', cwd: '/tmp/work', updatedAt: '2026-06-16T12:00:00Z' }] };
     });
 
     await store.refreshAllSessions();
@@ -553,7 +588,7 @@ describe('AgentsStore prompt session start', () => {
   it('marks a background session for attention when it finishes after running', async () => {
     const store = createStore();
     (mockClient.listSessions as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce([
+      .mockResolvedValueOnce({ sessions: [
         {
           sessionId: 'background-1',
           title: 'Background task',
@@ -566,8 +601,8 @@ describe('AgentsStore prompt session start', () => {
             runtimeStatus: 'running'
           }
         }
-      ])
-      .mockResolvedValueOnce([
+      ] })
+      .mockResolvedValueOnce({ sessions: [
         {
           sessionId: 'background-1',
           title: 'Background task',
@@ -580,7 +615,7 @@ describe('AgentsStore prompt session start', () => {
             runtimeStatus: 'idle'
           }
         }
-      ]);
+      ] });
 
     await store.refreshSessionsForAgent('agent-1');
     await store.refreshSessionsForAgent('agent-1');
@@ -593,7 +628,7 @@ describe('AgentsStore prompt session start', () => {
     store.activeAgentId = 'agent-1';
     store.activeSessionId = 'session-1';
     (mockClient.listSessions as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce([
+      .mockResolvedValueOnce({ sessions: [
         {
           sessionId: 'session-1',
           title: 'Selected task',
@@ -606,8 +641,8 @@ describe('AgentsStore prompt session start', () => {
             runtimeStatus: 'running'
           }
         }
-      ])
-      .mockResolvedValueOnce([
+      ] })
+      .mockResolvedValueOnce({ sessions: [
         {
           sessionId: 'session-1',
           title: 'Selected task',
@@ -620,12 +655,190 @@ describe('AgentsStore prompt session start', () => {
             runtimeStatus: 'idle'
           }
         }
-      ]);
+      ] });
 
     await store.refreshSessionsForAgent('agent-1');
     await store.refreshSessionsForAgent('agent-1');
 
     expect(store.attentionSessionKeys).toEqual([]);
+  });
+
+  it('discovers workspaces across every global page using opaque cursors', async () => {
+    const store = createStore();
+    (mockClient.listSessions as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        sessions: [{ sessionId: 'session-a', title: 'A', cwd: '/tmp/a', updatedAt: '2026-07-18T12:00:00Z' }],
+        nextCursor: 'opaque-global-page-2'
+      })
+      .mockResolvedValueOnce({
+        sessions: [{ sessionId: 'session-b', title: 'B', cwd: '/tmp/b', updatedAt: '2026-07-17T12:00:00Z' }]
+      });
+
+    await store.refreshSessionsForAgent('agent-1', true);
+
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, {});
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { cursor: 'opaque-global-page-2' });
+    expect(store.workspaceSessionGroups.map((group) => group.cwd)).toEqual(['/tmp/a', '/tmp/b']);
+    expect(store.workspaceSessionGroups.every((group) => !group.initialized)).toBe(true);
+  });
+
+  it('coalesces concurrent full workspace discovery for one agent', async () => {
+    const store = createStore();
+    let resolveFirstPage!: (value: { sessions: never[] }) => void;
+    (mockClient.listSessions as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise((resolve) => (resolveFirstPage = resolve))
+    );
+
+    const firstDiscovery = store.refreshSessionsForAgent('agent-1', true);
+    const secondDiscovery = store.refreshSessionsForAgent('agent-1', true);
+    await vi.waitFor(() => expect(resolveFirstPage).toBeTypeOf('function'));
+    resolveFirstPage({ sessions: [] });
+    await Promise.all([firstDiscovery, secondDiscovery]);
+
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads workspace pages with cwd-scoped opaque cursors and reveals ten at a time', async () => {
+    const store = createStore();
+    store.workspaceSessionSources = {
+      'agent-1': {
+        '/tmp/work': {
+          agentId: 'agent-1',
+          agentName: 'QMTCODE',
+          cwd: '/tmp/work',
+          sessions: [],
+          latestActivity: '2026-07-18T12:00:00Z',
+          nextCursor: null,
+          initialized: false,
+          loading: false,
+          error: null
+        }
+      }
+    };
+    const page = (start: number) =>
+      Array.from({ length: 10 }, (_, index) => ({
+        sessionId: `session-${start + index}`,
+        title: `Session ${start + index}`,
+        cwd: '/tmp/work',
+        updatedAt: new Date(Date.UTC(2026, 6, 18, 12, 0, 0) - (start + index) * 1000).toISOString()
+      }));
+    (mockClient.listSessions as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ sessions: page(0), nextCursor: 'opaque-workspace-page-2' })
+      .mockResolvedValueOnce({ sessions: page(10) });
+
+    await store.loadWorkspaceSessions('/tmp/work');
+
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, { cwd: '/tmp/work', cursor: undefined });
+    expect(store.workspaceSessionGroups[0].sessions).toHaveLength(10);
+    expect(store.workspaceSessionGroups[0].hasMore).toBe(true);
+
+    await store.loadMoreWorkspaceSessions('/tmp/work');
+
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, {
+      cwd: '/tmp/work',
+      cursor: 'opaque-workspace-page-2'
+    });
+    expect(store.workspaceSessionGroups[0].sessions).toHaveLength(20);
+    expect(store.workspaceSessionGroups[0].hasMore).toBe(false);
+  });
+
+  it('continues cross-agent paging until the merged workspace has ten unique sessions', async () => {
+    const store = createStore();
+    store.configs = [
+      ...store.configs,
+      {
+        id: 'agent-2',
+        name: 'Mesh Agent',
+        transport: 'stdio',
+        commandLine: '/usr/local/bin/qmtcode --acp --mesh',
+        enabled: true,
+        autoStart: true
+      }
+    ];
+    store.workspaceSessionSources = {
+      'agent-1': {
+        '/tmp/work': {
+          agentId: 'agent-1',
+          agentName: 'QMTCODE',
+          cwd: '/tmp/work',
+          sessions: [],
+          latestActivity: null,
+          nextCursor: null,
+          initialized: false,
+          loading: false,
+          error: null
+        }
+      },
+      'agent-2': {
+        '/tmp/work': {
+          agentId: 'agent-2',
+          agentName: 'Mesh Agent',
+          cwd: '/tmp/work',
+          sessions: [],
+          latestActivity: null,
+          nextCursor: null,
+          initialized: false,
+          loading: false,
+          error: null
+        }
+      }
+    };
+    (mockClient.listSessions as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        sessions: [{ sessionId: 'agent-1-0', title: 'One', cwd: '/tmp/work', updatedAt: '2026-07-18T12:00:00Z' }],
+        nextCursor: 'agent-1-next'
+      })
+      .mockResolvedValueOnce({
+        sessions: [{ sessionId: 'agent-2-0', title: 'Two', cwd: '/tmp/work', updatedAt: '2026-07-18T11:59:00Z' }]
+      })
+      .mockResolvedValueOnce({
+        sessions: Array.from({ length: 9 }, (_, index) => ({
+          sessionId: `agent-1-${index + 1}`,
+          title: `More ${index}`,
+          cwd: '/tmp/work',
+          updatedAt: new Date(Date.UTC(2026, 6, 18, 11, 58, 0) - index * 1000).toISOString()
+        }))
+      });
+
+    await store.loadWorkspaceSessions('/tmp/work');
+
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(3);
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith({ cwd: '/tmp/work', cursor: 'agent-1-next' });
+    expect(store.workspaceSessionGroups[0].sessions).toHaveLength(10);
+  });
+
+  it('caps merged cross-agent workspace results at ten', () => {
+    const store = createStore();
+    const source = (agentId: string, agentName: string, offset: number) => ({
+      agentId,
+      agentName,
+      cwd: '/tmp/work',
+      sessions: Array.from({ length: 10 }, (_, index) => ({
+        agentId,
+        agentName,
+        sessionId: `${agentId}-${index}`,
+        title: `${agentName} ${index}`,
+        cwd: '/tmp/work',
+        updatedAt: new Date(Date.UTC(2026, 6, 18, 12, 0, 0) - (offset + index) * 1000).toISOString(),
+        runtimeId: agentId,
+        runtimeName: agentName,
+        source: 'acp' as const,
+        status: 'idle' as const
+      })),
+      latestActivity: '2026-07-18T12:00:00Z',
+      nextCursor: null,
+      initialized: true,
+      loading: false,
+      error: null
+    });
+    store.workspaceSessionSources = {
+      'agent-1': { '/tmp/work': source('agent-1', 'QMTCODE', 0) },
+      'agent-2': { '/tmp/work': source('agent-2', 'Mesh Agent', 5) }
+    };
+
+    expect(store.workspaceSessionGroups).toHaveLength(1);
+    expect(store.workspaceSessionGroups[0].sessions).toHaveLength(10);
+    expect(store.workspaceSessionGroups[0].hasMore).toBe(true);
   });
 
   it('clears attention when a session is acknowledged', () => {

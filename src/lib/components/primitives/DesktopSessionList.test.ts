@@ -155,4 +155,77 @@ describe('DesktopSessionList', () => {
     expect(screen.getByRole('button', { name: /^Delete$/ })).toBeEnabled();
     expect(screen.getByRole('dialog', { name: 'Delete Session' })).toBeInTheDocument();
   });
+
+  it('does not present an uninitialized workspace as having zero sessions', async () => {
+    const onOpenWorkspace = vi.fn(async () => {});
+    render(DesktopSessionList, {
+      workspaceGroups: [createWorkspaceGroup({ initialized: false, sessions: [], hasMore: false })],
+      onOpenWorkspace
+    });
+
+    expect(screen.getByLabelText('Sessions not loaded')).toHaveTextContent('—');
+    expect(screen.queryByLabelText('0 loaded sessions')).not.toBeInTheDocument();
+    await waitFor(() => expect(onOpenWorkspace).toHaveBeenCalledWith('/projects/querymt'));
+  });
+
+  it('shows workspace loading, empty, paginated, and terminal count states accurately', () => {
+    const tenSessions = Array.from({ length: 10 }, (_, index) => ({
+      ...sessions[0],
+      sessionId: `session-${index}`,
+      title: `Session ${index}`
+    }));
+    render(DesktopSessionList, {
+      workspaceGroups: [
+        createWorkspaceGroup({ key: '/loading', cwd: '/loading', name: 'loading', initialized: false, loading: true }),
+        createWorkspaceGroup({ key: '/empty', cwd: '/empty', name: 'empty', initialized: true }),
+        createWorkspaceGroup({ key: '/more', cwd: '/more', name: 'more', sessions: tenSessions, initialized: true, hasMore: true }),
+        createWorkspaceGroup({ key: '/done', cwd: '/done', name: 'done', sessions: tenSessions, initialized: true })
+      ]
+    });
+
+    expect(screen.getByLabelText('Loading sessions')).toBeInTheDocument();
+    expect(screen.getByLabelText('0 loaded sessions')).toHaveTextContent('0');
+    expect(screen.getByLabelText('10 loaded sessions, more available')).toHaveTextContent('10+');
+    expect(screen.getByLabelText('10 loaded sessions')).toHaveTextContent('10');
+  });
+
+  it('loads an unopened workspace and requests ten more when pagination is available', async () => {
+    const onOpenWorkspace = vi.fn(async () => {});
+    const onLoadMoreWorkspace = vi.fn(async () => {});
+    const workspaceGroups = [createWorkspaceGroup({ sessions, initialized: false, hasMore: true })];
+    render(DesktopSessionList, { workspaceGroups, onOpenWorkspace, onLoadMoreWorkspace });
+
+    await waitFor(() => expect(onOpenWorkspace).toHaveBeenCalledWith('/projects/querymt'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+
+    expect(onLoadMoreWorkspace).toHaveBeenCalledWith('/projects/querymt');
+    expect(screen.getByLabelText('Sessions not loaded')).toBeInTheDocument();
+  });
 });
+
+function createWorkspaceGroup(overrides: Partial<{
+  key: string;
+  cwd: string;
+  name: string;
+  path: string;
+  sessions: DesktopSessionSummary[];
+  latestActivity: string | null;
+  initialized: boolean;
+  loading: boolean;
+  hasMore: boolean;
+  error: string | null;
+}> = {}) {
+  return {
+    key: '/projects/querymt',
+    cwd: '/projects/querymt',
+    name: 'querymt',
+    path: overrides.cwd ?? '/projects/querymt',
+    sessions: [],
+    latestActivity: '2026-07-18T01:23:00Z',
+    initialized: false,
+    loading: false,
+    hasMore: false,
+    error: null,
+    ...overrides
+  };
+}
