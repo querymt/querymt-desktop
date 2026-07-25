@@ -7,6 +7,7 @@ import {
   type ElicitationCapabilities,
   type InitializeRequest,
   type InitializeResponse,
+  type ListSessionsRequest,
   type ListSessionsResponse,
   type LoadSessionResponse,
   type NewSessionResponse,
@@ -14,7 +15,6 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionConfigOption,
-  type SessionInfo,
   type SetSessionConfigOptionRequest
 } from '@agentclientprotocol/sdk';
 import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment } from '$lib/domain/types';
@@ -150,13 +150,12 @@ export class DesktopAcpClient {
     return this.initializeResponse;
   }
 
-  async listSessions(): Promise<SessionInfo[]> {
+  async listSessions(request: ListSessionsRequest = {}): Promise<ListSessionsResponse> {
     if (!this.connection) {
       await this.connect();
     }
 
-    const response: ListSessionsResponse = await this.connection!.listSessions({});
-    return response.sessions;
+    return this.connection!.listSessions(request);
   }
 
   async deleteSession(sessionId: string): Promise<void> {

@@ -2,25 +2,31 @@
   import { getContext } from 'svelte';
   import { Accordion, Portal } from 'bits-ui';
   import { Check, ChevronDown, ChevronRight, Clock3, Copy, FolderKanban, LoaderCircle, RefreshCw, Search, Trash2, X } from '@lucide/svelte';
-  import { formatSessionTimestamp, groupSessionsByWorkspace } from '$lib/domain/sessions';
+  import { formatSessionTimestamp, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
 
   let {
-    sessions,
+    sessions = [],
+    workspaceGroups = null,
     loading = false,
     error = null,
     emptyMessage = 'No sessions returned yet.',
     onRefresh = null,
+    onOpenWorkspace = null,
+    onLoadMoreWorkspace = null,
     onOpenSession = null,
     canDeleteSession = null,
     onDeleteSession = null
   }: {
-    sessions: DesktopSessionSummary[];
+    sessions?: DesktopSessionSummary[];
+    workspaceGroups?: WorkspaceSessionGroup[] | null;
     loading?: boolean;
     error?: string | null;
     emptyMessage?: string;
     onRefresh?: (() => void) | null;
+    onOpenWorkspace?: ((cwd: string) => void | Promise<void>) | null;
+    onLoadMoreWorkspace?: ((cwd: string) => void | Promise<void>) | null;
     onOpenSession?: ((session: DesktopSessionSummary) => void) | null;
     canDeleteSession?: ((session: DesktopSessionSummary) => boolean) | null;
     onDeleteSession?: ((session: DesktopSessionSummary) => Promise<void>) | null;
@@ -30,6 +36,7 @@
   let statusFilter = $state<'all' | SessionStatus>('all');
   let openGroups = $state<string[]>([]);
   let lastWorkspaceKeySignature = $state('');
+  let requestedWorkspaceKeys = $state<string[]>([]);
   let copiedSessionId = $state<string | null>(null);
   let pendingDeleteSession = $state<DesktopSessionSummary | null>(null);
   let deletingSessionKey = $state<string | null>(null);
@@ -38,28 +45,59 @@
   const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
 
-  const filteredSessions = $derived.by(() => {
+  const sourceWorkspaceGroups = $derived(workspaceGroups ?? groupSessionsByWorkspace(sessions));
+
+  function workspaceMatchesGroup(group: WorkspaceSessionGroup, normalizedQuery: string): boolean {
+    return (
+      !normalizedQuery ||
+      group.name.toLowerCase().includes(normalizedQuery) ||
+      group.path.toLowerCase().includes(normalizedQuery)
+    );
+  }
+
+  const filteredWorkspaceGroups = $derived.by(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return sessions.filter((session) => {
-      const matchesStatus = statusFilter === 'all' || session.status === statusFilter;
-      const matchesQuery =
-        !normalizedQuery ||
-        session.title.toLowerCase().includes(normalizedQuery) ||
-        session.cwd.toLowerCase().includes(normalizedQuery) ||
-        session.agentName.toLowerCase().includes(normalizedQuery);
-      return matchesStatus && matchesQuery;
-    });
+    return sourceWorkspaceGroups
+      .map((group) => {
+        const workspaceMatches = workspaceMatchesGroup(group, normalizedQuery);
+        const filteredSessions = group.sessions.filter((session) => {
+          const matchesStatus = statusFilter === 'all' || session.status === statusFilter;
+          const matchesQuery =
+            workspaceMatches ||
+            session.title.toLowerCase().includes(normalizedQuery) ||
+            session.agentName.toLowerCase().includes(normalizedQuery);
+          return matchesStatus && matchesQuery;
+        });
+        return { ...group, sessions: filteredSessions };
+      })
+      .filter((group) => group.sessions.length > 0 || (statusFilter === 'all' && workspaceMatchesGroup(group, normalizedQuery)));
   });
 
-  const workspaceGroups = $derived(groupSessionsByWorkspace(filteredSessions));
-
   $effect(() => {
-    const nextSignature = workspaceGroups.map((group) => group.key).join('|');
+    const nextSignature = filteredWorkspaceGroups.map((group) => group.key).join('|');
     if (nextSignature !== lastWorkspaceKeySignature) {
       lastWorkspaceKeySignature = nextSignature;
-      const visibleKeys = new Set(workspaceGroups.map((group) => group.key));
+      const visibleKeys = new Set(filteredWorkspaceGroups.map((group) => group.key));
       const preservedOpenGroups = openGroups.filter((key) => visibleKeys.has(key));
-      openGroups = preservedOpenGroups.length > 0 ? preservedOpenGroups : workspaceGroups.slice(0, 3).map((group) => group.key);
+      openGroups = preservedOpenGroups.length > 0 ? preservedOpenGroups : filteredWorkspaceGroups.slice(0, 3).map((group) => group.key);
+    }
+  });
+
+  $effect(() => {
+    for (const group of sourceWorkspaceGroups) {
+      if (
+        openGroups.includes(group.key) &&
+        !group.initialized &&
+        !group.loading &&
+        !group.error &&
+        !requestedWorkspaceKeys.includes(group.key)
+      ) {
+        requestedWorkspaceKeys = [...requestedWorkspaceKeys, group.key];
+        void onOpenWorkspace?.(group.cwd);
+      }
+      if ((group.initialized || group.error) && requestedWorkspaceKeys.includes(group.key)) {
+        requestedWorkspaceKeys = requestedWorkspaceKeys.filter((key) => key !== group.key);
+      }
     }
   });
 
@@ -166,13 +204,13 @@
   <div class="session-browser-body">
     {#if loading}
       <div class="muted px-4 py-4 text-sm">Loading sessions…</div>
-    {:else if sessions.length === 0}
+    {:else if sourceWorkspaceGroups.length === 0}
       <div class="muted px-4 py-4 text-sm">{emptyMessage}</div>
-    {:else if workspaceGroups.length === 0}
-      <div class="muted px-4 py-4 text-sm">No sessions match the current filters.</div>
+    {:else if filteredWorkspaceGroups.length === 0}
+      <div class="muted px-4 py-4 text-sm">No loaded sessions match the current filters.</div>
     {:else}
       <Accordion.Root type="multiple" bind:value={openGroups} class="session-workspace-accordion">
-        {#each workspaceGroups as group}
+        {#each filteredWorkspaceGroups as group}
           <Accordion.Item value={group.key} class="session-workspace-item">
             <Accordion.Header level={3} class="session-workspace-header">
               <Accordion.Trigger class="session-workspace-trigger">
@@ -184,15 +222,28 @@
                   </span>
                 </span>
                 <span class="session-workspace-meta">
-                  <span class="badge">{group.sessions.length}</span>
+                  {#if group.loading && !group.initialized}
+                    <span class="badge session-workspace-count-loading" aria-label="Loading sessions" title="Loading sessions">
+                      <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+                    </span>
+                  {:else if group.initialized}
+                    <span class="badge" aria-label={`${group.sessions.length} loaded session${group.sessions.length === 1 ? '' : 's'}${group.hasMore ? ', more available' : ''}`}>
+                      {group.sessions.length}{group.hasMore ? '+' : ''}
+                    </span>
+                  {:else}
+                    <span class="badge session-workspace-count-pending" aria-label="Sessions not loaded" title="Sessions load when opened">—</span>
+                  {/if}
                   <span class="session-workspace-updated"><Clock3 size={12} /> {formatSessionTimestamp(group.latestActivity)}</span>
                   <ChevronDown size={15} class="session-workspace-chevron" />
                 </span>
               </Accordion.Trigger>
             </Accordion.Header>
             <Accordion.Content class="session-workspace-content">
-              <div class="model-picker-list session-workspace-session-list">
-                {#each group.sessions as session}
+              {#if group.loading && group.sessions.length === 0}
+                <div class="session-workspace-loading"><LoaderCircle size={15} class="animate-spin" /> Loading workspace sessions...</div>
+              {:else}
+                <div class="model-picker-list session-workspace-session-list">
+                  {#each group.sessions as session}
                   {@const identicon = createRoundIdenticon(session.sessionId)}
                   <div class="model-picker-row session-row">
                     <button
@@ -270,8 +321,27 @@
                       </span>
                     </span>
                   </div>
-                {/each}
-              </div>
+                  {/each}
+                </div>
+                {#if group.error}
+                  <div class="session-workspace-pagination">
+                    <span class="alert-error" role="alert">{group.error}</span>
+                    <button class="action-btn" type="button" onclick={() => onOpenWorkspace?.(group.cwd)}>Retry</button>
+                  </div>
+                {:else if group.hasMore && onLoadMoreWorkspace}
+                  <div class="session-workspace-pagination">
+                    <button
+                      class="action-btn"
+                      type="button"
+                      disabled={group.loading}
+                      onclick={() => onLoadMoreWorkspace(group.cwd)}
+                    >
+                      {#if group.loading}<LoaderCircle size={14} class="animate-spin" />{/if}
+                      {group.loading ? 'Loading...' : 'Load 10 more'}
+                    </button>
+                  </div>
+                {/if}
+              {/if}
             </Accordion.Content>
           </Accordion.Item>
         {/each}

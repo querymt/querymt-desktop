@@ -20,11 +20,13 @@
 
   <div class="sessions-unified-panel">
     <DesktopSessionList
-      sessions={agentsStore.sessions}
+      workspaceGroups={agentsStore.workspaceSessionGroups}
       loading={agentsStore.loading}
       error={agentsStore.error}
       emptyMessage="No sessions yet from the currently configured agents."
       onRefresh={() => agentsStore.refreshAllSessions()}
+      onOpenWorkspace={(cwd: string) => agentsStore.loadWorkspaceSessions(cwd)}
+      onLoadMoreWorkspace={(cwd: string) => agentsStore.loadMoreWorkspaceSessions(cwd)}
       onOpenSession={(session: DesktopSessionSummary) => openSession(session)}
       canDeleteSession={(session: DesktopSessionSummary) => agentsStore.canDeleteSession(session.agentId)}
       onDeleteSession={(session: DesktopSessionSummary) => agentsStore.deleteSession(session.agentId, session.sessionId)}
