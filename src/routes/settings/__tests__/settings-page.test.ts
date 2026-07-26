@@ -1,8 +1,15 @@
 import { open } from '@tauri-apps/plugin-shell';
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SettingsPage from '../+page.svelte';
+
+const chatPreferencesStore = vi.hoisted(() => ({
+  sendShortcut: 'enter',
+  initialized: true,
+  initialize: vi.fn(),
+  setSendShortcut: vi.fn()
+}));
 
 const agentsStore = vi.hoisted(() => ({
   configs: [{ id: 'agent-1', name: 'QMTCODE' }],
@@ -71,6 +78,8 @@ vi.mock('$lib/stores/appearance.svelte', () => ({
   }
 }));
 
+vi.mock('$lib/stores/chat-preferences.svelte', () => ({ chatPreferencesStore }));
+
 Object.defineProperty(navigator, 'clipboard', {
   value: {
     writeText: vi.fn(async () => {})
@@ -88,6 +97,12 @@ vi.mock('$lib/stores/window-decorations.svelte', () => ({
     toggleCustomTitlebar: vi.fn(async () => {})
   }
 }));
+
+beforeEach(() => {
+  HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+  HTMLElement.prototype.releasePointerCapture = vi.fn();
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+});
 
 afterEach(() => {
   cleanup();
@@ -110,15 +125,43 @@ afterEach(() => {
     provider: 'anthropic',
     flow_kind: 'device_poll'
   }));
+  chatPreferencesStore.sendShortcut = 'enter';
 });
 
-describe('Settings provider controls', () => {
+describe('Settings controls', () => {
   it('marks the custom titlebar setting as beta and keeps it off by default', () => {
     render(SettingsPage);
 
     expect(screen.getByText('Custom titlebar')).toBeInTheDocument();
     expect(screen.getByText('Beta')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Custom titlebar' })).not.toBeChecked();
+  });
+
+  it('defaults to Enter and updates the send shortcut preference', async () => {
+    render(SettingsPage);
+
+    const shortcutSelect = screen.getByRole('button', { name: 'Send messages with' });
+    expect(shortcutSelect).toHaveTextContent('Enter');
+    expect(screen.getByText('Enter sends. Shift+Enter adds a new line.')).toBeInTheDocument();
+
+    await fireEvent.pointerDown(shortcutSelect, { button: 0, pointerType: 'mouse' });
+    const shiftEnterOption = await screen.findByRole('option', { name: 'Shift+Enter' });
+    await fireEvent.pointerDown(shiftEnterOption, { button: 0, pointerType: 'mouse' });
+    await fireEvent.pointerUp(shiftEnterOption, { button: 0, pointerType: 'mouse' });
+
+    expect(chatPreferencesStore.setSendShortcut).toHaveBeenCalledWith('shift-enter');
+  });
+
+  it('offers Cmd+Enter on macOS', async () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    render(SettingsPage);
+
+    await fireEvent.pointerDown(screen.getByRole('button', { name: 'Send messages with' }), {
+      button: 0,
+      pointerType: 'mouse'
+    });
+
+    expect(await screen.findByRole('option', { name: 'Cmd+Enter' })).toBeInTheDocument();
   });
 
   it('keeps API key entry interactive and saves through the store', async () => {

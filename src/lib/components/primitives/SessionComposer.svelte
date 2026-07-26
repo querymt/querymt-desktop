@@ -13,14 +13,12 @@
     getConfigOptionChoices
   } from '$lib/querymt/config-options';
   import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment } from '$lib/domain/types';
+  import type { SendShortcut } from '$lib/stores/chat-preferences.svelte';
   import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 
   let modelPickerRef: { openPicker: () => Promise<void> } | null = null;
-  let fileInputElement: HTMLInputElement | null = null;
+  let fileInputElement = $state<HTMLInputElement | null>(null);
   let isDragging = $state(false);
-  const isMacPlatform =
-    typeof navigator !== 'undefined' &&
-    /mac/i.test(`${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`);
 
   let {
     cwd = '',
@@ -38,6 +36,7 @@
     dockAlignLeft = null,
     dockAlignWidth = null,
     chatView = false,
+    sendShortcut = 'enter',
     modelOptions = [],
     selectedModelId = '',
     modelInfo = {},
@@ -80,6 +79,7 @@
     dockAlignLeft?: number | null;
     dockAlignWidth?: number | null;
     chatView?: boolean;
+    sendShortcut?: SendShortcut;
     modelOptions?: ModelEntry[];
     selectedModelId?: string;
     modelInfo?: Record<string, ModelInfo | null>;
@@ -181,11 +181,20 @@
   }
 
   function shouldSendFromKeyboard(event: KeyboardEvent): boolean {
-    if (event.key !== 'Enter' || event.shiftKey || event.altKey) {
+    if (event.key !== 'Enter' || event.isComposing || event.altKey) {
       return false;
     }
 
-    return isMacPlatform ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+    switch (sendShortcut) {
+      case 'shift-enter':
+        return event.shiftKey && !event.ctrlKey && !event.metaKey;
+      case 'ctrl-enter':
+        return event.ctrlKey && !event.shiftKey && !event.metaKey;
+      case 'cmd-enter':
+        return event.metaKey && !event.shiftKey && !event.ctrlKey;
+      default:
+        return !event.shiftKey && !event.ctrlKey && !event.metaKey;
+    }
   }
 
   function handlePromptKeydown(event: KeyboardEvent) {
@@ -485,6 +494,7 @@
         value={prompt}
         placeholder={sessionPlaceholder}
         oninput={(event) => onPromptInput((event.currentTarget as HTMLInputElement).value)}
+        onkeydown={handlePromptKeydown}
       />
       <IconTooltipButton label="Attach files" icon={Paperclip} size={16} onclick={handleAttachClick} />
       <IconTooltipButton label="Send reply" icon={SendHorizontal} tone="primary" size={16} disabled={loading} onclick={onSendPrompt} />

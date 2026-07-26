@@ -19,6 +19,7 @@
   } from '$lib/domain/session-scroll';
   import { formatSessionTimestamp, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
 
   const agentId = $derived(decodeURIComponent(page.params.agentId ?? ''));
@@ -407,6 +408,7 @@
         compact={true}
         sessionOnly={true}
         chatView={true}
+        sendShortcut={chatPreferencesStore.sendShortcut}
         prompt={agentsStore.composerPrompt}
         loading={agentsStore.loading}
         error={agentsStore.error}

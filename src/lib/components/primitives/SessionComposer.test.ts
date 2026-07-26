@@ -127,44 +127,64 @@ describe('SessionComposer', () => {
     expect(screen.getByText('Switch model')).toBeInTheDocument();
   });
 
-  it('sends with Cmd+Enter on macOS', async () => {
-    vi.stubGlobal('navigator', { platform: 'MacIntel', userAgent: 'Macintosh' });
+  it('sends with Enter by default and keeps Shift+Enter for a new line', async () => {
     const onSendPrompt = vi.fn();
     renderComposer({ onSendPrompt });
+    const prompt = screen.getAllByPlaceholderText(/Ask QueryMT/i)[0];
 
-    await fireEvent.keyDown(screen.getAllByPlaceholderText(/Ask QueryMT/i)[0], { key: 'Enter', metaKey: true });
+    expect(await fireEvent.keyDown(prompt, { key: 'Enter', shiftKey: true })).toBe(true);
+    expect(onSendPrompt).not.toHaveBeenCalled();
 
+    expect(await fireEvent.keyDown(prompt, { key: 'Enter' })).toBe(false);
     expect(onSendPrompt).toHaveBeenCalledTimes(1);
   });
 
-  it('does not send with Ctrl+Enter on macOS', async () => {
-    vi.stubGlobal('navigator', { platform: 'MacIntel', userAgent: 'Macintosh' });
+  it.each([
+    ['shift-enter', { shiftKey: true }],
+    ['ctrl-enter', { ctrlKey: true }],
+    ['cmd-enter', { metaKey: true }]
+  ] as const)('sends only with the selected %s shortcut', async (sendShortcut, modifiers) => {
     const onSendPrompt = vi.fn();
-    renderComposer({ onSendPrompt });
+    renderComposer({ onSendPrompt, sendShortcut });
+    const prompt = screen.getAllByPlaceholderText(/Ask QueryMT/i)[0];
 
-    await fireEvent.keyDown(screen.getAllByPlaceholderText(/Ask QueryMT/i)[0], { key: 'Enter', ctrlKey: true });
-
+    expect(await fireEvent.keyDown(prompt, { key: 'Enter' })).toBe(true);
     expect(onSendPrompt).not.toHaveBeenCalled();
-  });
 
-  it('sends with Ctrl+Enter on non-macOS platforms', async () => {
-    vi.stubGlobal('navigator', { platform: 'Win32', userAgent: 'Windows NT 10.0' });
-    const onSendPrompt = vi.fn();
-    renderComposer({ onSendPrompt });
-
-    await fireEvent.keyDown(screen.getAllByPlaceholderText(/Ask QueryMT/i)[0], { key: 'Enter', ctrlKey: true });
-
+    expect(await fireEvent.keyDown(prompt, { key: 'Enter', ...modifiers })).toBe(false);
     expect(onSendPrompt).toHaveBeenCalledTimes(1);
   });
 
-  it('does not send with Cmd+Enter on non-macOS platforms', async () => {
-    vi.stubGlobal('navigator', { platform: 'Linux x86_64', userAgent: 'X11; Linux x86_64' });
+  it('does not send while loading or composing text with an IME', async () => {
     const onSendPrompt = vi.fn();
-    renderComposer({ onSendPrompt });
+    const { rerender } = renderComposer({ onSendPrompt });
+    const prompt = screen.getAllByPlaceholderText(/Ask QueryMT/i)[0];
 
-    await fireEvent.keyDown(screen.getAllByPlaceholderText(/Ask QueryMT/i)[0], { key: 'Enter', metaKey: true });
-
+    await fireEvent.keyDown(prompt, { key: 'Enter', isComposing: true });
     expect(onSendPrompt).not.toHaveBeenCalled();
+
+    await rerender({ loading: true });
+    await fireEvent.keyDown(prompt, { key: 'Enter' });
+    expect(onSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('uses the selected shortcut in the collapsed composer', async () => {
+    const onSendPrompt = vi.fn();
+    renderComposer({
+      collapsed: true,
+      docked: true,
+      sessionOnly: true,
+      chatView: true,
+      sendShortcut: 'ctrl-enter',
+      onSendPrompt
+    });
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+
+    await fireEvent.keyDown(prompt, { key: 'Enter' });
+    expect(onSendPrompt).not.toHaveBeenCalled();
+
+    await fireEvent.keyDown(prompt, { key: 'Enter', ctrlKey: true });
+    expect(onSendPrompt).toHaveBeenCalledTimes(1);
   });
 
   it('renders the full composer while fixed and following', () => {

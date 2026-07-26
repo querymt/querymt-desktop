@@ -87,6 +87,7 @@ const agentsStore = vi.hoisted(() => createAgentsStore());
 
 vi.mock('$app/navigation', () => ({ goto }));
 vi.mock('$lib/stores/agents.svelte', () => ({ agentsStore }));
+vi.mock('$lib/stores/chat-preferences.svelte', () => ({ chatPreferencesStore: { sendShortcut: 'enter' } }));
 vi.mock('$lib/stores/inbox.svelte', () => ({ inboxStore: { pendingCount: 0 } }));
 
 afterEach(() => {

@@ -11,6 +11,7 @@
   import SessionContextRail from '$lib/components/session/SessionContextRail.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { appearanceStore } from '$lib/stores/appearance.svelte';
+  import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
   import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
   import type { SectionName } from '$lib/design/tokens';
@@ -62,6 +63,7 @@
 
   onMount(() => {
     appearanceStore.initialize();
+    chatPreferencesStore.initialize();
     void agentsStore.initialize();
     void windowDecorationsStore.initialize();
 

@@ -8,6 +8,7 @@
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { appearanceStore, type AppearanceThemeMode } from '$lib/stores/appearance.svelte';
+  import { chatPreferencesStore, type SendShortcut } from '$lib/stores/chat-preferences.svelte';
   import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
   import { AuthMethod, OAuthFlowKindTs, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
   import { enableProfileTemplate, listProfileTemplates, type ProfileTemplateInfo } from '$lib/querymt/profile-templates';
@@ -33,6 +34,7 @@
   let profileTemplates = $state<ProfileTemplateInfo[]>([]);
   let profileTemplatesLoading = $state(false);
   let profileTemplateError = $state<string | null>(null);
+  let isMacPlatform = $state(false);
 
   const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
@@ -74,7 +76,9 @@
 
   onMount(() => {
     appearanceStore.initialize();
+    chatPreferencesStore.initialize();
     void windowDecorationsStore.initialize();
+    isMacPlatform = /mac/i.test(`${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`);
   });
 
   const themeOptions: Array<{ value: AppearanceThemeMode; label: string }> = [
@@ -82,6 +86,18 @@
     { value: 'light', label: 'Light' },
     { value: 'dark', label: 'Dark' }
   ];
+
+  const sendShortcutOptions = $derived.by(() => {
+    const options: Array<{ value: SendShortcut; label: string }> = [
+      { value: 'enter', label: 'Enter' },
+      { value: 'shift-enter', label: 'Shift+Enter' },
+      { value: 'ctrl-enter', label: 'Ctrl+Enter' }
+    ];
+    if (isMacPlatform) {
+      options.push({ value: 'cmd-enter', label: 'Cmd+Enter' });
+    }
+    return options;
+  });
 
   type OAuthPollResult = 'connected' | 'timeout' | 'cancelled';
 
@@ -586,6 +602,12 @@
     }
   }
 
+  function handleSendShortcutChange(value: string) {
+    if (value === 'enter' || value === 'shift-enter' || value === 'ctrl-enter' || value === 'cmd-enter') {
+      chatPreferencesStore.setSendShortcut(value);
+    }
+  }
+
   async function handleWindowDecorationChange(enabled: boolean) {
     try {
       await windowDecorationsStore.toggleCustomTitlebar(enabled);
@@ -618,7 +640,7 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Settings"
-      description="Manage appearance, bundled profiles, and provider authentication."
+      description="Manage appearance, chat preferences, bundled profiles, and provider authentication."
     />
   </div>
 
@@ -640,6 +662,24 @@
           </div>
         </div>
         <AppSelect value={appearanceStore.themeMode} options={themeOptions} pill ariaLabel="Theme" onValueChange={handleThemeChange} />
+      </div>
+
+      <div class="settings-preference-row">
+        <div class="settings-preference-main">
+          <div class="settings-preference-title">Send messages with</div>
+          <div class="settings-preference-description">
+            {chatPreferencesStore.sendShortcut === 'enter'
+              ? 'Enter sends. Shift+Enter adds a new line.'
+              : `${sendShortcutOptions.find((option) => option.value === chatPreferencesStore.sendShortcut)?.label ?? 'Selected shortcut'} sends. Enter adds a new line.`}
+          </div>
+        </div>
+        <AppSelect
+          value={chatPreferencesStore.sendShortcut}
+          options={sendShortcutOptions}
+          pill
+          ariaLabel="Send messages with"
+          onValueChange={handleSendShortcutChange}
+        />
       </div>
 
       <div class="settings-preference-row">

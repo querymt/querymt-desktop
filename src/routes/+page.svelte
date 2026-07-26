@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
 
   const onlineAgents = $derived(agentsStore.connectedAgents);
@@ -64,6 +65,7 @@
       compact={true}
       minimal={true}
       launch={true}
+      sendShortcut={chatPreferencesStore.sendShortcut}
       cwd={agentsStore.composerCwd}
       prompt={agentsStore.composerPrompt}
       loading={agentsStore.loading}
