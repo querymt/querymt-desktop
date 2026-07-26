@@ -189,6 +189,13 @@ export interface SessionUsageStats {
   activeWorkStartedAt: number | null;
 }
 
+export interface SessionUndoState {
+  stack: string[];
+  pendingOperation: 'undo' | 'redo' | null;
+  lastRevertedFiles: string[];
+  lastMessage: string | null;
+}
+
 export interface ActiveSessionViewModel {
   sessionId: string | null;
   transcript: SessionTranscriptItem[];
@@ -202,6 +209,7 @@ export interface ActiveSessionViewModel {
   lastStopReason: string | null;
   lastError: string | null;
   usage: SessionUsageStats;
+  undo: SessionUndoState;
 }
 
 export interface SessionEventItem {

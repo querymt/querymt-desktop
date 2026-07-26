@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render } from '@testing-library/svelte';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionConversationTurn } from '$lib/domain/session-conversation';
 import SessionTurn from './SessionTurn.svelte';
 
@@ -8,6 +8,7 @@ const turn: SessionConversationTurn = {
   id: 'turn-1',
   user: {
     id: 'user-1',
+    messageId: 'message-1',
     html: '<p>Inspect the app</p>',
     text: 'Inspect the app'
   },
@@ -59,6 +60,20 @@ const turn: SessionConversationTurn = {
 afterEach(cleanup);
 
 describe('SessionTurn', () => {
+  it('calls targeted undo with the user message id when available', async () => {
+    const onUndo = vi.fn();
+    const { getByRole } = render(SessionTurn, { turn, undoAvailable: true, onUndo });
+
+    await fireEvent.click(getByRole('button', { name: 'Undo to this prompt' }));
+
+    expect(onUndo).toHaveBeenCalledWith('message-1');
+  });
+
+  it('disables targeted undo for a reverted turn', () => {
+    const { getByRole } = render(SessionTurn, { turn, undoAvailable: false, reverted: true });
+    expect(getByRole('button', { name: 'Undo to this prompt' })).toHaveProperty('disabled', true);
+  });
+
   it('renders reasoning, tools, and assistant text in content order', () => {
     const { container } = render(SessionTurn, { turn });
     const orderedText = Array.from(container.querySelector('.session-turn-content')?.children ?? []).map((element) =>

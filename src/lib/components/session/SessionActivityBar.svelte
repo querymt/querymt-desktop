@@ -1,25 +1,38 @@
 <script lang="ts">
-  import { LoaderCircle, XCircle } from '@lucide/svelte';
+  import { LoaderCircle, Redo2, Undo2, XCircle } from '@lucide/svelte';
   import Shimmer from '$lib/components/ai-elements/shimmer.svelte';
   import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
 
   let {
     session,
-    onCancel
+    canUndo = false,
+    canRedo = false,
+    undoSupported = false,
+    onCancel,
+    onUndo,
+    onRedo
   }: {
     session: ActiveSessionViewModel;
+    canUndo?: boolean;
+    canRedo?: boolean;
+    undoSupported?: boolean;
     onCancel?: () => void | Promise<void>;
+    onUndo?: () => void;
+    onRedo?: () => void | Promise<void>;
   } = $props();
 
-  const isBusy = $derived(
+  const agentBusy = $derived(
     session.runState === 'submitting' ||
       session.runState === 'thinking' ||
       session.runState === 'streaming' ||
       session.runState === 'tool-running'
   );
+  const isBusy = $derived(session.undo.pendingOperation !== null || agentBusy);
 
   const primaryStatus = $derived.by(() => {
+    if (session.undo.pendingOperation === 'undo') return 'Undoing workspace changes…';
+    if (session.undo.pendingOperation === 'redo') return 'Restoring workspace changes…';
     if (session.runState === 'failed') {
       return session.lastError ? `Failed: ${session.lastError}` : 'Failed';
     }
@@ -36,7 +49,7 @@
       return 'Sending prompt…';
     }
     if (session.runState === 'completed') {
-      return 'Completed';
+      return session.undo.lastMessage ?? 'Completed';
     }
     return 'Ready';
   });
@@ -56,6 +69,8 @@
           <span>stop: {session.lastStopReason}</span>
         {:else if session.activeToolCallId}
           <span>Active tool in progress · double Esc to cancel</span>
+        {:else if session.undo.pendingOperation}
+          <span>Updating session history and workspace files</span>
         {:else if isBusy}
           <span>Agent busy · double Esc to cancel</span>
         {:else}
@@ -63,11 +78,35 @@
         {/if}
       </div>
     </div>
-    {#if isBusy && onCancel}
-      <button class="icon-btn" type="button" aria-label="Cancel active session" onclick={onCancel}>
-        <XCircle size={16} />
-      </button>
-    {/if}
+    <div class="session-activity-actions">
+      {#if undoSupported}
+        <button
+          class="icon-btn"
+          type="button"
+          aria-label="Undo latest turn"
+          title="Undo latest turn (Ctrl/Cmd+Z)"
+          disabled={!canUndo || session.undo.pendingOperation !== null || isBusy}
+          onclick={() => onUndo?.()}
+        >
+          {#if session.undo.pendingOperation === 'undo'}<LoaderCircle size={16} class="animate-spin" />{:else}<Undo2 size={16} />{/if}
+        </button>
+        <button
+          class="icon-btn"
+          type="button"
+          aria-label="Redo last undone turn"
+          title="Redo last undone turn (Ctrl/Cmd+Shift+Z)"
+          disabled={!canRedo || session.undo.pendingOperation !== null || isBusy}
+          onclick={() => onRedo?.()}
+        >
+          {#if session.undo.pendingOperation === 'redo'}<LoaderCircle size={16} class="animate-spin" />{:else}<Redo2 size={16} />{/if}
+        </button>
+      {/if}
+      {#if agentBusy && onCancel}
+        <button class="icon-btn" type="button" aria-label="Cancel active session" onclick={onCancel}>
+          <XCircle size={16} />
+        </button>
+      {/if}
+    </div>
   </div>
 
   {#if isBusy}

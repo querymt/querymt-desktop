@@ -2827,10 +2827,40 @@ summary:focus-visible {
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-.session-message-action-btn:hover {
+.session-message-action-btn:hover:not(:disabled) {
   border-color: var(--border);
   background: var(--bg-card-hover);
   color: var(--text);
+}
+
+.session-message-action-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.session-turn-reverted {
+  opacity: 0.46;
+  filter: saturate(0.55);
+}
+
+.session-turn-reverted .session-user-message-shell {
+  border-left: 2px dashed var(--border-strong);
+  padding-left: 0.65rem;
+}
+
+.session-undo-prompt {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.session-activity-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 .session-message-action-btn:focus-visible {

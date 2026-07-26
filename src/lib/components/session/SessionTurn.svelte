@@ -5,7 +5,19 @@
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
   import type { SessionAssistantContent, SessionConversationTurn } from '$lib/domain/session-conversation';
 
-  let { turn }: { turn: SessionConversationTurn } = $props();
+  let {
+    turn,
+    undoAvailable = false,
+    reverted = false,
+    undoPending = false,
+    onUndo
+  }: {
+    turn: SessionConversationTurn;
+    undoAvailable?: boolean;
+    reverted?: boolean;
+    undoPending?: boolean;
+    onUndo?: (messageId: string) => void;
+  } = $props();
 
   let copiedAssistantId = $state<string | null>(null);
   let copiedUserId = $state<string | null>(null);
@@ -65,7 +77,7 @@
   }
 </script>
 
-<article class="session-turn">
+<article class:session-turn-reverted={reverted} class="session-turn">
   {#if turn.user}
     <section class="session-user-message-shell">
       <div class="session-message session-message-user">
@@ -164,15 +176,18 @@
             >
               <GitFork size={15} />
             </button>
-            <button
-              class="session-message-action-btn"
-              type="button"
-              aria-label="Undo"
-              title="Undo"
-              onclick={() => showNotImplemented(item.id)}
-            >
-              <Undo2 size={15} />
-            </button>
+            {#if turn.user?.messageId}
+              <button
+                class="session-message-action-btn"
+                type="button"
+                aria-label="Undo to this prompt"
+                title={undoAvailable ? 'Undo workspace to this prompt' : reverted ? 'This turn is currently undone' : 'Undo unavailable'}
+                disabled={!undoAvailable || undoPending}
+                onclick={() => turn.user?.messageId && onUndo?.(turn.user.messageId)}
+              >
+                <Undo2 size={15} />
+              </button>
+            {/if}
             {#if noopNoticeAssistantId === item.id}
               <span class="session-message-action-note" aria-live="polite">Not implemented yet</span>
             {/if}

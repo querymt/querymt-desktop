@@ -28,6 +28,15 @@ const mockClient = vi.hoisted(() => {
     })),
     sendPrompt: vi.fn(async (): Promise<PromptResponse> => ({ stopReason: 'end_turn' })),
     cancelSession: vi.fn(async () => undefined),
+    supportsQuerymtMethod: vi.fn(() => true),
+    getUndoStack: vi.fn(async (): Promise<{ undo_stack: Array<{ message_id: string }> }> => ({ undo_stack: [] })),
+    undoSession: vi.fn(async (_sessionId: string, messageId: string) => ({
+      success: true,
+      message_id: messageId,
+      reverted_files: ['src/app.ts'],
+      undo_stack: [{ message_id: messageId }]
+    })),
+    redoSession: vi.fn(async () => ({ success: true, restored: true, undo_stack: [] })),
     getInitializeResponse: vi.fn(() => ({
       protocolVersion: 1,
       agentCapabilities: {},
@@ -177,6 +186,60 @@ describe('AgentsStore connections', () => {
     expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '/tmp/work');
     expect(mockClient.permissionUnsubscribe()).not.toHaveBeenCalled();
     expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
+  });
+
+  it('hydrates the server-authoritative undo stack with session history', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'A', cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    mockClient.getUndoStack.mockResolvedValueOnce({ undo_stack: [{ message_id: 'm2' }] });
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(mockClient.getUndoStack).toHaveBeenCalledWith('session-1');
+    expect(store.activeSession.undo.stack).toEqual(['m2']);
+  });
+
+  it('undoes a targeted turn, restores its prompt, and reloads the session', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'A', cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    await store.loadSession('agent-1', 'session-1');
+    store.activeSession.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'Change the app', messageId: 'm1' }
+    ];
+    store.composerPrompt = '';
+
+    await expect(store.undoActiveSessionTo('m1')).resolves.toBe(true);
+
+    expect(mockClient.undoSession).toHaveBeenCalledWith('session-1', 'm1');
+    expect(store.composerPrompt).toBe('Change the app');
+    expect(mockClient.loadSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('redos the latest stack frame and reloads the session', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'A', cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    await store.loadSession('agent-1', 'session-1');
+    store.activeSession.undo.stack = ['m1'];
+
+    await expect(store.redoActiveSession()).resolves.toBe(true);
+
+    expect(mockClient.redoSession).toHaveBeenCalledWith('session-1');
+    expect(mockClient.loadSession).toHaveBeenCalledTimes(2);
   });
 
   it('restores each loaded session model from its snapshot without changing the agent session', async () => {

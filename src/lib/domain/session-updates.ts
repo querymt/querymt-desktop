@@ -27,6 +27,12 @@ export function createEmptyActiveSession(): ActiveSessionViewModel {
       cumulativeCostUsd: null,
       activeWorkMs: 0,
       activeWorkStartedAt: null
+    },
+    undo: {
+      stack: [],
+      pendingOperation: null,
+      lastRevertedFiles: [],
+      lastMessage: null
     }
   };
 }
@@ -59,7 +65,12 @@ export function applySessionNotification(
     activeToolCallId: current.activeToolCallId,
     lastStopReason: current.lastStopReason,
     lastError: current.lastError,
-    usage: { ...current.usage }
+    usage: { ...current.usage },
+    undo: {
+      ...current.undo,
+      stack: current.undo.stack.slice(),
+      lastRevertedFiles: current.undo.lastRevertedFiles.slice()
+    }
   };
   next.sessionId = notification.sessionId;
 

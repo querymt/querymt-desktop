@@ -32,7 +32,8 @@ import type {
   MeshPeerExpiredNotification,
   OAuthFlowKindTs,
   PluginUpdateResult,
-  SchedulesChangedNotification
+  SchedulesChangedNotification,
+  UndoStackFrame
 } from '$lib/querymt/generated/types';
 import type { ClientSideConnection } from '@agentclientprotocol/sdk';
 
@@ -77,6 +78,9 @@ export const QMT_METHOD_AUTH_SET_API_TOKEN = 'querymt/auth/setApiToken';
 export const QMT_METHOD_AUTH_CLEAR_API_TOKEN = 'querymt/auth/clearApiToken';
 export const QMT_METHOD_AUTH_SET_METHOD = 'querymt/auth/setMethod';
 export const QMT_METHOD_UPDATE_PLUGINS = 'querymt/updatePlugins';
+export const QMT_METHOD_SESSION_UNDO_STACK = 'querymt/session/undoStack';
+export const QMT_METHOD_SESSION_UNDO = 'querymt/session/undo';
+export const QMT_METHOD_SESSION_REDO = 'querymt/session/redo';
 
 export interface QuerymtModelsResponse {
   models: ModelEntry[];
@@ -137,6 +141,23 @@ export interface QuerymtAuthResult {
 
 export interface QuerymtPluginUpdateResponse {
   results: PluginUpdateResult[];
+}
+
+export interface QuerymtUndoStackResponse {
+  undo_stack: UndoStackFrame[];
+}
+
+export interface QuerymtUndoResponse extends QuerymtUndoStackResponse {
+  success: boolean;
+  message_id?: string;
+  reverted_files?: string[];
+  message?: string;
+}
+
+export interface QuerymtRedoResponse extends QuerymtUndoStackResponse {
+  success: boolean;
+  restored?: boolean;
+  message?: string;
 }
 
 export function toAcpExtensionMethod(method: QuerymtLogicalMethod): QuerymtWireMethod {
@@ -289,5 +310,20 @@ export class QuerymtExtensions {
     return {
       results: response.results ?? []
     };
+  }
+
+  async undoStack(session_id: string): Promise<QuerymtUndoStackResponse> {
+    const response = await this.call<QuerymtUndoStackResponse>(QMT_METHOD_SESSION_UNDO_STACK, { session_id });
+    return { undo_stack: response.undo_stack ?? [] };
+  }
+
+  async undoSession(session_id: string, message_id: string): Promise<QuerymtUndoResponse> {
+    const response = await this.call<QuerymtUndoResponse>(QMT_METHOD_SESSION_UNDO, { session_id, message_id });
+    return { ...response, undo_stack: response.undo_stack ?? [], reverted_files: response.reverted_files ?? [] };
+  }
+
+  async redoSession(session_id: string): Promise<QuerymtRedoResponse> {
+    const response = await this.call<QuerymtRedoResponse>(QMT_METHOD_SESSION_REDO, { session_id });
+    return { ...response, undo_stack: response.undo_stack ?? [] };
   }
 }

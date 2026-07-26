@@ -68,10 +68,16 @@ import {
   QMT_METHOD_SCHEDULES_PAUSE,
   QMT_METHOD_SCHEDULES_RESUME,
   QMT_METHOD_SCHEDULES_TRIGGER,
+  QMT_METHOD_SESSION_REDO,
+  QMT_METHOD_SESSION_UNDO,
+  QMT_METHOD_SESSION_UNDO_STACK,
   QuerymtExtensions,
   type QuerymtAuthResult,
   type QuerymtAuthStartResponse,
   type QuerymtPluginUpdateResponse,
+  type QuerymtRedoResponse,
+  type QuerymtUndoResponse,
+  type QuerymtUndoStackResponse,
   toLogicalQuerymtMethod,
   type QuerymtExtensionNotification,
   type QuerymtLogicalMethod
@@ -214,6 +220,30 @@ export class DesktopAcpClient {
 
   supportsQuerymtFeature(feature: keyof CapabilitiesInfo['features']): boolean {
     return this.controlCapabilities?.features?.[feature] ?? false;
+  }
+
+  async getUndoStack(sessionId: string): Promise<QuerymtUndoStackResponse> {
+    if (!this.querymtExtensions) {
+      await this.connect();
+    }
+    this.assertQuerymtMethod(QMT_METHOD_SESSION_UNDO_STACK);
+    return this.querymtExtensions!.undoStack(sessionId);
+  }
+
+  async undoSession(sessionId: string, messageId: string): Promise<QuerymtUndoResponse> {
+    if (!this.querymtExtensions) {
+      await this.connect();
+    }
+    this.assertQuerymtMethod(QMT_METHOD_SESSION_UNDO);
+    return this.querymtExtensions!.undoSession(sessionId, messageId);
+  }
+
+  async redoSession(sessionId: string): Promise<QuerymtRedoResponse> {
+    if (!this.querymtExtensions) {
+      await this.connect();
+    }
+    this.assertQuerymtMethod(QMT_METHOD_SESSION_REDO);
+    return this.querymtExtensions!.redoSession(sessionId);
   }
 
   async listModels(): Promise<ModelEntry[]> {

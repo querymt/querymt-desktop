@@ -33,6 +33,7 @@ export type SessionConversationTurn = {
   id: string;
   user?: {
     id: string;
+    messageId: string | null;
     html: string;
     text: string;
   };
@@ -59,6 +60,7 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
         id: `turn-${item.group.id}`,
         user: {
           id: item.group.id,
+          messageId: item.group.messageId,
           html: renderMarkdownToHtml(item.group.text),
           text: item.group.text
         },

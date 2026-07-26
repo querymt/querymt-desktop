@@ -10,6 +10,7 @@
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import SessionScrollToBottomPill from '$lib/components/session/SessionScrollToBottomPill.svelte';
   import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
+  import SessionUndoDialog from '$lib/components/session/SessionUndoDialog.svelte';
   import {
     getDistanceFromBottom,
     nextSessionChatPresentationState,
@@ -18,6 +19,7 @@
     type SessionScrollMode
   } from '$lib/domain/session-scroll';
   import { formatSessionTimestamp, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
+  import { getUndoAffectedTurnCount, getUndoableSessionTurns } from '$lib/domain/session-undo';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
@@ -43,12 +45,23 @@
   let lastViewportScrollTop = 0;
   let sessionLoadToken = 0;
   let lastRequestedSessionKey: string | null = null;
+  let undoDialogOpen = $state(false);
+  let undoTargetMessageId = $state<string | null>(null);
 
   const debugEventsTooltip = $derived.by(() => {
     const count = agentsStore.activeSession.events.length;
     return count === 0 ? 'Debug events' : `Debug events (${count})`;
   });
   const composerCollapsed = $derived(chatPresentationState === 'fixed-free-compact');
+  const undoSupported = $derived(agentId ? agentsStore.canUseSessionUndo(agentId) : false);
+  const undoTarget = $derived(
+    undoTargetMessageId
+      ? getUndoableSessionTurns(agentsStore.activeSession).find((turn) => turn.messageId === undoTargetMessageId) ?? null
+      : null
+  );
+  const undoAffectedTurns = $derived(
+    undoTargetMessageId ? getUndoAffectedTurnCount(agentsStore.activeSession, undoTargetMessageId) : 0
+  );
   const latestVisible = $derived(chatPresentationState === 'fixed-free-compact');
   const latestContentSignature = $derived.by(() => {
     const transcript = agentsStore.activeSession.transcript;
@@ -108,16 +121,54 @@
 
   onMount(() => {
     const onLayoutChange = () => syncDockAlign();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z' || isEditableTarget(event.target)) return;
+      if (event.shiftKey) {
+        if (undoSupported && agentsStore.activeSession.undo.stack.length > 0) {
+          event.preventDefault();
+          void agentsStore.redoActiveSession();
+        }
+        return;
+      }
+      const target = getUndoableSessionTurns(agentsStore.activeSession);
+      const frontier = agentsStore.activeSession.undo.stack.at(-1);
+      const frontierIndex = frontier ? target.findIndex((turn) => turn.messageId === frontier) : target.length;
+      const latest = target.slice(0, frontierIndex >= 0 ? frontierIndex : target.length).at(-1);
+      if (undoSupported && latest) {
+        event.preventDefault();
+        openUndoDialog(latest.messageId);
+      }
+    };
 
     setupScrollTracking();
     window.addEventListener('resize', onLayoutChange);
+    window.addEventListener('keydown', onKeyDown);
 
     return () => {
       sessionLoadToken += 1;
       disconnectScrollTracking();
       window.removeEventListener('resize', onLayoutChange);
+      window.removeEventListener('keydown', onKeyDown);
     };
   });
+
+  function isEditableTarget(target: EventTarget | null): boolean {
+    return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+  }
+
+  function openUndoDialog(messageId: string) {
+    undoTargetMessageId = messageId;
+    undoDialogOpen = true;
+  }
+
+  async function confirmUndo() {
+    if (!undoTargetMessageId) return;
+    const success = await agentsStore.undoActiveSessionTo(undoTargetMessageId);
+    if (success) {
+      undoDialogOpen = false;
+      undoTargetMessageId = null;
+    }
+  }
 
   async function ensureSessionLoaded(agentIdToLoad = agentId, sessionIdToLoad = sessionId) {
     await agentsStore.loadSession(agentIdToLoad, sessionIdToLoad);
@@ -363,7 +414,13 @@
   </div>
 
   <div bind:this={sessionPageContent} class="session-page-content">
-    <ActiveSessionView session={agentsStore.activeSession} onCancel={() => agentsStore.cancelActiveSession()} />
+    <ActiveSessionView
+      session={agentsStore.activeSession}
+      {undoSupported}
+      onCancel={() => agentsStore.cancelActiveSession()}
+      onUndo={openUndoDialog}
+      onRedo={() => void agentsStore.redoActiveSession()}
+    />
 
     {#if pendingElicitations.length > 0}
       <section class="settings-section session-elicitation-panel" aria-label="Session questions">
@@ -371,7 +428,8 @@
           <div>
             <h2>Input needed</h2>
             <p>The agent is waiting for your response before it can continue.</p>
-          </div>
+</div>
+
         </div>
         <div class="space-y-3">
           {#each pendingElicitations as item}
@@ -436,4 +494,12 @@
 
     <div class="session-chat-end-anchor" aria-hidden="true"></div>
   </div>
+
+  <SessionUndoDialog
+    bind:open={undoDialogOpen}
+    prompt={undoTarget?.text ?? ''}
+    affectedTurns={undoAffectedTurns}
+    pending={agentsStore.activeSession.undo.pendingOperation === 'undo'}
+    onConfirm={confirmUndo}
+  />
 </div>

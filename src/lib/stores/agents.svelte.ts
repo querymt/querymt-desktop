@@ -9,6 +9,7 @@ import type {
 } from '@agentclientprotocol/sdk';
 import { tick } from 'svelte';
 import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
+import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
 import {
   createEmptyActiveSession,
   applySessionNotification,
@@ -72,6 +73,11 @@ import {
   setSessionConfigOptionRequest
 } from '$lib/querymt/config-options';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
+import {
+  QMT_METHOD_SESSION_REDO,
+  QMT_METHOD_SESSION_UNDO,
+  QMT_METHOD_SESSION_UNDO_STACK
+} from '$lib/querymt/querymt-extensions';
 import { sendDesktopNotification } from '$lib/querymt/notifications';
 import { listManagedProfiles } from '$lib/querymt/profile-templates';
 import { getAgentLogs, getAgentStatus, restartAgent, startAgent, stopAgent, validateWorkspaceDirectory } from '$lib/querymt/sidecar';
@@ -248,6 +254,15 @@ export class AgentsStore {
 
   canDeleteSession(agentId: string): boolean {
     return Boolean(this.clients.get(agentId)?.initializeResponse?.agentCapabilities?.sessionCapabilities?.delete);
+  }
+
+  canUseSessionUndo(agentId: string): boolean {
+    const client = this.clients.get(agentId)?.client;
+    return Boolean(
+      client?.supportsQuerymtMethod(QMT_METHOD_SESSION_UNDO_STACK) &&
+        client.supportsQuerymtMethod(QMT_METHOD_SESSION_UNDO) &&
+        client.supportsQuerymtMethod(QMT_METHOD_SESSION_REDO)
+    );
   }
 
   acknowledgeSession(agentId: string, sessionId: string) {
@@ -1034,6 +1049,9 @@ export class AgentsStore {
       const attachments = this.promptAttachments;
       const sessionId = this.activeSessionId;
       this.addOptimisticUserPrompt(sessionId, prompt);
+      this.activeSession.undo.stack = [];
+      this.activeSession.undo.lastRevertedFiles = [];
+      this.activeSession.undo.lastMessage = null;
       this.activeSession.runState = 'thinking';
       this.activeSession.activityLabel = 'Waiting for the agent to respond…';
       beginSessionWork(this.activeSession);
@@ -1088,7 +1106,7 @@ export class AgentsStore {
     }
   }
 
-  async loadSession(agentId: string, sessionId: string) {
+  async loadSession(agentId: string, sessionId: string, pendingOperation: 'undo' | 'redo' | null = null) {
     const summary = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
     if (!summary) {
       await this.refreshSessionsForAgent(agentId);
@@ -1112,6 +1130,7 @@ export class AgentsStore {
 
     try {
       this.resetActiveSession(agentId, sessionId);
+      this.activeSession.undo.pendingOperation = pendingOperation;
       this.activeSession.runState = 'thinking';
       this.activeSession.activityLabel = 'Loading session history...';
       this.activeSession.lastError = null;
@@ -1173,6 +1192,9 @@ export class AgentsStore {
         });
       }
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });
+      this.activeSession.undo.pendingOperation = pendingOperation;
+      await this.hydrateUndoStack(agentId, sessionId, record.client);
+      if (!this.isSelectedSession(agentId, sessionId)) return;
       if (!hasReplayHistory && !hasSnapshotHistory && drainedCount === 0) {
         this.activeSession.activityLabel = 'Session loaded, but the agent returned no replayable history.';
       }
@@ -1183,6 +1205,128 @@ export class AgentsStore {
       this.activeSession.lastError = message;
       this.activeSession.activityLabel = message;
       this.error = message;
+    }
+  }
+
+  async undoActiveSessionTo(messageId: string) {
+    if (!this.activeAgentId || !this.activeSessionId) {
+      this.error = 'No active session selected.';
+      return false;
+    }
+    if (PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) || this.activeSession.undo.pendingOperation) {
+      return false;
+    }
+
+    const agentId = this.activeAgentId;
+    const sessionId = this.activeSessionId;
+    const target = getUndoableSessionTurns(this.activeSession).find((turn) => turn.messageId === messageId);
+    if (!target || !canUndoToMessage(this.activeSession, messageId)) return false;
+    await this.connectAgent(agentId);
+    const record = this.ensureClientRecord(agentId);
+    if (!this.canUseSessionUndo(agentId)) {
+      this.error = 'This agent does not support session undo and redo.';
+      return false;
+    }
+
+    this.error = null;
+    this.activeSession.undo.pendingOperation = 'undo';
+    this.activeSession.activityLabel = 'Undoing workspace changes...';
+    try {
+      const response = await record.client.undoSession(sessionId, messageId);
+      if (!response.success) throw new Error(response.message ?? 'Undo failed.');
+      if (!this.isSelectedSession(agentId, sessionId)) return false;
+
+      const revertedFiles = response.reverted_files ?? [];
+      const resultMessage = revertedFiles.length
+        ? `Undid ${revertedFiles.length} changed file${revertedFiles.length === 1 ? '' : 's'}.`
+        : 'Turn undone.';
+      this.activeSession.undo.stack = response.undo_stack.map((frame) => frame.message_id);
+      this.activeSession.undo.lastRevertedFiles = revertedFiles;
+      this.activeSession.undo.lastMessage = resultMessage;
+      if (!this.composerPrompt.trim() && target?.text) this.composerPrompt = target.text;
+      await this.loadSession(agentId, sessionId, 'undo');
+      if (this.isSelectedSession(agentId, sessionId)) {
+        this.activeSession.undo.lastRevertedFiles = revertedFiles;
+        this.activeSession.undo.lastMessage = resultMessage;
+        this.activeSession.activityLabel = resultMessage;
+      }
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Undo failed.';
+      this.activeSession.undo.lastMessage = message;
+      this.error = message;
+      return false;
+    } finally {
+      if (this.isSelectedSession(agentId, sessionId)) this.activeSession.undo.pendingOperation = null;
+    }
+  }
+
+  async undoLatestActiveSession() {
+    const target = getCurrentUndoTarget(this.activeSession);
+    return target ? this.undoActiveSessionTo(target.messageId) : false;
+  }
+
+  async redoActiveSession() {
+    if (!this.activeAgentId || !this.activeSessionId) {
+      this.error = 'No active session selected.';
+      return false;
+    }
+    if (
+      this.activeSession.undo.stack.length === 0 ||
+      PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) ||
+      this.activeSession.undo.pendingOperation
+    ) {
+      return false;
+    }
+
+    const agentId = this.activeAgentId;
+    const sessionId = this.activeSessionId;
+    await this.connectAgent(agentId);
+    const record = this.ensureClientRecord(agentId);
+    if (!this.canUseSessionUndo(agentId)) {
+      this.error = 'This agent does not support session undo and redo.';
+      return false;
+    }
+
+    this.error = null;
+    this.activeSession.undo.pendingOperation = 'redo';
+    this.activeSession.activityLabel = 'Restoring workspace changes...';
+    try {
+      const response = await record.client.redoSession(sessionId);
+      if (!response.success) throw new Error(response.message ?? 'Redo failed.');
+      if (!this.isSelectedSession(agentId, sessionId)) return false;
+
+      this.activeSession.undo.stack = response.undo_stack.map((frame) => frame.message_id);
+      this.activeSession.undo.lastRevertedFiles = [];
+      this.activeSession.undo.lastMessage = 'Turn restored.';
+      await this.loadSession(agentId, sessionId, 'redo');
+      if (this.isSelectedSession(agentId, sessionId)) {
+        this.activeSession.undo.lastMessage = 'Turn restored.';
+        this.activeSession.activityLabel = 'Turn restored.';
+      }
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Redo failed.';
+      this.activeSession.undo.lastMessage = message;
+      this.error = message;
+      return false;
+    } finally {
+      if (this.isSelectedSession(agentId, sessionId)) this.activeSession.undo.pendingOperation = null;
+    }
+  }
+
+  private async hydrateUndoStack(agentId: string, sessionId: string, client: DesktopAcpClient) {
+    if (!client.supportsQuerymtMethod(QMT_METHOD_SESSION_UNDO_STACK)) {
+      this.activeSession.undo.stack = [];
+      return;
+    }
+    try {
+      const response = await client.getUndoStack(sessionId);
+      if (this.isSelectedSession(agentId, sessionId)) {
+        this.activeSession.undo.stack = response.undo_stack.map((frame) => frame.message_id);
+      }
+    } catch (error) {
+      console.warn('Failed to load QueryMT undo stack', error);
     }
   }
 

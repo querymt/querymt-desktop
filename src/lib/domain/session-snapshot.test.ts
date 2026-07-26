@@ -333,6 +333,12 @@ describe('activeSessionFromLoadResponse', () => {
         cumulativeCostUsd: null,
         activeWorkMs: 0,
         activeWorkStartedAt: null
+      },
+      undo: {
+        stack: [],
+        pendingOperation: null,
+        lastRevertedFiles: [],
+        lastMessage: null
       }
     };
 
