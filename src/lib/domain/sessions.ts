@@ -40,6 +40,14 @@ export interface SessionRailItem {
   requiresAttention: boolean;
 }
 
+export interface SessionRelationshipMeta {
+  parentSessionId: string | null;
+  forkOrigin: string | null;
+  sessionKind: string | null;
+  hasChildren: boolean;
+  forkCount: number;
+}
+
 export interface SessionRailOptions {
   attentionSessionKeys?: Iterable<string>;
   actionRequiredSessionKeys?: Iterable<string>;
@@ -74,12 +82,13 @@ export function mapAcpSessionsToDesktopSessions(
     runtimeId: agent.agentId,
     runtimeName: agent.agentName,
     source: 'acp',
-    status: inferSessionStatus(session)
+    status: inferSessionStatus(session),
+    ...readSessionRelationshipMeta(session)
   }));
 }
 
 export function inferSessionStatus(session: SessionInfo): SessionStatus {
-  const meta = readSessionMeta(session);
+  const meta = readOperationalSessionMeta(session);
   if (!meta) {
     return 'idle';
   }
@@ -97,7 +106,7 @@ export function inferSessionStatus(session: SessionInfo): SessionStatus {
   }
 }
 
-function readSessionMeta(session: SessionInfo): QuerymtSessionMeta | null {
+function readOperationalSessionMeta(session: SessionInfo): QuerymtSessionMeta | null {
   const meta = session._meta;
   if (!meta || typeof meta !== 'object') {
     return null;
@@ -114,6 +123,39 @@ function readSessionMeta(session: SessionInfo): QuerymtSessionMeta | null {
   }
 
   return candidate as QuerymtSessionMeta;
+}
+
+export function readSessionRelationshipMeta(session: SessionInfo): SessionRelationshipMeta {
+  const meta = session._meta;
+  if (!meta || typeof meta !== 'object') {
+    return emptySessionRelationshipMeta();
+  }
+
+  const candidate = meta as Partial<QuerymtSessionMeta>;
+  return {
+    parentSessionId: readNonEmptyString(candidate.parentSessionId),
+    forkOrigin: readNonEmptyString(candidate.forkOrigin),
+    sessionKind: readNonEmptyString(candidate.sessionKind),
+    hasChildren: typeof candidate.hasChildren === 'boolean' ? candidate.hasChildren : false,
+    forkCount:
+      typeof candidate.forkCount === 'number' && Number.isFinite(candidate.forkCount) && candidate.forkCount >= 0
+        ? candidate.forkCount
+        : 0
+  };
+}
+
+function emptySessionRelationshipMeta(): SessionRelationshipMeta {
+  return {
+    parentSessionId: null,
+    forkOrigin: null,
+    sessionKind: null,
+    hasChildren: false,
+    forkCount: 0
+  };
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
 }
 
 export function getSessionWorkspaceName(cwd: string): string {

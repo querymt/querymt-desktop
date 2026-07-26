@@ -60,6 +60,7 @@ describe('buildSessionConversation', () => {
       'assistant'
     ]);
     expect(turns[0].content.map((item) => item.id)).toEqual(['r1', 't1', 't2', 'r2', 't3', 't4', 'a1']);
+    expect(turns[0].forkMessageId).toBe('m-final');
   });
 
   it('keeps reasoning traces separate when a tool appears between chunks with the same message id', () => {

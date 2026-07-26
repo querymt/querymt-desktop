@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { LoaderCircle, Redo2, Undo2, XCircle } from '@lucide/svelte';
+  import { GitFork, LoaderCircle, Redo2, Undo2, XCircle } from '@lucide/svelte';
   import Shimmer from '$lib/components/ai-elements/shimmer.svelte';
   import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
@@ -9,17 +9,25 @@
     canUndo = false,
     canRedo = false,
     undoSupported = false,
+    forkSupported = false,
+    forkPending = false,
+    canFork = false,
     onCancel,
     onUndo,
-    onRedo
+    onRedo,
+    onFork
   }: {
     session: ActiveSessionViewModel;
     canUndo?: boolean;
     canRedo?: boolean;
     undoSupported?: boolean;
+    forkSupported?: boolean;
+    forkPending?: boolean;
+    canFork?: boolean;
     onCancel?: () => void | Promise<void>;
     onUndo?: () => void;
     onRedo?: () => void | Promise<void>;
+    onFork?: () => void;
   } = $props();
 
   const agentBusy = $derived(
@@ -28,9 +36,10 @@
       session.runState === 'streaming' ||
       session.runState === 'tool-running'
   );
-  const isBusy = $derived(session.undo.pendingOperation !== null || agentBusy);
+  const isBusy = $derived(session.undo.pendingOperation !== null || forkPending || agentBusy);
 
   const primaryStatus = $derived.by(() => {
+    if (forkPending) return 'Creating fork…';
     if (session.undo.pendingOperation === 'undo') return 'Undoing workspace changes…';
     if (session.undo.pendingOperation === 'redo') return 'Restoring workspace changes…';
     if (session.runState === 'failed') {
@@ -79,6 +88,18 @@
       </div>
     </div>
     <div class="session-activity-actions">
+      {#if forkSupported}
+        <button
+          class="icon-btn"
+          type="button"
+          aria-label="Fork latest turn"
+          title="Fork latest turn"
+          disabled={!canFork || isBusy}
+          onclick={() => onFork?.()}
+        >
+          {#if forkPending}<LoaderCircle size={16} class="animate-spin" />{:else}<GitFork size={16} />{/if}
+        </button>
+      {/if}
       {#if undoSupported}
         <button
           class="icon-btn"

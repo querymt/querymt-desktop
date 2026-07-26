@@ -1029,6 +1029,11 @@ export interface SessionMeta {
 	userMessageCount: number;
 	hasErrors: boolean;
 	runtimeStatus: SessionRuntimeStatus;
+	parentSessionId?: string;
+	forkOrigin?: string;
+	sessionKind?: string;
+	hasChildren?: boolean;
+	forkCount?: number;
 }
 
 /**

@@ -16,6 +16,7 @@ export type SessionReasoningContent = {
 export type SessionAssistantContent = {
   type: 'assistant';
   id: string;
+  messageId: string | null;
   html: string;
   text: string;
   relatedEvents: Array<{ kind: string; text: string }>;
@@ -31,6 +32,7 @@ export type SessionConversationContent = SessionReasoningContent | SessionAssist
 
 export type SessionConversationTurn = {
   id: string;
+  forkMessageId: string | null;
   user?: {
     id: string;
     messageId: string | null;
@@ -58,6 +60,7 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
     if (item.type === 'group' && item.group.role === 'user') {
       current = {
         id: `turn-${item.group.id}`,
+        forkMessageId: item.group.messageId,
         user: {
           id: item.group.id,
           messageId: item.group.messageId,
@@ -72,7 +75,7 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
 
     if (!current) {
       const id = item.type === 'group' ? item.group.id : item.tool.id;
-      current = { id: `turn-${id}`, content: [] };
+      current = { id: `turn-${id}`, forkMessageId: null, content: [] };
       turns.push(current);
     }
 
@@ -91,9 +94,11 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
       continue;
     }
 
+    current.forkMessageId = item.group.messageId ?? current.forkMessageId;
     current.content.push({
       type: 'assistant',
       id: item.group.id,
+      messageId: item.group.messageId,
       html: renderMarkdownToHtml(item.group.text),
       text: item.group.text,
       relatedEvents: session.events

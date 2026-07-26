@@ -14,7 +14,7 @@ const mockClient = vi.hoisted(() => {
   return {
     connect: vi.fn(async (): Promise<InitializeResponse> => ({
       protocolVersion: 1,
-      agentCapabilities: { loadSession: true },
+      agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
       authMethods: []
     })),
     createSession: vi.fn(async () => ({
@@ -37,6 +37,7 @@ const mockClient = vi.hoisted(() => {
       undo_stack: [{ message_id: messageId }]
     })),
     redoSession: vi.fn(async () => ({ success: true, restored: true, undo_stack: [] })),
+    forkSession: vi.fn(async () => ({ sessionId: 'fork-session' })),
     getInitializeResponse: vi.fn(() => ({
       protocolVersion: 1,
       agentCapabilities: {},
@@ -186,6 +187,46 @@ describe('AgentsStore connections', () => {
     expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '/tmp/work');
     expect(mockClient.permissionUnsubscribe()).not.toHaveBeenCalled();
     expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
+  });
+
+  it('forks at the selected message, refreshes sessions, and inserts a fallback summary', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Original', cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    await store.loadSession('agent-1', 'session-1');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [] });
+
+    await expect(store.forkActiveSessionAt('assistant-2')).resolves.toBe('fork-session');
+
+    expect(mockClient.forkSession).toHaveBeenCalledWith('session-1', '/tmp/work', 'assistant-2');
+    expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sessionId: 'fork-session',
+        title: 'Fork of Original',
+        cwd: '/tmp/work',
+        parentSessionId: 'session-1',
+        forkOrigin: 'user',
+        hasChildren: false,
+        forkCount: 0
+      }),
+      expect.objectContaining({ sessionId: 'session-1', hasChildren: true, forkCount: 1 })
+    ]));
+    expect(store.activeSessionId).toBe('session-1');
+  });
+
+  it('blocks fork requests while the agent is active', async () => {
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.runState = 'thinking';
+
+    await expect(store.forkActiveSessionAt('assistant-1')).resolves.toBeNull();
+    expect(mockClient.forkSession).not.toHaveBeenCalled();
   });
 
   it('hydrates the server-authoritative undo stack with session history', async () => {

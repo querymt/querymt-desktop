@@ -6,6 +6,7 @@ import SessionTurn from './SessionTurn.svelte';
 
 const turn: SessionConversationTurn = {
   id: 'turn-1',
+  forkMessageId: 'assistant-1',
   user: {
     id: 'user-1',
     messageId: 'message-1',
@@ -50,6 +51,7 @@ const turn: SessionConversationTurn = {
     {
       type: 'assistant',
       id: 'assistant-1',
+      messageId: 'assistant-1',
       html: '<p>Implemented the fix.</p>',
       text: 'Implemented the fix.',
       relatedEvents: []
@@ -60,6 +62,15 @@ const turn: SessionConversationTurn = {
 afterEach(cleanup);
 
 describe('SessionTurn', () => {
+  it('calls the fork action for the completed response boundary', async () => {
+    const onFork = vi.fn();
+    const { getByRole } = render(SessionTurn, { turn, forkAvailable: true, onFork });
+
+    await fireEvent.click(getByRole('button', { name: 'Fork into new session' }));
+
+    expect(onFork).toHaveBeenCalledOnce();
+  });
+
   it('calls targeted undo with the user message id when available', async () => {
     const onUndo = vi.fn();
     const { getByRole } = render(SessionTurn, { turn, undoAvailable: true, onUndo });

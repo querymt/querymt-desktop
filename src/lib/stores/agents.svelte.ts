@@ -169,6 +169,7 @@ export class AgentsStore {
   activeAgentId = $state<string | null>(null);
   activeSessionId = $state<string | null>(null);
   activeSession = $state<ActiveSessionViewModel>(createEmptyActiveSession());
+  forkPending = $state(false);
   lastCreatedSession = $state<NewSessionResponse | null>(null);
   lastLoadedSession = $state<LoadSessionResponse | null>(null);
   lastPromptResponse = $state<PromptResponse | null>(null);
@@ -254,6 +255,10 @@ export class AgentsStore {
 
   canDeleteSession(agentId: string): boolean {
     return Boolean(this.clients.get(agentId)?.initializeResponse?.agentCapabilities?.sessionCapabilities?.delete);
+  }
+
+  canForkSession(agentId: string): boolean {
+    return Boolean(this.clients.get(agentId)?.initializeResponse?.agentCapabilities?.sessionCapabilities?.fork);
   }
 
   canUseSessionUndo(agentId: string): boolean {
@@ -1208,12 +1213,87 @@ export class AgentsStore {
     }
   }
 
+  async forkActiveSessionAt(messageId: string): Promise<string | null> {
+    if (!this.activeAgentId || !this.activeSessionId) {
+      this.error = 'No active session selected.';
+      return null;
+    }
+    if (
+      PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) ||
+      this.activeSession.undo.pendingOperation ||
+      this.forkPending
+    ) {
+      return null;
+    }
+
+    const agentId = this.activeAgentId;
+    const sessionId = this.activeSessionId;
+    const source = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    if (!source) {
+      this.error = 'Unable to locate the source session.';
+      return null;
+    }
+
+    await this.connectAgent(agentId);
+    const record = this.ensureClientRecord(agentId);
+    if (!this.canForkSession(agentId)) {
+      this.error = 'This agent does not support session forks.';
+      return null;
+    }
+
+    this.error = null;
+    this.forkPending = true;
+    this.activeSession.activityLabel = 'Creating fork...';
+    try {
+      const response = await record.client.forkSession(sessionId, source.cwd, messageId);
+      if (!this.isSelectedSession(agentId, sessionId)) return null;
+
+      await this.refreshSessionsForAgent(agentId);
+      const refreshedSessions = this.sessionsByAgent[agentId] ?? [];
+      const refreshedSource = refreshedSessions.find((session) => session.sessionId === source.sessionId);
+      const sourceWithFork = {
+        ...(refreshedSource ?? source),
+        hasChildren: true,
+        forkCount: Math.max(refreshedSource?.forkCount ?? 0, (source.forkCount ?? 0) + 1)
+      };
+      const optimisticSessions = refreshedSessions.map((session) =>
+        session.sessionId === source.sessionId ? sourceWithFork : session
+      );
+      if (!optimisticSessions.some((session) => session.sessionId === response.sessionId)) {
+        const forkSummary: DesktopSessionSummary = {
+          ...source,
+          sessionId: response.sessionId,
+          title: `Fork of ${source.title}`,
+          updatedAt: new Date().toISOString(),
+          status: 'idle',
+          parentSessionId: source.sessionId,
+          forkOrigin: 'user',
+          sessionKind: null,
+          hasChildren: false,
+          forkCount: 0
+        };
+        optimisticSessions.push(forkSummary);
+      }
+      this.sessionsByAgent = {
+        ...this.sessionsByAgent,
+        [agentId]: optimisticSessions.sort(compareSessionsByActivity)
+      };
+      return response.sessionId;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to fork session.';
+      this.error = message;
+      return null;
+    } finally {
+      this.forkPending = false;
+    }
+  }
+
   async undoActiveSessionTo(messageId: string) {
     if (!this.activeAgentId || !this.activeSessionId) {
       this.error = 'No active session selected.';
       return false;
     }
-    if (PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) || this.activeSession.undo.pendingOperation) {
+    if (PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) || this.activeSession.undo.pendingOperation || this.forkPending) {
       return false;
     }
 
@@ -1274,7 +1354,8 @@ export class AgentsStore {
     if (
       this.activeSession.undo.stack.length === 0 ||
       PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) ||
-      this.activeSession.undo.pendingOperation
+      this.activeSession.undo.pendingOperation ||
+      this.forkPending
     ) {
       return false;
     }

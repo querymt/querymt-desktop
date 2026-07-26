@@ -4126,14 +4126,55 @@ summary:focus-visible {
   gap: 0.22rem;
 }
 
+.session-row-title-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .session-row-title {
   overflow: hidden;
+  min-width: 0;
   color: var(--text);
   font-size: 0.88rem;
   font-weight: 600;
   letter-spacing: -0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-relationship-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.08rem 0.38rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  line-height: 1rem;
+}
+
+.session-relationship-badge-fork {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--accent);
+}
+
+.session-relationship-badge-delegate {
+  border-color: color-mix(in srgb, var(--status-running) 42%, var(--border));
+  background: color-mix(in srgb, var(--status-running) 9%, transparent);
+  color: var(--status-running);
+}
+
+.session-relationship-badge-child,
+.session-relationship-badge-count {
+  background: var(--status-muted-bg);
 }
 
 .session-row-meta {

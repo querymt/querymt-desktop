@@ -55,6 +55,28 @@ describe('DesktopSessionList', () => {
     expect(screen.getAllByText('QMTCODE')).toHaveLength(1);
   });
 
+  it('shows fork relationships and parent fork counts without inferring from titles', async () => {
+    const hierarchySessions: DesktopSessionSummary[] = [
+      { ...sessions[0], sessionId: 'parent', title: 'Parent', hasChildren: true, forkCount: 2 },
+      { ...sessions[0], sessionId: 'user-fork', title: 'Branch', parentSessionId: 'parent', forkOrigin: 'user' },
+      { ...sessions[0], sessionId: 'delegate', title: 'Worker', parentSessionId: 'parent', forkOrigin: 'delegation' },
+      { ...sessions[0], sessionId: 'unknown-child', title: 'Child session', parentSessionId: 'parent', forkOrigin: 'future-origin' }
+    ];
+
+    render(DesktopSessionList, { sessions: hierarchySessions, onOpenSession: vi.fn() });
+
+    expect(await screen.findByText('2 forks')).toBeInTheDocument();
+    expect(screen.getByText('Fork')).toBeInTheDocument();
+    expect(screen.getByText('Delegate')).toBeInTheDocument();
+    expect(screen.getByText('Child')).toBeInTheDocument();
+  });
+
+  it('does not show relationship badges for a root session without hierarchy metadata', async () => {
+    const { container } = render(DesktopSessionList, { sessions: [sessions[0]], onOpenSession: vi.fn() });
+    await screen.findByText('Inspect workspace');
+    expect(container.querySelector('.session-relationship-badge')).toBeNull();
+  });
+
   it('shows a short session ID and copies the complete ID without opening the session', async () => {
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, 'clipboard', {

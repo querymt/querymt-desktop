@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { Accordion, Portal } from 'bits-ui';
-  import { Check, ChevronDown, ChevronRight, Clock3, Copy, FolderKanban, LoaderCircle, RefreshCw, Search, Trash2, X } from '@lucide/svelte';
+  import { Bot, Check, ChevronDown, ChevronRight, Clock3, Copy, FolderKanban, GitFork, LoaderCircle, RefreshCw, Search, Trash2, X } from '@lucide/svelte';
   import { formatSessionTimestamp, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
@@ -270,7 +270,23 @@
                       </svg>
                     </span>
                     <span class="session-row-main">
-                      <span class="session-row-title">{session.title}</span>
+                      <span class="session-row-title-line">
+                        <span class="session-row-title">{session.title}</span>
+                        {#if session.parentSessionId}
+                          {#if session.forkOrigin === 'user'}
+                            <span class="session-relationship-badge session-relationship-badge-fork"><GitFork size={11} />Fork</span>
+                          {:else if session.forkOrigin === 'delegation'}
+                            <span class="session-relationship-badge session-relationship-badge-delegate"><Bot size={11} />Delegate</span>
+                          {:else}
+                            <span class="session-relationship-badge session-relationship-badge-child"><GitFork size={11} />Child</span>
+                          {/if}
+                        {/if}
+                        {#if (session.forkCount ?? 0) > 0}
+                          <span class="session-relationship-badge session-relationship-badge-count">
+                            <GitFork size={11} />{session.forkCount} {session.forkCount === 1 ? 'fork' : 'forks'}
+                          </span>
+                        {/if}
+                      </span>
                       <span class="session-row-meta">
                         <span>{session.agentName}</span>
                         <span>{formatSessionTimestamp(session.updatedAt)}</span>

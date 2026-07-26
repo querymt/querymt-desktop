@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, Copy, GitFork, Pencil, RotateCcw, Share2, Undo2, Volume2 } from '@lucide/svelte';
+  import { Check, Copy, GitFork, LoaderCircle, Pencil, RotateCcw, Share2, Undo2, Volume2 } from '@lucide/svelte';
   import SessionReasoningBlock from '$lib/components/session/SessionReasoningBlock.svelte';
   import SessionToolBlock from '$lib/components/session/SessionToolBlock.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
@@ -8,15 +8,21 @@
   let {
     turn,
     undoAvailable = false,
+    forkAvailable = false,
     reverted = false,
     undoPending = false,
-    onUndo
+    forkPending = false,
+    onUndo,
+    onFork
   }: {
     turn: SessionConversationTurn;
     undoAvailable?: boolean;
+    forkAvailable?: boolean;
     reverted?: boolean;
     undoPending?: boolean;
+    forkPending?: boolean;
     onUndo?: (messageId: string) => void;
+    onFork?: () => void;
   } = $props();
 
   let copiedAssistantId = $state<string | null>(null);
@@ -171,10 +177,11 @@
               class="session-message-action-btn"
               type="button"
               aria-label="Fork into new session"
-              title="Fork into new session"
-              onclick={() => showNotImplemented(item.id)}
+              title={forkAvailable ? 'Fork into a new session from this response' : 'Fork unavailable'}
+              disabled={!forkAvailable || forkPending}
+              onclick={() => onFork?.()}
             >
-              <GitFork size={15} />
+              {#if forkPending}<LoaderCircle size={15} class="animate-spin" />{:else}<GitFork size={15} />{/if}
             </button>
             {#if turn.user?.messageId}
               <button

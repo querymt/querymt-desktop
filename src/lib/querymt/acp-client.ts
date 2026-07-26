@@ -5,6 +5,7 @@ import {
   type CreateElicitationRequest,
   type CreateElicitationResponse,
   type ElicitationCapabilities,
+  type ForkSessionResponse,
   type InitializeRequest,
   type InitializeResponse,
   type ListSessionsRequest,
@@ -199,6 +200,23 @@ export class DesktopAcpClient {
       sessionId,
       cwd,
       mcpServers: []
+    });
+  }
+
+  async forkSession(sessionId: string, cwd: string, messageId: string): Promise<ForkSessionResponse> {
+    if (!this.connection) {
+      await this.connect();
+    }
+
+    return this.connection!.unstable_forkSession({
+      sessionId,
+      cwd,
+      mcpServers: [],
+      _meta: {
+        querymt: {
+          message_id: messageId
+        }
+      }
     });
   }
 

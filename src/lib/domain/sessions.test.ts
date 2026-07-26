@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
-import { getRecentSessionRailItems, inferSessionStatus } from './sessions';
+import { getRecentSessionRailItems, inferSessionStatus, mapAcpSessionsToDesktopSessions } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 
 function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionId: string }): DesktopSessionSummary {
@@ -27,6 +27,66 @@ function createSession(meta?: Record<string, unknown>): SessionInfo {
     _meta: meta
   } as SessionInfo;
 }
+
+describe('session relationship metadata', () => {
+  it('maps durable fork hierarchy metadata from ACP session info', () => {
+    const [session] = mapAcpSessionsToDesktopSessions(
+      [
+        createSession({
+          messageCount: 2,
+          userMessageCount: 1,
+          hasErrors: false,
+          runtimeStatus: 'idle',
+          parentSessionId: 'parent-1',
+          forkOrigin: 'user',
+          sessionKind: 'custom',
+          hasChildren: true,
+          forkCount: 2
+        })
+      ],
+      { agentId: 'agent-1', agentName: 'QueryMT' }
+    );
+
+    expect(session).toMatchObject({
+      parentSessionId: 'parent-1',
+      forkOrigin: 'user',
+      sessionKind: 'custom',
+      hasChildren: true,
+      forkCount: 2
+    });
+  });
+
+  it('parses relationship metadata independently of operational statistics', () => {
+    const [session] = mapAcpSessionsToDesktopSessions(
+      [createSession({ parentSessionId: 'parent-1', forkOrigin: 'delegation', hasChildren: false, forkCount: 0 })],
+      { agentId: 'agent-1', agentName: 'QueryMT' }
+    );
+
+    expect(session.status).toBe('idle');
+    expect(session).toMatchObject({
+      parentSessionId: 'parent-1',
+      forkOrigin: 'delegation',
+      sessionKind: null,
+      hasChildren: false,
+      forkCount: 0
+    });
+  });
+
+  it('defaults invalid or absent hierarchy metadata safely', () => {
+    const [session] = mapAcpSessionsToDesktopSessions(
+      [createSession({ parentSessionId: '', forkOrigin: 42, hasChildren: 'yes', forkCount: -1 })],
+      { agentId: 'agent-1', agentName: 'QueryMT' }
+    );
+
+    expect(session).toMatchObject({
+      parentSessionId: null,
+      forkOrigin: null,
+      sessionKind: null,
+      hasChildren: false,
+      forkCount: 0
+    });
+  });
+});
 
 describe('inferSessionStatus', () => {
   it('maps running runtimeStatus to thinking', () => {

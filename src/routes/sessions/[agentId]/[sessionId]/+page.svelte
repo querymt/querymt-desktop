@@ -9,6 +9,7 @@
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import SessionScrollToBottomPill from '$lib/components/session/SessionScrollToBottomPill.svelte';
+  import SessionForkDialog from '$lib/components/session/SessionForkDialog.svelte';
   import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
   import SessionUndoDialog from '$lib/components/session/SessionUndoDialog.svelte';
   import {
@@ -18,7 +19,9 @@
     type SessionChatPresentationState,
     type SessionScrollMode
   } from '$lib/domain/session-scroll';
+  import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { formatSessionTimestamp, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
+  import { getForkTarget, type SessionForkTarget } from '$lib/domain/session-fork';
   import { getUndoAffectedTurnCount, getUndoableSessionTurns } from '$lib/domain/session-undo';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
@@ -47,6 +50,8 @@
   let lastRequestedSessionKey: string | null = null;
   let undoDialogOpen = $state(false);
   let undoTargetMessageId = $state<string | null>(null);
+  let forkDialogOpen = $state(false);
+  let forkTarget = $state<SessionForkTarget | null>(null);
 
   const debugEventsTooltip = $derived.by(() => {
     const count = agentsStore.activeSession.events.length;
@@ -54,6 +59,7 @@
   });
   const composerCollapsed = $derived(chatPresentationState === 'fixed-free-compact');
   const undoSupported = $derived(agentId ? agentsStore.canUseSessionUndo(agentId) : false);
+  const forkSupported = $derived(agentId ? agentsStore.canForkSession(agentId) : false);
   const undoTarget = $derived(
     undoTargetMessageId
       ? getUndoableSessionTurns(agentsStore.activeSession).find((turn) => turn.messageId === undoTargetMessageId) ?? null
@@ -154,6 +160,25 @@
 
   function isEditableTarget(target: EventTarget | null): boolean {
     return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+  }
+
+  function openForkDialog(messageId: string) {
+    const turn = buildSessionConversation(agentsStore.activeSession).find(
+      (candidate) => candidate.forkMessageId === messageId
+    );
+    const target = turn ? getForkTarget(turn) : null;
+    if (!target) return;
+    forkTarget = target;
+    forkDialogOpen = true;
+  }
+
+  async function confirmFork() {
+    if (!forkTarget) return;
+    const forkedSessionId = await agentsStore.forkActiveSessionAt(forkTarget.messageId);
+    if (!forkedSessionId) return;
+    forkDialogOpen = false;
+    forkTarget = null;
+    await goto(`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(forkedSessionId)}`);
   }
 
   function openUndoDialog(messageId: string) {
@@ -417,9 +442,12 @@
     <ActiveSessionView
       session={agentsStore.activeSession}
       {undoSupported}
+      {forkSupported}
+      forkPending={agentsStore.forkPending}
       onCancel={() => agentsStore.cancelActiveSession()}
       onUndo={openUndoDialog}
       onRedo={() => void agentsStore.redoActiveSession()}
+      onFork={openForkDialog}
     />
 
     {#if pendingElicitations.length > 0}
@@ -494,6 +522,14 @@
 
     <div class="session-chat-end-anchor" aria-hidden="true"></div>
   </div>
+
+  <SessionForkDialog
+    bind:open={forkDialogOpen}
+    sourceTitle={selectedSession?.title ?? 'this session'}
+    target={forkTarget}
+    pending={agentsStore.forkPending}
+    onConfirm={confirmFork}
+  />
 
   <SessionUndoDialog
     bind:open={undoDialogOpen}

@@ -84,6 +84,11 @@ export interface DesktopSessionSummary {
   runtimeName: string;
   source: 'acp';
   status: SessionStatus;
+  parentSessionId?: string | null;
+  forkOrigin?: string | null;
+  sessionKind?: string | null;
+  hasChildren?: boolean;
+  forkCount?: number;
 }
 
 export interface ModelEntry {
