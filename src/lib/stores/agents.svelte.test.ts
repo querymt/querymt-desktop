@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InitializeResponse, PromptResponse, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
+import { getModelSelectionKey } from '$lib/querymt/config-options';
 import { AgentsStore } from './agents.svelte';
 
 const mockListManagedProfiles = vi.hoisted(() => vi.fn(async () => []));
@@ -22,7 +23,9 @@ const mockClient = vi.hoisted(() => {
     })),
     listSessions: vi.fn(async () => ({ sessions: [] })),
     deleteSession: vi.fn(async () => undefined),
-    loadSession: vi.fn(async () => ({ configOptions: [] })),
+    loadSession: vi.fn(async (_sessionId?: string, _cwd?: string): Promise<Record<string, unknown> & { configOptions: SessionConfigOption[] }> => ({
+      configOptions: []
+    })),
     sendPrompt: vi.fn(async (): Promise<PromptResponse> => ({ stopReason: 'end_turn' })),
     cancelSession: vi.fn(async () => undefined),
     getInitializeResponse: vi.fn(() => ({
@@ -174,6 +177,116 @@ describe('AgentsStore connections', () => {
     expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '/tmp/work');
     expect(mockClient.permissionUnsubscribe()).not.toHaveBeenCalled();
     expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
+  });
+
+  it('restores each loaded session model from its snapshot without changing the agent session', async () => {
+    const store = createStore();
+    const anthropic = {
+      id: 'anthropic/claude-sonnet-4',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4',
+      label: 'Claude Sonnet 4'
+    };
+    const openai = {
+      id: 'openai/gpt-5',
+      provider: 'openai',
+      model: 'gpt-5',
+      label: 'GPT-5'
+    };
+    store.modelsByAgent = { 'agent-1': [anthropic, openai] };
+    store.sessionsByAgent = {
+      'agent-1': [
+        {
+          agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-a', title: 'A', cwd: '/tmp/work',
+          updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+        },
+        {
+          agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-b', title: 'B', cwd: '/tmp/work',
+          updatedAt: '2026-07-18T16:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+        }
+      ]
+    };
+    mockClient.loadSession.mockImplementation(async (sessionId?: string) => ({
+      configOptions: [],
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [{
+              kind: {
+                type: 'provider_changed',
+                data: sessionId === 'session-a'
+                  ? { provider: 'anthropic', model: 'claude-sonnet-4' }
+                  : { provider: 'openai', model: 'gpt-5' }
+              }
+            }]
+          }
+        }
+      }
+    }));
+
+    await store.loadSession('agent-1', 'session-a');
+    expect(store.composerModelId).toBe(anthropic.id);
+    await store.loadSession('agent-1', 'session-b');
+    expect(store.composerModelId).toBe(openai.id);
+    await store.loadSession('agent-1', 'session-a');
+    expect(store.composerModelId).toBe(anthropic.id);
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
+  it('restores the mesh copy when the snapshot and ACP model id refer to the same remote model', async () => {
+    const store = createStore();
+    const localModel = {
+      id: 'anthropic/claude-sonnet-4', provider: 'anthropic', model: 'claude-sonnet-4', label: 'Claude Sonnet 4'
+    };
+    const remoteModel = { ...localModel, node_id: 'node-1', node_label: 'Build server' };
+    store.modelsByAgent = { 'agent-1': [localModel, remoteModel] };
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Remote', cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    mockClient.loadSession.mockResolvedValueOnce({
+      configOptions: [{
+        id: 'model', name: 'Model', type: 'select', currentValue: localModel.id,
+        options: [{ value: localModel.id, name: localModel.label }]
+      }],
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: { events: [{ kind: { type: 'provider_changed', data: {
+            provider: remoteModel.provider, model: remoteModel.model, provider_node_id: remoteModel.node_id
+          } } }] }
+        }
+      }
+    });
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.composerModelId).toBe(getModelSelectionKey(remoteModel));
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
+  it('sends the exact selected mesh entry while keeping the ACP model value canonical', async () => {
+    const store = createStore();
+    const localModel = {
+      id: 'anthropic/claude-sonnet-4', provider: 'anthropic', model: 'claude-sonnet-4', label: 'Claude Sonnet 4'
+    };
+    const remoteModel = { ...localModel, node_id: 'node-1', node_label: 'Build server' };
+    store.modelsByAgent = { 'agent-1': [localModel, remoteModel] };
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+
+    await store.setComposerModel(getModelSelectionKey(remoteModel));
+
+    expect(mockClient.setSessionConfigOption).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-1',
+      configId: 'model',
+      value: remoteModel.id,
+      _meta: { querymt: { modelEntry: remoteModel } }
+    }));
+    expect(store.composerModelId).toBe(getModelSelectionKey(remoteModel));
+    expect(store.getRecentModels('agent-1')).toEqual([remoteModel]);
   });
 });
 

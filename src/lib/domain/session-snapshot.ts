@@ -16,6 +16,12 @@ type SessionLoadSnapshot = {
   };
 };
 
+export interface SnapshotProviderChange {
+  provider: string;
+  model: string;
+  providerNodeId: string | null;
+}
+
 const TOOL_TERMINAL_EVENT_TYPES = new Set(['assistant_message_stored', 'llm_request_end']);
 
 export function activeSessionFromLoadResponse(sessionId: string, response: unknown): ActiveSessionViewModel {
@@ -131,6 +137,25 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
 
   session.toolCalls = finalizeHistoricalToolCalls(Array.from(toolCallsById.values()), snapshot.audit?.events ?? []);
   return normalizeHistoricalSession(session);
+}
+
+export function getSnapshotProviderChange(response: unknown): SnapshotProviderChange | null {
+  const events = readSnapshot(response)?.audit?.events ?? [];
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.kind?.type !== 'provider_changed') continue;
+
+    const provider = readString(event.kind.data?.provider);
+    const model = readString(event.kind.data?.model);
+    if (!provider || !model) continue;
+
+    return {
+      provider,
+      model,
+      providerNodeId: readString(event.kind.data?.provider_node_id) ?? null
+    };
+  }
+  return null;
 }
 
 export function normalizeHistoricalSession(

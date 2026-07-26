@@ -1,7 +1,57 @@
 import { describe, expect, it } from 'vitest';
 import type { ActiveSessionViewModel } from './types';
 import { buildSessionConversation } from './session-conversation';
-import { activeSessionFromLoadResponse, normalizeHistoricalSession } from './session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHistoricalSession } from './session-snapshot';
+
+describe('getSnapshotProviderChange', () => {
+  it('returns the last valid provider change including its mesh node', () => {
+    const change = getSnapshotProviderChange({
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [
+              {
+                kind: {
+                  type: 'provider_changed',
+                  data: { provider: 'anthropic', model: 'claude-3-5' }
+                }
+              },
+              {
+                kind: {
+                  type: 'provider_changed',
+                  data: { provider: 'openrouter', model: 'claude-sonnet-4', provider_node_id: 'node-1' }
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(change).toEqual({
+      provider: 'openrouter',
+      model: 'claude-sonnet-4',
+      providerNodeId: 'node-1'
+    });
+  });
+
+  it('skips malformed provider changes and returns null when none are valid', () => {
+    expect(
+      getSnapshotProviderChange({
+        _meta: {
+          'querymt/sessionLoadSnapshot.v1': {
+            audit: {
+              events: [
+                { kind: { type: 'provider_changed', data: { provider: 'anthropic' } } },
+                { kind: { type: 'assistant_message_stored', data: { content: 'done' } } }
+              ]
+            }
+          }
+        }
+      })
+    ).toBeNull();
+  });
+});
 
 describe('activeSessionFromLoadResponse', () => {
   it('hydrates assistant messages and tool calls from QueryMT load snapshots', () => {

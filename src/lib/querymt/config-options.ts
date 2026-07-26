@@ -11,6 +11,7 @@ export const CONFIG_PROFILE = 'profile' as const;
 export const CONFIG_MODE = 'mode' as const;
 export const CONFIG_THOUGHT_LEVEL = 'thought_level' as const;
 
+const REMOTE_MODEL_SELECTION_PREFIX = 'querymt:model:';
 const REASONING_ALIASES = new Set([CONFIG_THOUGHT_LEVEL, 'reasoning', 'reasoning_effort', 'thought', 'thought_level']);
 
 function normalize(value: string | null | undefined): string {
@@ -55,6 +56,33 @@ export function findModelConfigOption(
 
 export function getCurrentModelId(options: SessionConfigOption[] | undefined | null): string | undefined {
   return findModelConfigOption(options)?.currentValue;
+}
+
+export function getModelSelectionKey(model: Pick<ModelEntry, 'id' | 'node_id'>): string {
+  return model.node_id
+    ? `${REMOTE_MODEL_SELECTION_PREFIX}${JSON.stringify([model.id, model.node_id])}`
+    : model.id;
+}
+
+export function findModelBySelectionKey(models: ModelEntry[], selectionKey: string | null | undefined): ModelEntry | undefined {
+  if (!selectionKey) return undefined;
+
+  const exact = models.find((model) => getModelSelectionKey(model) === selectionKey);
+  if (exact) return exact;
+
+  const legacyMatches = models.filter((model) => model.id === selectionKey);
+  return legacyMatches.find((model) => !model.node_id) ?? legacyMatches[0];
+}
+
+export function findModelByIdentity(
+  models: ModelEntry[],
+  identity: { provider: string; model: string; providerNodeId?: string | null }
+): ModelEntry | undefined {
+  const matches = models.filter((entry) => entry.provider === identity.provider && entry.model === identity.model);
+  if (identity.providerNodeId) {
+    return matches.find((entry) => entry.node_id === identity.providerNodeId);
+  }
+  return matches.find((entry) => !entry.node_id) ?? matches[0];
 }
 
 export function findProfileConfigOption(

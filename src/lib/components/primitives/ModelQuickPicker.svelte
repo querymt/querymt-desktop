@@ -4,6 +4,7 @@
   import { Portal } from 'bits-ui';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import type { ModelEntry, ModelInfo } from '$lib/domain/types';
+  import { getModelSelectionKey } from '$lib/querymt/config-options';
 
   type ModelGroup = {
     label: string;
@@ -43,10 +44,14 @@
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
 
   const selectedModel = $derived(
-    modelOptions.find((entry) => entry.id === selectedModelId) ?? recentModels[0] ?? modelOptions[0] ?? null
+    modelOptions.find((entry) => getModelSelectionKey(entry) === selectedModelId) ??
+      modelOptions.find((entry) => entry.id === selectedModelId && !entry.node_id) ??
+      recentModels[0] ??
+      modelOptions[0] ??
+      null
   );
 
-  const recentIds = $derived(new Set(recentModels.map((entry) => entry.id)));
+  const recentIds = $derived(new Set(recentModels.map(getModelSelectionKey)));
 
   const filteredGroups = $derived.by(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -62,7 +67,7 @@
 
     const providerMap = new Map<string, Array<{ model: ModelEntry; score: number }>>();
     for (const model of modelOptions) {
-      if (recentIds.has(model.id)) continue;
+      if (recentIds.has(getModelSelectionKey(model))) continue;
       const score = scoreModel(model, normalizedQuery);
       if (score === Number.NEGATIVE_INFINITY) continue;
       const key = model.provider;
@@ -125,7 +130,7 @@
       event.preventDefault();
       const target = flatResults[highlightedIndex];
       if (target) {
-        await handleSelect(target.id);
+        await handleSelect(getModelSelectionKey(target));
       }
       return;
     }
@@ -250,13 +255,14 @@
                 {:else if group.items.length > 0}
                   <div class="model-picker-list">
                     {#each group.items as model}
-                      {@const index = flatResults.findIndex((entry) => entry.id === model.id)}
-                      {@const info = modelInfo[model.id]}
+                      {@const selectionKey = getModelSelectionKey(model)}
+                      {@const index = flatResults.findIndex((entry) => getModelSelectionKey(entry) === selectionKey)}
+                      {@const info = modelInfo[selectionKey]}
                       <button
                         class="model-picker-row"
-                        class:model-picker-row-selected={selectedModelId === model.id || highlightedIndex === index}
+                        class:model-picker-row-selected={selectedModelId === selectionKey || highlightedIndex === index}
                         type="button"
-                        onclick={() => handleSelect(model.id)}
+                        onclick={() => handleSelect(selectionKey)}
                         onmousemove={() => (highlightedIndex = index)}
                       >
                         <div class="min-w-0 flex-1">
@@ -293,7 +299,7 @@
                           {#if info?.capabilities?.tool_call}
                             <span class="badge">tools</span>
                           {/if}
-                          {#if selectedModelId === model.id}
+                          {#if selectedModelId === selectionKey}
                             <Check size={14} />
                           {/if}
                         </div>

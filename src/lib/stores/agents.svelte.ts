@@ -8,7 +8,7 @@ import type {
   SessionNotification
 } from '@agentclientprotocol/sdk';
 import { tick } from 'svelte';
-import { activeSessionFromLoadResponse, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import {
   createEmptyActiveSession,
   applySessionNotification,
@@ -59,9 +59,12 @@ import type {
   ScheduleListInfo
 } from '$lib/querymt/generated/types';
 import {
+  findModelByIdentity,
+  findModelBySelectionKey,
   findModelConfigOption,
   getCurrentModelId,
   getCurrentProfileId,
+  getModelSelectionKey,
   getProfileChoices,
   setModelConfigOptionRequest,
   setSessionConfigOptionRequest
@@ -993,7 +996,6 @@ export class AgentsStore {
       this.activeSession.configOptions = response.configOptions ?? [];
       this.composerProfileId = getCurrentProfileId(this.activeSession.configOptions) ?? this.composerProfileId;
       await this.applySelectedModelToSession(agentId, sessionId, this.composerModelId || getDefaultModelId(this.modelsByAgent[agentId] ?? []));
-      this.composerModelId = getCurrentModelId(this.activeSession.configOptions) ?? this.composerModelId;
       await this.drainQueuedSessionUpdates(agentId, sessionId);
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
       return sessionId;
@@ -1145,7 +1147,26 @@ export class AgentsStore {
 
       this.activeSession.configOptions = loadedSession.configOptions ?? [];
       this.composerProfileId = getCurrentProfileId(this.activeSession.configOptions) ?? this.composerProfileId;
-      this.composerModelId = getCurrentModelId(this.activeSession.configOptions) ?? this.composerModelId;
+      const configuredModelId = getCurrentModelId(this.activeSession.configOptions);
+      const configuredModel = findModelBySelectionKey(this.modelsByAgent[agentId] ?? [], configuredModelId);
+      const snapshotProviderChange = getSnapshotProviderChange(loadedSession);
+      const snapshotModel = snapshotProviderChange
+        ? findModelByIdentity(this.modelsByAgent[agentId] ?? [], snapshotProviderChange)
+        : undefined;
+      const restoredModel =
+        configuredModel && snapshotModel?.id === configuredModel.id
+          ? snapshotModel
+          : configuredModel ?? snapshotModel;
+      if (restoredModel) {
+        this.composerModelId = getModelSelectionKey(restoredModel);
+      } else if (configuredModelId) {
+        this.composerModelId = configuredModelId;
+      } else if (snapshotProviderChange) {
+        this.composerModelId = getModelSelectionKey({
+          id: `${snapshotProviderChange.provider}/${snapshotProviderChange.model}`,
+          node_id: snapshotProviderChange.providerNodeId
+        });
+      }
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });
       if (!hasReplayHistory && !hasSnapshotHistory && drainedCount === 0) {
         this.activeSession.activityLabel = 'Session loaded, but the agent returned no replayable history.';
@@ -1631,9 +1652,16 @@ export class AgentsStore {
   getRecentModels(agentId: string): ModelEntry[] {
     const allModels = this.modelsByAgent[agentId] ?? [];
     const recentIds = this.recentModelsByAgent[agentId] ?? [];
+    const seen = new Set<string>();
     return recentIds
-      .map((modelId) => allModels.find((entry) => entry.id === modelId) ?? null)
-      .filter((entry): entry is ModelEntry => entry !== null);
+      .map((selectionKey) => findModelBySelectionKey(allModels, selectionKey) ?? null)
+      .filter((entry): entry is ModelEntry => {
+        if (!entry) return false;
+        const selectionKey = getModelSelectionKey(entry);
+        if (seen.has(selectionKey)) return false;
+        seen.add(selectionKey);
+        return true;
+      });
   }
 
   private selectComposerModelForAgent(agentId: string, models: ModelEntry[]) {
@@ -1641,20 +1669,22 @@ export class AgentsStore {
       return;
     }
 
-    const currentStillAvailable = models.some((entry) => entry.id === this.composerModelId);
-    if (currentStillAvailable) {
+    const currentModel = findModelBySelectionKey(models, this.composerModelId);
+    if (currentModel) {
+      this.composerModelId = getModelSelectionKey(currentModel);
       return;
     }
 
-    const recentModelId = (this.recentModelsByAgent[agentId] ?? []).find((modelId) =>
-      models.some((entry) => entry.id === modelId)
-    );
-    this.composerModelId = recentModelId ?? getDefaultModelId(models);
+    const recentModel = (this.recentModelsByAgent[agentId] ?? [])
+      .map((selectionKey) => findModelBySelectionKey(models, selectionKey))
+      .find((model): model is ModelEntry => Boolean(model));
+    this.composerModelId = recentModel ? getModelSelectionKey(recentModel) : getDefaultModelId(models);
   }
 
-  private rememberRecentModel(agentId: string, modelId: string) {
+  private rememberRecentModel(agentId: string, model: ModelEntry) {
+    const selectionKey = getModelSelectionKey(model);
     const current = this.recentModelsByAgent[agentId] ?? [];
-    const next = [modelId, ...current.filter((entry) => entry !== modelId)].slice(0, RECENT_MODELS_LIMIT);
+    const next = [selectionKey, ...current.filter((entry) => entry !== selectionKey)].slice(0, RECENT_MODELS_LIMIT);
     this.recentModelsByAgent = {
       ...this.recentModelsByAgent,
       [agentId]: next
@@ -1680,7 +1710,7 @@ export class AgentsStore {
       return;
     }
 
-    const model = (this.modelsByAgent[agentId] ?? []).find((entry) => entry.id === modelId);
+    const model = findModelBySelectionKey(this.modelsByAgent[agentId] ?? [], modelId);
     if (!model) {
       return;
     }
@@ -1718,10 +1748,13 @@ export class AgentsStore {
       const configOptions = await record.client.setSessionConfigOption(request);
       this.activeSession.configOptions = configOptions;
       this.composerProfileId = getCurrentProfileId(configOptions) ?? this.composerProfileId;
-      this.composerModelId = getCurrentModelId(configOptions) ?? this.composerModelId;
       const activeModelId = getCurrentModelId(configOptions);
-      if (activeModelId) {
-        this.rememberRecentModel(agentId, activeModelId);
+      const selectedModel = options.model ?? findModelBySelectionKey(this.modelsByAgent[agentId] ?? [], activeModelId);
+      if (selectedModel) {
+        this.composerModelId = getModelSelectionKey(selectedModel);
+        this.rememberRecentModel(agentId, selectedModel);
+      } else if (activeModelId) {
+        this.composerModelId = activeModelId;
       }
     } finally {
       this.sessionConfigPending = {
@@ -1736,7 +1769,7 @@ export class AgentsStore {
       return;
     }
 
-    const pending = models.filter((entry) => !this.modelInfoByAgent[agentId]?.[entry.id]);
+    const pending = models.filter((entry) => !this.modelInfoByAgent[agentId]?.[getModelSelectionKey(entry)]);
     if (pending.length === 0) {
       return;
     }
@@ -1747,7 +1780,7 @@ export class AgentsStore {
     );
 
     const mapped = pending.reduce<Record<string, ModelInfo | null>>((acc, entry) => {
-      acc[entry.id] = infoByKey[`${entry.provider}/${entry.model}`] ?? null;
+      acc[getModelSelectionKey(entry)] = infoByKey[`${entry.provider}/${entry.model}`] ?? null;
       return acc;
     }, {});
 
@@ -2210,7 +2243,7 @@ function slugify(value: string): string {
 }
 
 function getDefaultModelId(models: ModelEntry[]): string {
-  return models[0]?.id ?? '';
+  return models[0] ? getModelSelectionKey(models[0]) : '';
 }
 
 function buildWorkspaceSourceKey(agentId: string, cwd: string): string {

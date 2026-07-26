@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SessionComposer from './SessionComposer.svelte';
+import { getModelSelectionKey } from '$lib/querymt/config-options';
 
 const elementAnimateDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'animate');
 
@@ -117,6 +118,26 @@ describe('SessionComposer', () => {
 
     expect(screen.getByText('Switch model')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Search models, providers, nodes…')).toBeInTheDocument();
+  });
+
+  it('distinguishes local and mesh copies of the same model', async () => {
+    const onModelChange = vi.fn();
+    const remoteModel = { ...modelOptions[0], node_id: 'node-1', node_label: 'Build server' };
+    renderComposer({
+      modelOptions: [modelOptions[0], remoteModel],
+      selectedModelId: getModelSelectionKey(remoteModel),
+      onModelChange
+    });
+
+    await fireEvent.click(screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0]);
+
+    const rows = screen.getAllByRole('button', { name: /Claude Sonnet 4/i }).filter((button) => button.classList.contains('model-picker-row'));
+    expect(rows).toHaveLength(2);
+    expect(rows.filter((row) => row.querySelector('.lucide-check'))).toHaveLength(1);
+    expect(rows[1].querySelector('.lucide-check')).not.toBeNull();
+
+    await fireEvent.click(rows[1]);
+    expect(onModelChange).toHaveBeenCalledWith(getModelSelectionKey(remoteModel));
   });
 
   it('opens the model picker with Cmd+M from the prompt', async () => {
