@@ -54,6 +54,61 @@ describe('getSnapshotProviderChange', () => {
 });
 
 describe('activeSessionFromLoadResponse', () => {
+  it('restores context, cumulative cost, and completed active work from QueryMT snapshots', () => {
+    const session = activeSessionFromLoadResponse('session-usage', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [
+              {
+                seq: 1,
+                timestamp: 100,
+                kind: {
+                  type: 'provider_changed',
+                  data: { provider: 'anthropic', model: 'claude-sonnet-4', context_limit: 200_000 }
+                }
+              },
+              { seq: 2, timestamp: 110, kind: { type: 'llm_request_start', data: { message_count: 2 } } },
+              {
+                seq: 3,
+                timestamp: 125,
+                kind: {
+                  type: 'llm_request_end',
+                  data: { context_tokens: 48_000, cumulative_cost_usd: 0.125 }
+                }
+              },
+              { seq: 4, timestamp: 130, kind: { type: 'llm_request_start', data: { message_count: 4 } } },
+              { seq: 5, timestamp: 138, kind: { type: 'cancelled', data: {} } }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(session.usage).toEqual({
+      contextUsed: 48_000,
+      contextLimit: 200_000,
+      cumulativeCostUsd: 0.125,
+      activeWorkMs: 23_000,
+      activeWorkStartedAt: null
+    });
+  });
+
+  it('does not count incomplete historical work spans as wall-clock session age', () => {
+    const session = activeSessionFromLoadResponse('session-usage', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [{ seq: 1, timestamp: 100, kind: { type: 'llm_request_start', data: {} } }]
+          }
+        }
+      }
+    });
+
+    expect(session.usage.activeWorkMs).toBe(0);
+    expect(session.usage.activeWorkStartedAt).toBeNull();
+  });
+
   it('hydrates assistant messages and tool calls from QueryMT load snapshots', () => {
     const session = activeSessionFromLoadResponse('session-1', {
       _meta: {
@@ -271,7 +326,14 @@ describe('activeSessionFromLoadResponse', () => {
       activityLabel: 'Running tool: Run shell',
       activeToolCallId: 't-orphan',
       lastStopReason: null,
-      lastError: null
+      lastError: null,
+      usage: {
+        contextUsed: null,
+        contextLimit: null,
+        cumulativeCostUsd: null,
+        activeWorkMs: 0,
+        activeWorkStartedAt: null
+      }
     };
 
     const normalized = normalizeHistoricalSession(session, { loadCompleted: true });

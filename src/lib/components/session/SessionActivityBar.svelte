@@ -1,6 +1,7 @@
 <script lang="ts">
   import { LoaderCircle, XCircle } from '@lucide/svelte';
   import Shimmer from '$lib/components/ai-elements/shimmer.svelte';
+  import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
 
   let {
@@ -74,4 +75,6 @@
       <Shimmer text={primaryStatus} class="text-xs" />
     </div>
   {/if}
+
+  <SessionUsageBar usage={session.usage} />
 </section>

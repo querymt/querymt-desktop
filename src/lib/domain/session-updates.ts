@@ -20,7 +20,14 @@ export function createEmptyActiveSession(): ActiveSessionViewModel {
     activityLabel: null,
     activeToolCallId: null,
     lastStopReason: null,
-    lastError: null
+    lastError: null,
+    usage: {
+      contextUsed: null,
+      contextLimit: null,
+      cumulativeCostUsd: null,
+      activeWorkMs: 0,
+      activeWorkStartedAt: null
+    }
   };
 }
 
@@ -51,7 +58,8 @@ export function applySessionNotification(
     activityLabel: current.activityLabel,
     activeToolCallId: current.activeToolCallId,
     lastStopReason: current.lastStopReason,
-    lastError: current.lastError
+    lastError: current.lastError,
+    usage: { ...current.usage }
   };
   next.sessionId = notification.sessionId;
 
@@ -180,6 +188,11 @@ export function applySessionNotification(
       break;
     case 'config_option_update':
       next.configOptions = update.configOptions ?? [];
+      break;
+    case 'usage_update':
+      next.usage.contextUsed = readFiniteNumber(update.used) ?? next.usage.contextUsed;
+      next.usage.contextLimit = readPositiveNumber(update.size) ?? next.usage.contextLimit;
+      next.usage.cumulativeCostUsd = readCostUsd(update.cost) ?? next.usage.cumulativeCostUsd;
       break;
     case 'plan_update':
       if (update.plan.type === 'items') {
@@ -316,6 +329,35 @@ function stringifyToolContent(value: unknown): string | null {
   return stringifyOptional(value);
 }
 
+export function beginSessionWork(session: ActiveSessionViewModel, startedAt = Date.now()) {
+  if (session.usage.activeWorkStartedAt === null) {
+    session.usage.activeWorkStartedAt = startedAt;
+  }
+}
+
+export function endSessionWork(session: ActiveSessionViewModel, endedAt = Date.now()) {
+  const startedAt = session.usage.activeWorkStartedAt;
+  if (startedAt === null) return;
+  session.usage.activeWorkMs += Math.max(0, endedAt - startedAt);
+  session.usage.activeWorkStartedAt = null;
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function readPositiveNumber(value: unknown): number | null {
+  const number = readFiniteNumber(value);
+  return number !== null && number > 0 ? number : null;
+}
+
+function readCostUsd(value: unknown): number | null {
+  if (!value || typeof value !== 'object') return null;
+  const cost = value as { amount?: unknown; currency?: unknown };
+  if (typeof cost.currency !== 'string' || cost.currency.toUpperCase() !== 'USD') return null;
+  return readFiniteNumber(cost.amount);
+}
+
 function summarizeUpdate(notification: SessionNotification): string {
   const update = notification.update;
 
@@ -336,8 +378,11 @@ function summarizeUpdate(notification: SessionNotification): string {
       return 'Plan removed';
     case 'session_info_update':
       return `Session info updated${update.title ? `: ${update.title}` : ''}`;
-    case 'usage_update':
-      return 'Usage update';
+    case 'usage_update': {
+      const percent = update.size > 0 ? ` (${Math.round((update.used / update.size) * 100)}%)` : '';
+      const cost = readCostUsd(update.cost);
+      return `Context ${update.used}/${update.size} tokens${percent}${cost !== null ? ` · $${cost.toFixed(4)}` : ''}`;
+    }
     case 'available_commands_update':
       return 'Available commands update';
     case 'current_mode_update':

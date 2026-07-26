@@ -14,7 +14,14 @@ function baseSession(): ActiveSessionViewModel {
     activityLabel: null,
     activeToolCallId: null,
     lastStopReason: null,
-    lastError: null
+    lastError: null,
+    usage: {
+      contextUsed: null,
+      contextLimit: null,
+      cumulativeCostUsd: null,
+      activeWorkMs: 0,
+      activeWorkStartedAt: null
+    }
   };
 }
 

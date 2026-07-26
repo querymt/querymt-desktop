@@ -35,11 +35,35 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
 
   const toolCallsById = new Map<string, SessionToolCallItem>();
   let lastAssistantMessageId: string | null = null;
+  let activeWorkStartedAt: number | null = null;
 
   for (const event of snapshot.audit?.events ?? []) {
     const kind = event.kind?.type;
     const data = event.kind?.data ?? {};
     const eventId = `snapshot-${event.seq ?? session.events.length + 1}`;
+
+    if (kind === 'llm_request_start') {
+      activeWorkStartedAt ??= readTimestampMs(event.timestamp);
+      continue;
+    }
+
+    if (kind === 'provider_changed') {
+      session.usage.contextLimit = readPositiveNumber(data.context_limit) ?? session.usage.contextLimit;
+      continue;
+    }
+
+    if (kind === 'llm_request_end') {
+      session.usage.contextUsed = readNonNegativeNumber(data.context_tokens) ?? session.usage.contextUsed;
+      session.usage.cumulativeCostUsd = readNonNegativeNumber(data.cumulative_cost_usd) ?? session.usage.cumulativeCostUsd;
+      session.usage.activeWorkMs += elapsedWorkMs(activeWorkStartedAt, readTimestampMs(event.timestamp));
+      activeWorkStartedAt = null;
+      continue;
+    }
+
+    if (kind === 'cancelled' || kind === 'error') {
+      session.usage.activeWorkMs += elapsedWorkMs(activeWorkStartedAt, readTimestampMs(event.timestamp));
+      activeWorkStartedAt = null;
+    }
 
     if (kind === 'prompt_received') {
       const messageId = readString(data.message_id) ?? eventId;
@@ -193,6 +217,24 @@ export function normalizeHistoricalSession(
   }
 
   return session;
+}
+
+function readNonNegativeNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function readPositiveNumber(value: unknown): number | null {
+  const number = readNonNegativeNumber(value);
+  return number !== null && number > 0 ? number : null;
+}
+
+function readTimestampMs(value: unknown): number | null {
+  const seconds = readNonNegativeNumber(value);
+  return seconds === null ? null : seconds * 1000;
+}
+
+function elapsedWorkMs(startedAt: number | null, endedAt: number | null): number {
+  return startedAt !== null && endedAt !== null && endedAt >= startedAt ? endedAt - startedAt : 0;
 }
 
 function readSnapshot(response: unknown): SessionLoadSnapshot | null {

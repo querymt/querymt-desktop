@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionNotification } from '@agentclientprotocol/sdk';
-import { applySessionNotification, createEmptyActiveSession, getNextConversationEventIndex } from './session-updates';
+import {
+  applySessionNotification,
+  beginSessionWork,
+  createEmptyActiveSession,
+  endSessionWork,
+  getNextConversationEventIndex
+} from './session-updates';
 
 function notification(update: SessionNotification['update']): SessionNotification {
   return { sessionId: 'session-1', update };
@@ -43,6 +49,55 @@ describe('conversation event ordering', () => {
     );
 
     expect(next.transcript[0]).toMatchObject({ text: 'Ask me a question', eventIndex: 11 });
+  });
+});
+
+describe('session usage updates', () => {
+  it('stores live context-window and USD cost updates', () => {
+    const next = applySessionNotification(
+      createEmptyActiveSession(),
+      notification({
+        sessionUpdate: 'usage_update',
+        used: 32_768,
+        size: 128_000,
+        cost: { amount: 0.0425, currency: 'USD' }
+      })
+    );
+
+    expect(next.usage).toMatchObject({
+      contextUsed: 32_768,
+      contextLimit: 128_000,
+      cumulativeCostUsd: 0.0425
+    });
+    expect(next.events.at(-1)?.text).toContain('26%');
+    expect(next.events.at(-1)?.text).toContain('$0.0425');
+  });
+
+  it('preserves known limits and costs when later updates omit them', () => {
+    const session = createEmptyActiveSession();
+    session.usage.contextLimit = 200_000;
+    session.usage.cumulativeCostUsd = 0.1;
+
+    const next = applySessionNotification(
+      session,
+      notification({ sessionUpdate: 'usage_update', used: 45_000, size: 0 })
+    );
+
+    expect(next.usage).toMatchObject({
+      contextUsed: 45_000,
+      contextLimit: 200_000,
+      cumulativeCostUsd: 0.1
+    });
+  });
+
+  it('tracks active processing time without double-starting a span', () => {
+    const session = createEmptyActiveSession();
+    beginSessionWork(session, 1_000);
+    beginSessionWork(session, 2_000);
+    endSessionWork(session, 4_500);
+
+    expect(session.usage.activeWorkMs).toBe(3_500);
+    expect(session.usage.activeWorkStartedAt).toBeNull();
   });
 });
 

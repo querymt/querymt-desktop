@@ -181,6 +181,14 @@ export interface SessionPlanEntry {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
+export interface SessionUsageStats {
+  contextUsed: number | null;
+  contextLimit: number | null;
+  cumulativeCostUsd: number | null;
+  activeWorkMs: number;
+  activeWorkStartedAt: number | null;
+}
+
 export interface ActiveSessionViewModel {
   sessionId: string | null;
   transcript: SessionTranscriptItem[];
@@ -193,6 +201,7 @@ export interface ActiveSessionViewModel {
   activeToolCallId: string | null;
   lastStopReason: string | null;
   lastError: string | null;
+  usage: SessionUsageStats;
 }
 
 export interface SessionEventItem {

@@ -12,6 +12,8 @@ import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHist
 import {
   createEmptyActiveSession,
   applySessionNotification,
+  beginSessionWork,
+  endSessionWork,
   getNextConversationEventIndex
 } from '$lib/domain/session-updates';
 import {
@@ -1034,12 +1036,14 @@ export class AgentsStore {
       this.addOptimisticUserPrompt(sessionId, prompt);
       this.activeSession.runState = 'thinking';
       this.activeSession.activityLabel = 'Waiting for the agent to respond…';
+      beginSessionWork(this.activeSession);
       this.activeSession.lastError = null;
       this.composerPrompt = '';
       this.clearPromptAttachments();
       await this.connectAgent(this.activeAgentId);
       this.lastPromptResponse = await record.client.sendPrompt(sessionId, prompt, attachments);
       this.activeSession.lastStopReason = this.lastPromptResponse.stopReason ?? null;
+      endSessionWork(this.activeSession);
       await this.drainQueuedSessionUpdates(this.activeAgentId, sessionId);
       if (PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState)) {
         this.activeSession.runState = 'completed';
@@ -1049,6 +1053,7 @@ export class AgentsStore {
       }
       await this.refreshSessionsForAgent(this.activeAgentId);
     } catch (error) {
+      endSessionWork(this.activeSession);
       this.activeSession.runState = 'failed';
       this.activeSession.lastError = error instanceof Error ? error.message : 'Failed to send ACP prompt.';
       this.activeSession.activityLabel = this.activeSession.lastError;
