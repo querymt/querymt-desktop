@@ -37,6 +37,50 @@ afterEach(() => {
 });
 
 describe('DesktopSessionList', () => {
+  it('shows a stable skeleton while sessions load initially', () => {
+    render(DesktopSessionList, { loading: true });
+
+    expect(screen.getByLabelText('Loading sessions')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument();
+  });
+
+  it('offers the right recovery for empty and disconnected states', async () => {
+    const onCreateSession = vi.fn();
+    const { unmount } = render(DesktopSessionList, { onCreateSession, emptyMessage: 'Start a task first.' });
+
+    expect(screen.getByText('No sessions yet')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    expect(onCreateSession).toHaveBeenCalledOnce();
+    unmount();
+
+    const onOpenAgents = vi.fn();
+    render(DesktopSessionList, { disconnected: true, onOpenAgents });
+    expect(screen.getByText('No agents connected')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Open agents' }));
+    expect(onOpenAgents).toHaveBeenCalledOnce();
+  });
+
+  it('clears a search that has no matching sessions', async () => {
+    render(DesktopSessionList, { sessions });
+    const search = screen.getByPlaceholderText('Search sessions, workspaces, agents…');
+    await fireEvent.input(search, { target: { value: 'missing session' } });
+
+    expect(screen.getByText('No matching sessions')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(search).toHaveValue('');
+    expect(await screen.findByText('Inspect workspace')).toBeInTheDocument();
+  });
+
+  it('keeps loaded sessions visible during refresh errors', async () => {
+    const onRefresh = vi.fn();
+    render(DesktopSessionList, { sessions, loading: true, error: 'Connection timed out.', onRefresh });
+
+    expect(await screen.findByText('Inspect workspace')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Sessions could not be refreshed.');
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
   it('shows agent names on sessions without workspace-level agent pills', async () => {
     const { container } = render(DesktopSessionList, { sessions, onOpenSession: vi.fn() });
 

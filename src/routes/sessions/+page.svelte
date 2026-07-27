@@ -5,6 +5,8 @@
   import type { DesktopSessionSummary } from '$lib/domain/types';
   import { agentsStore } from '$lib/stores/agents.svelte';
 
+  const disconnected = $derived(agentsStore.connectedAgents.length === 0);
+
   async function openSession(session: DesktopSessionSummary) {
     await goto(`/sessions/${encodeURIComponent(session.agentId)}/${encodeURIComponent(session.sessionId)}`);
   }
@@ -23,8 +25,11 @@
       workspaceGroups={agentsStore.workspaceSessionGroups}
       loading={agentsStore.loading}
       error={agentsStore.error}
-      emptyMessage="No sessions yet from the currently configured agents."
+      emptyMessage="Start a task and its conversation will appear here."
+      {disconnected}
       onRefresh={() => agentsStore.refreshAllSessions()}
+      onCreateSession={() => goto('/')}
+      onOpenAgents={() => goto('/agents')}
       onOpenWorkspace={(cwd: string) => agentsStore.loadWorkspaceSessions(cwd)}
       onLoadMoreWorkspace={(cwd: string) => agentsStore.loadMoreWorkspaceSessions(cwd)}
       onOpenSession={(session: DesktopSessionSummary) => openSession(session)}

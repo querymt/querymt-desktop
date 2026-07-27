@@ -1303,6 +1303,31 @@ summary:focus-visible {
   height: 1.8rem;
 }
 
+.inbox-empty-state {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  border-top: 1px solid var(--subtle-border);
+  border-bottom: 1px solid var(--subtle-border);
+  padding: 0.75rem 0.25rem;
+}
+
+.inbox-empty-state > span:last-child {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.inbox-empty-state strong {
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 620;
+}
+
+.inbox-empty-state small {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
 @keyframes state-skeleton-shimmer {
   from { background-position: 100% 0; }
   to { background-position: -100% 0; }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { Accordion, Portal } from 'bits-ui';
-  import { Bot, Check, ChevronDown, ChevronRight, Clock3, Copy, FolderKanban, GitFork, LoaderCircle, RefreshCw, Search, Trash2, X } from '@lucide/svelte';
+  import { AlertTriangle, Bot, Check, ChevronDown, ChevronRight, Clock3, Copy, FolderKanban, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, RefreshCw, Search, SearchX, Trash2, X } from '@lucide/svelte';
   import { formatSessionTimestamp, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
@@ -12,7 +12,10 @@
     loading = false,
     error = null,
     emptyMessage = 'No sessions returned yet.',
+    disconnected = false,
     onRefresh = null,
+    onCreateSession = null,
+    onOpenAgents = null,
     onOpenWorkspace = null,
     onLoadMoreWorkspace = null,
     onOpenSession = null,
@@ -24,7 +27,10 @@
     loading?: boolean;
     error?: string | null;
     emptyMessage?: string;
-    onRefresh?: (() => void) | null;
+    disconnected?: boolean;
+    onRefresh?: (() => void | Promise<void>) | null;
+    onCreateSession?: (() => void | Promise<void>) | null;
+    onOpenAgents?: (() => void | Promise<void>) | null;
     onOpenWorkspace?: ((cwd: string) => void | Promise<void>) | null;
     onLoadMoreWorkspace?: ((cwd: string) => void | Promise<void>) | null;
     onOpenSession?: ((session: DesktopSessionSummary) => void) | null;
@@ -46,6 +52,9 @@
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
 
   const sourceWorkspaceGroups = $derived(workspaceGroups ?? groupSessionsByWorkspace(sessions));
+  const initialLoading = $derived(loading && sourceWorkspaceGroups.length === 0);
+  const refreshing = $derived(loading && sourceWorkspaceGroups.length > 0);
+  const hasActiveFilters = $derived(query.trim().length > 0 || statusFilter !== 'all');
 
   function workspaceMatchesGroup(group: WorkspaceSessionGroup, normalizedQuery: string): boolean {
     return (
@@ -109,6 +118,11 @@
     { value: 'cancelling', label: 'Cancelling' },
     { value: 'completed', label: 'Completed' }
   ];
+
+  function clearFilters() {
+    query = '';
+    statusFilter = 'all';
+  }
 
   function getStatusLabel(status: SessionStatus): string {
     switch (status) {
@@ -190,25 +204,58 @@
         {/each}
       </div>
       {#if onRefresh}
-        <button class="icon-btn" type="button" aria-label="Refresh sessions" onclick={onRefresh}>
-          <RefreshCw size={16} />
+        <button class="icon-btn" type="button" aria-label={refreshing ? 'Refreshing sessions' : 'Refresh sessions'} disabled={loading} onclick={onRefresh}>
+          {#if refreshing}<LoaderCircle size={16} class="animate-spin" />{:else}<RefreshCw size={16} />{/if}
         </button>
       {/if}
     </div>
   </div>
 
-  {#if error}
-    <div class="alert-error">{error}</div>
-  {/if}
-
   <div class="session-browser-body">
-    {#if loading}
-      <div class="muted px-4 py-4 text-sm">Loading sessions…</div>
+    {#if initialLoading}
+      <div class="state-skeleton-list" aria-label="Loading sessions" aria-busy="true">
+        {#each Array(4) as _}
+          <div class="state-skeleton-row">
+            <span class="state-skeleton-avatar"></span>
+            <span class="state-skeleton-copy"><i></i><i></i></span>
+            <span class="state-skeleton-actions"></span>
+          </div>
+        {/each}
+      </div>
+    {:else if error && sourceWorkspaceGroups.length === 0}
+      <div class="state-panel state-panel-error" role="alert">
+        <span class="state-panel-icon"><AlertTriangle size={17} /></span>
+        <div class="state-panel-copy"><strong>Sessions could not be loaded</strong><p>{error}</p></div>
+        {#if onRefresh}<button class="action-btn" type="button" onclick={onRefresh}>Try again</button>{/if}
+      </div>
+    {:else if disconnected && sourceWorkspaceGroups.length === 0}
+      <div class="state-panel">
+        <span class="state-panel-icon"><PlugZap size={17} /></span>
+        <div class="state-panel-copy"><strong>No agents connected</strong><p>Connect an agent before browsing or creating sessions.</p></div>
+        {#if onOpenAgents}<button class="action-btn action-btn-primary" type="button" onclick={onOpenAgents}>Open agents</button>{/if}
+      </div>
     {:else if sourceWorkspaceGroups.length === 0}
-      <div class="muted px-4 py-4 text-sm">{emptyMessage}</div>
+      <div class="state-panel">
+        <span class="state-panel-icon"><MessageSquarePlus size={17} /></span>
+        <div class="state-panel-copy"><strong>No sessions yet</strong><p>{emptyMessage}</p></div>
+        {#if onCreateSession}<button class="action-btn action-btn-primary" type="button" onclick={onCreateSession}>New session</button>{/if}
+      </div>
     {:else if filteredWorkspaceGroups.length === 0}
-      <div class="muted px-4 py-4 text-sm">No loaded sessions match the current filters.</div>
+      <div class="state-panel">
+        <span class="state-panel-icon"><SearchX size={17} /></span>
+        <div class="state-panel-copy"><strong>No matching sessions</strong><p>Try another search or clear the current status filter.</p></div>
+        {#if hasActiveFilters}<button class="action-btn" type="button" onclick={clearFilters}>Clear filters</button>{/if}
+      </div>
     {:else}
+      {#if error}
+        <div class="state-inline-error" role="alert">
+          <AlertTriangle size={15} />
+          <span class="min-w-0 flex-1"><strong>Sessions could not be refreshed.</strong> {error}</span>
+          {#if onRefresh}<button class="action-btn !px-3 !py-1.5 text-xs" type="button" onclick={onRefresh}>Retry</button>{/if}
+        </div>
+      {:else if refreshing}
+        <div class="state-inline-progress" role="status"><LoaderCircle size={14} class="animate-spin" /><span>Refreshing sessions…</span></div>
+      {/if}
       <Accordion.Root type="multiple" bind:value={openGroups} class="session-workspace-accordion">
         {#each filteredWorkspaceGroups as group}
           <Accordion.Item value={group.key} class="session-workspace-item">
