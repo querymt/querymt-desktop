@@ -347,12 +347,16 @@
                 {:else if group.hasMore && onLoadMoreWorkspace}
                   <div class="session-workspace-pagination">
                     <button
-                      class="action-btn"
+                      class="session-workspace-load-more"
                       type="button"
                       disabled={group.loading}
                       onclick={() => onLoadMoreWorkspace(group.cwd)}
                     >
-                      {#if group.loading}<LoaderCircle size={14} class="animate-spin" />{/if}
+                      {#if group.loading}
+                        <LoaderCircle size={14} class="animate-spin" />
+                      {:else}
+                        <ChevronDown size={14} aria-hidden="true" />
+                      {/if}
                       {group.loading ? 'Loading...' : 'Load 10 more'}
                     </button>
                   </div>

@@ -345,7 +345,7 @@
   {/if}
 
   <div
-    class={`${unifiedShell ? 'px-1' : 'px-2'} rounded-[18px] transition ${isDragging ? 'bg-[var(--accent-dim)] ring-1 ring-[var(--border-strong)]' : ''}`}
+    class={`${unifiedShell ? 'px-1' : 'px-2'} rounded-[18px] bg-inherit transition ${isDragging ? 'bg-[var(--accent-dim)] ring-1 ring-[var(--border-strong)]' : ''}`}
     role="region"
     aria-label="Prompt and attachment drop zone"
     ondragover={(event) => {
@@ -363,7 +363,7 @@
   >
     <textarea
       bind:this={promptElement}
-      class={`block w-full resize-none border-0 bg-transparent px-1 py-2 text-sm text-[var(--text)] outline-none ${promptMinHeightClass} ${launch ? 'text-base' : ''}`}
+      class={`block w-full resize-none border-0 bg-inherit px-1 py-2 text-sm text-[var(--text)] outline-none ${promptMinHeightClass} ${launch ? 'text-base' : ''}`}
       placeholder={sessionOnly ? sessionPlaceholder : launch ? 'Ask QueryMT to inspect, change, debug, explain, or plan something.' : minimal ? 'What should QueryMT do in this workspace?' : 'Ask QueryMT to inspect, plan, change, or explain something in this workspace.'}
       value={prompt}
       oninput={(event) => onPromptInput((event.currentTarget as HTMLTextAreaElement).value)}
@@ -555,7 +555,7 @@
       transition:composerMorph={{ compact: false }}
     >
       <div
-        class={`flex flex-col ${unifiedShell ? 'gap-4 rounded-[24px] bg-[var(--bg-card)]' : 'gap-3 rounded-[18px] border border-[var(--border)] bg-[var(--bg-card)]'} ${unifiedShell ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}
+        class={`flex flex-col ${unifiedShell ? 'gap-4 rounded-[24px] bg-inherit' : 'gap-3 rounded-[18px] border border-[var(--border)] bg-inherit'} ${unifiedShell ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}
       >
         {@render composerBody()}
       </div>

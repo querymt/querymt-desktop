@@ -218,7 +218,10 @@ describe('DesktopSessionList', () => {
     render(DesktopSessionList, { workspaceGroups, onOpenWorkspace, onLoadMoreWorkspace });
 
     await waitFor(() => expect(onOpenWorkspace).toHaveBeenCalledWith('/projects/querymt'));
-    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    const loadMoreButton = screen.getByRole('button', { name: 'Load 10 more' });
+    expect(loadMoreButton).toHaveClass('session-workspace-load-more');
+    expect(loadMoreButton.querySelector('.lucide-chevron-down')).not.toBeNull();
+    await fireEvent.click(loadMoreButton);
 
     expect(onLoadMoreWorkspace).toHaveBeenCalledWith('/projects/querymt');
     expect(screen.getByLabelText('Sessions not loaded')).toBeInTheDocument();

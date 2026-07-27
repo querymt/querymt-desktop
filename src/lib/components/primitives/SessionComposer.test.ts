@@ -278,9 +278,14 @@ describe('SessionComposer', () => {
   it('renders the full composer while fixed and following', () => {
     const { container } = renderComposer({ docked: true, collapsed: false, sessionOnly: true, chatView: true });
 
-    expect(container.querySelector('.session-composer-dock-expanded')).not.toBeNull();
-    expect(screen.getByPlaceholderText('Write a reply for this session...').tagName).toBe('TEXTAREA');
-    expect(container.querySelector('textarea')).not.toBeNull();
+    const shell = container.querySelector('.session-composer-dock-expanded');
+    const innerSurface = shell?.firstElementChild;
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+    expect(shell).not.toBeNull();
+    expect(innerSurface).toHaveClass('bg-inherit');
+    expect(prompt.tagName).toBe('TEXTAREA');
+    expect(prompt).toHaveClass('bg-inherit');
+    expect(prompt).not.toHaveClass('bg-transparent');
   });
 
   it('renders the compact composer while fixed and free-scrolling', () => {
