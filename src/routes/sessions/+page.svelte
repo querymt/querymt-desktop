@@ -5,7 +5,14 @@
   import type { DesktopSessionSummary } from '$lib/domain/types';
   import { agentsStore } from '$lib/stores/agents.svelte';
 
-  const disconnected = $derived(agentsStore.connectedAgents.length === 0);
+  const connectedAgentCount = $derived(agentsStore.connectedAgents.length);
+  const disconnected = $derived(connectedAgentCount === 0);
+
+  async function createWorkspaceSession(cwd: string) {
+    agentsStore.setComposerCwd(cwd);
+    await goto('/');
+    agentsStore.requestPromptFocus();
+  }
 
   async function openSession(session: DesktopSessionSummary) {
     await goto(`/sessions/${encodeURIComponent(session.agentId)}/${encodeURIComponent(session.sessionId)}`);
@@ -27,10 +34,12 @@
       error={agentsStore.error}
       emptyMessage="Start a task and its conversation will appear here."
       {disconnected}
+      showAgentNames={connectedAgentCount > 1}
       onRefresh={() => agentsStore.refreshAllSessions()}
       onCreateSession={() => goto('/')}
       onOpenAgents={() => goto('/agents')}
       onOpenWorkspace={(cwd: string) => agentsStore.loadWorkspaceSessions(cwd)}
+      onCreateWorkspaceSession={(cwd: string) => createWorkspaceSession(cwd)}
       onLoadMoreWorkspace={(cwd: string) => agentsStore.loadMoreWorkspaceSessions(cwd)}
       onOpenSession={(session: DesktopSessionSummary) => openSession(session)}
       canDeleteSession={(session: DesktopSessionSummary) => agentsStore.canDeleteSession(session.agentId)}

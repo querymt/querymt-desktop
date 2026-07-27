@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { Accordion, Portal } from 'bits-ui';
-  import { AlertTriangle, Bot, Check, ChevronDown, ChevronRight, Clock3, Copy, FolderKanban, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, RefreshCw, Search, SearchX, Trash2, X } from '@lucide/svelte';
+  import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, Plus, RefreshCw, Search, SearchX, Trash2, X } from '@lucide/svelte';
   import { formatSessionTimestamp, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
@@ -13,10 +13,12 @@
     error = null,
     emptyMessage = 'No sessions returned yet.',
     disconnected = false,
+    showAgentNames = true,
     onRefresh = null,
     onCreateSession = null,
     onOpenAgents = null,
     onOpenWorkspace = null,
+    onCreateWorkspaceSession = null,
     onLoadMoreWorkspace = null,
     onOpenSession = null,
     canDeleteSession = null,
@@ -28,18 +30,22 @@
     error?: string | null;
     emptyMessage?: string;
     disconnected?: boolean;
+    showAgentNames?: boolean;
     onRefresh?: (() => void | Promise<void>) | null;
     onCreateSession?: (() => void | Promise<void>) | null;
     onOpenAgents?: (() => void | Promise<void>) | null;
     onOpenWorkspace?: ((cwd: string) => void | Promise<void>) | null;
+    onCreateWorkspaceSession?: ((cwd: string) => void | Promise<void>) | null;
     onLoadMoreWorkspace?: ((cwd: string) => void | Promise<void>) | null;
     onOpenSession?: ((session: DesktopSessionSummary) => void) | null;
     canDeleteSession?: ((session: DesktopSessionSummary) => boolean) | null;
     onDeleteSession?: ((session: DesktopSessionSummary) => Promise<void>) | null;
   } = $props();
 
+  type SessionFilter = 'all' | 'active' | 'needs-input' | 'completed';
+
   let query = $state('');
-  let statusFilter = $state<'all' | SessionStatus>('all');
+  let statusFilter = $state<SessionFilter>('all');
   let openGroups = $state<string[]>([]);
   let lastWorkspaceKeySignature = $state('');
   let requestedWorkspaceKeys = $state<string[]>([]);
@@ -70,7 +76,7 @@
       .map((group) => {
         const workspaceMatches = workspaceMatchesGroup(group, normalizedQuery);
         const filteredSessions = group.sessions.filter((session) => {
-          const matchesStatus = statusFilter === 'all' || session.status === statusFilter;
+           const matchesStatus = sessionMatchesFilter(session.status, statusFilter);
           const matchesQuery =
             workspaceMatches ||
             session.title.toLowerCase().includes(normalizedQuery) ||
@@ -88,7 +94,7 @@
       lastWorkspaceKeySignature = nextSignature;
       const visibleKeys = new Set(filteredWorkspaceGroups.map((group) => group.key));
       const preservedOpenGroups = openGroups.filter((key) => visibleKeys.has(key));
-      openGroups = preservedOpenGroups.length > 0 ? preservedOpenGroups : filteredWorkspaceGroups.slice(0, 3).map((group) => group.key);
+      openGroups = preservedOpenGroups.length > 0 ? preservedOpenGroups : filteredWorkspaceGroups.slice(0, 1).map((group) => group.key);
     }
   });
 
@@ -110,14 +116,23 @@
     }
   });
 
-  const statusFilters: Array<{ value: 'all' | SessionStatus; label: string }> = [
+  const statusFilters: Array<{ value: SessionFilter; label: string }> = [
     { value: 'all', label: 'All' },
-    { value: 'idle', label: 'Idle' },
-    { value: 'thinking', label: 'Thinking' },
-    { value: 'waiting', label: 'Waiting' },
-    { value: 'cancelling', label: 'Cancelling' },
+    { value: 'active', label: 'Active' },
+    { value: 'needs-input', label: 'Needs input' },
     { value: 'completed', label: 'Completed' }
   ];
+
+  function sessionMatchesFilter(status: SessionStatus, filter: SessionFilter): boolean {
+    if (filter === 'all') return true;
+    if (filter === 'active') return status === 'thinking' || status === 'cancelling';
+    if (filter === 'needs-input') return status === 'waiting';
+    return status === 'completed';
+  }
+
+  function countWorkspaceSessions(group: WorkspaceSessionGroup, filter: SessionFilter): number {
+    return group.sessions.filter((session) => sessionMatchesFilter(session.status, filter)).length;
+  }
 
   function clearFilters() {
     query = '';
@@ -142,6 +157,7 @@
 
   async function copySessionId(event: MouseEvent, sessionId: string) {
     event.stopPropagation();
+    (event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open');
 
     try {
       await navigator.clipboard.writeText(sessionId);
@@ -156,6 +172,7 @@
 
   function requestDeleteSession(event: MouseEvent, session: DesktopSessionSummary) {
     event.stopPropagation();
+    (event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open');
     deleteError = null;
     pendingDeleteSession = session;
   }
@@ -259,40 +276,47 @@
       <Accordion.Root type="multiple" bind:value={openGroups} class="session-workspace-accordion">
         {#each filteredWorkspaceGroups as group}
           <Accordion.Item value={group.key} class="session-workspace-item">
-            <Accordion.Header level={3} class="session-workspace-header">
-              <Accordion.Trigger class="session-workspace-trigger">
-                <span class="session-workspace-trigger-main">
-                  <span class="session-workspace-icon"><FolderKanban size={16} /></span>
-                  <span class="session-workspace-copy">
-                    <span class="session-workspace-name">{group.name}</span>
-                    <span class="session-workspace-path">{group.path}</span>
-                  </span>
-                </span>
-                <span class="session-workspace-meta">
-                  {#if group.loading && !group.initialized}
-                    <span class="badge session-workspace-count-loading" aria-label="Loading sessions" title="Loading sessions">
-                      <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
-                    </span>
-                  {:else if group.initialized}
-                    <span class="badge" aria-label={`${group.sessions.length} loaded session${group.sessions.length === 1 ? '' : 's'}${group.hasMore ? ', more available' : ''}`}>
-                      {group.sessions.length}{group.hasMore ? '+' : ''}
-                    </span>
-                  {:else}
-                    <span class="badge session-workspace-count-pending" aria-label="Sessions not loaded" title="Sessions load when opened">—</span>
-                  {/if}
-                  <span class="session-workspace-updated"><Clock3 size={12} /> {formatSessionTimestamp(group.latestActivity)}</span>
-                  <ChevronDown size={15} class="session-workspace-chevron" />
-                </span>
-              </Accordion.Trigger>
-            </Accordion.Header>
+             <div class="session-workspace-heading">
+               <Accordion.Header level={3} class="session-workspace-header">
+                 <Accordion.Trigger class="session-workspace-trigger">
+                   <span class="session-workspace-trigger-main">
+                     <span class="session-workspace-icon"><FolderKanban size={16} /></span>
+                     <span class="session-workspace-copy">
+                       <span class="session-workspace-name">{group.name}</span>
+                       <span class="session-workspace-path">{group.path}</span>
+                     </span>
+                   </span>
+                   <span class="session-workspace-meta">
+                     {#if group.loading && !group.initialized}
+                       <span class="badge session-workspace-count-loading" aria-label="Loading sessions" title="Loading sessions"><LoaderCircle size={12} class="animate-spin" aria-hidden="true" /></span>
+                     {:else if group.initialized}
+                       {@const activeCount = countWorkspaceSessions(group, 'active')}
+                       {@const waitingCount = countWorkspaceSessions(group, 'needs-input')}
+                       {#if activeCount > 0}<span class="session-workspace-signal session-workspace-signal-active">{activeCount} active</span>{/if}
+                       {#if waitingCount > 0}<span class="session-workspace-signal session-workspace-signal-waiting">{waitingCount} waiting</span>{/if}
+                       <span class="session-workspace-count" aria-label={`${group.sessions.length} loaded session${group.sessions.length === 1 ? '' : 's'}${group.hasMore ? ', more available' : ''}`}>{group.sessions.length}{group.hasMore ? '+' : ''}</span>
+                     {:else}
+                       <span class="session-workspace-count session-workspace-count-pending" aria-label="Sessions not loaded" title="Sessions load when opened">—</span>
+                     {/if}
+                     <span class="session-workspace-updated"><Clock3 size={12} /> {formatSessionTimestamp(group.latestActivity)}</span>
+                     <ChevronDown size={15} class="session-workspace-chevron" />
+                   </span>
+                 </Accordion.Trigger>
+               </Accordion.Header>
+               {#if onCreateWorkspaceSession}
+                 <button class="session-workspace-new" type="button" aria-label={`New session in ${group.name}`} title={`New session in ${group.name}`} onclick={() => onCreateWorkspaceSession?.(group.cwd)}><Plus size={15} /></button>
+               {/if}
+             </div>
             <Accordion.Content class="session-workspace-content">
               {#if group.loading && group.sessions.length === 0}
                 <div class="session-workspace-loading"><LoaderCircle size={15} class="animate-spin" /> Loading workspace sessions...</div>
               {:else}
                 <div class="model-picker-list session-workspace-session-list">
                   {#each group.sessions as session}
-                  {@const identicon = createRoundIdenticon(session.sessionId)}
-                  <div class="model-picker-row session-row">
+                   {@const identicon = createRoundIdenticon(session.sessionId)}
+                   {@const sessionKey = `${session.agentId}:${session.sessionId}`}
+                   {@const canDelete = canDeleteSession?.(session) ?? false}
+                   <div class="model-picker-row session-row">
                     <button
                       class="session-row-navigation"
                       type="button"
@@ -317,8 +341,9 @@
                       </svg>
                     </span>
                     <span class="session-row-main">
-                      <span class="session-row-title-line">
-                        <span class="session-row-title">{session.title}</span>
+                       <span class="session-row-title-line">
+                         <span class="session-row-title">{session.title}</span>
+                         <span class={`session-row-status session-row-status-${session.status}`}>{getStatusLabel(session.status)}</span>
                         {#if session.parentSessionId}
                           {#if session.forkOrigin === 'user'}
                             <span class="session-relationship-badge session-relationship-badge-fork"><GitFork size={11} />Fork</span>
@@ -335,54 +360,25 @@
                         {/if}
                       </span>
                       <span class="session-row-meta">
-                        <span>{session.agentName}</span>
+                        {#if showAgentNames}<span>{session.agentName}</span>{/if}
                         <span>{formatSessionTimestamp(session.updatedAt)}</span>
-                        <span class="session-row-id">
-                          <code>{session.sessionId.slice(0, 8)}</code>
-                          <button
-                            class="session-row-copy-id"
-                            type="button"
-                            aria-label={copiedSessionId === session.sessionId ? 'Session ID copied' : 'Copy session ID'}
-                            title={copiedSessionId === session.sessionId ? 'Copied' : 'Copy full session ID'}
-                            onclick={(event) => copySessionId(event, session.sessionId)}
-                          >
-                            {#if copiedSessionId === session.sessionId}
-                              <Check size={12} />
-                            {:else}
-                              <Copy size={12} />
-                            {/if}
-                          </button>
-                        </span>
                       </span>
                     </span>
-                    <span class="session-row-side">
-                      <span class="badge">{getStatusLabel(session.status)}</span>
-                      {#if onDeleteSession}
-                        {@const sessionKey = `${session.agentId}:${session.sessionId}`}
-                        {@const canDelete = canDeleteSession?.(session) ?? false}
-                        <span class="session-row-delete-slot">
-                          {#if canDelete}
-                            <button
-                              class="session-row-delete"
-                              type="button"
-                              aria-label={deletingSessionKey === sessionKey ? `Deleting session ${session.title}` : `Delete session ${session.title}`}
-                              title="Delete session"
-                              disabled={deletingSessionKey !== null}
-                              onclick={(event) => requestDeleteSession(event, session)}
-                            >
-                              {#if deletingSessionKey === sessionKey}
-                                <LoaderCircle size={13} class="session-row-delete-spinner" />
-                              {:else}
-                                <Trash2 size={13} />
-                              {/if}
-                            </button>
-                          {/if}
-                        </span>
-                      {/if}
-                      <span class="session-row-open" aria-hidden="true">
-                        <ChevronRight size={15} />
-                      </span>
-                    </span>
+                     <span class="session-row-side">
+                       <details class="session-row-menu">
+                         <summary class="session-row-menu-trigger" aria-label={`Session actions for ${session.title}`} title="Session actions"><Ellipsis size={16} /></summary>
+                         <div class="session-row-menu-content">
+                           <button type="button" aria-label={`Copy session ID for ${session.title}`} onclick={(event) => copySessionId(event, session.sessionId)}>
+                             {#if copiedSessionId === session.sessionId}<Check size={14} />Copied{:else}<Copy size={14} />Copy session ID{/if}
+                           </button>
+                           {#if onDeleteSession && canDelete}
+                             <button class="session-row-menu-danger" type="button" aria-label={`Delete session ${session.title}`} disabled={deletingSessionKey !== null} onclick={(event) => requestDeleteSession(event, session)}>
+                               {#if deletingSessionKey === sessionKey}<LoaderCircle size={14} class="animate-spin" />Deleting{:else}<Trash2 size={14} />Delete session{/if}
+                             </button>
+                           {/if}
+                         </div>
+                       </details>
+                     </span>
                   </div>
                   {/each}
                 </div>
