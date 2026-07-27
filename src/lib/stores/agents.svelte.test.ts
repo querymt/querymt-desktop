@@ -467,6 +467,19 @@ describe('AgentsStore prompt session start', () => {
     resolvePrompt();
   });
 
+  it('creates a blank session without attempting to send an empty prompt', async () => {
+    const store = createStore();
+    store.composerPrompt = '   ';
+
+    const sessionId = await store.startSessionWithPrompt('agent-1');
+
+    expect(sessionId).toBe('session-1');
+    expect(store.activeSessionId).toBe('session-1');
+    expect(store.activeSession.runState).toBe('idle');
+    expect(store.error).toBe(null);
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+  });
+
   it('keeps the optimistic prompt position when its authoritative chunk arrives after a tool', async () => {
     let resolvePrompt!: () => void;
     mockClient.sendPrompt.mockImplementationOnce(

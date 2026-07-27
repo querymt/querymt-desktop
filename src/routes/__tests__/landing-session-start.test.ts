@@ -102,6 +102,7 @@ beforeEach(() => {
 describe('Landing page session start', () => {
   it('opens the new session as soon as session creation resolves', async () => {
     agentsStore.startSessionWithPrompt.mockResolvedValue('session-1');
+    agentsStore.composerPrompt = 'Draft prompt';
 
     render(LandingPage);
 

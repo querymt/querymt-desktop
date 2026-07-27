@@ -111,6 +111,29 @@ describe('SessionComposer', () => {
     expect(screen.getByText('Default profile')).toBeInTheDocument();
   });
 
+  it('morphs between stable overlaid blank-session and send states', async () => {
+    const { container, rerender } = renderComposer({ launch: true, prompt: '' });
+    const morph = container.querySelector('.composer-action-morph');
+    const createState = container.querySelector('.composer-action-morph-create');
+    const sendState = container.querySelector('.composer-action-morph-send');
+
+    expect(screen.getByRole('button', { name: 'Start blank session' })).toBeInTheDocument();
+    expect(morph).toHaveClass('is-creating');
+    expect(morph).not.toHaveClass('is-sending');
+    expect(createState).toHaveAttribute('aria-hidden', 'false');
+    expect(sendState).toHaveAttribute('aria-hidden', 'true');
+    expect(createState?.querySelector('.lucide-plus')).not.toBeNull();
+    expect(sendState?.querySelector('.lucide-send-horizontal')).not.toBeNull();
+
+    await rerender({ prompt: 'Fix the failing tests' });
+
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeInTheDocument();
+    expect(morph).not.toHaveClass('is-creating');
+    expect(morph).toHaveClass('is-sending');
+    expect(createState).toHaveAttribute('aria-hidden', 'true');
+    expect(sendState).toHaveAttribute('aria-hidden', 'false');
+  });
+
   it('opens the model picker when the model pill is clicked', async () => {
     renderComposer();
 

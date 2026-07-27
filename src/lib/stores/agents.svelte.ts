@@ -1029,7 +1029,7 @@ export class AgentsStore {
 
   async startSessionWithPrompt(agentId: string): Promise<string | null> {
     const sessionId = await this.createSession(agentId);
-    if (sessionId) {
+    if (sessionId && this.composerPrompt.trim()) {
       void this.sendPromptToActiveSession();
     }
     return sessionId;

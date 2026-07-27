@@ -132,6 +132,7 @@
   }
 
   const unifiedShell = $derived(launch || sessionOnly);
+  const creatingBlankSession = $derived(!activeSessionId && prompt.trim().length === 0);
   const sessionPlaceholder = 'Write a reply for this session...';
   const promptMinHeightClass = $derived.by(() => {
     if (chatView && sessionOnly) return 'min-h-[76px]';
@@ -453,12 +454,31 @@
         class={`${launch ? 'action-btn action-btn-primary min-w-[9rem] justify-center px-5 py-3' : minimal ? 'action-btn action-btn-primary px-4' : 'icon-btn icon-btn-primary'}`}
         disabled={loading}
         type="button"
-        aria-label={activeSessionId ? 'Send reply' : 'Start session'}
+        aria-label={activeSessionId ? 'Send reply' : creatingBlankSession ? 'Start blank session' : 'Start session'}
         onclick={onSendPrompt}
       >
-        <SendHorizontal size={16} />
-        {#if minimal || launch}
-          <span>{activeSessionId ? 'Send reply' : 'Start session'}</span>
+        {#if activeSessionId}
+          <span class="inline-flex items-center gap-2">
+            <SendHorizontal size={16} />
+            {#if minimal || launch}
+              <span>Send reply</span>
+            {/if}
+          </span>
+        {:else}
+          <span class="composer-action-morph" class:is-creating={creatingBlankSession} class:is-sending={!creatingBlankSession}>
+            <span class="composer-action-morph-state composer-action-morph-create" aria-hidden={!creatingBlankSession}>
+              <Plus size={16} />
+              {#if minimal || launch}
+                <span>New session</span>
+              {/if}
+            </span>
+            <span class="composer-action-morph-state composer-action-morph-send" aria-hidden={creatingBlankSession}>
+              <SendHorizontal size={16} />
+              {#if minimal || launch}
+                <span>Start session</span>
+              {/if}
+            </span>
+          </span>
         {/if}
       </button>
     </div>
