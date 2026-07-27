@@ -3553,6 +3553,10 @@ summary:focus-visible {
 }
 
 .app-icon-rail {
+  --rail-item-radius-rest: 999px;
+  --rail-item-radius-hover: 14px;
+  --rail-item-morph-duration: 180ms;
+  --rail-item-morph-easing: cubic-bezier(0.22, 1, 0.36, 1);
   position: fixed;
   top: 1rem;
   left: 0.5rem;
@@ -3611,18 +3615,18 @@ summary:focus-visible {
   width: 2.4rem;
   height: 2.4rem;
   flex: 0 0 auto;
-  border-radius: 999px;
+  border-radius: var(--rail-item-radius-rest);
   color: var(--text);
   text-decoration: none;
   outline: none;
-  transition: border-radius 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+  transition: border-radius var(--rail-item-morph-duration) var(--rail-item-morph-easing), transform 160ms ease, box-shadow 160ms ease;
 }
 
 .app-icon-link:hover,
 .app-icon-link:focus-visible,
 .session-icon-link:hover,
 .session-icon-link:focus-visible {
-  border-radius: 14px;
+  border-radius: var(--rail-item-radius-hover);
   transform: translateY(-1px);
 }
 
@@ -3651,12 +3655,12 @@ summary:focus-visible {
   width: 2.4rem;
   height: 2.4rem;
   overflow: hidden;
-  border-radius: inherit;
+  border-radius: var(--rail-item-radius-rest);
   border: 1px solid var(--subtle-border);
   background: var(--bg-card);
   color: var(--text-dim);
   box-shadow: var(--shadow-sm);
-  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+  transition: border-radius var(--rail-item-morph-duration) var(--rail-item-morph-easing), border-color 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
 }
 
 .app-nav-icon-surface {
@@ -3670,8 +3674,9 @@ summary:focus-visible {
   height: 2.4rem;
   align-items: center;
   justify-content: center;
-  border-radius: inherit;
+  border-radius: var(--rail-item-radius-rest);
   overflow: visible;
+  transition: border-radius var(--rail-item-morph-duration) var(--rail-item-morph-easing);
 }
 
 .session-identicon-svg {
@@ -3689,6 +3694,15 @@ summary:focus-visible {
   border-color: var(--border-strong);
   color: var(--text);
   box-shadow: var(--shadow-md);
+}
+
+.app-icon-link:hover .app-nav-icon-surface,
+.app-icon-link:focus-visible .app-nav-icon-surface,
+.session-icon-link:hover .session-icon-surface,
+.session-icon-link:focus-visible .session-icon-surface,
+.session-icon-link:hover .session-icon-avatar,
+.session-icon-link:focus-visible .session-icon-avatar {
+  border-radius: var(--rail-item-radius-hover);
 }
 
 .app-icon-link-current .app-icon-activity-pill,
@@ -3894,6 +3908,7 @@ summary:focus-visible {
   .app-icon-link,
   .session-icon-link,
   .app-nav-icon-surface,
+  .session-icon-surface,
   .session-icon-avatar,
   .app-icon-activity-pill {
     transition: none;

@@ -69,6 +69,18 @@ describe('RecentSessionRail attention indicators', () => {
     expect(container.querySelectorAll('.sidebar-attention-dot')).toHaveLength(2);
   });
 
+  it('keeps stable nested surfaces for the session shape morph', () => {
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
+
+    const sessionLink = screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl/Cmd+1' });
+    const surface = sessionLink.querySelector('.session-icon-surface');
+    const avatar = surface?.querySelector('.session-icon-avatar');
+    expect(sessionLink).toHaveClass('session-icon-link');
+    expect(surface).not.toBeNull();
+    expect(avatar).not.toBeNull();
+    expect(avatar?.querySelector('.session-identicon-svg')).not.toBeNull();
+  });
+
   it('keeps only the activity spinner when no session action is required', () => {
     render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
 
