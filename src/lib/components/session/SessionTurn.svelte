@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, Copy, GitFork, LoaderCircle, Pencil, RotateCcw, Share2, Undo2, Volume2 } from '@lucide/svelte';
+  import { Check, Copy, GitFork, LoaderCircle, Undo2 } from '@lucide/svelte';
   import SessionReasoningBlock from '$lib/components/session/SessionReasoningBlock.svelte';
   import SessionToolBlock from '$lib/components/session/SessionToolBlock.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
@@ -27,28 +27,6 @@
 
   let copiedAssistantId = $state<string | null>(null);
   let copiedUserId = $state<string | null>(null);
-  let noopNoticeAssistantId = $state<string | null>(null);
-  let userEditNoticeId = $state<string | null>(null);
-
-  function showNotImplemented(assistantId: string) {
-    noopNoticeAssistantId = assistantId;
-    window.setTimeout(() => {
-      if (noopNoticeAssistantId === assistantId) {
-        noopNoticeAssistantId = null;
-      }
-    }, 1600);
-  }
-
-  function showUserEditNotImplemented() {
-    if (!turn.user) return;
-
-    userEditNoticeId = turn.user.id;
-    window.setTimeout(() => {
-      if (userEditNoticeId === turn.user?.id) {
-        userEditNoticeId = null;
-      }
-    }, 1600);
-  }
 
   async function copyUserMessage() {
     if (!turn.user?.text) return;
@@ -104,18 +82,6 @@
             <Copy size={15} />
           {/if}
         </button>
-        <button
-          class="session-message-action-btn"
-          type="button"
-          aria-label="Edit prompt"
-          title="Edit prompt"
-          onclick={showUserEditNotImplemented}
-        >
-          <Pencil size={15} />
-        </button>
-        {#if userEditNoticeId === turn.user.id}
-          <span class="session-message-action-note" aria-live="polite">Not implemented yet</span>
-        {/if}
       </div>
     </section>
   {/if}
@@ -146,57 +112,29 @@
                 <Copy size={15} />
               {/if}
             </button>
-            <button
-              class="session-message-action-btn"
-              type="button"
-              aria-label="Share response"
-              title="Share response"
-              onclick={() => showNotImplemented(item.id)}
-            >
-              <Share2 size={15} />
-            </button>
-            <button
-              class="session-message-action-btn"
-              type="button"
-              aria-label="Read aloud"
-              title="Read aloud"
-              onclick={() => showNotImplemented(item.id)}
-            >
-              <Volume2 size={15} />
-            </button>
-            <button
-              class="session-message-action-btn"
-              type="button"
-              aria-label="Try again"
-              title="Try again..."
-              onclick={() => showNotImplemented(item.id)}
-            >
-              <RotateCcw size={15} />
-            </button>
-            <button
-              class="session-message-action-btn"
-              type="button"
-              aria-label="Fork into new session"
-              title={forkAvailable ? 'Fork into a new session from this response' : 'Fork unavailable'}
-              disabled={!forkAvailable || forkPending}
-              onclick={() => onFork?.()}
-            >
-              {#if forkPending}<LoaderCircle size={15} class="animate-spin" />{:else}<GitFork size={15} />{/if}
-            </button>
-            {#if turn.user?.messageId}
+            {#if forkAvailable}
+              <button
+                class="session-message-action-btn"
+                type="button"
+                aria-label="Fork into new session"
+                title="Fork into a new session from this response"
+                disabled={forkPending}
+                onclick={() => onFork?.()}
+              >
+                {#if forkPending}<LoaderCircle size={15} class="animate-spin" />{:else}<GitFork size={15} />{/if}
+              </button>
+            {/if}
+            {#if undoAvailable && turn.user?.messageId}
               <button
                 class="session-message-action-btn"
                 type="button"
                 aria-label="Undo to this prompt"
-                title={undoAvailable ? 'Undo workspace to this prompt' : reverted ? 'This turn is currently undone' : 'Undo unavailable'}
-                disabled={!undoAvailable || undoPending}
+                title="Undo workspace to this prompt"
+                disabled={undoPending}
                 onclick={() => turn.user?.messageId && onUndo?.(turn.user.messageId)}
               >
                 <Undo2 size={15} />
               </button>
-            {/if}
-            {#if noopNoticeAssistantId === item.id}
-              <span class="session-message-action-note" aria-live="polite">Not implemented yet</span>
             {/if}
           </div>
         </section>

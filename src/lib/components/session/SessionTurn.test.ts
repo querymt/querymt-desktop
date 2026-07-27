@@ -80,9 +80,22 @@ describe('SessionTurn', () => {
     expect(onUndo).toHaveBeenCalledWith('message-1');
   });
 
-  it('disables targeted undo for a reverted turn', () => {
-    const { getByRole } = render(SessionTurn, { turn, undoAvailable: false, reverted: true });
-    expect(getByRole('button', { name: 'Undo to this prompt' })).toHaveProperty('disabled', true);
+  it('hides fork and undo when they are not actionable', () => {
+    const { queryByRole } = render(SessionTurn, { turn, undoAvailable: false, forkAvailable: false, reverted: true });
+
+    expect(queryByRole('button', { name: 'Fork into new session' })).not.toBeInTheDocument();
+    expect(queryByRole('button', { name: 'Undo to this prompt' })).not.toBeInTheDocument();
+  });
+
+  it('shows only functional message actions', () => {
+    const { getByRole, queryByRole } = render(SessionTurn, { turn });
+
+    expect(getByRole('button', { name: 'Copy prompt' })).toBeInTheDocument();
+    expect(getByRole('button', { name: 'Copy response' })).toBeInTheDocument();
+    expect(queryByRole('button', { name: 'Edit prompt' })).not.toBeInTheDocument();
+    expect(queryByRole('button', { name: 'Share response' })).not.toBeInTheDocument();
+    expect(queryByRole('button', { name: 'Read aloud' })).not.toBeInTheDocument();
+    expect(queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
   });
 
   it('renders reasoning, tools, and assistant text in content order', () => {

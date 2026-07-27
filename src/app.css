@@ -3131,12 +3131,6 @@ summary:focus-visible {
   outline-offset: 2px;
 }
 
-.session-message-action-note {
-  align-self: center;
-  color: var(--muted);
-  font-size: 0.76rem;
-}
-
 .session-agent-block-activities {
   gap: 0;
 }
