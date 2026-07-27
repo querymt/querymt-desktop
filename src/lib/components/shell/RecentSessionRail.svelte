@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Tooltip } from 'bits-ui';
-  import { ChevronLeft, ChevronRight, LoaderCircle, X } from '@lucide/svelte';
+  import { ChevronLeft, ChevronRight, LoaderCircle } from '@lucide/svelte';
   import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
   import { formatAriaShortcut, formatShortcut } from '$lib/design/platform';
   import { sectionIcons, type SectionName } from '$lib/design/tokens';
@@ -28,9 +28,8 @@
     currentAgentId = null,
     currentSessionId = null,
     collapsed = false,
-    narrowOpen = false,
+    collapseLocked = false,
     onToggleCollapsed = null,
-    onCloseNarrow = null,
     onOpenSession = null,
     onVisibleSessionItemsChange = null
   }: {
@@ -40,9 +39,8 @@
     currentAgentId?: string | null;
     currentSessionId?: string | null;
     collapsed?: boolean;
-    narrowOpen?: boolean;
+    collapseLocked?: boolean;
     onToggleCollapsed?: (() => void) | null;
-    onCloseNarrow?: (() => void) | null;
     onOpenSession?: ((session: DesktopSessionSummary) => void) | null;
     onVisibleSessionItemsChange?: ((items: SessionRailItem[]) => void) | null;
   } = $props();
@@ -63,7 +61,7 @@
 
   let sessionListElement = $state<HTMLElement | null>(null);
   let sessionIconLimit = $state(MAX_SESSION_ICONS);
-  const compact = $derived(collapsed && !narrowOpen);
+  const compact = $derived(collapsed);
   const onlineAgentCount = $derived(agentsStore.connectedAgents.length);
   const agentAttentionCount = $derived(agentsStore.agentsNeedingAttention.length);
   const inboxActionCount = $derived(inboxStore.actionableItems.length);
@@ -137,13 +135,8 @@
     return activity ?? 'Recent';
   }
 
-  function closeNarrow() {
-    onCloseNarrow?.();
-  }
-
   function openSession(session: DesktopSessionSummary) {
     onOpenSession?.(session);
-    closeNarrow();
   }
 </script>
 
@@ -165,7 +158,6 @@
         href={routeMap[section]}
         aria-current={current === section ? 'page' : undefined}
         aria-label={getSectionLabel(section)}
-        onclick={closeNarrow}
       >
         <span class="app-sidebar-link-icon"><Icon size={16} />{@render navIndicator(section)}</span>
         <span>{section}</span>
@@ -177,7 +169,7 @@
 {/snippet}
 
 <Tooltip.Provider delayDuration={120} skipDelayDuration={80}>
-  <nav class={`app-sidebar ${compact ? 'app-sidebar-collapsed' : 'app-sidebar-expanded'} ${narrowOpen ? 'app-sidebar-narrow-open' : ''}`} aria-label="App navigation and recent sessions">
+  <nav class={`app-sidebar ${compact ? 'app-sidebar-collapsed' : 'app-sidebar-expanded'}`} aria-label="App navigation and recent sessions">
     {#if compact}
       <div class="app-icon-rail-top">
         <Tooltip.Root>
@@ -247,7 +239,7 @@
       </div>
 
       <div class="app-icon-rail-bottom">
-        <button class="app-icon-link app-sidebar-toggle-compact" type="button" aria-label="Expand sidebar" title="Expand sidebar" onclick={onToggleCollapsed}><ChevronRight size={16} /></button>
+        {#if !collapseLocked}<button class="app-icon-link app-sidebar-toggle-compact" type="button" aria-label="Expand sidebar" title="Expand sidebar" onclick={onToggleCollapsed}><ChevronRight size={16} /></button>{/if}
         <Tooltip.Root>
           <Tooltip.Trigger>
             {#snippet child({ props })}
@@ -261,9 +253,8 @@
       </div>
     {:else}
       <div class="app-sidebar-header">
-        <a class="app-sidebar-brand" href="/" aria-label="Today" onclick={closeNarrow}><span>Q</span><strong>QueryMT</strong></a>
+        <a class="app-sidebar-brand" href="/" aria-label="Today"><span>Q</span><strong>QueryMT</strong></a>
         <button class="icon-btn app-sidebar-collapse" type="button" aria-label="Collapse sidebar" title="Collapse sidebar" onclick={onToggleCollapsed}><ChevronLeft size={16} /></button>
-        <button class="icon-btn app-sidebar-narrow-close" type="button" aria-label="Close navigation" onclick={closeNarrow}><X size={17} /></button>
       </div>
 
       <div class="app-sidebar-navigation">
@@ -272,7 +263,7 @@
       </div>
 
       <div class="app-sidebar-recent" bind:this={sessionListElement}>
-        <div class="app-sidebar-section-heading"><span>Recent sessions</span><a href="/sessions" onclick={closeNarrow}>View all</a></div>
+        <div class="app-sidebar-section-heading"><span>Recent sessions</span><a href="/sessions">View all</a></div>
         <div class="app-sidebar-session-list">
           {#if railItems.length === 0}
             <div class="app-sidebar-empty">No recent sessions</div>
@@ -298,7 +289,7 @@
       </div>
 
       <div class="app-sidebar-footer">
-        <a class={`app-sidebar-link ${current === 'Settings' ? 'app-sidebar-link-current' : ''}`} href="/settings" aria-current={current === 'Settings' ? 'page' : undefined} onclick={closeNarrow}>
+        <a class={`app-sidebar-link ${current === 'Settings' ? 'app-sidebar-link-current' : ''}`} href="/settings" aria-current={current === 'Settings' ? 'page' : undefined}>
           <span class="app-sidebar-link-icon"><SettingsIcon size={16} /></span><span>Settings</span>
         </a>
       </div>

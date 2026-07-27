@@ -51,7 +51,7 @@
   const isSessionCancellable = $derived(
     isActiveSessionRoute && CANCELLABLE_RUN_STATES.has(agentsStore.activeSession.runState)
   );
-  const layoutClass = $derived(sidebarStore.initialized && sidebarStore.collapsed ? 'app-grid-sidebar-collapsed' : 'app-grid-sidebar-expanded');
+  const layoutClass = $derived(sidebarStore.initialized && sidebarStore.effectiveCollapsed ? 'app-grid-sidebar-collapsed' : 'app-grid-sidebar-expanded');
 
   const section = $derived.by(() => {
     if (pathname.startsWith('/sessions/')) {
@@ -246,17 +246,12 @@
       attentionSessionKeys={agentsStore.attentionSessionKeys}
       currentAgentId={currentRailAgentId}
       currentSessionId={currentRailSessionId}
-      collapsed={sidebarStore.initialized && sidebarStore.collapsed}
-      narrowOpen={sidebarStore.narrowOpen}
+      collapsed={sidebarStore.initialized && sidebarStore.effectiveCollapsed}
+      collapseLocked={sidebarStore.viewportConstrained}
       onToggleCollapsed={() => sidebarStore.toggleCollapsed()}
-      onCloseNarrow={() => sidebarStore.closeNarrow()}
       onOpenSession={(session) => agentsStore.acknowledgeSession(session.agentId, session.sessionId)}
       onVisibleSessionItemsChange={(items) => (visibleRailSessionItems = items)}
     />
-
-    {#if sidebarStore.narrowOpen}
-      <button class="app-sidebar-backdrop" type="button" aria-label="Close navigation" onclick={() => sidebarStore.closeNarrow()}></button>
-    {/if}
 
     <div class={`app-grid grid ${layoutClass}`}>
       <div class="app-sidebar-spacer" aria-hidden="true"></div>

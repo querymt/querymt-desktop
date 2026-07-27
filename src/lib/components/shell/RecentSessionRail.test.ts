@@ -58,6 +58,19 @@ describe('RecentSessionRail navigation', () => {
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
   });
 
+  it('locks the automatic compact rail without showing an unavailable expand control', () => {
+    render(RecentSessionRail, {
+      current: 'Sessions',
+      sessions: [activeSession],
+      collapsed: true,
+      collapseLocked: true
+    });
+
+    expect(screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl+1' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Expand sidebar' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Recent sessions')).not.toBeInTheDocument();
+  });
+
   it('shows activity and the shared attention dot together for a session requiring action', () => {
     inboxStore.actionableItems = [{ id: 'request-1', agentId: 'agent-1', sessionId: 'session-1' }];
 
