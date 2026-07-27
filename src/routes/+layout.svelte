@@ -14,6 +14,7 @@
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
   import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
+  import { isMacPlatform as detectMacPlatform } from '$lib/design/platform';
   import type { SectionName } from '$lib/design/tokens';
   import type { SessionRailItem } from '$lib/domain/sessions';
   import type { SessionRunState } from '$lib/domain/types';
@@ -67,7 +68,7 @@
     void agentsStore.initialize();
     void windowDecorationsStore.initialize();
 
-    isMacPlatform = navigator.platform.toLowerCase().includes('mac');
+    isMacPlatform = detectMacPlatform();
 
     let unlistenResize: (() => void) | undefined;
     let unlistenFocus: (() => void) | undefined;

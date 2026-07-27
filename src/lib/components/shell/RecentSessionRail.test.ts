@@ -56,7 +56,7 @@ describe('RecentSessionRail attention indicators', () => {
     });
 
     const sessionLink = screen.getByRole('link', {
-      name: 'Waiting session, Waiting, action required, Ctrl/Cmd+1'
+      name: 'Waiting session, Waiting, action required, Ctrl+1'
     });
     expect(sessionLink).toBeInTheDocument();
     expect(sessionLink.querySelector('.session-icon-status-active')).not.toBeNull();
@@ -72,7 +72,7 @@ describe('RecentSessionRail attention indicators', () => {
   it('keeps stable nested surfaces for the session shape morph', () => {
     render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
 
-    const sessionLink = screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl/Cmd+1' });
+    const sessionLink = screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl+1' });
     const surface = sessionLink.querySelector('.session-icon-surface');
     const avatar = surface?.querySelector('.session-icon-avatar');
     expect(sessionLink).toHaveClass('session-icon-link');
@@ -84,7 +84,7 @@ describe('RecentSessionRail attention indicators', () => {
   it('keeps only the activity spinner when no session action is required', () => {
     render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
 
-    const sessionLink = screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl/Cmd+1' });
+    const sessionLink = screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl+1' });
     expect(sessionLink.querySelector('.session-icon-status-active')).not.toBeNull();
     expect(sessionLink.querySelector('.sidebar-attention-dot')).toBeNull();
   });

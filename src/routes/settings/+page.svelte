@@ -6,6 +6,7 @@
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
+  import { isMacPlatform as detectMacPlatform } from '$lib/design/platform';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { appearanceStore, type AppearanceThemeMode } from '$lib/stores/appearance.svelte';
   import { chatPreferencesStore, type SendShortcut } from '$lib/stores/chat-preferences.svelte';
@@ -78,7 +79,7 @@
     appearanceStore.initialize();
     chatPreferencesStore.initialize();
     void windowDecorationsStore.initialize();
-    isMacPlatform = /mac/i.test(`${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`);
+    isMacPlatform = detectMacPlatform();
   });
 
   const themeOptions: Array<{ value: AppearanceThemeMode; label: string }> = [
@@ -640,7 +641,7 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Settings"
-      description="Manage appearance, chat preferences, bundled profiles, and provider authentication."
+      description="Appearance, chat behavior, profiles, and provider access."
     />
   </div>
 
@@ -649,7 +650,7 @@
       <div class="settings-section-header">
       <div>
         <h2>Appearance</h2>
-        <p>Match the QueryMT website style while choosing whether Desktop owns the titlebar or leaves it to the operating system.</p>
+        <p>Choose the app theme and window frame.</p>
       </div>
     </div>
 
@@ -712,7 +713,7 @@
       <div class="settings-section-header settings-section-header-action">
       <div>
         <h2>Curated profiles</h2>
-        <p>Enable bundled TOML profile templates into Desktop app-data. Existing user copies are never overwritten.</p>
+        <p>Install bundled TOML profiles. Existing copies are never overwritten.</p>
       </div>
       <IconTooltipButton label="Refresh profile templates" icon={RefreshCw} size={16} disabled={profileTemplatesLoading} onclick={() => refreshProfileTemplates()} />
     </div>
@@ -934,7 +935,7 @@
         <div class="dialog-modal-panel relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div class="dialog-header">
             <div class="dialog-header-title-block">
-              <div class="dialog-title">Set API Key</div>
+              <div class="dialog-title">Set API key</div>
               <div class="dialog-subtitle">Store a key for {tokenDialogProvider.display_name} in the desktop agent keyring.</div>
             </div>
             <div class="dialog-header-actions">
@@ -1061,7 +1062,7 @@
         <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div class="dialog-header">
             <div class="dialog-header-title-block">
-              <div class="dialog-title">Disconnect Provider</div>
+              <div class="dialog-title">Disconnect provider</div>
               <div class="dialog-subtitle">Remove OAuth credentials for {disconnectProviderPending.display_name}?</div>
             </div>
             <div class="dialog-header-actions">
@@ -1100,7 +1101,7 @@
         <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div class="dialog-header">
             <div class="dialog-header-title-block">
-              <div class="dialog-title">Clear Stored API Key</div>
+              <div class="dialog-title">Clear stored API key</div>
               <div class="dialog-subtitle">Remove the saved key for {clearKeyProviderPending.display_name}?</div>
             </div>
             <div class="dialog-header-actions">

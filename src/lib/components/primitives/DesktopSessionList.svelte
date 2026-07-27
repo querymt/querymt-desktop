@@ -382,7 +382,7 @@
         <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" aria-labelledby="delete-session-dialog-title" tabindex="-1" data-blocking-overlay="true">
           <div class="dialog-header">
             <div class="dialog-header-title-block">
-              <div class="dialog-title" id="delete-session-dialog-title">Delete Session</div>
+              <div class="dialog-title" id="delete-session-dialog-title">Delete session</div>
               <div class="dialog-subtitle">Permanently remove "{pendingDeleteSession.title}" from {pendingDeleteSession.agentName}?</div>
             </div>
             <div class="dialog-header-actions">

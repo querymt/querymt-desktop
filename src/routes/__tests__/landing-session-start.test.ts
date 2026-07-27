@@ -122,9 +122,12 @@ beforeEach(() => {
 });
 
 describe('Landing page session start', () => {
-  it('shows the launch mode and reasoning preferences', () => {
+  it('shows task-oriented launch copy and session preferences', () => {
     render(LandingPage);
 
+    expect(screen.getAllByText('New session')).not.toHaveLength(0);
+    expect(screen.getByText('Choose a workspace, then describe the task.')).toBeInTheDocument();
+    expect(screen.queryByText('Desktop control center')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Mode' })).toHaveTextContent('Build');
     expect(screen.getByRole('button', { name: 'Reasoning effort' })).toHaveTextContent('Auto');
   });

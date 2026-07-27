@@ -3,6 +3,7 @@
   import { Bot, CalendarClock, ChevronDown, Link, MessageSquarePlus, Network, Plus, RefreshCw, Search, SendHorizontal, X } from '@lucide/svelte';
   import { Command, Dialog } from 'bits-ui';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import { formatShortcut } from '$lib/design/platform';
   import type { CommandPalettePrefill, DesktopSessionSummary } from '$lib/domain/types';
   import type { RemoteSessionInfo } from '$lib/querymt/generated/types';
   import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
@@ -86,16 +87,16 @@
 
   const isDialogFormMode = $derived(commandPaletteStore.mode !== 'commands');
   const dialogTitle = $derived.by(() => {
-    if (commandPaletteStore.mode === 'schedule') return 'Schedule Prompt';
-    if (commandPaletteStore.mode === 'remote-create') return 'Create Remote Session';
-    if (commandPaletteStore.mode === 'remote-attach') return 'Attach Remote Session';
-    return 'Command Palette';
+    if (commandPaletteStore.mode === 'schedule') return 'Schedule prompt';
+    if (commandPaletteStore.mode === 'remote-create') return 'Create remote session';
+    if (commandPaletteStore.mode === 'remote-attach') return 'Attach remote session';
+    return 'Command palette';
   });
   const dialogSubtitle = $derived.by(() => {
     if (commandPaletteStore.mode === 'schedule') return 'Create a recurring task or attach it to an existing session.';
     if (commandPaletteStore.mode === 'remote-create') return 'Start a session on a selected mesh node.';
     if (commandPaletteStore.mode === 'remote-attach') return 'Continue an existing remote session from a mesh node.';
-    return 'Cmd+P for fast actions and creation flows.';
+    return `${formatShortcut('P')} opens actions and navigation.`;
   });
 
   const commands = $derived.by(() => {
@@ -187,7 +188,7 @@
       },
       {
         id: 'open-automations',
-        title: 'Open Automations',
+        title: 'Open automations',
         subtitle: 'View and control existing schedules.',
         section: 'Navigate',
         keywords: ['automations', 'schedules'],
@@ -198,7 +199,7 @@
       },
       {
         id: 'open-mesh',
-        title: 'Open Mesh',
+        title: 'Open mesh',
         subtitle: 'View mesh status, nodes, and remote sessions.',
         section: 'Navigate',
         keywords: ['mesh', 'remote', 'nodes'],

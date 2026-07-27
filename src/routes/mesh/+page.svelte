@@ -201,7 +201,7 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Mesh"
-      description="Manage mesh status, invites, and remote sessions."
+      description="Nodes, invites, and remote sessions."
     />
   </div>
 

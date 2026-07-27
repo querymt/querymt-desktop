@@ -20,7 +20,7 @@
   <div class="settings-section-header settings-section-header-action">
     <div>
       <h2>Folders</h2>
-      <p>Desktop folders available as workspace context.</p>
+      <p>Folders available as session context.</p>
     </div>
     {#if onAddWorkspace}
       <button class="action-btn action-btn-primary" disabled={loading} onclick={onAddWorkspace}>
@@ -36,7 +36,7 @@
   {#if items.length === 0}
     <div class="empty-state">
       <div class="text-sm font-medium">No workspaces added yet</div>
-      <div class="panel-copy mt-1">Pick a folder to create the first desktop workspace context.</div>
+      <div class="panel-copy mt-1">Pick a folder to add your first workspace.</div>
     </div>
   {:else}
     <div class="mesh-item-list">

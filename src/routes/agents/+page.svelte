@@ -301,7 +301,7 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Agents"
-      description="Manage configured ACP agents and lifecycle controls."
+      description="Connections, status, and runtime controls."
     />
 
     <div class="compact-toolbar">
@@ -416,7 +416,7 @@
         <div class="dialog-modal-panel relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div class="dialog-header">
             <div class="dialog-header-title-block">
-              <div class="dialog-title">{agentDialogMode === 'add' ? 'Add Agent' : 'Edit Agent'}</div>
+              <div class="dialog-title">{agentDialogMode === 'add' ? 'Add agent' : 'Edit agent'}</div>
               <div class="dialog-subtitle">Choose a local process or an already-running ACP WebSocket endpoint.</div>
             </div>
             <div class="dialog-header-actions">
@@ -484,7 +484,7 @@
         <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
           <div class="dialog-header">
             <div class="dialog-header-title-block">
-              <div class="dialog-title">Delete Agent</div>
+              <div class="dialog-title">Delete agent</div>
               <div class="dialog-subtitle">Remove this configured agent from the desktop app?</div>
             </div>
             <div class="dialog-header-actions">

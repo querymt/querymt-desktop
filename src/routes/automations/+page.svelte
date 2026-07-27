@@ -115,7 +115,7 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Automations"
-      description="Manage scheduled tasks and automation health."
+      description="Scheduled tasks, run status, and controls."
     />
   </div>
 

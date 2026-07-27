@@ -18,7 +18,7 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Inbox"
-      description="Permission and elicitation requests that need human attention."
+      description="Requests waiting for your response."
     />
   </div>
 

@@ -3,6 +3,7 @@
   import { Tooltip } from 'bits-ui';
   import { LoaderCircle } from '@lucide/svelte';
   import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
+  import { formatAriaShortcut, formatShortcut } from '$lib/design/platform';
   import { sectionIcons, sectionOrder, type SectionName } from '$lib/design/tokens';
   import {
     formatSessionTimestamp,
@@ -133,11 +134,11 @@
   }
 
   function getSessionShortcutLabel(index: number): string {
-    return index === 9 ? 'Ctrl/Cmd+0' : `Ctrl/Cmd+${index + 1}`;
+    return formatShortcut(index === 9 ? '0' : String(index + 1));
   }
 
   function getSessionAriaShortcut(index: number): string {
-    return index === 9 ? 'Control+0 Meta+0' : `Control+${index + 1} Meta+${index + 1}`;
+    return formatAriaShortcut(index === 9 ? '0' : String(index + 1));
   }
 
   function getStatusLabel(status: SessionStatus, item: SessionRailItem): string {

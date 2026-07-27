@@ -3,8 +3,8 @@
   import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelte';
   import SessionTurn from '$lib/components/session/SessionTurn.svelte';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
-  import { getForkTarget, getLatestForkTarget } from '$lib/domain/session-fork';
-  import { canUndoToMessage, getCurrentUndoTarget, isTurnReverted } from '$lib/domain/session-undo';
+  import { getForkTarget } from '$lib/domain/session-fork';
+  import { canUndoToMessage, isTurnReverted } from '$lib/domain/session-undo';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
 
   let {
@@ -28,15 +28,6 @@
   } = $props();
 
   const turns = $derived(buildSessionConversation(session));
-  const currentUndoTarget = $derived(getCurrentUndoTarget(session));
-  const revertedMessageIds = $derived(
-    new Set(
-      turns
-        .filter((turn) => turn.user?.messageId && isTurnReverted(session, turn.user.messageId))
-        .map((turn) => turn.user!.messageId!)
-    )
-  );
-  const latestForkTarget = $derived(getLatestForkTarget(turns, revertedMessageIds));
   const busy = $derived(
     ['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState) ||
       session.undo.pendingOperation !== null ||
@@ -45,19 +36,7 @@
 </script>
 
 <div class="session-detail-shell">
-  <SessionActivityBar
-    {session}
-    {undoSupported}
-    {forkSupported}
-    {forkPending}
-    {onCancel}
-    {onRedo}
-    canFork={forkSupported && latestForkTarget !== null && !busy}
-    canUndo={undoSupported && currentUndoTarget !== null && !busy}
-    canRedo={undoSupported && session.undo.stack.length > 0 && !busy}
-    onUndo={() => currentUndoTarget && onUndo?.(currentUndoTarget.messageId)}
-    onFork={() => latestForkTarget && onFork?.(latestForkTarget.messageId)}
-  />
+  <SessionActivityBar {session} {forkPending} {onCancel} />
 
   <section class="session-conversation-column">
     <Conversation

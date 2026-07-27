@@ -16,7 +16,7 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Workspaces"
-      description="Manage desktop folders and quick context shortcuts."
+      description="Folders available as session context."
     />
   </div>
 
