@@ -18,7 +18,8 @@ describe('left rail shape morph', () => {
   });
 
   it('disables every visible rail-layer transition for reduced motion', () => {
-    const reducedMotionRule = appCss.match(/@media \(prefers-reduced-motion: reduce\) \{\n  \.app-icon-link,([\s\S]*?)\n\}/)?.[0] ?? '';
+    const reducedMotionRule = appCss.match(/@media \(prefers-reduced-motion: reduce\) \{\n  \.app-sidebar,([\s\S]*?)\n\}/)?.[0] ?? '';
+    expect(reducedMotionRule).toContain('.app-sidebar');
     expect(reducedMotionRule).toContain('.app-icon-link');
     expect(reducedMotionRule).toContain('.session-icon-link');
     expect(reducedMotionRule).toContain('.app-nav-icon-surface');

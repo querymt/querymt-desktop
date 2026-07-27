@@ -14,6 +14,7 @@
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
   import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
+  import { sidebarStore } from '$lib/stores/sidebar.svelte';
   import { isMacPlatform as detectMacPlatform } from '$lib/design/platform';
   import type { SectionName } from '$lib/design/tokens';
   import type { SessionRailItem } from '$lib/domain/sessions';
@@ -52,7 +53,7 @@
   const isSessionCancellable = $derived(
     isActiveSessionRoute && CANCELLABLE_RUN_STATES.has(agentsStore.activeSession.runState)
   );
-  const layoutClass = 'grid grid-cols-1 gap-4 lg:grid-cols-[48px_minmax(0,1fr)] 2xl:grid-cols-[48px_minmax(0,1fr)_280px]';
+  const layoutClass = $derived(sidebarStore.initialized && sidebarStore.collapsed ? 'app-grid-sidebar-collapsed' : 'app-grid-sidebar-expanded');
 
   const section = $derived.by(() => {
     if (pathname.startsWith('/sessions/')) {
@@ -65,6 +66,7 @@
   onMount(() => {
     appearanceStore.initialize();
     chatPreferencesStore.initialize();
+    sidebarStore.initialize();
     void agentsStore.initialize();
     void windowDecorationsStore.initialize();
 
@@ -246,14 +248,22 @@
       attentionSessionKeys={agentsStore.attentionSessionKeys}
       currentAgentId={currentRailAgentId}
       currentSessionId={currentRailSessionId}
+      collapsed={sidebarStore.initialized && sidebarStore.collapsed}
+      narrowOpen={sidebarStore.narrowOpen}
+      onToggleCollapsed={() => sidebarStore.toggleCollapsed()}
+      onCloseNarrow={() => sidebarStore.closeNarrow()}
       onOpenSession={(session) => agentsStore.acknowledgeSession(session.agentId, session.sessionId)}
       onVisibleSessionItemsChange={(items) => (visibleRailSessionItems = items)}
     />
 
-    <div class={`app-grid grid ${layoutClass}`}>
-      <div class="app-icon-rail-spacer" aria-hidden="true"></div>
+    {#if sidebarStore.narrowOpen}
+      <button class="app-sidebar-backdrop" type="button" aria-label="Close navigation" onclick={() => sidebarStore.closeNarrow()}></button>
+    {/if}
 
-      <div class="flex min-w-0 flex-col gap-4">
+    <div class={`app-grid grid ${layoutClass}`}>
+      <div class="app-sidebar-spacer" aria-hidden="true"></div>
+
+      <div class="app-main-column flex min-w-0 flex-col gap-4">
         <main class="min-h-0 flex-1">
           {@render children?.()}
         </main>
