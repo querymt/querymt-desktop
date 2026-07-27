@@ -111,6 +111,50 @@ describe('SessionComposer', () => {
     expect(screen.getByText('Default profile')).toBeInTheDocument();
   });
 
+  it('renders launch mode and reasoning with the existing composer pills', () => {
+    const onLaunchModeChange = vi.fn();
+    const onLaunchReasoningChange = vi.fn();
+    renderComposer({
+      launch: true,
+      launchModeOptions: [
+        { id: 'build', label: 'Build' },
+        { id: 'plan', label: 'Plan' }
+      ],
+      selectedLaunchModeId: 'build',
+      launchReasoningOptions: [
+        { id: 'auto', label: 'Auto' },
+        { id: 'high', label: 'High' }
+      ],
+      selectedLaunchReasoningId: 'auto',
+      onLaunchModeChange,
+      onLaunchReasoningChange
+    });
+
+    const modeSelect = screen.getByRole('button', { name: 'Mode' });
+    const reasoningSelect = screen.getByRole('button', { name: 'Reasoning effort' });
+    expect(modeSelect).toHaveClass('composer-control-pill');
+    expect(reasoningSelect).toHaveClass('composer-control-pill');
+    expect(modeSelect).toHaveTextContent('Build');
+    expect(reasoningSelect).toHaveTextContent('Auto');
+  });
+
+  it('orders composer controls as model, reasoning, mode, and profile', () => {
+    renderComposer({
+      launch: true,
+      profileOptions: [{ id: 'default', label: 'Default' }],
+      launchModeOptions: [{ id: 'build', label: 'Build' }],
+      launchReasoningOptions: [{ id: 'auto', label: 'Auto' }]
+    });
+
+    const controls = screen.getAllByRole('button').filter((button) => button.classList.contains('composer-control-pill'));
+    expect(controls.map((button) => button.getAttribute('aria-label') ?? button.textContent?.trim())).toEqual([
+      'Claude Sonnet 4 · anthropic',
+      'Reasoning effort',
+      'Mode',
+      'Profile'
+    ]);
+  });
+
   it('morphs between stable overlaid blank-session and send states', async () => {
     const { container, rerender } = renderComposer({ launch: true, prompt: '' });
     const morph = container.querySelector('.composer-action-morph');

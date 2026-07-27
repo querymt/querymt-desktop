@@ -1,7 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
-  import { agentsStore } from '$lib/stores/agents.svelte';
+  import { agentsStore, LAUNCH_MODE_OPTIONS, LAUNCH_REASONING_OPTIONS } from '$lib/stores/agents.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
 
@@ -82,6 +82,10 @@
       attachments={agentsStore.promptAttachments}
       profileOptions={agentsStore.getProfileOptions()}
       selectedProfileId={agentsStore.composerProfileId}
+      launchModeOptions={LAUNCH_MODE_OPTIONS}
+      selectedLaunchModeId={agentsStore.composerModeId}
+      launchReasoningOptions={LAUNCH_REASONING_OPTIONS}
+      selectedLaunchReasoningId={agentsStore.composerReasoningId}
       targetOptions={agentsStore.getTargetOptions(primaryAgentId)}
       selectedTargetId={agentsStore.composerTargetId}
       sessionConfigOptions={agentsStore.activeSession.configOptions}
@@ -93,6 +97,8 @@
       onAddAttachments={(attachments) => agentsStore.addPromptAttachments(attachments)}
       onRemoveAttachment={(attachmentId) => agentsStore.removePromptAttachment(attachmentId)}
       onProfileChange={(profileId) => agentsStore.setComposerProfile(profileId)}
+      onLaunchModeChange={(modeId) => agentsStore.setComposerMode(modeId)}
+      onLaunchReasoningChange={(reasoningId) => agentsStore.setComposerReasoning(reasoningId)}
       onTargetChange={(targetId) => agentsStore.setComposerTarget(targetId)}
       onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
       onCreateSession={() => startBlankSessionFromToday()}

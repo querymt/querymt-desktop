@@ -47,6 +47,10 @@
     attachments = [],
     profileOptions = [],
     selectedProfileId = 'default',
+    launchModeOptions = [],
+    selectedLaunchModeId = 'build',
+    launchReasoningOptions = [],
+    selectedLaunchReasoningId = 'auto',
     targetOptions = [],
     selectedTargetId = 'local',
     sessionConfigOptions = [],
@@ -58,6 +62,8 @@
     onAddAttachments = null,
     onRemoveAttachment = null,
     onProfileChange = null,
+    onLaunchModeChange = null,
+    onLaunchReasoningChange = null,
     onTargetChange = null,
     onSessionConfigChange = null,
     onCreateSession = null,
@@ -90,6 +96,10 @@
     attachments?: PromptAttachment[];
     profileOptions?: ComposerOption[];
     selectedProfileId?: string;
+    launchModeOptions?: ComposerOption[];
+    selectedLaunchModeId?: string;
+    launchReasoningOptions?: ComposerOption[];
+    selectedLaunchReasoningId?: string;
     targetOptions?: ComposerOption[];
     selectedTargetId?: string;
     sessionConfigOptions?: SessionConfigOption[];
@@ -101,6 +111,8 @@
     onAddAttachments?: ((attachments: PromptAttachment[]) => void) | null;
     onRemoveAttachment?: ((attachmentId: string) => void) | null;
     onProfileChange?: ((profileId: string) => void) | null;
+    onLaunchModeChange?: ((modeId: string) => void) | null;
+    onLaunchReasoningChange?: ((reasoningId: string) => void) | null;
     onTargetChange?: ((targetId: string) => void) | null;
     onSessionConfigChange?: ((configId: string, value: string) => void | Promise<void>) | null;
     onCreateSession?: (() => void) | null;
@@ -378,40 +390,6 @@
       {#if !sessionOnly && onCreateSession && !minimal && !launch}
         <IconTooltipButton label="Blank session" icon={Plus} size={16} disabled={loading} onclick={onCreateSession} />
       {/if}
-      {#if !sessionOnly && profileOptions.length > 0}
-        <ComposerSplitPillSelect
-          value={selectedProfileId}
-          options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))}
-          icon={UserRound}
-          ariaLabel="Profile"
-          class="composer-control-pill"
-          onValueChange={(value) => onProfileChange?.(value)}
-        />
-      {/if}
-      {#if modeOption}
-        <ComposerSplitPillSelect
-          value={modeOption.currentValue}
-          options={getConfigOptionChoices(modeOption).map((choice) => ({ value: choice.value, label: choice.name }))}
-          icon={SlidersHorizontal}
-          pending={!!sessionConfigPending[modeOption.id]}
-          disabled={!!sessionConfigPending[modeOption.id]}
-          ariaLabel={modeOption.name}
-          class="composer-control-pill"
-          onValueChange={(value) => onSessionConfigChange?.(modeOption.id, value)}
-        />
-      {/if}
-      {#if reasoningOption}
-        <ComposerSplitPillSelect
-          value={reasoningOption.currentValue}
-          options={getConfigOptionChoices(reasoningOption).map((choice) => ({ value: choice.value, label: choice.name }))}
-          icon={Brain}
-          pending={!!sessionConfigPending[reasoningOption.id]}
-          disabled={!!sessionConfigPending[reasoningOption.id]}
-          ariaLabel={reasoningOption.name}
-          class="composer-control-pill"
-          onValueChange={(value) => onSessionConfigChange?.(reasoningOption.id, value)}
-        />
-      {/if}
       <ModelQuickPicker
         bind:this={modelPickerRef}
         modelOptions={modelOptions}
@@ -425,6 +403,58 @@
         onSelect={(value) => onModelChange?.(value)}
         onRefresh={onRefreshModels}
       />
+      {#if !activeSessionId && launch && launchReasoningOptions.length > 0}
+        <ComposerSplitPillSelect
+          value={selectedLaunchReasoningId}
+          options={launchReasoningOptions.map((option) => ({ value: option.id, label: option.label }))}
+          icon={Brain}
+          ariaLabel="Reasoning effort"
+          class="composer-control-pill"
+          onValueChange={(value) => onLaunchReasoningChange?.(value)}
+        />
+      {:else if reasoningOption}
+        <ComposerSplitPillSelect
+          value={reasoningOption.currentValue}
+          options={getConfigOptionChoices(reasoningOption).map((choice) => ({ value: choice.value, label: choice.name }))}
+          icon={Brain}
+          pending={!!sessionConfigPending[reasoningOption.id]}
+          disabled={!!sessionConfigPending[reasoningOption.id]}
+          ariaLabel={reasoningOption.name}
+          class="composer-control-pill"
+          onValueChange={(value) => onSessionConfigChange?.(reasoningOption.id, value)}
+        />
+      {/if}
+      {#if !activeSessionId && launch && launchModeOptions.length > 0}
+        <ComposerSplitPillSelect
+          value={selectedLaunchModeId}
+          options={launchModeOptions.map((option) => ({ value: option.id, label: option.label }))}
+          icon={SlidersHorizontal}
+          ariaLabel="Mode"
+          class="composer-control-pill"
+          onValueChange={(value) => onLaunchModeChange?.(value)}
+        />
+      {:else if modeOption}
+        <ComposerSplitPillSelect
+          value={modeOption.currentValue}
+          options={getConfigOptionChoices(modeOption).map((choice) => ({ value: choice.value, label: choice.name }))}
+          icon={SlidersHorizontal}
+          pending={!!sessionConfigPending[modeOption.id]}
+          disabled={!!sessionConfigPending[modeOption.id]}
+          ariaLabel={modeOption.name}
+          class="composer-control-pill"
+          onValueChange={(value) => onSessionConfigChange?.(modeOption.id, value)}
+        />
+      {/if}
+      {#if !sessionOnly && profileOptions.length > 0}
+        <ComposerSplitPillSelect
+          value={selectedProfileId}
+          options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))}
+          icon={UserRound}
+          ariaLabel="Profile"
+          class="composer-control-pill"
+          onValueChange={(value) => onProfileChange?.(value)}
+        />
+      {/if}
     </div>
 
     <div class="flex items-center gap-2">

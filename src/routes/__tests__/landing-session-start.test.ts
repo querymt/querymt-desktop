@@ -42,6 +42,8 @@ function createAgentsStore() {
     composerPrompt: '',
     composerModelId: 'anthropic/claude-sonnet-4',
     composerProfileId: 'default',
+    composerModeId: 'build',
+    composerReasoningId: 'auto',
     composerTargetId: 'local',
     promptAttachments: [],
     promptFocusToken: 0,
@@ -72,6 +74,12 @@ function createAgentsStore() {
     addPromptAttachments: vi.fn(),
     removePromptAttachment: vi.fn(),
     setComposerProfile: vi.fn(),
+    setComposerMode: vi.fn((value: string) => {
+      agentsStore.composerModeId = value;
+    }),
+    setComposerReasoning: vi.fn((value: string) => {
+      agentsStore.composerReasoningId = value;
+    }),
     setComposerTarget: vi.fn(),
     createSession: vi.fn(async () => 'session-1'),
     startSessionWithPrompt: vi.fn(async () => 'session-1'),
@@ -86,7 +94,21 @@ const goto = vi.hoisted(() => vi.fn(async () => undefined));
 const agentsStore = vi.hoisted(() => createAgentsStore());
 
 vi.mock('$app/navigation', () => ({ goto }));
-vi.mock('$lib/stores/agents.svelte', () => ({ agentsStore }));
+vi.mock('$lib/stores/agents.svelte', () => ({
+  agentsStore,
+  LAUNCH_MODE_OPTIONS: [
+    { id: 'build', label: 'Build' },
+    { id: 'plan', label: 'Plan' },
+    { id: 'review', label: 'Review' }
+  ],
+  LAUNCH_REASONING_OPTIONS: [
+    { id: 'auto', label: 'Auto' },
+    { id: 'low', label: 'Low' },
+    { id: 'medium', label: 'Medium' },
+    { id: 'high', label: 'High' },
+    { id: 'max', label: 'Max' }
+  ]
+}));
 vi.mock('$lib/stores/chat-preferences.svelte', () => ({ chatPreferencesStore: { sendShortcut: 'enter' } }));
 vi.mock('$lib/stores/inbox.svelte', () => ({ inboxStore: { pendingCount: 0 } }));
 
@@ -100,6 +122,13 @@ beforeEach(() => {
 });
 
 describe('Landing page session start', () => {
+  it('shows the launch mode and reasoning preferences', () => {
+    render(LandingPage);
+
+    expect(screen.getByRole('button', { name: 'Mode' })).toHaveTextContent('Build');
+    expect(screen.getByRole('button', { name: 'Reasoning effort' })).toHaveTextContent('Auto');
+  });
+
   it('opens the new session as soon as session creation resolves', async () => {
     agentsStore.startSessionWithPrompt.mockResolvedValue('session-1');
     agentsStore.composerPrompt = 'Draft prompt';

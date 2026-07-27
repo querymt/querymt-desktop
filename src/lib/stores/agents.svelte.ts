@@ -4,6 +4,7 @@ import type {
   LoadSessionResponse,
   NewSessionResponse,
   PromptResponse,
+  SessionConfigOption,
   SessionInfo,
   SessionNotification
 } from '@agentclientprotocol/sdk';
@@ -62,11 +63,16 @@ import type {
   ScheduleListInfo
 } from '$lib/querymt/generated/types';
 import {
+  findModeConfigOption,
   findModelByIdentity,
   findModelBySelectionKey,
   findModelConfigOption,
+  findReasoningConfigOption,
+  getConfigOptionChoices,
+  getCurrentModeId,
   getCurrentModelId,
   getCurrentProfileId,
+  getCurrentReasoningId,
   getModelSelectionKey,
   getProfileChoices,
   setModelConfigOptionRequest,
@@ -91,6 +97,20 @@ const RECENT_WORKSPACES_LIMIT = 8;
 const WEBSOCKET_RECONNECT_MAX_DELAY_MS = 8_000;
 const WORKSPACE_SESSION_PAGE_SIZE = 10;
 const PROMPT_ACTIVE_RUN_STATES = new Set<SessionRunState>(['thinking', 'streaming', 'tool-running']);
+
+// TODO: Replace these desktop defaults with agent-provided launch config metadata once the server exposes it before session/new.
+export const LAUNCH_MODE_OPTIONS: ComposerOption[] = [
+  { id: 'build', label: 'Build', description: 'Full read and write access.' },
+  { id: 'plan', label: 'Plan', description: 'Inspect and plan without making changes.' },
+  { id: 'review', label: 'Review', description: 'Review code without making changes.' }
+];
+export const LAUNCH_REASONING_OPTIONS: ComposerOption[] = [
+  { id: 'auto', label: 'Auto', description: 'Use model-specific defaults.' },
+  { id: 'low', label: 'Low', description: 'Minimal thinking and faster responses.' },
+  { id: 'medium', label: 'Medium', description: 'Balanced thinking.' },
+  { id: 'high', label: 'High', description: 'Thorough thinking.' },
+  { id: 'max', label: 'Max', description: 'Deepest thinking and highest budget.' }
+];
 
 interface AgentClientRecord {
   client: DesktopAcpClient;
@@ -177,6 +197,8 @@ export class AgentsStore {
   composerPrompt = $state('');
   composerModelId = $state<string>('');
   composerProfileId = $state<string>('default');
+  composerModeId = $state<string>('build');
+  composerReasoningId = $state<string>('auto');
   composerTargetId = $state<string>('local');
   sessionConfigPending = $state<Record<string, boolean>>({});
   promptAttachments = $state<PromptAttachment[]>([]);
@@ -322,6 +344,14 @@ export class AgentsStore {
 
   setComposerProfile(profileId: string) {
     this.composerProfileId = profileId;
+  }
+
+  setComposerMode(modeId: string) {
+    this.composerModeId = modeId;
+  }
+
+  setComposerReasoning(reasoningId: string) {
+    this.composerReasoningId = reasoningId;
   }
 
   setComposerTarget(targetId: string) {
@@ -1009,7 +1039,10 @@ export class AgentsStore {
 
     try {
       if (this.composerTargetId !== 'local') {
-        return await this.createAttachedRemoteSession(agentId, this.composerTargetId, cwd);
+        const sessionId = await this.createAttachedRemoteSession(agentId, this.composerTargetId, cwd);
+        await this.applyComposerLaunchConfig(agentId, sessionId);
+        await this.applySelectedModelToSession(agentId, sessionId, this.composerModelId || getDefaultModelId(this.modelsByAgent[agentId] ?? []));
+        return sessionId;
       }
 
       const response = await this.createBackgroundSession(agentId, cwd);
@@ -1017,6 +1050,7 @@ export class AgentsStore {
       this.resetActiveSession(agentId, sessionId);
       this.activeSession.configOptions = response.configOptions ?? [];
       this.composerProfileId = getCurrentProfileId(this.activeSession.configOptions) ?? this.composerProfileId;
+      await this.applyComposerLaunchConfig(agentId, sessionId);
       await this.applySelectedModelToSession(agentId, sessionId, this.composerModelId || getDefaultModelId(this.modelsByAgent[agentId] ?? []));
       await this.drainQueuedSessionUpdates(agentId, sessionId);
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
@@ -1933,6 +1967,39 @@ export class AgentsStore {
       RECENT_WORKSPACES_LIMIT
     );
     persistRecentWorkspaces(this.recentWorkspaces);
+  }
+
+  private async applyComposerLaunchConfig(agentId: string, sessionId: string) {
+    const preferences = [
+      {
+        option: findModeConfigOption(this.activeSession.configOptions),
+        value: this.composerModeId,
+        sync: (options: SessionConfigOption[]) => {
+          this.composerModeId = getCurrentModeId(options) ?? this.composerModeId;
+        }
+      },
+      {
+        option: findReasoningConfigOption(this.activeSession.configOptions),
+        value: this.composerReasoningId,
+        sync: (options: SessionConfigOption[]) => {
+          this.composerReasoningId = getCurrentReasoningId(options) ?? this.composerReasoningId;
+        }
+      }
+    ];
+
+    for (const preference of preferences) {
+      const option = preference.option;
+      if (!option) continue;
+
+      const supported = getConfigOptionChoices(option).some((choice) => choice.value === preference.value);
+      if (!supported) {
+        preference.sync(this.activeSession.configOptions);
+        continue;
+      }
+      if (option.currentValue !== preference.value) {
+        await this.updateSessionConfigOption(agentId, sessionId, option.id, preference.value);
+      }
+    }
   }
 
   async applySelectedModelToSession(agentId: string, sessionId: string, modelId: string | null | undefined) {

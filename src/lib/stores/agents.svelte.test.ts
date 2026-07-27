@@ -17,7 +17,7 @@ const mockClient = vi.hoisted(() => {
       agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
       authMethods: []
     })),
-    createSession: vi.fn(async () => ({
+    createSession: vi.fn(async (): Promise<{ sessionId: string; configOptions: SessionConfigOption[] }> => ({
       sessionId: 'session-1',
       configOptions: []
     })),
@@ -69,7 +69,7 @@ const mockClient = vi.hoisted(() => {
     onExtensionNotification: vi.fn(() => () => undefined),
     onPermissionRequest: vi.fn(() => permissionUnsubscribe),
     onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
-    setSessionConfigOption: vi.fn(async () => [])
+    setSessionConfigOption: vi.fn(async (): Promise<SessionConfigOption[]> => [])
   };
 });
 
@@ -465,6 +465,98 @@ describe('AgentsStore prompt session start', () => {
       expect(mockClient.sendPrompt).toHaveBeenCalledWith('session-1', 'Fix the failing tests', []);
     });
     resolvePrompt();
+  });
+
+  it('applies supported launch mode and reasoning before sending the first prompt', async () => {
+    const configOptions: SessionConfigOption[] = [
+      {
+        id: 'mode',
+        name: 'Mode',
+        type: 'select',
+        currentValue: 'build',
+        options: [
+          { value: 'build', name: 'Build' },
+          { value: 'plan', name: 'Plan' },
+          { value: 'review', name: 'Review' }
+        ]
+      },
+      {
+        id: 'reasoning_effort',
+        name: 'Reasoning Effort',
+        type: 'select',
+        currentValue: 'auto',
+        options: [
+          { value: 'auto', name: 'Auto' },
+          { value: 'high', name: 'High' }
+        ]
+      }
+    ];
+    mockClient.createSession.mockResolvedValueOnce({ sessionId: 'session-1', configOptions });
+    const order: string[] = [];
+    const configuredOptions = (mode: string, reasoning: string): SessionConfigOption[] => [
+      { ...configOptions[0], currentValue: mode } as SessionConfigOption,
+      { ...configOptions[1], currentValue: reasoning } as SessionConfigOption
+    ];
+    mockClient.setSessionConfigOption.mockImplementationOnce(async (): Promise<SessionConfigOption[]> => {
+      order.push('mode');
+      return configuredOptions('plan', 'auto');
+    }).mockImplementationOnce(async (): Promise<SessionConfigOption[]> => {
+      order.push('reasoning');
+      return configuredOptions('plan', 'high');
+    });
+    mockClient.sendPrompt.mockImplementationOnce(async () => {
+      order.push('prompt');
+      return { stopReason: 'end_turn' };
+    });
+    const store = createStore();
+    store.setComposerMode('plan');
+    store.setComposerReasoning('high');
+
+    const sessionId = await store.startSessionWithPrompt('agent-1');
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalled());
+
+    expect(sessionId).toBe('session-1');
+    expect(mockClient.setSessionConfigOption).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ sessionId: 'session-1', configId: 'mode', value: 'plan' })
+    );
+    expect(mockClient.setSessionConfigOption).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ sessionId: 'session-1', configId: 'reasoning_effort', value: 'high' })
+    );
+    expect(order).toEqual(['mode', 'reasoning', 'prompt']);
+    expect(store.composerModeId).toBe('plan');
+    expect(store.composerReasoningId).toBe('high');
+  });
+
+  it('keeps agent defaults when a launch preference is unsupported', async () => {
+    const configOptions: SessionConfigOption[] = [
+      {
+        id: 'mode',
+        name: 'Mode',
+        type: 'select',
+        currentValue: 'build',
+        options: [{ value: 'build', name: 'Build' }]
+      },
+      {
+        id: 'reasoning_effort',
+        name: 'Reasoning Effort',
+        type: 'select',
+        currentValue: 'auto',
+        options: [{ value: 'auto', name: 'Auto' }]
+      }
+    ];
+    mockClient.createSession.mockResolvedValueOnce({ sessionId: 'session-1', configOptions });
+    const store = createStore();
+    store.setComposerMode('review');
+    store.setComposerReasoning('max');
+
+    const sessionId = await store.createSession('agent-1');
+
+    expect(sessionId).toBe('session-1');
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+    expect(store.composerModeId).toBe('build');
+    expect(store.composerReasoningId).toBe('auto');
   });
 
   it('creates a blank session without attempting to send an empty prompt', async () => {
