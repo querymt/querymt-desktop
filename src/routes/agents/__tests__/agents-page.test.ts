@@ -71,6 +71,8 @@ function createAgentsStore() {
       }
     },
     agentErrors: { 'agent-1': null },
+    loading: false,
+    error: null as string | null,
     initialize: vi.fn(async () => undefined),
     refreshCapabilities: vi.fn(async () => undefined),
     startConfiguredAgent: vi.fn(async () => undefined),
@@ -105,6 +107,45 @@ beforeEach(() => {
 });
 
 describe('Agents page', () => {
+  it('offers the primary setup action when no agents are configured', async () => {
+    agentsStore.configs = [];
+    agentsStore.statuses = {} as typeof agentsStore.statuses;
+    agentsStore.sessionsByAgent = {} as typeof agentsStore.sessionsByAgent;
+
+    render(AgentsPage);
+
+    expect(screen.getByText('No agents configured')).toBeInTheDocument();
+    expect(screen.getByText('Add a local ACP command or connect to an ACP WebSocket endpoint.')).toBeInTheDocument();
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Add agent' })[1]);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('shows a stable loading state before agent configuration is available', () => {
+    agentsStore.configs = [];
+    agentsStore.statuses = {} as typeof agentsStore.statuses;
+    agentsStore.sessionsByAgent = {} as typeof agentsStore.sessionsByAgent;
+    agentsStore.loading = true;
+
+    render(AgentsPage);
+
+    expect(screen.getByLabelText('Loading agents')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByText('No agents configured')).not.toBeInTheDocument();
+  });
+
+  it('provides recovery when agent initialization fails', async () => {
+    agentsStore.configs = [];
+    agentsStore.statuses = {} as typeof agentsStore.statuses;
+    agentsStore.sessionsByAgent = {} as typeof agentsStore.sessionsByAgent;
+    agentsStore.error = 'Agent service unavailable.';
+
+    render(AgentsPage);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Agents could not be loaded');
+    expect(screen.getByRole('alert')).toHaveTextContent('Agent service unavailable.');
+    await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(agentsStore.initialize).toHaveBeenCalledOnce();
+  });
+
   it('renders a simple agent row without verbose details by default', () => {
     render(AgentsPage);
 

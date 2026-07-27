@@ -1172,6 +1172,161 @@ summary:focus-visible {
   padding: 1rem;
 }
 
+.state-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.8rem;
+  min-height: 5.25rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--subtle-surface);
+  padding: 0.9rem 1rem;
+}
+
+.state-panel-error {
+  border-style: solid;
+  border-color: var(--status-danger-border);
+  background: var(--status-danger-bg);
+}
+
+.state-panel-icon {
+  display: inline-flex;
+  width: 2.15rem;
+  height: 2.15rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-control);
+  background: var(--icon-surface);
+  color: var(--text-muted);
+}
+
+.state-panel-error .state-panel-icon {
+  background: color-mix(in srgb, var(--status-danger), transparent 88%);
+  color: var(--status-danger);
+}
+
+.state-panel-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.state-panel-copy strong {
+  color: var(--text);
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.state-panel-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.state-inline-error,
+.state-inline-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.7rem;
+  font-size: 0.73rem;
+}
+
+.state-inline-error {
+  border: 1px solid var(--status-danger-border);
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+}
+
+.state-inline-progress {
+  border: 1px solid var(--status-running-border);
+  background: var(--status-running-bg);
+  color: var(--status-running);
+}
+
+.state-skeleton-list {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.state-skeleton-row {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+  min-height: 4.25rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem 1rem;
+}
+
+.state-skeleton-row + .state-skeleton-row {
+  border-top: 1px solid var(--subtle-border);
+}
+
+.state-skeleton-avatar,
+.state-skeleton-copy i,
+.state-skeleton-actions {
+  display: block;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--subtle-surface) 20%, var(--bg-card-hover) 48%, var(--subtle-surface) 76%);
+  background-size: 220% 100%;
+  animation: state-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.state-skeleton-avatar {
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-control);
+}
+
+.state-skeleton-copy {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.state-skeleton-copy i:first-child {
+  width: min(14rem, 58%);
+  height: 0.65rem;
+}
+
+.state-skeleton-copy i:last-child {
+  width: min(20rem, 76%);
+  height: 0.5rem;
+}
+
+.state-skeleton-actions {
+  width: 5.5rem;
+  height: 1.8rem;
+}
+
+@keyframes state-skeleton-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@media (max-width: 640px) {
+  .state-panel {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .state-panel > .action-btn {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .state-skeleton-avatar,
+  .state-skeleton-copy i,
+  .state-skeleton-actions {
+    animation: none;
+  }
+}
+
 .code-pill {
   display: inline-flex;
   align-items: center;

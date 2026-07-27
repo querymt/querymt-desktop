@@ -26,7 +26,9 @@
       loading={workspacesStore.loading}
       error={workspacesStore.error}
       onAddWorkspace={() => workspacesStore.addWorkspaceFromDialog()}
+      onRetry={() => workspacesStore.addWorkspaceFromDialog()}
       onUseWorkspace={(item) => useWorkspace(item)}
+      onRemoveWorkspace={(item) => workspacesStore.removeWorkspace(item.id)}
     />
   </div>
 </div>

@@ -1,9 +1,11 @@
 <script lang="ts">
   import {
+    AlertTriangle,
     Bot,
     CirclePlus,
     Info,
     Pencil,
+    LoaderCircle,
     Play,
     RefreshCw,
     RotateCcw,
@@ -73,6 +75,8 @@
   );
 
   const selectedMessages = $derived.by(() => (selectedCard ? getAgentMessages(selectedCard) : []));
+  const initialLoading = $derived(agentsStore.loading && !agentsStore.error && agentCards.length === 0);
+  const refreshing = $derived(agentsStore.loading && agentCards.length > 0);
 
   function statusClass(state?: string | null, connectionState?: string | null, controlState?: string | null) {
     if (state === 'failed' || connectionState === 'failed' || controlState === 'failed' || controlState === 'degraded') {
@@ -261,6 +265,10 @@
     return () => window.removeEventListener('keydown', handleKeydown, { capture: true });
   });
 
+  async function refreshAgents() {
+    await agentsStore.initialize();
+  }
+
   async function saveAgentDialog() {
     const name = draftName.trim();
     const endpoint = draftTransport === 'websocket' ? draftWebSocketUrl.trim() : draftCommandLine.trim();
@@ -305,7 +313,14 @@
     />
 
     <div class="compact-toolbar">
-      <IconTooltipButton label="Refresh agents" icon={RefreshCw} size={16} onclick={() => agentsStore.initialize()} />
+      <IconTooltipButton
+        label={refreshing ? 'Refreshing agents' : 'Refresh agents'}
+        icon={refreshing ? LoaderCircle : RefreshCw}
+        iconClass={refreshing ? 'animate-spin' : ''}
+        size={16}
+        disabled={agentsStore.loading}
+        onclick={() => refreshAgents()}
+      />
       <IconTooltipButton label="Add agent" icon={CirclePlus} tone="primary" size={16} onclick={() => openAddDialog()} />
     </div>
   </div>
@@ -319,17 +334,44 @@
         </div>
       </div>
 
-      {#if agentCards.length === 0}
-        <div class="empty-state">
-          <div class="flex items-start gap-3">
-            <span class="icon-swatch"><Bot size={16} /></span>
-            <div>
-              <div class="text-sm font-medium">No agents configured</div>
-              <div class="panel-copy mt-1">Add a command line with the + button and it will appear here as a manageable ACP agent.</div>
+      {#if initialLoading}
+        <div class="state-skeleton-list" aria-label="Loading agents" aria-busy="true">
+          {#each Array(3) as _}
+            <div class="state-skeleton-row">
+              <span class="state-skeleton-avatar"></span>
+              <span class="state-skeleton-copy"><i></i><i></i></span>
+              <span class="state-skeleton-actions"></span>
             </div>
+          {/each}
+        </div>
+      {:else if agentsStore.error && agentCards.length === 0}
+        <div class="state-panel state-panel-error" role="alert">
+          <span class="state-panel-icon"><AlertTriangle size={17} /></span>
+          <div class="state-panel-copy">
+            <strong>Agents could not be loaded</strong>
+            <p>{agentsStore.error}</p>
           </div>
+          <button class="action-btn" type="button" onclick={() => refreshAgents()}>Try again</button>
+        </div>
+      {:else if agentCards.length === 0}
+        <div class="state-panel">
+          <span class="state-panel-icon"><Bot size={17} /></span>
+          <div class="state-panel-copy">
+            <strong>No agents configured</strong>
+            <p>Add a local ACP command or connect to an ACP WebSocket endpoint.</p>
+          </div>
+          <button class="action-btn action-btn-primary" type="button" onclick={openAddDialog}>Add agent</button>
         </div>
       {:else}
+        {#if agentsStore.error}
+          <div class="state-inline-error" role="alert">
+            <AlertTriangle size={15} />
+            <span class="min-w-0 flex-1"><strong>Some agents could not be refreshed.</strong> {agentsStore.error}</span>
+            <button class="action-btn !px-3 !py-1.5 text-xs" type="button" onclick={() => refreshAgents()}>Retry</button>
+          </div>
+        {:else if refreshing}
+          <div class="state-inline-progress" role="status"><LoaderCircle size={14} class="animate-spin" /><span>Refreshing agent status…</span></div>
+        {/if}
         <div class="agent-list">
           {#each agentCards as card}
             <article class="agent-list-row">
