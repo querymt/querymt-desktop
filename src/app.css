@@ -726,7 +726,8 @@ html:has(.app-shell-custom-titlebar) body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .composer-action-morph-state {
+  .composer-action-morph-state,
+  .composer-options-chevron {
     transition: none;
   }
 }
@@ -1728,6 +1729,150 @@ summary:focus-visible {
   margin-left: 0.2rem;
 }
 
+.composer-options {
+  position: relative;
+}
+
+.composer-options > summary {
+  list-style: none;
+}
+
+.composer-options > summary::-webkit-details-marker {
+  display: none;
+}
+
+.composer-options-trigger {
+  display: inline-flex;
+  min-height: 2rem;
+  max-width: 18rem;
+  align-items: center;
+  gap: 0.42rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-card);
+  padding: 0.3rem 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.composer-options-trigger:hover,
+.composer-options[open] .composer-options-trigger {
+  border-color: var(--border-strong);
+  background: var(--bg-card-hover);
+  color: var(--text);
+}
+
+.composer-options-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.composer-options-trigger small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 450;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-options-chevron {
+  flex: 0 0 auto;
+  color: var(--muted);
+  transition: transform 0.16s ease;
+}
+
+.composer-options[open] .composer-options-chevron {
+  transform: rotate(180deg);
+}
+
+.composer-options-panel {
+  position: absolute;
+  bottom: calc(100% + 0.65rem);
+  left: 0;
+  z-index: 45;
+  width: min(27rem, calc(100vw - 2rem));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel-strong);
+  padding: 0.85rem;
+  box-shadow: var(--shadow-lg);
+}
+
+.composer-options-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 0.1rem 0.65rem;
+}
+
+.composer-options-heading strong {
+  font-size: 0.82rem;
+}
+
+.composer-options-heading span {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.composer-options-list {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.composer-option-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem;
+}
+
+.composer-option-row + .composer-option-row {
+  border-top: 1px solid var(--border);
+}
+
+.composer-option-copy {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--text-muted);
+}
+
+.composer-option-copy > span {
+  display: grid;
+  min-width: 0;
+}
+
+.composer-option-copy strong {
+  color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.composer-option-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.67rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-option-row .composer-split-pill {
+  min-width: 7.5rem;
+  max-width: 11rem;
+  justify-content: flex-start;
+}
+
 .composer-split-pill-divider {
   flex: 0 0 auto;
   align-self: stretch;
@@ -2235,28 +2380,6 @@ summary:focus-visible {
 
 .workspace-input-loading {
   flex: 0 0 auto;
-}
-
-.workspace-target-select-wrap,
-.workspace-target-tooltip-trigger {
-  display: inline-flex;
-  flex: 0 0 auto;
-  max-height: 100%;
-  align-items: center;
-}
-
-.workspace-target-select-wrap {
-  border-left: 1px solid var(--border);
-  padding-left: 0.6rem;
-}
-
-.workspace-target-pill.composer-split-pill {
-  box-sizing: border-box;
-  min-width: 0;
-  max-width: clamp(7rem, 22vw, 10.5rem);
-  max-height: 2rem;
-  flex: 0 0 auto;
-  background: var(--subtle-surface);
 }
 
 .workspace-suggestion-popover {
@@ -2965,6 +3088,25 @@ summary:focus-visible {
 }
 
 @media (max-width: 760px) {
+  .composer-options-panel {
+    position: fixed;
+    right: 1rem;
+    bottom: 5rem;
+    left: 1rem;
+    width: auto;
+  }
+
+  .composer-option-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .composer-option-row .composer-split-pill {
+    width: 100%;
+    max-width: none;
+  }
+
   .session-header {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }

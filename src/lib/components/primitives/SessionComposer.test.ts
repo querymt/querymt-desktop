@@ -80,38 +80,32 @@ describe('SessionComposer', () => {
     expect(onCwdInput).toHaveBeenCalledWith('/Users/wiking/project');
   });
 
-  it('embeds the session target selector in the workspace input', () => {
+  it('moves target and profile into session options', async () => {
     renderComposer({
+      launch: true,
       targetOptions: [
         { id: 'local', label: 'Local' },
         { id: 'eulr', label: 'eulr' }
       ],
       selectedTargetId: 'local',
-      onTargetChange: vi.fn()
-    });
-
-    const targetSelect = screen.getByRole('button', { name: 'Session target' });
-    expect(targetSelect.closest('.workspace-input-shell')).not.toBeNull();
-    expect(screen.getAllByRole('button', { name: 'Session target' })).toHaveLength(1);
-  });
-
-  it('renders profile as an icon control pill', () => {
-    renderComposer({
       profileOptions: [
         { id: 'default', label: 'Default profile' },
         { id: 'review', label: 'Review profile' }
       ],
       selectedProfileId: 'default',
+      onTargetChange: vi.fn(),
       onProfileChange: vi.fn()
     });
 
-    const profileSelect = screen.getByRole('button', { name: 'Profile' });
-    expect(profileSelect).toHaveClass('composer-split-pill');
-    expect(profileSelect).toHaveClass('composer-control-pill');
-    expect(screen.getByText('Default profile')).toBeInTheDocument();
+    const workspace = screen.getByPlaceholderText('/absolute/path/to/workspace');
+    expect(workspace.closest('.workspace-input-shell')?.querySelector('[aria-label="Session target"]')).toBeNull();
+
+    await fireEvent.click(screen.getByLabelText('Session options'));
+    expect(screen.getByRole('button', { name: 'Session target' })).toHaveTextContent('Local');
+    expect(screen.getByRole('button', { name: 'Profile' })).toHaveTextContent('Default profile');
   });
 
-  it('renders launch mode and reasoning with the existing composer pills', () => {
+  it('keeps launch mode visible and moves reasoning into session options', async () => {
     const onLaunchModeChange = vi.fn();
     const onLaunchReasoningChange = vi.fn();
     renderComposer({
@@ -131,14 +125,20 @@ describe('SessionComposer', () => {
     });
 
     const modeSelect = screen.getByRole('button', { name: 'Mode' });
-    const reasoningSelect = screen.getByRole('button', { name: 'Reasoning effort' });
     expect(modeSelect).toHaveClass('composer-control-pill');
-    expect(reasoningSelect).toHaveClass('composer-control-pill');
     expect(modeSelect).toHaveTextContent('Build');
+    const options = screen.getByLabelText('Session options').closest('details');
+    const reasoningSelect = screen.getByRole('button', { name: 'Reasoning effort' });
+    expect(options).not.toHaveAttribute('open');
+    expect(reasoningSelect.closest('.composer-options')).toBe(options);
+
+    await fireEvent.click(screen.getByLabelText('Session options'));
+    expect(options).toHaveAttribute('open');
+    expect(reasoningSelect).toHaveClass('composer-control-pill');
     expect(reasoningSelect).toHaveTextContent('Auto');
   });
 
-  it('orders composer controls as model, reasoning, mode, and profile', () => {
+  it('keeps the primary row focused on model, mode, and session options', () => {
     renderComposer({
       launch: true,
       profileOptions: [{ id: 'default', label: 'Default' }],
@@ -146,13 +146,15 @@ describe('SessionComposer', () => {
       launchReasoningOptions: [{ id: 'auto', label: 'Auto' }]
     });
 
-    const controls = screen.getAllByRole('button').filter((button) => button.classList.contains('composer-control-pill'));
+    const controls = screen
+      .getAllByRole('button')
+      .filter((button) => button.classList.contains('composer-control-pill') && !button.closest('.composer-options'));
     expect(controls.map((button) => button.getAttribute('aria-label') ?? button.textContent?.trim())).toEqual([
       'Claude Sonnet 4 · anthropic',
-      'Reasoning effort',
-      'Mode',
-      'Profile'
+      'Mode'
     ]);
+    expect(screen.getByLabelText('Session options')).toBeInTheDocument();
+    expect(screen.getByLabelText('Session options').closest('.composer-options')).not.toBeNull();
   });
 
   it('morphs between stable overlaid blank-session and send states', async () => {

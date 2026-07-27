@@ -126,10 +126,11 @@ describe('Landing page session start', () => {
     render(LandingPage);
 
     expect(screen.getAllByText('New session')).not.toHaveLength(0);
-    expect(screen.getByText('Choose a workspace, then describe the task.')).toBeInTheDocument();
+    expect(screen.getByText('Working in')).toBeInTheDocument();
+    expect(screen.getByText('work')).toBeInTheDocument();
     expect(screen.queryByText('Desktop control center')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Mode' })).toHaveTextContent('Build');
-    expect(screen.getByRole('button', { name: 'Reasoning effort' })).toHaveTextContent('Auto');
+    expect(screen.getByLabelText('Session options')).toHaveTextContent('Auto');
   });
 
   it('opens the new session as soon as session creation resolves', async () => {
