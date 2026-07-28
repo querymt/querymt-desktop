@@ -1092,8 +1092,7 @@ summary:focus-visible {
 @media (max-width: 640px) {
   .settings-section-header-action,
   .settings-preference-row,
-  .profile-template-row,
-  .mesh-created-invite {
+  .profile-template-row {
     align-items: stretch;
     flex-direction: column;
   }
@@ -1482,50 +1481,130 @@ summary:focus-visible {
   box-shadow: inset 0 0 0 3px var(--bg-card), inset 0 0 0 8px var(--accent), 0 0 0 3px var(--accent-dim);
 }
 
-.mesh-created-invite {
+.mesh-page-toolbar {
+  align-items: flex-start;
+}
+
+.mesh-page-actions {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+  gap: 0.45rem;
+}
+
+.mesh-overview {
   overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.mesh-overview-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.mesh-overview-stat {
+  min-width: 0;
+  padding: 0.8rem 1rem;
+}
+
+.mesh-overview-stat + .mesh-overview-stat {
+  border-left: 1px solid var(--border);
+}
+
+.mesh-overview-stat span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.mesh-overview-stat strong {
+  display: block;
+  margin-top: 0.24rem;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-overview-stat .mesh-overview-value-success {
+  color: var(--status-success);
+}
+
+.mesh-overview-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  border-top: 1px solid var(--border);
+  padding: 0.55rem 1rem;
+  background: color-mix(in srgb, var(--bg-panel), var(--bg-card) 54%);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
+.mesh-overview-warning {
+  color: var(--status-warn);
+}
+
+.mesh-empty-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  background: var(--bg-card);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.mesh-invite-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
   border: 1px solid color-mix(in srgb, var(--status-success), var(--border) 72%);
   border-radius: var(--radius);
   padding: 0.9rem 1rem;
   background: color-mix(in srgb, var(--status-success-bg), var(--bg-card) 74%);
 }
 
-.mesh-created-invite-main {
+.mesh-invite-result-icon {
+  display: inline-flex;
+  width: 1.8rem;
+  height: 1.8rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--status-success-bg);
+  color: var(--status-success);
+}
+
+.mesh-invite-result-main {
   min-width: 0;
 }
 
-.mesh-created-invite-eyebrow {
-  color: var(--status-success);
-  font-size: 0.74rem;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.mesh-created-invite-id {
-  margin-top: 0.18rem;
-  color: var(--text);
-  font-size: 0.9rem;
-  font-weight: 700;
-  line-height: 1.3;
-}
-
-.mesh-created-invite-url {
-  margin-top: 0.18rem;
+.mesh-invite-result-main strong,
+.mesh-invite-result-main span {
+  display: block;
   overflow: hidden;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 0.74rem;
-  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.mesh-created-invite .action-btn {
-  flex: 0 0 auto;
+.mesh-invite-result-main strong {
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.mesh-invite-result-main span {
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
 }
 
 .mesh-item-list,
@@ -1569,6 +1648,23 @@ summary:focus-visible {
   letter-spacing: -0.01em;
 }
 
+.mesh-node-title-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.mesh-node-session-count {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--status-muted-bg);
+  color: var(--muted);
+  padding: 0.12rem 0.42rem;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .mesh-item-description,
 .mesh-item-meta {
   margin-top: 0.18rem;
@@ -1592,11 +1688,43 @@ summary:focus-visible {
   gap: 0.35rem;
 }
 
+.mesh-node-feedback,
 .mesh-remote-session-list {
   grid-column: 1 / -1;
-  display: grid;
+}
+
+.mesh-node-feedback {
+  display: flex;
+  align-items: center;
   gap: 0.45rem;
-  margin-top: 0.2rem;
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.mesh-node-feedback-error {
+  color: var(--danger);
+}
+
+.mesh-node-feedback button {
+  color: currentColor;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 0.15rem;
+}
+
+.mesh-remote-session-list {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+  border-left: 2px solid var(--subtle-border);
+  padding-left: 0.75rem;
+}
+
+.mesh-remote-session-empty {
+  padding: 0.55rem 0.7rem;
+  color: var(--muted);
+  font-size: 0.76rem;
 }
 
 .mesh-remote-session-row {
@@ -1604,10 +1732,32 @@ summary:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.7rem 0.8rem;
+  padding: 0.65rem 0.75rem;
   background: color-mix(in srgb, var(--bg-panel), var(--bg-card) 55%);
+}
+
+@media (max-width: 720px) {
+  .mesh-overview-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mesh-overview-stat:nth-child(3) {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  .mesh-overview-stat:nth-child(4) {
+    border-top: 1px solid var(--border);
+  }
+
+  .mesh-item-row-stacked {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mesh-item-row-stacked > .mesh-item-actions {
+    justify-content: flex-start;
+  }
 }
 
 .settings-provider-row {
