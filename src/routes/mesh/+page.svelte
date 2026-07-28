@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Clipboard, Link, Plus, RefreshCw, Ticket, Trash2, XCircle } from '@lucide/svelte';
+  import { Clipboard, Link, Network, Plus, RefreshCw, Ticket, Trash2, XCircle } from '@lucide/svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
@@ -203,26 +203,34 @@
       title="Mesh"
       description="Nodes, invites, and remote sessions."
     />
+    <IconTooltipButton
+      label={loading ? 'Refreshing mesh' : 'Refresh mesh'}
+      icon={RefreshCw}
+      iconClass={loading ? 'animate-spin' : ''}
+      size={16}
+      disabled={!selectedAgentId || loading}
+      onclick={() => refreshMesh()}
+    />
   </div>
 
   <div class="settings-unified-panel">
     {#if meshAgents.length === 0}
-      <section class="settings-section">
-        <div class="settings-section-header">
-          <div>
-            <h2>Mesh</h2>
-            <p>No connected agents currently advertise `querymt/mesh/status`.</p>
+      <section class="settings-section" aria-label="Mesh availability">
+        <div class="state-panel">
+          <span class="state-panel-icon"><Network size={17} /></span>
+          <div class="state-panel-copy">
+            <strong>Mesh is not available</strong>
+            <p>Connect an agent that supports mesh status to manage nodes, invites, and remote sessions.</p>
           </div>
         </div>
       </section>
     {:else}
       <section class="settings-section">
-        <div class="settings-section-header settings-section-header-action">
+        <div class="settings-section-header">
           <div>
             <h2>Agent</h2>
             <p>Choose the active agent and inspect mesh connectivity.</p>
           </div>
-          <IconTooltipButton label="Refresh mesh" icon={RefreshCw} size={16} disabled={!selectedAgentId || loading} onclick={() => refreshMesh()} />
         </div>
 
         <div class="settings-preference-list">

@@ -107,6 +107,14 @@ beforeEach(() => {
 });
 
 describe('Agents page', () => {
+  it('uses one page title without a redundant configured-agents heading', () => {
+    render(AgentsPage);
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Agents' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Configured agents' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Configured agents' })).toBeInTheDocument();
+  });
+
   it('offers the primary setup action when no agents are configured', async () => {
     agentsStore.configs = [];
     agentsStore.statuses = {} as typeof agentsStore.statuses;

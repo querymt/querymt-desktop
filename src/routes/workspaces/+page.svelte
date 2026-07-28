@@ -1,5 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { FolderPlus, LoaderCircle } from '@lucide/svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import WorkspaceList from '$lib/components/primitives/WorkspaceList.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import type { WorkspaceItem } from '$lib/domain/types';
@@ -16,7 +18,16 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Workspaces"
-      description="Folders available as session context."
+      description="Folders available as context when starting a session."
+    />
+    <IconTooltipButton
+      label={workspacesStore.loading ? 'Opening folder picker' : 'Pick folder'}
+      icon={workspacesStore.loading ? LoaderCircle : FolderPlus}
+      iconClass={workspacesStore.loading ? 'animate-spin' : ''}
+      tone="primary"
+      size={16}
+      disabled={workspacesStore.loading}
+      onclick={() => workspacesStore.addWorkspaceFromDialog()}
     />
   </div>
 

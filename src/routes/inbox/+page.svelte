@@ -21,7 +21,7 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Inbox"
-      description="Requests waiting for your response."
+      description="Permission and input requests waiting for your response."
     />
   </div>
 

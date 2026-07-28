@@ -14,13 +14,20 @@ const workspace = {
 afterEach(cleanup);
 
 describe('WorkspaceList states', () => {
+  it('uses the page-owned hierarchy instead of rendering a duplicate heading', () => {
+    render(WorkspaceList, { items: [workspace] });
+
+    expect(screen.queryByRole('heading')).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Workspace folders' })).toBeInTheDocument();
+  });
+
   it('offers the primary setup action when no folders exist', async () => {
     const onAddWorkspace = vi.fn();
     render(WorkspaceList, { items: [], onAddWorkspace });
 
     expect(screen.getByText('No workspace folders yet')).toBeInTheDocument();
     expect(screen.getByText('Add a folder to use it as context when starting a session.')).toBeInTheDocument();
-    await fireEvent.click(screen.getAllByRole('button', { name: 'Pick folder' })[1]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Pick folder' }));
     expect(onAddWorkspace).toHaveBeenCalledOnce();
   });
 

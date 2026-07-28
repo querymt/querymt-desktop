@@ -21,6 +21,13 @@ const request: InboxItem = {
 afterEach(cleanup);
 
 describe('InboxList states', () => {
+  it('uses the page-owned hierarchy instead of rendering a duplicate heading', () => {
+    render(InboxList, { items: [request] });
+
+    expect(screen.queryByRole('heading', { name: 'Requests' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Requests' })).toBeInTheDocument();
+  });
+
   it('shows a calm all-clear state when connected with no requests', () => {
     render(InboxList, { items: [] });
 

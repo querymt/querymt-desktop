@@ -34,19 +34,7 @@
   }
 </script>
 
-<section class="settings-section">
-  <div class="settings-section-header settings-section-header-action">
-    <div>
-      <h2>Folders</h2>
-      <p>Folders available as session context.</p>
-    </div>
-    {#if onAddWorkspace}
-      <button class="action-btn action-btn-primary" disabled={loading} onclick={onAddWorkspace}>
-        {loading ? 'Picking...' : 'Pick folder'}
-      </button>
-    {/if}
-  </div>
-
+<section class="settings-section" aria-label="Workspace folders">
   {#if loading && items.length === 0}
     <div class="state-skeleton-list" aria-label="Adding workspace" aria-busy="true">
       {#each Array(2) as _}

@@ -31,14 +31,7 @@
 
 </script>
 
-<section class="settings-section">
-  <div class="settings-section-header">
-    <div>
-      <h2>Requests</h2>
-      <p>Permission and elicitation requests from active agents.</p>
-    </div>
-  </div>
-
+<section class="settings-section" aria-label="Requests">
   {#if loading && items.length === 0 && !error}
     <div class="state-skeleton-list" aria-label="Loading requests" aria-busy="true">
       {#each Array(2) as _}

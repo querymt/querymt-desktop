@@ -309,7 +309,7 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Agents"
-      description="Connections, status, and runtime controls."
+      description="Configure connections, inspect status, and control agent runtimes."
     />
 
     <div class="compact-toolbar">
@@ -326,14 +326,7 @@
   </div>
 
   <div class="agents-unified-panel">
-    <section class="settings-section">
-      <div class="settings-section-header">
-        <div>
-          <h2>Configured agents</h2>
-          <p>Start, stop, edit, and inspect connected agents.</p>
-        </div>
-      </div>
-
+    <section class="settings-section" aria-label="Configured agents">
       {#if initialLoading}
         <div class="state-skeleton-list" aria-label="Loading agents" aria-busy="true">
           {#each Array(3) as _}
