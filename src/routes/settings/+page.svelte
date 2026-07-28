@@ -1,9 +1,10 @@
 <script lang="ts">
   import { getContext, onMount } from 'svelte';
-  import { CircleStop, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Trash2, X } from '@lucide/svelte';
+  import { LoaderCircle, RefreshCw, X } from '@lucide/svelte';
   import { Portal } from 'bits-ui';
   import GeneralSettingsPanel from '$lib/components/settings/GeneralSettingsPanel.svelte';
   import ProfilesSettingsPanel from '$lib/components/settings/ProfilesSettingsPanel.svelte';
+  import ProviderConnectionList from '$lib/components/settings/ProviderConnectionList.svelte';
   import ProviderMaintenance from '$lib/components/settings/ProviderMaintenance.svelte';
   import ProviderOverview from '$lib/components/settings/ProviderOverview.svelte';
   import SettingsSubnav, { type SettingsSectionId } from '$lib/components/settings/SettingsSubnav.svelte';
@@ -11,6 +12,7 @@
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { hasUsableProviderCredential } from '$lib/domain/provider-auth';
   import { AuthMethod, OAuthFlowKindTs, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
   import { open } from '@tauri-apps/plugin-shell';
 
@@ -37,6 +39,9 @@
   let updatingPlugins = $state(false);
   let maintenanceError = $state<string | null>(null);
   let maintenanceMessage = $state<string | null>(null);
+  let providerPendingAction = $state<{ provider: string; action: string } | null>(null);
+  let providerMessages = $state<Record<string, string | undefined>>({});
+  let providerErrors = $state<Record<string, string | undefined>>({});
 
   const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
@@ -58,13 +63,12 @@
   });
 
   const providers = $derived.by(() => (selectedAgentId ? agentsStore.authProvidersByAgent[selectedAgentId] ?? [] : []));
-  const sortedProviders = $derived.by(() => sortProviders(providers));
-  const connectedProviderCount = $derived(providers.filter((provider) => hasUsableCredential(provider)).length);
+  const connectedProviderCount = $derived(providers.filter((provider) => hasUsableProviderCredential(provider)).length);
   const attentionProviderCount = $derived(
-    providers.filter((provider) => !hasUsableCredential(provider) && provider.oauth_status === OAuthStatus.Expired).length
+    providers.filter((provider) => !hasUsableProviderCredential(provider) && provider.oauth_status === OAuthStatus.Expired).length
   );
   const setupProviderCount = $derived(
-    providers.filter((provider) => !hasUsableCredential(provider) && provider.oauth_status !== OAuthStatus.Expired).length
+    providers.filter((provider) => !hasUsableProviderCredential(provider) && provider.oauth_status !== OAuthStatus.Expired).length
   );
   const modelCount = $derived(selectedAgentId ? agentsStore.modelsByAgent[selectedAgentId]?.length ?? 0 : 0);
   const authLoading = $derived.by(() => (selectedAgentId ? agentsStore.authLoadingByAgent[selectedAgentId] ?? false : false));
@@ -77,20 +81,6 @@
   const manualOAuthHasAuthorizationUrl = $derived(Boolean(manualOAuthAuthorizationUrl));
 
   type OAuthPollResult = 'connected' | 'timeout' | 'cancelled';
-
-  function getAuthMethodOptionsForProvider(provider: AuthProviderEntry): Array<{ value: AuthMethod | 'auto'; label: string }> {
-    const base: Array<{ value: AuthMethod | 'auto'; label: string }> = [
-      { value: 'auto', label: 'Auto' },
-      { value: AuthMethod.ApiKey, label: 'API key' }
-    ];
-    if (provider.supports_oauth) {
-      base.push({ value: AuthMethod.OAuth, label: 'OAuth' });
-    }
-    if (provider.env_var_name) {
-      base.push({ value: AuthMethod.EnvVar, label: 'Env var' });
-    }
-    return base;
-  }
 
   onMount(() => {
     const section = new URL(window.location.href).searchParams.get('section');
@@ -105,60 +95,30 @@
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
   }
 
-  function sortProviders(entries: AuthProviderEntry[]) {
-    return [...entries].sort((left, right) => {
-      const leftRank = providerSortRank(left);
-      const rightRank = providerSortRank(right);
-      if (leftRank !== rightRank) return leftRank - rightRank;
-      return left.display_name.localeCompare(right.display_name);
-    });
-  }
-
-  function hasUsableCredential(provider: AuthProviderEntry) {
-    return provider.oauth_status === OAuthStatus.Connected || provider.has_stored_api_key || provider.has_env_api_key;
-  }
-
-  function providerSortRank(provider: AuthProviderEntry) {
-    if (hasUsableCredential(provider)) return 0;
-    if (provider.oauth_status === OAuthStatus.Expired) return 1;
-    return 2;
-  }
-
-  function authStatusTone(provider: AuthProviderEntry) {
-    if (hasUsableCredential(provider)) return 'connected';
-    if (provider.oauth_status === OAuthStatus.Expired) return 'warning';
-    return 'muted';
-  }
-
-  function authStatusLabel(provider: AuthProviderEntry) {
-    if (provider.oauth_status === OAuthStatus.Connected) return 'Connected';
-    if (provider.has_stored_api_key) return 'API key stored';
-    if (provider.has_env_api_key) return 'Env key available';
-    if (provider.oauth_status === OAuthStatus.Expired) return 'OAuth expired';
-    if (provider.oauth_status === OAuthStatus.NotAuthenticated) return 'Not signed in';
-    return 'Not configured';
-  }
-
-  function authDetail(provider: AuthProviderEntry) {
-    if (provider.oauth_status === OAuthStatus.Connected) return 'OAuth credentials saved';
-    if (provider.has_stored_api_key) return 'Stored in desktop keyring';
-    if (provider.has_env_api_key) return provider.env_var_name ? `Environment key ${provider.env_var_name}` : 'Environment key available';
-    if (provider.oauth_status === OAuthStatus.Expired) return 'Sign in again to refresh OAuth';
-    if (provider.supports_oauth) return 'OAuth available';
-    return provider.env_var_name ? 'Environment variable supported' : 'API key authentication supported';
-  }
-
-  function authHint(provider: AuthProviderEntry) {
-    if (hasUsableCredential(provider)) return '';
-    if (provider.oauth_status === OAuthStatus.Expired) return 'Reconnect this provider to resume OAuth access.';
-    if (provider.oauth_status === OAuthStatus.NotAuthenticated) return 'Sign in with OAuth to enable this provider.';
-    if (provider.env_var_name && provider.preferred_method === AuthMethod.EnvVar) return `Set ${provider.env_var_name} in your environment.`;
-    if (provider.preferred_method === AuthMethod.ApiKey) return 'Store an API key in the desktop keyring.';
-    return provider.env_var_name ? `Set ${provider.env_var_name} or store an API key.` : 'Store an API key to enable this provider.';
-  }
-
   function setBusy(value: string | null) {
     actionLoading = value;
+  }
+
+  function startProviderAction(provider: AuthProviderEntry, action: string) {
+    providerPendingAction = { provider: provider.provider, action };
+    providerMessages = { ...providerMessages, [provider.provider]: undefined };
+    providerErrors = { ...providerErrors, [provider.provider]: undefined };
+  }
+
+  function finishProviderAction(provider: AuthProviderEntry, action: string) {
+    if (providerPendingAction?.provider === provider.provider && providerPendingAction.action === action) {
+      providerPendingAction = null;
+    }
+  }
+
+  function setProviderMessage(provider: AuthProviderEntry, message: string) {
+    providerMessages = { ...providerMessages, [provider.provider]: message };
+    providerErrors = { ...providerErrors, [provider.provider]: undefined };
+  }
+
+  function setProviderError(provider: AuthProviderEntry, message: string) {
+    providerErrors = { ...providerErrors, [provider.provider]: message };
+    providerMessages = { ...providerMessages, [provider.provider]: undefined };
   }
 
   function isOAuthLoading(provider: AuthProviderEntry) {
@@ -183,7 +143,9 @@
     // If stale backend flows become a problem, add backend cancel support instead of using logout, which deletes credentials.
     oauthCancelRequested = true;
     pageError = null;
-    pageMessage = `Cancelled sign-in for ${provider.display_name}.`;
+    pageMessage = null;
+    setProviderMessage(provider, `Cancelled sign-in for ${provider.display_name}.`);
+    providerPendingAction = null;
     closeManualOAuthDialog();
     oauthCancelResolver?.();
   }
@@ -392,21 +354,29 @@
     }
 
     setBusy(`oauth-complete:${provider.provider}`);
+    startProviderAction(provider, 'oauth-complete');
     pageError = null;
     pageMessage = null;
 
     try {
       const result = await agentsStore.completeProviderSignIn(agentId, flowId, response);
       if (result.success) {
-        pageMessage = result.message || `Successfully authenticated with ${provider.display_name}.`;
+        const message = result.message || `Successfully authenticated with ${provider.display_name}.`;
+        pageMessage = message;
+        setProviderMessage(provider, message);
         closeManualOAuthDialog();
       } else {
-        pageError = result.message || `Failed to complete sign-in for ${provider.display_name}.`;
+        const message = result.message || `Failed to complete sign-in for ${provider.display_name}.`;
+        pageError = message;
+        setProviderError(provider, message);
       }
     } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to complete sign-in for ${provider.display_name}.`;
+      const message = error instanceof Error ? error.message : `Failed to complete sign-in for ${provider.display_name}.`;
+      pageError = message;
+      setProviderError(provider, message);
     } finally {
       setBusy(null);
+      finishProviderAction(provider, 'oauth-complete');
     }
   }
 
@@ -415,26 +385,35 @@
       return;
     }
 
-    setBusy(`token:${tokenDialogProvider.provider}`);
+    const provider = tokenDialogProvider;
+    setBusy(`token:${provider.provider}`);
+    startProviderAction(provider, 'token');
     pageError = null;
     pageMessage = null;
 
     try {
       const result = await agentsStore.setProviderApiToken(
         selectedAgentId,
-        tokenDialogProvider.provider,
+        provider.provider,
         tokenDialogValue.trim()
       );
       if (result.success) {
-        pageMessage = result.message || `Stored API key for ${tokenDialogProvider.display_name}.`;
+        const message = result.message || `Stored API key for ${provider.display_name}.`;
+        pageMessage = message;
+        setProviderMessage(provider, message);
         closeTokenDialog();
       } else {
-        pageError = result.message || `Failed to store API key for ${tokenDialogProvider.display_name}.`;
+        const message = result.message || `Failed to store API key for ${provider.display_name}.`;
+        pageError = message;
+        setProviderError(provider, message);
       }
     } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to store API key for ${tokenDialogProvider.display_name}.`;
+      const message = error instanceof Error ? error.message : `Failed to store API key for ${provider.display_name}.`;
+      pageError = message;
+      setProviderError(provider, message);
     } finally {
       setBusy(null);
+      finishProviderAction(provider, 'token');
     }
   }
 
@@ -443,21 +422,29 @@
 
     const provider = disconnectProviderPending;
     setBusy(`disconnect:${provider.provider}`);
+    startProviderAction(provider, 'disconnect');
     pageError = null;
     pageMessage = null;
 
     try {
       const result = await agentsStore.disconnectProvider(selectedAgentId, provider.provider);
       if (result.success) {
-        pageMessage = result.message || `Disconnected ${provider.display_name}.`;
+        const message = result.message || `Disconnected ${provider.display_name}.`;
+        pageMessage = message;
+        setProviderMessage(provider, message);
         closeDisconnectDialog();
       } else {
-        pageError = result.message || `Failed to disconnect ${provider.display_name}.`;
+        const message = result.message || `Failed to disconnect ${provider.display_name}.`;
+        pageError = message;
+        setProviderError(provider, message);
       }
     } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to disconnect ${provider.display_name}.`;
+      const message = error instanceof Error ? error.message : `Failed to disconnect ${provider.display_name}.`;
+      pageError = message;
+      setProviderError(provider, message);
     } finally {
       setBusy(null);
+      finishProviderAction(provider, 'disconnect');
     }
   }
 
@@ -466,21 +453,29 @@
 
     const provider = clearKeyProviderPending;
     setBusy(`clear-token:${provider.provider}`);
+    startProviderAction(provider, 'clear-token');
     pageError = null;
     pageMessage = null;
 
     try {
       const result = await agentsStore.clearProviderApiToken(selectedAgentId, provider.provider);
       if (result.success) {
-        pageMessage = result.message || `Cleared API key for ${provider.display_name}.`;
+        const message = result.message || `Cleared API key for ${provider.display_name}.`;
+        pageMessage = message;
+        setProviderMessage(provider, message);
         closeClearKeyDialog();
       } else {
-        pageError = result.message || `Failed to clear API key for ${provider.display_name}.`;
+        const message = result.message || `Failed to clear API key for ${provider.display_name}.`;
+        pageError = message;
+        setProviderError(provider, message);
       }
     } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to clear API key for ${provider.display_name}.`;
+      const message = error instanceof Error ? error.message : `Failed to clear API key for ${provider.display_name}.`;
+      pageError = message;
+      setProviderError(provider, message);
     } finally {
       setBusy(null);
+      finishProviderAction(provider, 'clear-token');
     }
   }
 
@@ -488,6 +483,7 @@
     if (!selectedAgentId) return;
     const agentId = selectedAgentId;
     setBusy(`oauth:${provider.provider}`);
+    startProviderAction(provider, 'oauth');
     oauthCancelRequested = false;
     pageError = null;
     pageMessage = null;
@@ -508,8 +504,10 @@
 
       const pollResult = await pollProviderSignInUntilCancelled(agentId, providerName);
       if (pollResult === 'connected') {
+        const message = `Successfully authenticated with ${providerName}.`;
         closeManualOAuthDialog();
-        pageMessage = `Successfully authenticated with ${providerName}.`;
+        pageMessage = message;
+        setProviderMessage(provider, message);
         return;
       }
       if (pollResult === 'cancelled') {
@@ -520,13 +518,16 @@
       manualOAuthNeedsCallbackInput = true;
     } catch (error) {
       if (!oauthCancelRequested) {
-        pageError = error instanceof Error ? error.message : `Failed to start sign-in for ${provider.provider}.`;
+        const message = error instanceof Error ? error.message : `Failed to start sign-in for ${provider.provider}.`;
+        pageError = message;
+        setProviderError(provider, message);
       }
     } finally {
       oauthCancelRequested = false;
       oauthCancelResolver = null;
       if (actionLoading === `oauth:${provider.provider}`) {
         setBusy(null);
+        finishProviderAction(provider, 'oauth');
       }
     }
   }
@@ -547,19 +548,27 @@
   async function handleAuthMethodChange(provider: AuthProviderEntry, value: string) {
     if (!selectedAgentId || value === 'auto') return;
     setBusy(`method:${provider.provider}`);
+    startProviderAction(provider, 'method');
     pageError = null;
     pageMessage = null;
     try {
       const result = await agentsStore.setProviderAuthMethod(selectedAgentId, provider.provider, value as AuthMethod);
       if (result.success) {
-        pageMessage = result.message || `Updated auth method for ${provider.display_name}.`;
+        const message = result.message || `Updated auth method for ${provider.display_name}.`;
+        pageMessage = message;
+        setProviderMessage(provider, message);
       } else {
-        pageError = result.message || `Failed to update auth method for ${provider.display_name}.`;
+        const message = result.message || `Failed to update auth method for ${provider.display_name}.`;
+        pageError = message;
+        setProviderError(provider, message);
       }
     } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to update auth method for ${provider.display_name}.`;
+      const message = error instanceof Error ? error.message : `Failed to update auth method for ${provider.display_name}.`;
+      pageError = message;
+      setProviderError(provider, message);
     } finally {
       setBusy(null);
+      finishProviderAction(provider, 'method');
     }
   }
 </script>
@@ -632,64 +641,18 @@
               No auth-enabled providers reported by this agent.
             </div>
           {:else}
-            <div class="settings-provider-list">
-              {#each sortedProviders as provider}
-                <article
-                  class:settings-provider-row-connected={hasUsableCredential(provider)}
-                  class:settings-provider-row-warning={provider.oauth_status === OAuthStatus.Expired}
-                  class:settings-provider-row-unconfigured={!hasUsableCredential(provider) && provider.oauth_status !== OAuthStatus.Expired}
-                  class="settings-provider-row"
-                >
-                  <div class="settings-provider-main">
-                    <div class="settings-provider-title">{provider.display_name}</div>
-                    <div class="settings-provider-id">{provider.provider}</div>
-                  </div>
-
-                  <div class="settings-provider-state">
-                    <div class={`settings-provider-status settings-provider-status-${authStatusTone(provider)}`}>
-                      <span class="settings-provider-status-dot" aria-hidden="true"></span>
-                      <span>{authStatusLabel(provider)}</span>
-                    </div>
-                    <div class="settings-provider-detail">{authDetail(provider)}</div>
-                    {#if authHint(provider)}
-                      <div class="settings-provider-hint">{authHint(provider)}</div>
-                    {/if}
-                  </div>
-
-                  <div class="settings-provider-method">
-                    <AppSelect
-                      value={provider.preferred_method ?? 'auto'}
-                      options={getAuthMethodOptionsForProvider(provider)}
-                      disabled={actionLoading === `method:${provider.provider}`}
-                      pill
-                      ariaLabel="Preferred auth"
-                      onValueChange={(value) => void handleAuthMethodChange(provider, value)}
-                    />
-                  </div>
-
-                  <div class="settings-provider-actions">
-                    {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}
-                      {#if isOAuthLoading(provider)}
-                        <IconTooltipButton label="Signing in" icon={LoaderCircle} iconClass="animate-spin" disabled />
-                        <IconTooltipButton label="Cancel sign-in" icon={CircleStop} tone="danger" onclick={() => requestOAuthCancel(provider)} />
-                      {:else}
-                        <IconTooltipButton label="Sign in" icon={LogIn} disabled={!!actionLoading} onclick={() => handleOAuth(provider)} />
-                      {/if}
-                    {/if}
-                    {#if provider.supports_oauth && provider.oauth_status === OAuthStatus.Connected}
-                      <IconTooltipButton label="Disconnect OAuth" icon={LogOut} disabled={!!actionLoading} onclick={() => handleDisconnect(provider)} />
-                    {/if}
-                    {#if (provider.preferred_method ?? 'auto') === AuthMethod.ApiKey}
-                      <IconTooltipButton label="Set API key" icon={KeyRound} disabled={!!actionLoading} onclick={() => handleSetApiToken(provider)} />
-                    {/if}
-                    {#if provider.has_stored_api_key}
-                      <IconTooltipButton label="Clear stored API key" icon={Trash2} tone="danger" disabled={!!actionLoading} onclick={() => handleClearApiToken(provider)} />
-                    {/if}
-                  </div>
-                </article>
-              {/each}
-            </div>
-            <p class="settings-provider-footnote">OAuth sign-in gives you a browser URL to open or copy. API keys are stored in the desktop keyring.</p>
+            <ProviderConnectionList
+              {providers}
+              pendingAction={providerPendingAction}
+              messages={providerMessages}
+              errors={providerErrors}
+              onSignIn={handleOAuth}
+              onCancelSignIn={requestOAuthCancel}
+              onDisconnect={handleDisconnect}
+              onSetApiKey={handleSetApiToken}
+              onClearApiKey={handleClearApiToken}
+              onAuthMethodChange={handleAuthMethodChange}
+            />
           {/if}
         </div>
 

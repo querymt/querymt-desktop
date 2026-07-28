@@ -2323,8 +2323,7 @@ summary:focus-visible {
   font-size: 0.74rem;
 }
 
-.mesh-item-list,
-.settings-provider-list {
+.mesh-item-list {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2498,138 +2497,181 @@ summary:focus-visible {
   }
 }
 
-.settings-provider-row {
+.provider-connection-list {
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.provider-connection-row {
   display: grid;
-  grid-template-columns: minmax(11rem, 1.1fr) minmax(14rem, 1.4fr) minmax(8.5rem, 9.5rem) minmax(4rem, auto);
-  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  border-top: 1px solid var(--border);
-  padding: 0.72rem 0.9rem;
+  gap: 0.45rem 1rem;
+  padding: 0.78rem 0.9rem;
+  background: var(--bg-card);
   transition: background 0.15s ease;
 }
 
-.settings-provider-row:first-child {
-  border-top: 0;
+.provider-connection-row + .provider-connection-row {
+  border-top: 1px solid var(--subtle-border);
 }
 
-.settings-provider-row:hover,
-.settings-provider-row:focus-within {
+.provider-connection-row:hover,
+.provider-connection-row:focus-within {
   background: var(--bg-card-hover);
 }
 
-.settings-provider-row-unconfigured .settings-provider-detail {
-  opacity: 0.78;
+.provider-connection-row-attention {
+  box-shadow: inset 2px 0 var(--status-warn);
 }
 
-.settings-provider-main,
-.settings-provider-state {
+.provider-connection-row-connected {
+  box-shadow: inset 2px 0 var(--status-success);
+}
+
+.provider-connection-main {
   min-width: 0;
 }
 
-.settings-provider-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.provider-connection-main h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.84rem;
+  font-weight: 650;
+  line-height: 1.25;
 }
 
-.settings-provider-title {
-  font-size: 0.9rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-
-.settings-provider-id,
-.settings-provider-detail,
-.settings-provider-hint,
-.settings-provider-footnote {
+.provider-connection-main p {
+  margin: 0.2rem 0 0;
   color: var(--muted);
-  font-size: 0.76rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
 }
 
-.settings-provider-id,
-.settings-provider-detail {
-  margin-top: 0.12rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-provider-id {
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-}
-
-.settings-provider-status {
-  display: inline-flex;
-  max-width: 100%;
-  align-items: center;
-  gap: 0.38rem;
-  border: 1px solid var(--status-muted-border);
-  border-radius: 999px;
-  background: var(--status-muted-bg);
-  color: var(--status-muted);
-  padding: 0.18rem 0.55rem;
-  font-size: 0.76rem;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.settings-provider-status span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-provider-status-dot {
-  width: 0.42rem;
-  height: 0.42rem;
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: currentColor;
-}
-
-.settings-provider-status-connected {
-  border-color: var(--status-success-border);
-  background: var(--status-success-bg);
-  color: var(--status-success);
-}
-
-.settings-provider-status-warning {
-  border-color: var(--status-warn-border);
-  background: var(--status-warn-bg);
-  color: var(--status-warn);
-}
-
-.settings-provider-metadata {
-  color: var(--text-dim);
-}
-
-.settings-provider-hint {
-  margin-top: 0.42rem;
-  line-height: 1.45;
-}
-
-.settings-provider-method {
+.provider-connection-primary {
   display: flex;
-  min-width: 0;
-  justify-content: flex-end;
-}
-
-.settings-provider-method .app-select-trigger-pill {
-  width: 100%;
-  min-width: 8.5rem;
-}
-
-.settings-provider-actions {
-  display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 0.3rem;
 }
 
-.settings-provider-footnote {
-  margin-top: 0.65rem;
+.provider-connection-action {
+  min-height: 2rem;
+  padding: 0.42rem 0.72rem;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.provider-connection-row-attention .provider-connection-action {
+  border-color: var(--status-warn-border);
+}
+
+.provider-connection-feedback,
+.provider-connection-details {
+  grid-column: 1 / -1;
+}
+
+.provider-connection-feedback {
+  font-size: 0.72rem;
+}
+
+.provider-connection-feedback-success {
+  color: var(--status-success);
+}
+
+.provider-connection-feedback-error {
+  color: var(--status-warn);
+}
+
+.provider-connection-details {
+  border-top: 1px solid var(--subtle-border);
+  margin-top: 0.25rem;
+  padding-top: 0.45rem;
+}
+
+.provider-connection-details > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+}
+
+.provider-connection-details > button:hover,
+.provider-connection-details > button:focus-visible {
+  color: var(--text);
+  outline: none;
+}
+
+.provider-connection-details-content {
+  display: grid;
+  margin-top: 0.5rem;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--subtle-surface);
+}
+
+.provider-connection-detail-row {
+  display: flex;
+  min-height: 3.4rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0.75rem;
+}
+
+.provider-connection-detail-row + .provider-connection-detail-row {
+  border-top: 1px solid var(--subtle-border);
+}
+
+.provider-connection-detail-row > div {
+  min-width: 0;
+}
+
+.provider-connection-detail-row strong,
+.provider-connection-detail-row span {
+  display: block;
+}
+
+.provider-connection-detail-row strong {
+  color: var(--text);
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.provider-connection-detail-row span {
+  margin-top: 0.16rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.provider-connection-mono {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-connection-availability {
+  flex: 0 0 auto;
+  margin: 0 !important;
+  color: var(--text-dim) !important;
+}
+
+.provider-connection-available {
+  color: var(--status-success) !important;
+}
+
+.provider-connection-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  border-top: 1px solid var(--subtle-border);
+  padding: 0.7rem 0.75rem;
+}
+
+.provider-connection-detail-actions .action-btn {
+  min-height: 2rem;
 }
 
 .app-tooltip-content {
@@ -2650,30 +2692,18 @@ summary:focus-visible {
   color: var(--danger);
 }
 
-@media (max-width: 1050px) {
-  .settings-provider-row {
-    grid-template-columns: 1fr auto;
-    grid-template-areas:
-      'provider actions'
-      'status method';
-    align-items: start;
+@media (max-width: 760px) {
+  .provider-connection-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .settings-provider-main {
-    grid-area: provider;
-  }
-
-  .settings-provider-state {
-    grid-area: status;
-  }
-
-  .settings-provider-method {
-    grid-area: method;
-  }
-
-  .settings-provider-actions {
-    grid-area: actions;
+  .provider-connection-primary {
     justify-content: flex-start;
+  }
+
+  .provider-connection-detail-row {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

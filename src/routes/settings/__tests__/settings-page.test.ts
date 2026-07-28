@@ -230,6 +230,7 @@ describe('Settings controls', () => {
     render(SettingsPage);
     await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
 
+    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Set API key' }));
     const input = screen.getByPlaceholderText('Paste API key');
     await fireEvent.input(input, { target: { value: 'sk-test' } });
@@ -249,7 +250,8 @@ describe('Settings controls', () => {
     render(SettingsPage);
     await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign in with OAuth' }));
     expect(screen.queryByPlaceholderText('https://... or pasted code')).not.toBeInTheDocument();
     expect(screen.getByText(/Open or copy the device authorization URL/)).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Authorization URL' })).toHaveValue('https://example.com/device');
@@ -272,7 +274,8 @@ describe('Settings controls', () => {
 
     render(SettingsPage);
     await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
-    await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign in with OAuth' }));
 
     const completeButton = screen.getByRole('button', { name: 'Complete sign-in' });
     expect(completeButton).toBeDisabled();
@@ -301,7 +304,8 @@ describe('Settings controls', () => {
 
     render(SettingsPage);
     await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
-    await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign in with OAuth' }));
 
     expect(open).not.toHaveBeenCalled();
     await fireEvent.click(await screen.findByRole('button', { name: 'Open in browser' }));
@@ -347,18 +351,19 @@ describe('Settings controls', () => {
 
     render(SettingsPage);
     await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
-    await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Set up' })[0]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign in with OAuth' }));
 
     const cancelButtons = await screen.findAllByRole('button', { name: 'Cancel sign-in' });
     expect(cancelButtons[0]).toBeEnabled();
     expect(cancelButtons[1]).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Signing in' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Signing in…' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Set API key' })).toBeDisabled();
 
     await fireEvent.click(cancelButtons[1]);
 
     expect(await screen.findByText('Cancelled sign-in for Anthropic.')).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: 'Sign in with OAuth' })).toBeEnabled();
   });
 
   it('renders live plugin update progress without blocking controls', async () => {
@@ -377,9 +382,10 @@ describe('Settings controls', () => {
 
     expect(screen.queryByText('Downloading layers')).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: /Advanced maintenance/ }));
-    expect(screen.getAllByText('anthropic')).toHaveLength(2);
+    expect(screen.getByText('anthropic')).toBeInTheDocument();
     expect(screen.getByText('pulling · 50%')).toBeInTheDocument();
     expect(screen.getByText('Downloading layers')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
     expect(screen.getByRole('button', { name: 'Set API key' })).toBeEnabled();
   });
 });
