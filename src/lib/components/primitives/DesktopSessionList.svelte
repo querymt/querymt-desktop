@@ -1,7 +1,8 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import { Accordion, Portal } from 'bits-ui';
-  import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, Plus, RefreshCw, Search, SearchX, Trash2, X } from '@lucide/svelte';
+  import { Accordion } from 'bits-ui';
+  import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, Plus, RefreshCw, Search, SearchX, Trash2 } from '@lucide/svelte';
+  import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
   import { formatSessionTimestamp, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
@@ -413,64 +414,18 @@
   </div>
 
   {#if pendingDeleteSession}
-    <Portal to={overlayPortalTarget}>
-      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-        <button
-          class="absolute inset-0 h-full w-full cursor-default"
-          type="button"
-          aria-label="Close delete session confirmation"
-          onclick={() => closeDeleteDialog()}
-          disabled={deletingSessionKey !== null}
-        ></button>
-        <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" aria-labelledby="delete-session-dialog-title" tabindex="-1" data-blocking-overlay="true">
-          <div class="dialog-header">
-            <div class="dialog-header-title-block">
-              <div class="dialog-title" id="delete-session-dialog-title">Delete session</div>
-              <div class="dialog-subtitle">Permanently remove "{pendingDeleteSession.title}" from {pendingDeleteSession.agentName}?</div>
-            </div>
-            <div class="dialog-header-actions">
-              <button
-                class="dialog-close-button"
-                type="button"
-                aria-label="Close delete session confirmation"
-                onclick={() => closeDeleteDialog()}
-                disabled={deletingSessionKey !== null}
-              >
-                <X size={16} />
-              </button>
-            </div>
-          </div>
-
-          <div class="dialog-body">
-            <div class="dialog-form">
-              <div class="dialog-row-group">
-                <div class="dialog-row dialog-row-muted dialog-row-full">
-                  <div class="dialog-row-main">
-                    <div class="dialog-row-title">This cannot be undone</div>
-                    <div class="dialog-row-description">The session and its history will be permanently removed from the agent.</div>
-                  </div>
-                </div>
-              </div>
-
-              {#if deleteError}
-                <div class="alert-error" role="alert">{deleteError}</div>
-              {/if}
-
-              <div class="dialog-footer">
-                <button class="action-btn" type="button" onclick={() => closeDeleteDialog()} disabled={deletingSessionKey !== null}>Cancel</button>
-                <button class="action-btn action-btn-danger" type="button" onclick={() => confirmDeleteSession()} disabled={deletingSessionKey !== null}>
-                  {#if deletingSessionKey}
-                    <LoaderCircle size={14} class="animate-spin" />
-                    Deleting...
-                  {:else}
-                    Delete
-                  {/if}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Portal>
+    <AppConfirmDialog
+      open={true}
+      title={`Delete ${pendingDeleteSession.title}?`}
+      description={`The session and its history will be permanently removed from ${pendingDeleteSession.agentName}. This cannot be undone.`}
+      confirmLabel="Delete"
+      pendingLabel="Deleting..."
+      pending={deletingSessionKey !== null}
+      portalTarget={overlayPortalTarget}
+      onConfirm={confirmDeleteSession}
+      onDismiss={closeDeleteDialog}
+    >
+      {#if deleteError}<div class="alert-error" role="alert">{deleteError}</div>{/if}
+    </AppConfirmDialog>
   {/if}
 </div>

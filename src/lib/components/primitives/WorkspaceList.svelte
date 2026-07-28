@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { AlertTriangle, FolderOpen, LoaderCircle, Trash2, X } from '@lucide/svelte';
+  import { AlertTriangle, FolderOpen, LoaderCircle, Trash2 } from '@lucide/svelte';
   import { getContext } from 'svelte';
-  import { Portal } from 'bits-ui';
+  import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
   import type { WorkspaceItem } from '$lib/domain/types';
 
   let {
@@ -99,36 +99,14 @@
 </section>
 
 {#if pendingRemoval}
-  <Portal to={overlayPortalTarget}>
-    <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-      <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close remove workspace confirmation" onclick={() => (pendingRemoval = null)}></button>
-      <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" aria-labelledby="remove-workspace-dialog-title" tabindex="-1" data-blocking-overlay="true">
-        <div class="dialog-header">
-          <div class="dialog-header-title-block">
-            <div class="dialog-title" id="remove-workspace-dialog-title">Remove workspace?</div>
-            <div class="dialog-subtitle">Remove “{pendingRemoval.name}” from QueryMT?</div>
-          </div>
-          <div class="dialog-header-actions">
-            <button class="dialog-close-button" type="button" aria-label="Close remove workspace confirmation" onclick={() => (pendingRemoval = null)}><X size={16} /></button>
-          </div>
-        </div>
-        <div class="dialog-body">
-          <div class="dialog-form">
-            <div class="dialog-row-group">
-              <div class="dialog-row dialog-row-muted dialog-row-full">
-                <div class="dialog-row-main">
-                  <div class="dialog-row-title">Your files stay on disk</div>
-                  <div class="dialog-row-description">Only this workspace shortcut is removed from the app. The folder and everything inside it are not changed.</div>
-                </div>
-              </div>
-            </div>
-            <div class="dialog-footer">
-              <button class="action-btn" type="button" onclick={() => (pendingRemoval = null)}>Cancel</button>
-              <button class="action-btn action-btn-danger" type="button" onclick={confirmRemoval}>Remove from QueryMT</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </Portal>
+  <AppConfirmDialog
+    open={true}
+    title={`Remove ${pendingRemoval.name} from QueryMT?`}
+    description="Only this workspace shortcut is removed. The folder and everything inside it stay on disk."
+    confirmLabel="Remove from QueryMT"
+    tone="neutral"
+    portalTarget={overlayPortalTarget}
+    onConfirm={confirmRemoval}
+    onDismiss={() => (pendingRemoval = null)}
+  />
 {/if}

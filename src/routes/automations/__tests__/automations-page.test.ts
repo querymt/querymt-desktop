@@ -116,7 +116,7 @@ describe('Automations page', () => {
 
     await fireEvent.click(screen.getByLabelText('More actions for Every hour'));
     await fireEvent.click(screen.getByRole('button', { name: 'Delete Every hour' }));
-    expect(screen.getByRole('dialog')).toHaveTextContent('Delete automation');
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Delete Every hour?');
     expect(agentsStore.runScheduleAction).not.toHaveBeenCalled();
 
     await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));

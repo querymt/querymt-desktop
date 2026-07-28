@@ -23,7 +23,8 @@ const handlers = {
   onDisconnect: vi.fn(),
   onSetApiKey: vi.fn(),
   onClearApiKey: vi.fn(),
-  onAuthMethodChange: vi.fn()
+  onAuthMethodChange: vi.fn(),
+  onDialogTrigger: vi.fn()
 };
 
 afterEach(() => cleanup());

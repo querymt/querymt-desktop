@@ -1,6 +1,6 @@
 import { open } from '@tauri-apps/plugin-shell';
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SettingsPage from '../+page.svelte';
 
@@ -104,11 +104,13 @@ beforeEach(() => {
   HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
   HTMLElement.prototype.releasePointerCapture = vi.fn();
   HTMLElement.prototype.scrollIntoView = vi.fn();
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => window.setTimeout(callback, 0));
 });
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
   agentsStore.authProvidersByAgent['agent-1'] = [
     {
       provider: 'anthropic',
@@ -131,6 +133,10 @@ afterEach(() => {
     }
   };
   agentsStore.refreshAuthProviders = vi.fn(async () => []);
+  agentsStore.setProviderApiToken = vi.fn(async () => ({ success: true }));
+  agentsStore.disconnectProvider = vi.fn(async () => ({ success: true }));
+  agentsStore.clearProviderApiToken = vi.fn(async () => ({ success: true }));
+  agentsStore.completeProviderSignIn = vi.fn(async () => ({ success: true, message: 'signed in' }));
   agentsStore.startProviderSignIn = vi.fn(async () => ({
     flow_id: 'flow-1',
     provider: 'anthropic',
@@ -239,6 +245,72 @@ describe('Settings controls', () => {
     expect(agentsStore.setProviderApiToken).toHaveBeenCalledWith('agent-1', 'anthropic', 'sk-test');
   });
 
+  it('names the API key dialog, focuses its input, and restores focus after Escape', async () => {
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
+    const trigger = screen.getByRole('button', { name: 'Set API key' });
+
+    await fireEvent.click(trigger);
+
+    expect(screen.getByRole('dialog', { name: 'Set API key' })).toHaveAttribute('data-blocking-overlay', 'true');
+    await waitFor(() => expect(screen.getByPlaceholderText('Paste API key')).toHaveFocus());
+
+    await fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Set API key' })).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it('places provider dialogs in the app overlay target when context provides one', async () => {
+    const overlayTarget = document.createElement('div');
+    document.body.append(overlayTarget);
+
+    render(SettingsPage, {
+      context: new Map([['app-overlay-target', () => overlayTarget]])
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Set API key' }));
+
+    expect(overlayTarget).toContainElement(screen.getByRole('dialog', { name: 'Set API key' }));
+    overlayTarget.remove();
+  });
+
+  it('clears API key input state when the dialog is dismissed', async () => {
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
+    const trigger = screen.getByRole('button', { name: 'Set API key' });
+
+    await fireEvent.click(trigger);
+    await fireEvent.input(screen.getByPlaceholderText('Paste API key'), { target: { value: 'discard-me' } });
+    await fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Set API key' })).not.toBeInTheDocument());
+
+    await fireEvent.click(trigger);
+    expect(screen.getByPlaceholderText('Paste API key')).toHaveValue('');
+  });
+
+  it('keeps the API key dialog open while saving', async () => {
+    let resolveSave!: (result: { success: boolean }) => void;
+    agentsStore.setProviderApiToken = vi.fn(() => new Promise((resolve) => (resolveSave = resolve))) as any;
+
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Set API key' }));
+    await fireEvent.input(screen.getByPlaceholderText('Paste API key'), { target: { value: 'sk-test' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+
+    await fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Set API key' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close API key dialog' })).toBeDisabled();
+
+    resolveSave({ success: true });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Set API key' })).not.toBeInTheDocument());
+  });
+
   it('checks device-poll OAuth completion without pasted input', async () => {
     agentsStore.startProviderSignIn = vi.fn(async () => ({
       flow_id: 'flow-1',
@@ -253,7 +325,7 @@ describe('Settings controls', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Sign in with OAuth' }));
     expect(screen.queryByPlaceholderText('https://... or pasted code')).not.toBeInTheDocument();
-    expect(screen.getByText(/Open or copy the device authorization URL/)).toBeInTheDocument();
+    expect(screen.getByText(/Approve access for Anthropic in your browser/)).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Authorization URL' })).toHaveValue('https://example.com/device');
 
     await fireEvent.click(screen.getByRole('button', { name: 'Copy URL' }));
@@ -318,6 +390,71 @@ describe('Settings controls', () => {
     expect(agentsStore.completeProviderSignIn).toHaveBeenCalledWith('agent-1', 'flow-2', 'manual-code');
   });
 
+  it('cancels in-progress OAuth polling when Escape dismisses the dialog', async () => {
+    agentsStore.startProviderSignIn = vi.fn(async () => ({
+      flow_id: 'flow-escape',
+      provider: 'anthropic',
+      authorization_url: 'https://example.com/oauth',
+      flow_kind: 'redirect_code'
+    }));
+    agentsStore.refreshAuthProviders = vi.fn(async () => [
+      { provider: 'anthropic', oauth_status: 'not_authenticated', supports_oauth: true }
+    ]) as any;
+
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign in with OAuth' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Sign in to Anthropic' })).toHaveAttribute('data-blocking-overlay', 'true');
+    await fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Sign in to Anthropic' })).not.toBeInTheDocument());
+    expect(await screen.findByText('Cancelled sign-in for Anthropic.')).toBeInTheDocument();
+    expect(agentsStore.disconnectProvider).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: 'Sign in with OAuth' })).toBeEnabled();
+  });
+
+  it('restores focus to a replacement primary Reconnect after cancelling OAuth', async () => {
+    agentsStore.authProvidersByAgent['agent-1'] = [
+      {
+        provider: 'anthropic',
+        display_name: 'Anthropic',
+        oauth_status: 'expired',
+        has_stored_api_key: false,
+        has_env_api_key: false,
+        supports_oauth: true,
+        preferred_method: 'oauth'
+      }
+    ];
+    agentsStore.startProviderSignIn = vi.fn(async () => ({
+      flow_id: 'flow-reconnect',
+      provider: 'anthropic',
+      authorization_url: 'https://example.com/oauth',
+      flow_kind: 'redirect_code'
+    }));
+    agentsStore.refreshAuthProviders = vi.fn(async () => [
+      { provider: 'anthropic', oauth_status: 'expired', supports_oauth: true }
+    ]) as any;
+
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+    const originalReconnect = screen.getByRole('button', { name: 'Reconnect' });
+    const providerRow = screen.getByRole('heading', { name: 'Anthropic' }).closest('article');
+
+    await fireEvent.click(originalReconnect);
+
+    expect(await screen.findByRole('dialog', { name: 'Sign in to Anthropic' })).toBeInTheDocument();
+    expect(originalReconnect.isConnected).toBe(false);
+    await fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Sign in to Anthropic' })).not.toBeInTheDocument());
+    const replacementReconnect = await screen.findByRole('button', { name: 'Reconnect' });
+    await waitFor(() => expect(replacementReconnect).toHaveFocus());
+    expect(providerRow).toContainElement(replacementReconnect);
+    expect(document.body).not.toHaveFocus();
+  });
+
   it('allows cancelling an in-progress redirect OAuth wait', async () => {
     agentsStore.authProvidersByAgent['agent-1'] = [
       {
@@ -354,16 +491,111 @@ describe('Settings controls', () => {
     await fireEvent.click(screen.getAllByRole('button', { name: 'Set up' })[0]);
     await fireEvent.click(screen.getByRole('button', { name: 'Sign in with OAuth' }));
 
-    const cancelButtons = await screen.findAllByRole('button', { name: 'Cancel sign-in' });
-    expect(cancelButtons[0]).toBeEnabled();
-    expect(cancelButtons[1]).toBeEnabled();
+    const dialogCancel = await screen.findByRole('button', { name: 'Cancel' });
+    expect(dialogCancel).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Cancel sign-in' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Signing in…' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Set API key' })).toBeDisabled();
 
-    await fireEvent.click(cancelButtons[1]);
+    await fireEvent.click(dialogCancel);
 
     expect(await screen.findByText('Cancelled sign-in for Anthropic.')).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Sign in with OAuth' })).toBeEnabled();
+  });
+
+  it('uses named confirmations and defaults focus to their safe actions', async () => {
+    agentsStore.authProvidersByAgent['agent-1'] = [
+      {
+        provider: 'anthropic',
+        display_name: 'Anthropic',
+        oauth_status: 'connected',
+        has_stored_api_key: true,
+        has_env_api_key: false,
+        supports_oauth: true,
+        preferred_method: 'oauth'
+      }
+    ];
+
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Manage' }));
+
+    const disconnectTrigger = screen.getByRole('button', { name: 'Disconnect OAuth' });
+    await fireEvent.click(disconnectTrigger);
+    expect(screen.getByRole('alertdialog', { name: 'Disconnect Anthropic?' })).toHaveAccessibleDescription('OAuth access will be removed. You can sign in again at any time.');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
+    await fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(disconnectTrigger).toHaveFocus());
+
+    const clearTrigger = screen.getByRole('button', { name: 'Clear API key' });
+    await fireEvent.click(clearTrigger);
+    expect(screen.getByRole('alertdialog', { name: 'Remove the stored Anthropic key?' })).toHaveAccessibleDescription('The key will be removed from the desktop keyring. Environment variables are not changed.');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
+    await fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(clearTrigger).toHaveFocus());
+  });
+
+  it('focuses the provider row primary action after clear-key loses its opening button', async () => {
+    const connectedProvider = {
+      provider: 'anthropic',
+      display_name: 'Anthropic',
+      oauth_status: 'connected',
+      has_stored_api_key: true,
+      has_env_api_key: false,
+      supports_oauth: true,
+      preferred_method: 'oauth'
+    };
+    agentsStore.authProvidersByAgent['agent-1'] = [connectedProvider];
+    let clearTrigger!: HTMLElement;
+    agentsStore.clearProviderApiToken = vi.fn(async () => {
+      clearTrigger.remove();
+      return { success: true };
+    });
+
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Manage' }));
+    const providerRow = screen.getByRole('heading', { name: 'Anthropic' }).closest('article');
+    clearTrigger = screen.getByRole('button', { name: 'Clear API key' });
+    await fireEvent.click(clearTrigger);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove key' }));
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog', { name: 'Remove the stored Anthropic key?' })).not.toBeInTheDocument());
+    expect(clearTrigger.isConnected).toBe(false);
+    const primaryAction = screen.getByRole('button', { name: 'Close' });
+    await waitFor(() => expect(primaryAction).toHaveFocus());
+    expect(providerRow).toContainElement(primaryAction);
+    expect(document.body).not.toHaveFocus();
+  });
+
+  it('keeps destructive confirmations open while their actions are pending', async () => {
+    let resolveDisconnect!: (result: { success: boolean }) => void;
+    agentsStore.authProvidersByAgent['agent-1'] = [
+      {
+        provider: 'anthropic',
+        display_name: 'Anthropic',
+        oauth_status: 'connected',
+        has_stored_api_key: false,
+        has_env_api_key: false,
+        supports_oauth: true,
+        preferred_method: 'oauth'
+      }
+    ];
+    agentsStore.disconnectProvider = vi.fn(() => new Promise((resolve) => (resolveDisconnect = resolve))) as any;
+
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Manage' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Disconnect OAuth' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+
+    await fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('alertdialog', { name: 'Disconnect Anthropic?' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveProperty('disabled', true);
+
+    resolveDisconnect({ success: true });
+    await waitFor(() => expect(screen.queryByRole('alertdialog', { name: 'Disconnect Anthropic?' })).not.toBeInTheDocument());
   });
 
   it('renders live plugin update progress without blocking controls', async () => {

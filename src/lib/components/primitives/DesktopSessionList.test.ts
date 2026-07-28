@@ -198,8 +198,8 @@ describe('DesktopSessionList', () => {
 
     await fireEvent.click(deleteButton);
 
-    const dialog = screen.getByRole('dialog', { name: 'Delete session' });
-    expect(dialog).toHaveTextContent('Permanently remove "Inspect workspace" from WS-QMT?');
+    const dialog = screen.getByRole('alertdialog', { name: 'Delete Inspect workspace?' });
+    expect(dialog).toHaveTextContent('The session and its history will be permanently removed from WS-QMT.');
     expect(dialog).toHaveTextContent('This cannot be undone');
     expect(onDeleteSession).not.toHaveBeenCalled();
     expect(onOpenSession).not.toHaveBeenCalled();
@@ -207,7 +207,7 @@ describe('DesktopSessionList', () => {
     await fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
 
     expect(onDeleteSession).toHaveBeenCalledWith(sessions[0]);
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete session' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('alertdialog', { name: 'Delete Inspect workspace?' })).not.toBeInTheDocument());
   });
 
   it('keeps the session when the in-app deletion dialog is cancelled', async () => {
@@ -223,7 +223,7 @@ describe('DesktopSessionList', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(onDeleteSession).not.toHaveBeenCalled();
-    expect(screen.queryByRole('dialog', { name: 'Delete session' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('alertdialog', { name: 'Delete Inspect workspace?' })).not.toBeInTheDocument();
   });
 
   it('reports a deletion failure in the dialog and restores the delete action', async () => {
@@ -242,7 +242,7 @@ describe('DesktopSessionList', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Agent refused to delete the session.');
     expect(screen.getByRole('button', { name: /^Delete$/ })).toBeEnabled();
-    expect(screen.getByRole('dialog', { name: 'Delete session' })).toBeInTheDocument();
+    expect(screen.getByRole('alertdialog', { name: 'Delete Inspect workspace?' })).toBeInTheDocument();
   });
 
   it('does not present an uninitialized workspace as having zero sessions', async () => {

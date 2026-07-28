@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { Bot, CalendarClock, ChevronDown, Link, MessageSquarePlus, Network, Plus, RefreshCw, Search, SendHorizontal, X } from '@lucide/svelte';
+  import { ArrowLeft, ChevronDown, Link, MessageSquarePlus, Plus, RefreshCw, Search, SendHorizontal } from '@lucide/svelte';
   import { Command, Dialog } from 'bits-ui';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import { formatShortcut } from '$lib/design/platform';
@@ -419,112 +419,107 @@
 
 <Dialog.Root bind:open={commandPaletteStore.open}>
   <Dialog.Portal to={portalTarget ?? undefined}>
-    <Dialog.Overlay class="model-picker-backdrop" />
+    <Dialog.Overlay class="app-picker-backdrop" />
     <Dialog.Content
-      class={`model-picker-modal command-palette-modal ${isDialogFormMode ? 'command-palette-modal-form' : ''} !p-0`}
-      onOpenAutoFocus={(event) => event.preventDefault()}
+      class={`app-picker ${isDialogFormMode ? 'app-picker-form' : ''}`}
+      data-blocking-overlay="true"
+      onOpenAutoFocus={(event) => commandPaletteStore.mode !== 'commands' && event.preventDefault()}
     >
-      <div class="dialog-header">
-        <div class="dialog-header-title-block">
-          <Dialog.Title class="dialog-title">{dialogTitle}</Dialog.Title>
-          <Dialog.Description class="dialog-subtitle">{dialogSubtitle}</Dialog.Description>
-        </div>
-        <div class="dialog-header-actions">
-          {#if commandPaletteStore.mode !== 'commands'}
-            <button class="dialog-header-button" type="button" onclick={() => commandPaletteStore.setMode('commands')}>
-              Back
-            </button>
-          {/if}
-        </div>
-      </div>
+      {#if commandPaletteStore.mode === 'commands'}
+        <Command.Root label="Command palette" loop>
+          <Dialog.Title class="sr-only">Command palette</Dialog.Title>
+          <Dialog.Description class="sr-only">{dialogSubtitle}</Dialog.Description>
+          <div class="app-picker-command-bar">
+            <Search size={16} />
+            <Command.Input
+              bind:value={commandPaletteStore.query}
+              autofocus
+              class="app-picker-search-input"
+              placeholder="Search commands, actions, and navigation…"
+            />
+          </div>
 
-      <div class={isDialogFormMode ? 'dialog-body' : 'p-4'}>
-        {#if commandPaletteStore.mode === 'commands'}
-          <Command.Root label="Command palette" loop>
-            <div class="model-search-shell">
-              <Search size={15} />
-              <Command.Input
-                bind:value={commandPaletteStore.query}
-                autofocus
-                class="model-search-input"
-                placeholder="Search commands, actions, and navigation…"
-              />
-            </div>
-
-            <div class="picker-scroll-frame mt-3">
-              <Command.List class="picker-scroll-area max-h-[26rem]">
+          <div class="app-picker-scroll-frame">
+            <Command.List class="app-picker-scroll-area">
                 <Command.Empty>
-                  <div class="surface-muted px-3 py-3 text-xs text-[var(--muted)]">
-                    No matching commands.
-                  </div>
+                  <div class="app-picker-empty">No matching commands.</div>
                 </Command.Empty>
 
-                <Command.Group value="create">
-                  <Command.GroupHeading class="px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--muted)]">Create</Command.GroupHeading>
-                  <Command.GroupItems class="model-picker-list mt-2">
-                    {#each commands.filter((item) => item.section === 'Create') as item, index}
+                <Command.Group value="create" class="app-picker-group">
+                  <Command.GroupHeading class="app-picker-group-heading">Create</Command.GroupHeading>
+                  <Command.GroupItems class="app-picker-list">
+                    {#each commands.filter((item) => item.section === 'Create') as item}
                       <Command.Item
                       value={item.title}
                       keywords={item.keywords}
                       disabled={item.disabled}
                       onSelect={() => item.run()}
-                      class={`model-picker-row ${index > 0 ? 'model-picker-row-separated' : ''} ${item.disabled ? 'opacity-50' : ''}`}
+                      class="app-picker-row"
                     >
                       <div class="min-w-0 flex-1">
-                        <div class="truncate text-sm font-medium">{item.title}</div>
-                        <div class="muted truncate text-xs">{item.subtitle}</div>
+                        <div class="app-picker-row-title">{item.title}</div>
+                        <div class="app-picker-row-description">{item.subtitle}</div>
                       </div>
-                      <span class="badge">Create</span>
                       </Command.Item>
                     {/each}
                   </Command.GroupItems>
                 </Command.Group>
 
-                <Command.Group value="mesh">
-                  <Command.GroupHeading class="mt-4 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--muted)]">Mesh</Command.GroupHeading>
-                  <Command.GroupItems class="model-picker-list mt-2">
-                  {#each commands.filter((item) => item.section === 'Mesh') as item, index}
+                <Command.Group value="mesh" class="app-picker-group">
+                  <Command.GroupHeading class="app-picker-group-heading">Mesh</Command.GroupHeading>
+                  <Command.GroupItems class="app-picker-list">
+                  {#each commands.filter((item) => item.section === 'Mesh') as item}
                     <Command.Item
                       value={item.title}
                       keywords={item.keywords}
                       disabled={item.disabled}
                       onSelect={() => item.run()}
-                      class={`model-picker-row ${index > 0 ? 'model-picker-row-separated' : ''} ${item.disabled ? 'opacity-50' : ''}`}
+                      class="app-picker-row"
                     >
                       <div class="min-w-0 flex-1">
-                        <div class="truncate text-sm font-medium">{item.title}</div>
-                        <div class="muted truncate text-xs">{item.subtitle}</div>
+                        <div class="app-picker-row-title">{item.title}</div>
+                        <div class="app-picker-row-description">{item.subtitle}</div>
                       </div>
-                      <span class="badge">Mesh</span>
                     </Command.Item>
                   {/each}
                   </Command.GroupItems>
                 </Command.Group>
 
-                <Command.Group value="navigate">
-                  <Command.GroupHeading class="mt-4 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-[var(--muted)]">Navigate</Command.GroupHeading>
-                  <Command.GroupItems class="model-picker-list mt-2">
-                    {#each commands.filter((item) => item.section === 'Navigate') as item, index}
+                <Command.Group value="navigate" class="app-picker-group">
+                  <Command.GroupHeading class="app-picker-group-heading">Navigate</Command.GroupHeading>
+                  <Command.GroupItems class="app-picker-list">
+                    {#each commands.filter((item) => item.section === 'Navigate') as item}
                       <Command.Item
                         value={item.title}
                         keywords={item.keywords}
                         onSelect={() => item.run()}
-                        class={`model-picker-row ${index > 0 ? 'model-picker-row-separated' : ''}`}
+                        class="app-picker-row"
                       >
                         <div class="min-w-0 flex-1">
-                          <div class="truncate text-sm font-medium">{item.title}</div>
-                          <div class="muted truncate text-xs">{item.subtitle}</div>
+                          <div class="app-picker-row-title">{item.title}</div>
+                          <div class="app-picker-row-description">{item.subtitle}</div>
                         </div>
-                        <span class="badge">Navigate</span>
                       </Command.Item>
                     {/each}
                   </Command.GroupItems>
                 </Command.Group>
-              </Command.List>
-            </div>
-          </Command.Root>
-        {:else if commandPaletteStore.mode === 'schedule'}
-          <div class="dialog-form">
+            </Command.List>
+          </div>
+        </Command.Root>
+      {:else}
+        <header class="app-picker-header">
+          <button class="app-picker-header-action" type="button" aria-label="Back to commands" onclick={() => commandPaletteStore.setMode('commands')}>
+            <ArrowLeft size={16} />
+          </button>
+          <div class="app-picker-heading">
+            <Dialog.Title class="app-picker-title">{dialogTitle}</Dialog.Title>
+            <Dialog.Description class="app-picker-description">{dialogSubtitle}</Dialog.Description>
+          </div>
+        </header>
+
+        <div class="app-picker-body">
+        {#if commandPaletteStore.mode === 'schedule'}
+          <div class="app-picker-form-body">
             <div class="dialog-row-group">
               <div class="dialog-row">
                 <div class="dialog-row-main">
@@ -628,7 +623,7 @@
               <div class="alert-error">{formError}</div>
             {/if}
 
-            <div class="dialog-footer">
+            <div class="app-picker-footer">
               <button class="action-btn" type="button" onclick={() => commandPaletteStore.close()}>
                 Cancel
               </button>
@@ -639,7 +634,7 @@
             </div>
           </div>
         {:else if commandPaletteStore.mode === 'remote-create'}
-          <div class="dialog-form">
+          <div class="app-picker-form-body">
             <div class="dialog-row-group">
               <div class="dialog-row">
                 <div class="dialog-row-main">
@@ -670,7 +665,7 @@
               <div class="alert-error">{formError}</div>
             {/if}
 
-            <div class="dialog-footer">
+            <div class="app-picker-footer">
               <button class="action-btn" type="button" onclick={() => commandPaletteStore.close()}>Cancel</button>
               <button class="action-btn action-btn-primary" type="button" disabled={submitting || !scheduleAgentId || !remoteNodeId} onclick={() => submitRemoteCreate()}>
                 <MessageSquarePlus size={15} />
@@ -679,7 +674,7 @@
             </div>
           </div>
         {:else}
-          <div class="dialog-form">
+          <div class="app-picker-form-body">
             <div class="dialog-row-group">
               <div class="dialog-row">
                 <div class="dialog-row-main">
@@ -738,7 +733,7 @@
               <div class="alert-error">{formError}</div>
             {/if}
 
-            <div class="dialog-footer">
+            <div class="app-picker-footer">
               <button class="action-btn" type="button" onclick={() => commandPaletteStore.close()}>Cancel</button>
               <button class="action-btn action-btn-primary" type="button" disabled={submitting || loadingRemoteSessions || !scheduleAgentId || !attachNodeId || !attachSessionId} onclick={() => submitRemoteAttach()}>
                 <Link size={15} />
@@ -747,7 +742,8 @@
             </div>
           </div>
         {/if}
-      </div>
+        </div>
+      {/if}
     </Dialog.Content>
   </Dialog.Portal>
 </Dialog.Root>

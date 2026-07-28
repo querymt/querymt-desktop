@@ -1,12 +1,16 @@
 <script lang="ts">
   import { getContext, onMount } from 'svelte';
-  import { LoaderCircle, RefreshCw, X } from '@lucide/svelte';
-  import { Portal } from 'bits-ui';
+  import { LoaderCircle, RefreshCw } from '@lucide/svelte';
   import GeneralSettingsPanel from '$lib/components/settings/GeneralSettingsPanel.svelte';
   import ProfilesSettingsPanel from '$lib/components/settings/ProfilesSettingsPanel.svelte';
+  import ProviderApiKeyDialog from '$lib/components/settings/ProviderApiKeyDialog.svelte';
+  import ProviderClearKeyDialog from '$lib/components/settings/ProviderClearKeyDialog.svelte';
   import ProviderConnectionList from '$lib/components/settings/ProviderConnectionList.svelte';
+  import ProviderDisconnectDialog from '$lib/components/settings/ProviderDisconnectDialog.svelte';
   import ProviderMaintenance from '$lib/components/settings/ProviderMaintenance.svelte';
+  import ProviderOAuthDialog from '$lib/components/settings/ProviderOAuthDialog.svelte';
   import ProviderOverview from '$lib/components/settings/ProviderOverview.svelte';
+  import { captureProviderDialogFocusTarget, type ProviderDialogFocusTarget } from '$lib/components/settings/provider-dialog-focus';
   import SettingsSubnav, { type SettingsSectionId } from '$lib/components/settings/SettingsSubnav.svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
@@ -33,6 +37,7 @@
   let oauthCancelResolver: (() => void) | null = null;
   let disconnectProviderPending = $state<AuthProviderEntry | null>(null);
   let clearKeyProviderPending = $state<AuthProviderEntry | null>(null);
+  let providerDialogFocusTarget = $state<ProviderDialogFocusTarget | null>(null);
   let selectedSection = $state<SettingsSectionId>('general');
   let refreshingProviders = $state(false);
   let refreshingModels = $state(false);
@@ -78,7 +83,6 @@
   );
   const lastPluginUpdate = $derived.by(() => (selectedAgentId ? agentsStore.lastPluginUpdateByAgent[selectedAgentId] ?? null : null));
   const manualOAuthIsDevicePoll = $derived(manualOAuthFlowKind === OAuthFlowKindTs.DevicePoll);
-  const manualOAuthHasAuthorizationUrl = $derived(Boolean(manualOAuthAuthorizationUrl));
 
   type OAuthPollResult = 'connected' | 'timeout' | 'cancelled';
 
@@ -248,45 +252,6 @@
   function closeClearKeyDialog() {
     clearKeyProviderPending = null;
   }
-
-  function closeTopmostDialog() {
-    if (actionLoading) return false;
-
-    if (tokenDialogProvider) {
-      closeTokenDialog();
-      return true;
-    }
-
-    if (manualOAuthProvider) {
-      closeManualOAuthDialog();
-      return true;
-    }
-
-    if (disconnectProviderPending) {
-      closeDisconnectDialog();
-      return true;
-    }
-
-    if (clearKeyProviderPending) {
-      closeClearKeyDialog();
-      return true;
-    }
-
-    return false;
-  }
-
-  onMount(() => {
-    const handleKeydown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      if (closeTopmostDialog()) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeydown, { capture: true });
-    return () => window.removeEventListener('keydown', handleKeydown, { capture: true });
-  });
 
   async function refreshProviders() {
     if (!selectedAgentId) return;
@@ -532,6 +497,10 @@
     }
   }
 
+  function rememberProviderDialogTrigger(event: MouseEvent) {
+    providerDialogFocusTarget = captureProviderDialogFocusTarget(event);
+  }
+
   function handleDisconnect(provider: AuthProviderEntry) {
     disconnectProviderPending = provider;
   }
@@ -652,6 +621,7 @@
               onSetApiKey={handleSetApiToken}
               onClearApiKey={handleClearApiToken}
               onAuthMethodChange={handleAuthMethodChange}
+              onDialogTrigger={rememberProviderDialogTrigger}
             />
           {/if}
         </div>
@@ -673,208 +643,55 @@
     </div>
   </div>
 
-  {#if tokenDialogProvider}
-    <Portal to={overlayPortalTarget}>
-      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close API key dialog" onclick={() => closeTopmostDialog()}></button>
-        <div class="dialog-modal-panel relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-          <div class="dialog-header">
-            <div class="dialog-header-title-block">
-              <div class="dialog-title">Set API key</div>
-              <div class="dialog-subtitle">Store a key for {tokenDialogProvider.display_name} in the desktop agent keyring.</div>
-            </div>
-            <div class="dialog-header-actions">
-              <button class="dialog-close-button" type="button" aria-label="Close API key dialog" onclick={() => closeTokenDialog()} disabled={!!actionLoading}>
-                <X size={16} />
-              </button>
-            </div>
-          </div>
+  <ProviderApiKeyDialog
+    open={tokenDialogProvider !== null}
+    provider={tokenDialogProvider}
+    focusTarget={providerDialogFocusTarget}
+    portalTarget={overlayPortalTarget}
+    bind:value={tokenDialogValue}
+    pending={!!actionLoading}
+    onClose={closeTokenDialog}
+    onSubmit={submitApiToken}
+  />
 
-          <div class="dialog-body">
-            <div class="dialog-form">
-              <div class="dialog-row-group">
-                <label class="dialog-row dialog-row-stacked">
-                  <div class="dialog-row-main">
-                    <div class="dialog-row-title">API key</div>
-                    <div class="dialog-row-description">Stored securely in the desktop keyring.</div>
-                  </div>
-                  <input class="input-shell w-full" type="password" bind:value={tokenDialogValue} placeholder="Paste API key" />
-                </label>
-              </div>
+  <ProviderOAuthDialog
+    open={manualOAuthProvider !== null}
+    provider={manualOAuthProvider}
+    focusTarget={providerDialogFocusTarget}
+    portalTarget={overlayPortalTarget}
+    flowKind={manualOAuthFlowKind}
+    authorizationUrl={manualOAuthAuthorizationUrl}
+    urlCopied={manualOAuthUrlCopied}
+    needsCallbackInput={manualOAuthNeedsCallbackInput}
+    bind:value={manualOAuthValue}
+    waiting={actionLoading?.startsWith('oauth:') ?? false}
+    pending={!!actionLoading}
+    completing={manualOAuthProvider ? isOAuthCompleting(manualOAuthProvider) : false}
+    submitDisabled={isManualOAuthSubmitDisabled()}
+    onDismiss={closeOrCancelManualOAuthDialog}
+    onOpenAuthorizationUrl={openManualOAuthAuthorizationUrl}
+    onCopyAuthorizationUrl={copyManualOAuthAuthorizationUrl}
+    onCancelSignIn={() => manualOAuthProvider && requestOAuthCancel(manualOAuthProvider)}
+    onSubmit={submitManualOAuth}
+  />
 
-              <div class="dialog-footer">
-                <button class="action-btn" type="button" onclick={() => closeTokenDialog()} disabled={!!actionLoading}>Cancel</button>
-                <button class="action-btn action-btn-primary" type="button" onclick={() => submitApiToken()} disabled={!!actionLoading || !tokenDialogValue.trim()}>
-                  Save key
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Portal>
-  {/if}
+  <ProviderDisconnectDialog
+    open={disconnectProviderPending !== null}
+    provider={disconnectProviderPending}
+    focusTarget={providerDialogFocusTarget}
+    portalTarget={overlayPortalTarget}
+    pending={!!actionLoading}
+    onClose={closeDisconnectDialog}
+    onConfirm={confirmDisconnectProvider}
+  />
 
-  {#if manualOAuthProvider}
-    <Portal to={overlayPortalTarget}>
-      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close OAuth dialog" onclick={() => closeOrCancelManualOAuthDialog()}></button>
-        <div class="dialog-modal-panel relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-          <div class="dialog-header">
-            <div class="dialog-header-title-block">
-              <div class="dialog-title">Complete OAuth sign-in</div>
-              <div class="dialog-subtitle">
-                {#if manualOAuthIsDevicePoll}
-                  Open or copy the device authorization URL for {manualOAuthProvider.display_name}, approve access, then check whether authentication completed.
-                {:else if manualOAuthNeedsCallbackInput && manualOAuthHasAuthorizationUrl}
-                  Open or copy the authorization URL for {manualOAuthProvider.display_name}. We'll detect completion automatically, or you can paste a callback URL/code.
-                {:else if manualOAuthNeedsCallbackInput}
-                  Paste the callback URL or returned code for {manualOAuthProvider.display_name}.
-                {:else}
-                  Open or copy the authorization URL for {manualOAuthProvider.display_name}. We'll detect completion automatically.
-                {/if}
-              </div>
-            </div>
-            <div class="dialog-header-actions">
-              <button class="dialog-close-button" type="button" aria-label="Close OAuth dialog" onclick={() => closeOrCancelManualOAuthDialog()}>
-                <X size={16} />
-              </button>
-            </div>
-          </div>
-
-          <div class="dialog-body">
-            <div class="dialog-form">
-              <div class="dialog-row-group">
-                {#if manualOAuthHasAuthorizationUrl}
-                  <div class="dialog-row dialog-row-stacked">
-                    <div class="dialog-row-main">
-                      <div class="dialog-row-title">Authorization URL</div>
-                      <div class="dialog-row-description">Open this URL in your browser or copy it if you want to continue sign-in elsewhere.</div>
-                    </div>
-                    <input class="input-shell dialog-code-field w-full" readonly value={manualOAuthAuthorizationUrl} aria-label="Authorization URL" title={manualOAuthAuthorizationUrl} />
-                    <div class="dialog-segmented dialog-segmented-two">
-                      <button class="action-btn dialog-segmented-button" type="button" onclick={() => openManualOAuthAuthorizationUrl()} disabled={!!actionLoading && !actionLoading.startsWith('oauth:')}>Open in browser</button>
-                      <button class="action-btn dialog-segmented-button" type="button" onclick={() => copyManualOAuthAuthorizationUrl()}>
-                        {manualOAuthUrlCopied ? 'Copied' : 'Copy URL'}
-                      </button>
-                    </div>
-                  </div>
-                {/if}
-
-                {#if manualOAuthNeedsCallbackInput && !manualOAuthIsDevicePoll}
-                  <label class="dialog-row dialog-row-stacked">
-                    <div class="dialog-row-main">
-                      <div class="dialog-row-title">Callback URL or code</div>
-                      <div class="dialog-row-description">
-                        {manualOAuthHasAuthorizationUrl ? 'Paste it here if the local callback does not complete automatically.' : 'Paste the browser callback URL or authorization code to complete sign-in manually.'}
-                      </div>
-                    </div>
-                    <textarea class="input-shell w-full min-h-28" bind:value={manualOAuthValue} placeholder="https://... or pasted code"></textarea>
-                  </label>
-                {/if}
-              </div>
-
-              {#if actionLoading?.startsWith('oauth:')}
-                <div class="dialog-status-row" role="status">
-                  <LoaderCircle size={15} class="animate-spin" />
-                  <span>Waiting for authentication. Paste a code below if the browser does not return automatically.</span>
-                </div>
-              {/if}
-
-              <div class="dialog-footer">
-                {#if actionLoading?.startsWith('oauth:') && manualOAuthProvider}
-                  <button class="action-btn action-btn-danger" type="button" onclick={() => manualOAuthProvider && requestOAuthCancel(manualOAuthProvider)}>Cancel sign-in</button>
-                {:else}
-                  <button class="action-btn" type="button" onclick={() => closeManualOAuthDialog()} disabled={!!actionLoading}>Cancel</button>
-                {/if}
-                {#if manualOAuthIsDevicePoll || manualOAuthNeedsCallbackInput}
-                  <button class="action-btn action-btn-primary" type="button" onclick={() => submitManualOAuth()} disabled={isManualOAuthSubmitDisabled()}>
-                    {manualOAuthIsDevicePoll ? 'Check authentication' : isOAuthCompleting(manualOAuthProvider) ? 'Completing...' : 'Complete sign-in'}
-                  </button>
-                {/if}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Portal>
-  {/if}
-
-  {#if disconnectProviderPending}
-    <Portal to={overlayPortalTarget}>
-      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close disconnect confirmation" onclick={() => closeTopmostDialog()}></button>
-        <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-          <div class="dialog-header">
-            <div class="dialog-header-title-block">
-              <div class="dialog-title">Disconnect provider</div>
-              <div class="dialog-subtitle">Remove OAuth credentials for {disconnectProviderPending.display_name}?</div>
-            </div>
-            <div class="dialog-header-actions">
-              <button class="dialog-close-button" type="button" aria-label="Close disconnect confirmation" onclick={() => closeDisconnectDialog()} disabled={!!actionLoading}>
-                <X size={16} />
-              </button>
-            </div>
-          </div>
-
-          <div class="dialog-body">
-            <div class="dialog-form">
-              <div class="dialog-row-group">
-                <div class="dialog-row dialog-row-muted dialog-row-full">
-                  <div class="dialog-row-main">
-                    <div class="dialog-row-title">OAuth access will be removed</div>
-                    <div class="dialog-row-description">You can sign in again from Authentication.</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="dialog-footer">
-                <button class="action-btn" type="button" onclick={() => closeDisconnectDialog()} disabled={!!actionLoading}>Cancel</button>
-                <button class="action-btn action-btn-danger" type="button" onclick={() => confirmDisconnectProvider()} disabled={!!actionLoading}>Disconnect</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Portal>
-  {/if}
-
-  {#if clearKeyProviderPending}
-    <Portal to={overlayPortalTarget}>
-      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close clear key confirmation" onclick={() => closeTopmostDialog()}></button>
-        <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-          <div class="dialog-header">
-            <div class="dialog-header-title-block">
-              <div class="dialog-title">Clear stored API key</div>
-              <div class="dialog-subtitle">Remove the saved key for {clearKeyProviderPending.display_name}?</div>
-            </div>
-            <div class="dialog-header-actions">
-              <button class="dialog-close-button" type="button" aria-label="Close clear key confirmation" onclick={() => closeClearKeyDialog()} disabled={!!actionLoading}>
-                <X size={16} />
-              </button>
-            </div>
-          </div>
-
-          <div class="dialog-body">
-            <div class="dialog-form">
-              <div class="dialog-row-group">
-                <div class="dialog-row dialog-row-muted dialog-row-full">
-                  <div class="dialog-row-main">
-                    <div class="dialog-row-title">The key will be removed from the desktop keyring</div>
-                    <div class="dialog-row-description">Environment variables are not changed.</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="dialog-footer">
-                <button class="action-btn" type="button" onclick={() => closeClearKeyDialog()} disabled={!!actionLoading}>Cancel</button>
-                <button class="action-btn action-btn-danger" type="button" onclick={() => confirmClearApiToken()} disabled={!!actionLoading}>Clear key</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Portal>
-  {/if}
+  <ProviderClearKeyDialog
+    open={clearKeyProviderPending !== null}
+    provider={clearKeyProviderPending}
+    focusTarget={providerDialogFocusTarget}
+    portalTarget={overlayPortalTarget}
+    pending={!!actionLoading}
+    onClose={closeClearKeyDialog}
+    onConfirm={confirmClearApiToken}
+  />
 </div>

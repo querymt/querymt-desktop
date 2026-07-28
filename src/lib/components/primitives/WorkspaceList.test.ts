@@ -60,8 +60,7 @@ describe('WorkspaceList states', () => {
     render(WorkspaceList, { items: [workspace], onRemoveWorkspace });
 
     await fireEvent.click(screen.getByRole('button', { name: 'Remove querymt-desktop from QueryMT' }));
-    expect(screen.getByRole('dialog')).toHaveTextContent('Your files stay on disk');
-    expect(screen.getByRole('dialog')).toHaveTextContent('The folder and everything inside it are not changed.');
+    expect(screen.getByRole('alertdialog', { name: 'Remove querymt-desktop from QueryMT?' })).toHaveTextContent('The folder and everything inside it stay on disk.');
 
     await fireEvent.click(screen.getByRole('button', { name: 'Remove from QueryMT' }));
     expect(onRemoveWorkspace).toHaveBeenCalledWith(workspace);

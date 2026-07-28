@@ -20,7 +20,8 @@
     onDisconnect,
     onSetApiKey,
     onClearApiKey,
-    onAuthMethodChange
+    onAuthMethodChange,
+    onDialogTrigger
   }: {
     provider: AuthProviderEntry;
     pendingAction?: string | null;
@@ -32,6 +33,7 @@
     onSetApiKey: (provider: AuthProviderEntry) => void;
     onClearApiKey: (provider: AuthProviderEntry) => void;
     onAuthMethodChange: (provider: AuthProviderEntry, method: string) => void;
+    onDialogTrigger: (event: MouseEvent) => void;
   } = $props();
 
   let detailsOpen = $state(false);
@@ -40,12 +42,17 @@
   const pending = $derived(Boolean(pendingAction));
   const signingIn = $derived(pendingAction === 'oauth');
 
-  function handlePrimaryAction() {
+  function handlePrimaryAction(event: MouseEvent) {
     if (primaryAction === 'reconnect') {
-      onSignIn(provider);
+      openDialog(event, onSignIn);
       return;
     }
     detailsOpen = !detailsOpen;
+  }
+
+  function openDialog(event: MouseEvent, action: (provider: AuthProviderEntry) => void) {
+    onDialogTrigger(event);
+    action(provider);
   }
 </script>
 
@@ -58,7 +65,7 @@
   <div class="provider-connection-primary">
     {#if signingIn}
       <button class="action-btn" type="button" disabled><LoaderCircle size={14} class="animate-spin" />Signing in…</button>
-      <IconTooltipButton label="Cancel sign-in" icon={CircleStop} tone="danger" onclick={() => onCancelSignIn(provider)} />
+      <IconTooltipButton label="Cancel sign-in" icon={CircleStop} onclick={() => onCancelSignIn(provider)} />
     {:else}
       <button
         class="action-btn provider-connection-action"
@@ -108,14 +115,14 @@
 
         <div class="provider-connection-detail-actions">
           {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}
-            <button class="action-btn" type="button" disabled={pending} onclick={() => onSignIn(provider)}><LogIn size={14} />{provider.oauth_status === OAuthStatus.Expired ? 'Reconnect OAuth' : 'Sign in with OAuth'}</button>
+            <button class="action-btn" type="button" disabled={pending} onclick={(event) => openDialog(event, onSignIn)}><LogIn size={14} />{provider.oauth_status === OAuthStatus.Expired ? 'Reconnect OAuth' : 'Sign in with OAuth'}</button>
           {/if}
           {#if provider.supports_oauth && provider.oauth_status === OAuthStatus.Connected}
-            <button class="action-btn" type="button" disabled={pending} onclick={() => onDisconnect(provider)}><LogOut size={14} />Disconnect OAuth</button>
+            <button class="action-btn" type="button" disabled={pending} onclick={(event) => openDialog(event, onDisconnect)}><LogOut size={14} />Disconnect OAuth</button>
           {/if}
-          <button class="action-btn" type="button" disabled={pending} onclick={() => onSetApiKey(provider)}><KeyRound size={14} />{provider.has_stored_api_key ? 'Replace API key' : 'Set API key'}</button>
+          <button class="action-btn" type="button" disabled={pending} onclick={(event) => openDialog(event, onSetApiKey)}><KeyRound size={14} />{provider.has_stored_api_key ? 'Replace API key' : 'Set API key'}</button>
           {#if provider.has_stored_api_key}
-            <button class="action-btn action-btn-danger" type="button" disabled={pending} onclick={() => onClearApiKey(provider)}><Trash2 size={14} />Clear API key</button>
+            <button class="action-btn action-btn-danger" type="button" disabled={pending} onclick={(event) => openDialog(event, onClearApiKey)}><Trash2 size={14} />Clear API key</button>
           {/if}
         </div>
       </div>

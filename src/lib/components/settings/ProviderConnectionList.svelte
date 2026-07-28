@@ -13,7 +13,8 @@
     onDisconnect,
     onSetApiKey,
     onClearApiKey,
-    onAuthMethodChange
+    onAuthMethodChange,
+    onDialogTrigger
   }: {
     providers: AuthProviderEntry[];
     pendingAction?: { provider: string; action: string } | null;
@@ -25,6 +26,7 @@
     onSetApiKey: (provider: AuthProviderEntry) => void;
     onClearApiKey: (provider: AuthProviderEntry) => void;
     onAuthMethodChange: (provider: AuthProviderEntry, method: string) => void;
+    onDialogTrigger: (event: MouseEvent) => void;
   } = $props();
 
   const sortedProviders = $derived(sortProvidersByAction(providers));
@@ -43,6 +45,7 @@
       {onSetApiKey}
       {onClearApiKey}
       {onAuthMethodChange}
+      {onDialogTrigger}
     />
   {/each}
 </div>

@@ -185,8 +185,19 @@ describe('SessionComposer', () => {
 
     await fireEvent.click(screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0]);
 
-    expect(screen.getByText('Switch model')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Search models, providers, nodes…')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Switch model' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search models, providers, nodes…')).toHaveFocus();
+  });
+
+  it('closes the model picker with Escape and restores focus to its trigger', async () => {
+    renderComposer();
+    const trigger = screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0];
+
+    await fireEvent.click(trigger);
+    await fireEvent.keyDown(screen.getByPlaceholderText('Search models, providers, nodes…'), { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog', { name: 'Switch model' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 
   it('distinguishes local and mesh copies of the same model', async () => {
@@ -200,7 +211,7 @@ describe('SessionComposer', () => {
 
     await fireEvent.click(screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0]);
 
-    const rows = screen.getAllByRole('button', { name: /Claude Sonnet 4/i }).filter((button) => button.classList.contains('model-picker-row'));
+    const rows = screen.getAllByRole('button', { name: /Claude Sonnet 4/i }).filter((button) => button.classList.contains('app-picker-row'));
     expect(rows).toHaveLength(2);
     expect(rows.filter((row) => row.querySelector('.lucide-check'))).toHaveLength(1);
     expect(rows[1].querySelector('.lucide-check')).not.toBeNull();
