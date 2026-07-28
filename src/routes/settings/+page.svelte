@@ -2,15 +2,14 @@
   import { getContext, onMount } from 'svelte';
   import { CircleStop, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Trash2, X } from '@lucide/svelte';
   import { Portal } from 'bits-ui';
-  import AppCheckbox from '$lib/components/primitives/AppCheckbox.svelte';
+  import GeneralSettingsPanel from '$lib/components/settings/GeneralSettingsPanel.svelte';
+  import ProviderMaintenance from '$lib/components/settings/ProviderMaintenance.svelte';
+  import ProviderOverview from '$lib/components/settings/ProviderOverview.svelte';
+  import SettingsSubnav, { type SettingsSectionId } from '$lib/components/settings/SettingsSubnav.svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
-  import { isMacPlatform as detectMacPlatform } from '$lib/design/platform';
   import { agentsStore } from '$lib/stores/agents.svelte';
-  import { appearanceStore, type AppearanceThemeMode } from '$lib/stores/appearance.svelte';
-  import { chatPreferencesStore, type SendShortcut } from '$lib/stores/chat-preferences.svelte';
-  import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
   import { AuthMethod, OAuthFlowKindTs, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
   import { enableProfileTemplate, listProfileTemplates, type ProfileTemplateInfo } from '$lib/querymt/profile-templates';
   import { open } from '@tauri-apps/plugin-shell';
@@ -35,14 +34,15 @@
   let profileTemplates = $state<ProfileTemplateInfo[]>([]);
   let profileTemplatesLoading = $state(false);
   let profileTemplateError = $state<string | null>(null);
-  let isMacPlatform = $state(false);
+  let selectedSection = $state<SettingsSectionId>('general');
+  let refreshingProviders = $state(false);
+  let refreshingModels = $state(false);
+  let updatingPlugins = $state(false);
+  let maintenanceError = $state<string | null>(null);
+  let maintenanceMessage = $state<string | null>(null);
 
   const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
-
-  const selectedAgent = $derived.by(() =>
-    selectedAgentId ? agentsStore.configs.find((config) => config.id === selectedAgentId) ?? null : null
-  );
 
   const authAgents = $derived.by(() =>
     agentsStore.configs.filter((config) => {
@@ -60,45 +60,24 @@
     }
   });
 
-  const selectedCapabilities = $derived.by(() =>
-    selectedAgentId ? agentsStore.controlCapabilitiesByAgent[selectedAgentId] ?? null : null
-  );
   const providers = $derived.by(() => (selectedAgentId ? agentsStore.authProvidersByAgent[selectedAgentId] ?? [] : []));
   const sortedProviders = $derived.by(() => sortProviders(providers));
+  const connectedProviderCount = $derived(providers.filter((provider) => hasUsableCredential(provider)).length);
+  const attentionProviderCount = $derived(
+    providers.filter((provider) => !hasUsableCredential(provider) && provider.oauth_status === OAuthStatus.Expired).length
+  );
+  const setupProviderCount = $derived(
+    providers.filter((provider) => !hasUsableCredential(provider) && provider.oauth_status !== OAuthStatus.Expired).length
+  );
+  const modelCount = $derived(selectedAgentId ? agentsStore.modelsByAgent[selectedAgentId]?.length ?? 0 : 0);
   const authLoading = $derived.by(() => (selectedAgentId ? agentsStore.authLoadingByAgent[selectedAgentId] ?? false : false));
   const authError = $derived.by(() => (selectedAgentId ? agentsStore.authErrorsByAgent[selectedAgentId] ?? null : null));
-  const modelLoading = $derived.by(() => (selectedAgentId ? agentsStore.modelLoadingByAgent[selectedAgentId] ?? false : false));
   const pluginUpdateStatus = $derived.by(() =>
     selectedAgentId ? agentsStore.pluginUpdateStatusByAgent[selectedAgentId] ?? null : null
   );
   const lastPluginUpdate = $derived.by(() => (selectedAgentId ? agentsStore.lastPluginUpdateByAgent[selectedAgentId] ?? null : null));
   const manualOAuthIsDevicePoll = $derived(manualOAuthFlowKind === OAuthFlowKindTs.DevicePoll);
   const manualOAuthHasAuthorizationUrl = $derived(Boolean(manualOAuthAuthorizationUrl));
-
-  onMount(() => {
-    appearanceStore.initialize();
-    chatPreferencesStore.initialize();
-    void windowDecorationsStore.initialize();
-    isMacPlatform = detectMacPlatform();
-  });
-
-  const themeOptions: Array<{ value: AppearanceThemeMode; label: string }> = [
-    { value: 'system', label: 'System' },
-    { value: 'light', label: 'Light' },
-    { value: 'dark', label: 'Dark' }
-  ];
-
-  const sendShortcutOptions = $derived.by(() => {
-    const options: Array<{ value: SendShortcut; label: string }> = [
-      { value: 'enter', label: 'Enter' },
-      { value: 'shift-enter', label: 'Shift+Enter' },
-      { value: 'ctrl-enter', label: 'Ctrl+Enter' }
-    ];
-    if (isMacPlatform) {
-      options.push({ value: 'cmd-enter', label: 'Cmd+Enter' });
-    }
-    return options;
-  });
 
   type OAuthPollResult = 'connected' | 'timeout' | 'cancelled';
 
@@ -117,8 +96,18 @@
   }
 
   onMount(() => {
+    const section = new URL(window.location.href).searchParams.get('section');
+    if (section === 'general' || section === 'profiles' || section === 'providers') selectedSection = section;
     void refreshProfileTemplates();
   });
+
+  function selectSection(section: SettingsSectionId) {
+    selectedSection = section;
+    const url = new URL(window.location.href);
+    if (section === 'general') url.searchParams.delete('section');
+    else url.searchParams.set('section', section);
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }
 
   async function refreshProfileTemplates() {
     profileTemplatesLoading = true;
@@ -198,14 +187,6 @@
     if (provider.env_var_name && provider.preferred_method === AuthMethod.EnvVar) return `Set ${provider.env_var_name} in your environment.`;
     if (provider.preferred_method === AuthMethod.ApiKey) return 'Store an API key in the desktop keyring.';
     return provider.env_var_name ? `Set ${provider.env_var_name} or store an API key.` : 'Store an API key to enable this provider.';
-  }
-
-  function selectedCapabilitySummary() {
-    if (!selectedCapabilities) return authLoading ? 'Refreshing provider capabilities' : 'No capabilities reported yet';
-
-    const details = [`API v${selectedCapabilities.querymt_control_version}`, 'Auth'];
-    if (selectedCapabilities.features.models) details.push('Models');
-    return details.join(' · ');
   }
 
   function setBusy(value: string | null) {
@@ -379,7 +360,7 @@
 
   async function refreshProviders() {
     if (!selectedAgentId) return;
-    setBusy('refresh');
+    refreshingProviders = true;
     pageError = null;
     pageMessage = null;
     try {
@@ -387,42 +368,40 @@
     } catch (error) {
       pageError = error instanceof Error ? error.message : 'Failed to refresh providers.';
     } finally {
-      setBusy(null);
+      refreshingProviders = false;
     }
   }
 
   async function refreshModels() {
     if (!selectedAgentId) return;
-    setBusy('refresh-models');
-    pageError = null;
-    pageMessage = null;
+    refreshingModels = true;
+    maintenanceError = null;
+    maintenanceMessage = null;
     try {
       await agentsStore.refreshModelsForAgent(selectedAgentId);
-      pageMessage = `Refreshed models for ${selectedAgent?.name ?? 'selected agent'}.`;
+      maintenanceMessage = `Refreshed ${agentsStore.modelsByAgent[selectedAgentId]?.length ?? 0} models.`;
     } catch (error) {
-      pageError = error instanceof Error ? error.message : 'Failed to refresh models.';
+      maintenanceError = error instanceof Error ? error.message : 'Failed to refresh models.';
     } finally {
-      setBusy(null);
+      refreshingModels = false;
     }
   }
 
   async function updatePlugins() {
     if (!selectedAgentId) return;
-    setBusy('update-plugins');
-    pageError = null;
-    pageMessage = null;
+    updatingPlugins = true;
+    maintenanceError = null;
+    maintenanceMessage = null;
     try {
       const results = await agentsStore.updatePluginsForAgent(selectedAgentId);
       const succeeded = results.filter((entry) => entry.success).length;
       const failed = results.length - succeeded;
-      pageMessage =
-        failed === 0
-          ? `Updated ${succeeded} plugin${succeeded === 1 ? '' : 's'}.`
-          : `Plugin update finished: ${succeeded} succeeded, ${failed} failed.`;
+      maintenanceMessage = failed === 0 ? `Updated ${succeeded} plugin${succeeded === 1 ? '' : 's'}.` : null;
+      if (failed > 0) maintenanceError = `${failed} of ${results.length} plugin updates failed.`;
     } catch (error) {
-      pageError = error instanceof Error ? error.message : 'Failed to update plugins.';
+      maintenanceError = error instanceof Error ? error.message : 'Failed to update plugins.';
     } finally {
-      setBusy(null);
+      updatingPlugins = false;
     }
   }
 
@@ -597,26 +576,6 @@
     clearKeyProviderPending = provider;
   }
 
-  function handleThemeChange(value: string) {
-    if (value === 'system' || value === 'light' || value === 'dark') {
-      appearanceStore.setThemeMode(value);
-    }
-  }
-
-  function handleSendShortcutChange(value: string) {
-    if (value === 'enter' || value === 'shift-enter' || value === 'ctrl-enter' || value === 'cmd-enter') {
-      chatPreferencesStore.setSendShortcut(value);
-    }
-  }
-
-  async function handleWindowDecorationChange(enabled: boolean) {
-    try {
-      await windowDecorationsStore.toggleCustomTitlebar(enabled);
-    } catch (error) {
-      pageError = error instanceof Error ? error.message : 'Failed to update window decorations.';
-    }
-  }
-
   async function handleAuthMethodChange(provider: AuthProviderEntry, value: string) {
     if (!selectedAgentId || value === 'auto') return;
     setBusy(`method:${provider.provider}`);
@@ -645,70 +604,13 @@
     />
   </div>
 
-  <div class="settings-unified-panel">
-    <section class="settings-section">
-      <div class="settings-section-header">
-      <div>
-        <h2>Appearance</h2>
-        <p>Choose the app theme and window frame.</p>
-      </div>
-    </div>
+  <div class="settings-layout">
+    <SettingsSubnav selected={selectedSection} onSelect={selectSection} />
 
-    <div class="settings-preference-list">
-      <div class="settings-preference-row">
-        <div class="settings-preference-main">
-          <div class="settings-preference-title">Theme</div>
-          <div class="settings-preference-description">
-            {appearanceStore.themeMode === 'system' ? `Follow the system preference (${appearanceStore.resolvedTheme}).` : `Use ${appearanceStore.themeMode} mode.`}
-          </div>
-        </div>
-        <AppSelect value={appearanceStore.themeMode} options={themeOptions} pill ariaLabel="Theme" onValueChange={handleThemeChange} />
-      </div>
-
-      <div class="settings-preference-row">
-        <div class="settings-preference-main">
-          <div class="settings-preference-title">Send messages with</div>
-          <div class="settings-preference-description">
-            {chatPreferencesStore.sendShortcut === 'enter'
-              ? 'Enter sends. Shift+Enter adds a new line.'
-              : `${sendShortcutOptions.find((option) => option.value === chatPreferencesStore.sendShortcut)?.label ?? 'Selected shortcut'} sends. Enter adds a new line.`}
-          </div>
-        </div>
-        <AppSelect
-          value={chatPreferencesStore.sendShortcut}
-          options={sendShortcutOptions}
-          pill
-          ariaLabel="Send messages with"
-          onValueChange={handleSendShortcutChange}
-        />
-      </div>
-
-      <div class="settings-preference-row">
-        <div class="settings-preference-main">
-          <div class="settings-preference-title">
-            Custom titlebar
-            <span class="badge">Beta</span>
-          </div>
-          <div class:settings-preference-error={windowDecorationsStore.error} class="settings-preference-description">
-            {#if windowDecorationsStore.error}
-              {windowDecorationsStore.error}
-            {:else if !windowDecorationsStore.supported}
-              Available in Tauri desktop builds.
-            {:else}
-              {windowDecorationsStore.mode === 'custom' ? 'QueryMT draws the window controls.' : 'Use the operating system window frame.'}
-            {/if}
-          </div>
-        </div>
-        <AppCheckbox
-          checked={windowDecorationsStore.mode === 'custom'}
-          disabled={!windowDecorationsStore.supported}
-          ariaLabel="Custom titlebar"
-          onCheckedChange={(checked) => void handleWindowDecorationChange(checked)}
-        />
-      </div>
-      </div>
-    </section>
-
+    <div class="settings-content">
+      {#if selectedSection === 'general'}
+        <GeneralSettingsPanel />
+      {:else if selectedSection === 'profiles'}
     <section class="settings-section">
       <div class="settings-section-header settings-section-header-action">
       <div>
@@ -758,6 +660,7 @@
       {/if}
     </section>
 
+      {:else}
     {#if authAgents.length === 0}
       <section class="settings-section">
       <div class="settings-section-header">
@@ -769,50 +672,27 @@
       </section>
     {:else}
       <section class="settings-section">
-        <div class="settings-section-header settings-section-header-action">
+        <div class="settings-section-header settings-section-header-action provider-panel-header">
           <div>
             <h2>Providers</h2>
-            <p>Choose the active agent and manage provider authentication.</p>
+            <p>Authentication for models and services.</p>
           </div>
-          <IconTooltipButton label="Refresh providers" icon={RefreshCw} size={16} disabled={!selectedAgentId || authLoading || actionLoading === 'refresh'} onclick={() => refreshProviders()} />
-        </div>
-
-        <div class="settings-subsection">
-          <div class="settings-preference-list">
-            <div class="settings-preference-row">
-              <div class="settings-preference-main">
-                <div class="settings-preference-title">Active agent</div>
-                <div class="settings-preference-description">{selectedCapabilitySummary()}</div>
-              </div>
-              <AppSelect bind:value={selectedAgentId} options={authAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Agent" />
-            </div>
-
-            <div class="settings-preference-row">
-              <div class="settings-preference-main">
-                <div class="settings-preference-title">Models</div>
-                <div class="settings-preference-description">Refresh available models for the selected agent.</div>
-              </div>
-              <div class="settings-preference-actions-single">
-                <button class="action-btn" type="button" disabled={!selectedAgentId || !!actionLoading || modelLoading} onclick={() => refreshModels()}>
-                  Refresh
-                </button>
-              </div>
-            </div>
-
-            <div class="settings-preference-row">
-              <div class="settings-preference-main">
-                <div class="settings-preference-title">Plugins</div>
-                <div class="settings-preference-description">Update installed plugins for the selected agent.</div>
-              </div>
-              <div class="settings-preference-actions-single">
-                <button class="action-btn" type="button" disabled={!selectedAgentId || !!actionLoading} onclick={() => updatePlugins()}>
-                  Update
-                </button>
-              </div>
-            </div>
-
+          <div class="provider-panel-actions">
+            {#if authAgents.length > 1}
+              <AppSelect bind:value={selectedAgentId} options={authAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Provider agent" />
+            {/if}
+            <IconTooltipButton
+              label={refreshingProviders ? 'Refreshing providers' : 'Refresh providers'}
+              icon={refreshingProviders ? LoaderCircle : RefreshCw}
+              iconClass={refreshingProviders ? 'animate-spin' : ''}
+              size={16}
+              disabled={!selectedAgentId || authLoading || refreshingProviders}
+              onclick={() => refreshProviders()}
+            />
           </div>
         </div>
+
+        <ProviderOverview connected={connectedProviderCount} needsSetup={setupProviderCount} attention={attentionProviderCount} models={modelCount} />
 
       {#if authError || pageError}
         <div class="alert-error settings-section-message">
@@ -826,39 +706,7 @@
         </div>
       {/if}
 
-      {#if pluginUpdateStatus}
-        <div class="surface-muted border-[var(--rail)] bg-[var(--accent-dim)] px-4 py-3 text-sm text-[var(--text)] space-y-1">
-          <div class="font-medium">Plugin update in progress</div>
-          <div>{pluginUpdateStatus.plugin_name} - {pluginUpdateStatus.phase}</div>
-          {#if pluginUpdateStatus.percent != null}
-            <div>{pluginUpdateStatus.percent.toFixed(0)}% complete</div>
-          {/if}
-          {#if pluginUpdateStatus.message}
-            <div class="text-[var(--muted)]">{pluginUpdateStatus.message}</div>
-          {/if}
-        </div>
-      {/if}
-
-      {#if lastPluginUpdate && lastPluginUpdate.length > 0}
-        <div class="surface-muted px-4 py-3 text-sm text-[var(--muted)] space-y-2">
-          <div class="font-medium text-[var(--text)]">Last plugin update</div>
-          <div class="space-y-1">
-            {#each lastPluginUpdate as result}
-              <div>
-                <span class="text-[var(--text)]">{result.plugin_name}</span>
-                <span class="text-[var(--muted)]"> - {result.success ? 'ok' : result.message ?? 'failed'}</span>
-              </div>
-            {/each}
-          </div>
-        </div>
-      {/if}
-
-        <div class="settings-subsection">
-          <div class="settings-subsection-header">
-            <h3>Authentication</h3>
-            <p>Review provider credentials and choose preferred authentication methods.</p>
-          </div>
-
+        <div class="settings-subsection" aria-label="Provider authentication">
           {#if providers.length === 0 && !authLoading}
             <div class="surface-muted p-4 text-sm text-[var(--muted)]">
               No auth-enabled providers reported by this agent.
@@ -924,8 +772,22 @@
             <p class="settings-provider-footnote">OAuth sign-in gives you a browser URL to open or copy. API keys are stored in the desktop keyring.</p>
           {/if}
         </div>
+
+        <ProviderMaintenance
+          {modelCount}
+          {refreshingModels}
+          {updatingPlugins}
+          pluginProgress={pluginUpdateStatus}
+          {lastPluginUpdate}
+          error={maintenanceError}
+          message={maintenanceMessage}
+          onRefreshModels={refreshModels}
+          onUpdatePlugins={updatePlugins}
+        />
       </section>
     {/if}
+      {/if}
+    </div>
   </div>
 
   {#if tokenDialogProvider}

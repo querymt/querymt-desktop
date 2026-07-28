@@ -19,7 +19,7 @@ const agentsStore = vi.hoisted(() => ({
       methods: [],
       features: { models: true, mesh: false, schedules: false, auth: true }
     }
-  },
+  } as Record<string, { querymt_control_version: number; methods: string[]; features: { models: boolean; mesh: boolean; schedules: boolean; auth: boolean } }>,
   authProvidersByAgent: {
     'agent-1': [
       {
@@ -35,6 +35,7 @@ const agentsStore = vi.hoisted(() => ({
   },
   authLoadingByAgent: { 'agent-1': false },
   authErrorsByAgent: { 'agent-1': null },
+  modelsByAgent: { 'agent-1': [{ id: 'model-1', label: 'Model 1' }, { id: 'model-2', label: 'Model 2' }] },
   modelLoadingByAgent: { 'agent-1': false },
   pluginUpdateStatusByAgent: { 'agent-1': null as null | {
     plugin_name: string;
@@ -99,6 +100,7 @@ vi.mock('$lib/stores/window-decorations.svelte', () => ({
 }));
 
 beforeEach(() => {
+  window.history.replaceState({}, '', '/settings');
   HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
   HTMLElement.prototype.releasePointerCapture = vi.fn();
   HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -119,6 +121,15 @@ afterEach(() => {
     }
   ];
   agentsStore.pluginUpdateStatusByAgent['agent-1'] = null;
+  agentsStore.lastPluginUpdateByAgent['agent-1'] = null;
+  agentsStore.configs = [{ id: 'agent-1', name: 'QMTCODE' }];
+  agentsStore.controlCapabilitiesByAgent = {
+    'agent-1': {
+      querymt_control_version: 1,
+      methods: [],
+      features: { models: true, mesh: false, schedules: false, auth: true }
+    }
+  };
   agentsStore.refreshAuthProviders = vi.fn(async () => []);
   agentsStore.startProviderSignIn = vi.fn(async () => ({
     flow_id: 'flow-1',
@@ -129,9 +140,31 @@ afterEach(() => {
 });
 
 describe('Settings controls', () => {
-  it('marks the custom titlebar setting as beta and keeps it off by default', () => {
+  it('opens an addressable settings destination from the URL', async () => {
+    window.history.replaceState({}, '', '/settings?section=profiles');
     render(SettingsPage);
 
+    expect(await screen.findByRole('heading', { name: 'Curated profiles' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Profiles/ })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('updates the URL without adding history entries when switching destinations', async () => {
+    render(SettingsPage);
+
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+
+    expect(window.location.search).toBe('?section=providers');
+    expect(screen.getByRole('heading', { name: 'Providers' })).toBeInTheDocument();
+  });
+
+  it('keeps casual preferences visible and advanced window controls collapsed by default', async () => {
+    render(SettingsPage);
+
+    expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Advanced/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Custom titlebar')).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
     expect(screen.getByText('Custom titlebar')).toBeInTheDocument();
     expect(screen.getByText('Beta')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Custom titlebar' })).not.toBeChecked();
@@ -142,7 +175,7 @@ describe('Settings controls', () => {
 
     const shortcutSelect = screen.getByRole('button', { name: 'Send messages with' });
     expect(shortcutSelect).toHaveTextContent('Enter');
-    expect(screen.getByText('Enter sends. Shift+Enter adds a new line.')).toBeInTheDocument();
+    expect(screen.getByText('Choose the shortcut that submits a message.')).toBeInTheDocument();
 
     await fireEvent.pointerDown(shortcutSelect, { button: 0, pointerType: 'mouse' });
     const shiftEnterOption = await screen.findByRole('option', { name: 'Shift+Enter' });
@@ -164,8 +197,38 @@ describe('Settings controls', () => {
     expect(await screen.findByRole('option', { name: 'Cmd+Enter' })).toBeInTheDocument();
   });
 
+  it('compacts provider scope and maintenance around an authentication overview', async () => {
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+
+    expect(screen.queryByLabelText('Provider agent')).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Provider overview' })).toHaveTextContent('Needs setup1');
+    expect(screen.getByRole('region', { name: 'Provider overview' })).toHaveTextContent('Models2');
+    expect(screen.queryByRole('heading', { name: 'Authentication' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Advanced maintenance/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'Update' })).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced maintenance/ }));
+    expect(screen.getByRole('button', { name: 'Update' })).toBeInTheDocument();
+    expect(screen.getByText('2 available models for the selected agent.')).toBeInTheDocument();
+  });
+
+  it('shows provider agent scope only when more than one auth agent exists', async () => {
+    agentsStore.configs = [...agentsStore.configs, { id: 'agent-2', name: 'Second agent' }];
+    agentsStore.controlCapabilitiesByAgent = {
+      ...agentsStore.controlCapabilitiesByAgent,
+      'agent-2': { querymt_control_version: 1, methods: [], features: { models: true, mesh: false, schedules: false, auth: true } }
+    };
+
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+
+    expect(screen.getByLabelText('Provider agent')).toBeInTheDocument();
+  });
+
   it('keeps API key entry interactive and saves through the store', async () => {
     render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
 
     await fireEvent.click(screen.getByRole('button', { name: 'Set API key' }));
     const input = screen.getByPlaceholderText('Paste API key');
@@ -184,6 +247,7 @@ describe('Settings controls', () => {
     }));
 
     render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
 
     await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     expect(screen.queryByPlaceholderText('https://... or pasted code')).not.toBeInTheDocument();
@@ -207,6 +271,7 @@ describe('Settings controls', () => {
     }));
 
     render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
     await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
     const completeButton = screen.getByRole('button', { name: 'Complete sign-in' });
@@ -235,6 +300,7 @@ describe('Settings controls', () => {
     ]) as any;
 
     render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
     await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
     expect(open).not.toHaveBeenCalled();
@@ -280,6 +346,7 @@ describe('Settings controls', () => {
     ]) as any;
 
     render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
     await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
     const cancelButtons = await screen.findAllByRole('button', { name: 'Cancel sign-in' });
@@ -306,10 +373,13 @@ describe('Settings controls', () => {
     };
 
     render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
 
-    expect(screen.getByText('Plugin update in progress')).toBeInTheDocument();
-    expect(screen.getByText('anthropic - pulling')).toBeInTheDocument();
-    expect(screen.getByText('50% complete')).toBeInTheDocument();
+    expect(screen.queryByText('Downloading layers')).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced maintenance/ }));
+    expect(screen.getAllByText('anthropic')).toHaveLength(2);
+    expect(screen.getByText('pulling · 50%')).toBeInTheDocument();
+    expect(screen.getByText('Downloading layers')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Set API key' })).toBeEnabled();
   });
 });
