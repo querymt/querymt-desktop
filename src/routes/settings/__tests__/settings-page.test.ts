@@ -144,7 +144,7 @@ describe('Settings controls', () => {
     window.history.replaceState({}, '', '/settings?section=profiles');
     render(SettingsPage);
 
-    expect(await screen.findByRole('heading', { name: 'Curated profiles' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Profiles' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Profiles/ })).toHaveAttribute('aria-current', 'page');
   });
 

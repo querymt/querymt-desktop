@@ -3,6 +3,7 @@
   import { CircleStop, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Trash2, X } from '@lucide/svelte';
   import { Portal } from 'bits-ui';
   import GeneralSettingsPanel from '$lib/components/settings/GeneralSettingsPanel.svelte';
+  import ProfilesSettingsPanel from '$lib/components/settings/ProfilesSettingsPanel.svelte';
   import ProviderMaintenance from '$lib/components/settings/ProviderMaintenance.svelte';
   import ProviderOverview from '$lib/components/settings/ProviderOverview.svelte';
   import SettingsSubnav, { type SettingsSectionId } from '$lib/components/settings/SettingsSubnav.svelte';
@@ -11,7 +12,6 @@
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { AuthMethod, OAuthFlowKindTs, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
-  import { enableProfileTemplate, listProfileTemplates, type ProfileTemplateInfo } from '$lib/querymt/profile-templates';
   import { open } from '@tauri-apps/plugin-shell';
 
   let selectedAgentId = $state('');
@@ -31,9 +31,6 @@
   let oauthCancelResolver: (() => void) | null = null;
   let disconnectProviderPending = $state<AuthProviderEntry | null>(null);
   let clearKeyProviderPending = $state<AuthProviderEntry | null>(null);
-  let profileTemplates = $state<ProfileTemplateInfo[]>([]);
-  let profileTemplatesLoading = $state(false);
-  let profileTemplateError = $state<string | null>(null);
   let selectedSection = $state<SettingsSectionId>('general');
   let refreshingProviders = $state(false);
   let refreshingModels = $state(false);
@@ -98,7 +95,6 @@
   onMount(() => {
     const section = new URL(window.location.href).searchParams.get('section');
     if (section === 'general' || section === 'profiles' || section === 'providers') selectedSection = section;
-    void refreshProfileTemplates();
   });
 
   function selectSection(section: SettingsSectionId) {
@@ -107,34 +103,6 @@
     if (section === 'general') url.searchParams.delete('section');
     else url.searchParams.set('section', section);
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
-  }
-
-  async function refreshProfileTemplates() {
-    profileTemplatesLoading = true;
-    profileTemplateError = null;
-    try {
-      profileTemplates = await listProfileTemplates();
-    } catch (error) {
-      profileTemplateError = error instanceof Error ? error.message : 'Failed to load profile templates.';
-    } finally {
-      profileTemplatesLoading = false;
-    }
-  }
-
-  async function enableTemplate(template: ProfileTemplateInfo) {
-    setBusy(`profile-template:${template.id}`);
-    pageError = null;
-    pageMessage = null;
-    try {
-      const updated = await enableProfileTemplate(template.id);
-      profileTemplates = profileTemplates.map((entry) => (entry.id === updated.id ? updated : entry));
-      await agentsStore.refreshManagedProfiles();
-      pageMessage = `Enabled ${updated.name}. The running agent will pick up profile changes automatically.`;
-    } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to enable ${template.name}.`;
-    } finally {
-      setBusy(null);
-    }
   }
 
   function sortProviders(entries: AuthProviderEntry[]) {
@@ -611,55 +579,7 @@
       {#if selectedSection === 'general'}
         <GeneralSettingsPanel />
       {:else if selectedSection === 'profiles'}
-    <section class="settings-section">
-      <div class="settings-section-header settings-section-header-action">
-      <div>
-        <h2>Curated profiles</h2>
-        <p>Install bundled TOML profiles. Existing copies are never overwritten.</p>
-      </div>
-      <IconTooltipButton label="Refresh profile templates" icon={RefreshCw} size={16} disabled={profileTemplatesLoading} onclick={() => refreshProfileTemplates()} />
-    </div>
-
-    {#if profileTemplateError}
-      <div class="alert-error">
-        {profileTemplateError}
-      </div>
-    {/if}
-
-    {#if profileTemplates.length === 0 && !profileTemplatesLoading}
-      <div class="surface-muted p-4 text-sm text-[var(--muted)]">No bundled profile templates found.</div>
-    {:else}
-      <div class="profile-template-list" aria-label="Curated profile templates">
-        {#each profileTemplates as template}
-          <article class:profile-template-row-enabled={template.enabled} class="profile-template-row">
-            <div class="min-w-0 flex-1">
-              <div class="profile-template-row-header">
-                <h3>{template.name}</h3>
-                {#if template.tags.length > 0}
-                  <span>{template.tags[0]}</span>
-                {/if}
-              </div>
-              <p>{template.description}</p>
-              {#if template.userPath}
-                <div class="profile-template-path" title={template.userPath}>{template.userPath}</div>
-              {/if}
-            </div>
-
-            <div class="profile-template-action">
-              {#if template.enabled}
-                <span class="profile-template-state">Enabled</span>
-              {:else}
-                <button class="action-btn" type="button" disabled={actionLoading === `profile-template:${template.id}`} onclick={() => enableTemplate(template)}>
-                  Enable
-                </button>
-              {/if}
-            </div>
-          </article>
-        {/each}
-      </div>
-      {/if}
-    </section>
-
+        <ProfilesSettingsPanel />
       {:else}
     {#if authAgents.length === 0}
       <section class="settings-section">
