@@ -1481,8 +1481,270 @@ summary:focus-visible {
   box-shadow: inset 0 0 0 3px var(--bg-card), inset 0 0 0 8px var(--accent), 0 0 0 3px var(--accent-dim);
 }
 
-.mesh-page-toolbar {
+.mesh-page-toolbar,
+.automations-page-toolbar {
   align-items: flex-start;
+}
+
+.automations-page-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.automation-overview {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.automation-overview-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.automation-overview-stat {
+  min-width: 0;
+  padding: 0.8rem 1rem;
+}
+
+.automation-overview-stat + .automation-overview-stat {
+  border-left: 1px solid var(--border);
+}
+
+.automation-overview-stat span {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-overview-stat strong {
+  display: block;
+  margin-top: 0.24rem;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+
+.automation-overview-value-danger {
+  color: var(--danger) !important;
+}
+
+.automation-overview-warning {
+  border-top: 1px solid var(--status-warn-border);
+  padding: 0.55rem 1rem;
+  background: var(--status-warn-bg);
+  color: var(--status-warn);
+  font-size: 0.74rem;
+}
+
+.automation-group .settings-section-header {
+  min-height: 1.7rem;
+}
+
+.automation-list {
+  overflow: visible;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+
+.automation-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.78rem 0.9rem;
+  background: var(--bg-card);
+  transition: background 0.15s ease;
+}
+
+.automation-row + .automation-row {
+  border-top: 1px solid var(--border);
+}
+
+.automation-row:hover,
+.automation-row:focus-within {
+  background: var(--bg-card-hover);
+}
+
+.automation-row-attention {
+  box-shadow: inset 2px 0 var(--danger);
+}
+
+.automation-row-main {
+  min-width: 0;
+}
+
+.automation-row-title-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.automation-row-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-state-chip {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--status-muted-bg);
+  color: var(--muted);
+  padding: 0.12rem 0.42rem;
+  font-size: 0.66rem;
+}
+
+.automation-state-chip-danger {
+  background: var(--status-error-bg);
+  color: var(--danger);
+}
+
+.automation-row-timing,
+.automation-row-target {
+  overflow: hidden;
+  margin-top: 0.18rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-row-target {
+  color: var(--text-dim);
+}
+
+.automation-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.automation-row-menu {
+  position: relative;
+}
+
+.automation-row-menu > summary {
+  list-style: none;
+}
+
+.automation-row-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.automation-row-menu-trigger {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.automation-row-menu-trigger:hover,
+.automation-row-menu-trigger:focus-visible,
+.automation-row-menu[open] .automation-row-menu-trigger {
+  background: var(--subtle-surface);
+  color: var(--text);
+  outline: none;
+}
+
+.automation-row-menu-content {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 11rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-strong);
+  padding: 0.25rem;
+  box-shadow: var(--shadow-lg);
+}
+
+.automation-row-menu-content button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 6px;
+  color: var(--text-muted);
+  padding: 0.48rem 0.55rem;
+  font-size: 0.73rem;
+  text-align: left;
+}
+
+.automation-row-menu-content button:hover,
+.automation-row-menu-content button:focus-visible {
+  background: var(--subtle-surface);
+  color: var(--text);
+  outline: none;
+}
+
+.automation-row-menu-content button:disabled {
+  opacity: 0.45;
+}
+
+.automation-row-menu-content .automation-row-menu-danger {
+  color: var(--danger);
+}
+
+.automation-row-error,
+.automation-row-details {
+  grid-column: 1 / -1;
+}
+
+.automation-row-error {
+  color: var(--danger);
+  font-size: 0.75rem;
+}
+
+.automation-row-details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem 1rem;
+  border-top: 1px solid var(--subtle-border);
+  margin-top: 0.15rem;
+  padding-top: 0.65rem;
+}
+
+.automation-row-details div {
+  min-width: 0;
+}
+
+.automation-row-details dt {
+  color: var(--text-dim);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.automation-row-details dd {
+  overflow: hidden;
+  margin: 0.18rem 0 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mesh-page-actions {
@@ -1738,7 +2000,8 @@ summary:focus-visible {
 }
 
 @media (max-width: 720px) {
-  .mesh-overview-stats {
+  .mesh-overview-stats,
+  .automation-overview-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1749,6 +2012,27 @@ summary:focus-visible {
 
   .mesh-overview-stat:nth-child(4) {
     border-top: 1px solid var(--border);
+  }
+
+  .automation-overview-stat:nth-child(3) {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  .automation-overview-stat:nth-child(4) {
+    border-top: 1px solid var(--border);
+  }
+
+  .automation-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .automation-row-actions {
+    justify-content: flex-start;
+  }
+
+  .automation-row-details {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .mesh-item-row-stacked {
