@@ -1,9 +1,8 @@
 <script lang="ts">
   import { Check, Copy, GitFork, LoaderCircle, Undo2 } from '@lucide/svelte';
-  import SessionReasoningBlock from '$lib/components/session/SessionReasoningBlock.svelte';
-  import SessionToolBlock from '$lib/components/session/SessionToolBlock.svelte';
+  import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
-  import type { SessionAssistantContent, SessionConversationTurn } from '$lib/domain/session-conversation';
+  import { buildTurnPresentation, type SessionAssistantContent, type SessionConversationTurn } from '$lib/domain/session-conversation';
 
   let {
     turn,
@@ -13,7 +12,8 @@
     undoPending = false,
     forkPending = false,
     onUndo,
-    onFork
+    onFork,
+    onDisclosureChange
   }: {
     turn: SessionConversationTurn;
     undoAvailable?: boolean;
@@ -23,10 +23,12 @@
     forkPending?: boolean;
     onUndo?: (messageId: string) => void;
     onFork?: () => void;
+    onDisclosureChange?: (anchor: HTMLElement, expanded: boolean) => void;
   } = $props();
 
   let copiedAssistantId = $state<string | null>(null);
   let copiedUserId = $state<string | null>(null);
+  const presentation = $derived(turn.presentation ?? buildTurnPresentation(turn.content, turn.settled ?? true));
 
   async function copyUserMessage() {
     if (!turn.user?.text) return;
@@ -87,18 +89,14 @@
   {/if}
 
   <div class="session-turn-content">
-    {#each turn.content as item (item.id)}
-      {#if item.type === 'reasoning'}
-        <SessionReasoningBlock reasoning={[item]} />
-      {:else if item.type === 'tool'}
-        <div class="session-turn-tool">
-          <SessionToolBlock tool={item.tool} />
-        </div>
+    {#each presentation as item (item.id)}
+      {#if item.type === 'work-group'}
+        <SessionWorkGroup group={item} {onDisclosureChange} />
       {:else}
-        <section class="session-agent-block">
+        <section class="session-agent-block session-assistant-message-shell">
           <div class="session-agent-body markdown-body" use:enhanceCodeBlocks>{@html item.html}</div>
 
-          <div class="session-message-actions" aria-label="Message actions">
+          <div class="session-message-actions session-assistant-message-actions" aria-label="Message actions">
             <button
               class="session-message-action-btn"
               type="button"

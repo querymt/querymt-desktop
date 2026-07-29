@@ -386,6 +386,23 @@
     });
   }
 
+  function preserveDisclosureAnchor(anchor: HTMLElement, expanded: boolean) {
+    const viewport = scrollViewport ?? resolveScrollViewport().element;
+    const beforeTop = anchor.getBoundingClientRect().top;
+    void tick().then(() => {
+      if (scrollMode === 'following') {
+        scheduleFollowScroll();
+        return;
+      }
+      const delta = anchor.getBoundingClientRect().top - beforeTop;
+      if (Math.abs(delta) > 0.5) {
+        viewport.scrollTop += delta;
+        lastViewportScrollTop = viewport.scrollTop;
+      }
+      if (!expanded) syncDockAlign();
+    });
+  }
+
   async function refreshSession() {
     await agentsStore.refreshSessionsForAgent(agentId);
     lastRequestedSessionKey = null;
@@ -446,6 +463,7 @@
       onUndo={openUndoDialog}
       onRedo={() => void agentsStore.redoActiveSession()}
       onFork={openForkDialog}
+      onDisclosureChange={preserveDisclosureAnchor}
     />
 
     {#if pendingElicitations.length > 0}

@@ -158,6 +158,40 @@ describe('buildSessionConversation', () => {
     expect(turns[1].content.map((item) => item.id)).toEqual(['question-2', 'a2']);
   });
 
+  it('folds settled intermediate work while keeping the terminal assistant output visible', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'inspect', messageId: 'u1', eventIndex: 0 },
+      { id: 'r1', kind: 'agent_thought_chunk', text: 'Thinking', messageId: 'r1', eventIndex: 1 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Done', messageId: 'a1', eventIndex: 3 }
+    ];
+    session.toolCalls = [{ id: 't1', title: 'read_tool', status: 'failed', kind: 'read_tool', eventIndex: 2 }];
+
+    const [turn] = buildSessionConversation(session);
+
+    expect(turn.settled).toBe(true);
+    expect(turn.presentation).toEqual([
+      expect.objectContaining({ type: 'work-group', toolCount: 1, reasoningCount: 1, failedToolCount: 1, settled: true }),
+      expect.objectContaining({ type: 'assistant', text: 'Done' })
+    ]);
+  });
+
+  it('keeps only the latest busy turn unsettled', () => {
+    const session = baseSession();
+    session.runState = 'tool-running';
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'first', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'First done', messageId: 'a1', eventIndex: 1 },
+      { id: 'u2', kind: 'user_message_chunk', text: 'second', messageId: 'u2', eventIndex: 2 },
+      { id: 'r2', kind: 'agent_thought_chunk', text: 'Working', messageId: 'r2', eventIndex: 3 }
+    ];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns.map((turn) => turn.settled)).toEqual([true, false]);
+    expect(turns[1].presentation?.[0]).toMatchObject({ type: 'work-group', settled: false });
+  });
+
   it('starts a new turn for each user prompt without requiring assistant text', () => {
     const session = baseSession();
     session.transcript = [

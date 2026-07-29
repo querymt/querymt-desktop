@@ -98,37 +98,39 @@ describe('SessionTurn', () => {
     expect(queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
   });
 
-  it('renders reasoning, tools, and assistant text in content order', () => {
-    const { container } = render(SessionTurn, { turn });
-    const orderedText = Array.from(container.querySelector('.session-turn-content')?.children ?? []).map((element) =>
+  it('folds settled work behind a concise summary while keeping the final answer visible', () => {
+    const { getByRole, getByText, queryByText } = render(SessionTurn, { turn: { ...turn, settled: true } });
+
+    expect(getByRole('button', { name: /Worked through 2 tool calls and 2 reasoning steps/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(queryByText('Inspecting components')).not.toBeInTheDocument();
+    expect(getByText('Implemented the fix.')).toBeInTheDocument();
+  });
+
+  it('restores the original reasoning and tool order when settled work is expanded', async () => {
+    const { container, getByRole } = render(SessionTurn, { turn: { ...turn, settled: true } });
+
+    await fireEvent.click(getByRole('button', { name: /Worked through 2 tool calls and 2 reasoning steps/ }));
+    const orderedText = Array.from(container.querySelector('.session-work-list')?.children ?? []).map((element) =>
       element.textContent?.replace(/\s+/g, ' ').trim()
     );
 
-    expect(orderedText).toHaveLength(5);
+    expect(orderedText).toHaveLength(4);
     expect(orderedText[0]).toContain('Inspecting components');
-    expect(orderedText[1]).toContain('read_tool');
+    expect(orderedText[1]).toContain('Read file');
     expect(orderedText[2]).toContain('Preparing the fix');
-    expect(orderedText[3]).toContain('edit');
-    expect(orderedText[4]).toContain('Implemented the fix.');
+    expect(orderedText[3]).toContain('Edit file');
   });
 
-  it('keeps all reasoning and tool disclosures collapsed by default regardless of status', () => {
-    const { container } = render(SessionTurn, { turn });
-    const details = Array.from(container.querySelectorAll('details'));
+  it('keeps current work visible but collapses older active entries', async () => {
+    const { getByRole, getByText, queryByText } = render(SessionTurn, { turn: { ...turn, settled: false } });
 
-    expect(details).toHaveLength(4);
-    expect(details.every((element) => !element.open)).toBe(true);
-  });
+    expect(getByRole('button', { name: '+2 previous work entries' })).toHaveAttribute('aria-expanded', 'false');
+    expect(queryByText('Inspecting components')).not.toBeInTheDocument();
+    expect(getByRole('region', { name: 'Agent work' }).querySelector('.session-reasoning-preview')).toHaveTextContent('Preparing the fix');
+    expect(getByText('Edit file')).toBeInTheDocument();
 
-  it('allows each technical entry to be expanded independently', async () => {
-    const { container } = render(SessionTurn, { turn });
-    const details = Array.from(container.querySelectorAll('details'));
-    const firstSummary = details[0].querySelector('summary');
-
-    expect(firstSummary).not.toBeNull();
-    await fireEvent.click(firstSummary!);
-
-    expect(details[0].open).toBe(true);
-    expect(details.slice(1).every((element) => !element.open)).toBe(true);
+    await fireEvent.click(getByRole('button', { name: '+2 previous work entries' }));
+    expect(getByRole('button', { name: 'Show fewer work entries' })).toHaveAttribute('aria-expanded', 'true');
+    expect(getByRole('region', { name: 'Agent work' })).toHaveTextContent('Inspecting components');
   });
 });

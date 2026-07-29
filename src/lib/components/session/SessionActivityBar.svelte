@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { AlertTriangle, LoaderCircle, XCircle } from '@lucide/svelte';
-  import Shimmer from '$lib/components/ai-elements/shimmer.svelte';
+  import { AlertTriangle, LoaderCircle, MessageCircleQuestion, X } from '@lucide/svelte';
+  import { getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
 
   let {
@@ -21,6 +21,8 @@
   );
   const isBusy = $derived(session.undo.pendingOperation !== null || forkPending || agentBusy);
   const isVisible = $derived(isBusy || session.runState === 'failed' || session.runState === 'waiting-input');
+  const activeTool = $derived(session.toolCalls.find((tool) => tool.id === session.activeToolCallId) ?? null);
+  const activeToolPresentation = $derived(activeTool ? getSessionToolPresentation(activeTool) : null);
 
   const primaryStatus = $derived.by(() => {
     if (forkPending) return 'Creating fork…';
@@ -28,9 +30,12 @@
     if (session.undo.pendingOperation === 'redo') return 'Restoring workspace changes…';
     if (session.runState === 'failed') return session.lastError ? `Failed: ${session.lastError}` : 'Session failed';
     if (session.runState === 'waiting-input') return 'Input needed';
+    if (session.runState === 'tool-running' && activeToolPresentation) {
+      return `${activeToolPresentation.label}${activeToolPresentation.preview ? ` · ${activeToolPresentation.preview}` : ''}`;
+    }
     if (session.runState === 'tool-running') return session.activityLabel ?? 'Running tool…';
-    if (session.runState === 'streaming') return 'Agent is replying…';
-    if (session.runState === 'thinking') return session.activityLabel ?? 'Agent is thinking…';
+    if (session.runState === 'streaming') return 'Responding…';
+    if (session.runState === 'thinking') return session.activityLabel ?? 'Thinking…';
     if (session.runState === 'submitting') return 'Sending prompt…';
     return '';
   });
@@ -38,42 +43,31 @@
 
 {#if isVisible}
   <section
-    class={`session-activity-bar ${isBusy ? 'session-activity-bar-busy' : ''} ${session.runState === 'failed' ? 'session-activity-bar-failed' : ''}`}
-    aria-live="polite"
+    class={`session-activity-bar ${isBusy ? 'session-activity-bar-busy' : ''} ${session.runState === 'failed' ? 'session-activity-bar-failed' : ''} ${session.runState === 'waiting-input' ? 'session-activity-bar-attention' : ''}`}
+    role={session.runState === 'failed' ? 'alert' : 'status'}
+    aria-live={session.runState === 'failed' ? 'assertive' : 'polite'}
   >
-    <div class="session-activity-main">
-      <div class="session-activity-indicator" aria-hidden="true">
-        {#if isBusy}
-          <LoaderCircle size={15} class="animate-spin" />
-        {:else}
-          <AlertTriangle size={15} />
-        {/if}
-      </div>
-      <div class="min-w-0 flex-1">
-        <div class="session-activity-title">{primaryStatus}</div>
-        <div class="session-activity-meta">
-          {#if session.runState === 'failed'}
-            <span>Review the error, then update the prompt or refresh the session.</span>
-          {:else if session.runState === 'waiting-input'}
-            <span>Respond to the request below to continue.</span>
-          {:else if session.undo.pendingOperation}
-            <span>Updating session history and workspace files</span>
-          {:else}
-            <span>Double Esc to cancel</span>
-          {/if}
-        </div>
-      </div>
-      {#if agentBusy && onCancel}
-        <button class="icon-btn" type="button" aria-label="Cancel active session" title="Cancel active session" onclick={onCancel}>
-          <XCircle size={16} />
-        </button>
+    <span class="session-activity-indicator" aria-hidden="true">
+      {#if isBusy}
+        <LoaderCircle size={14} class="animate-spin" />
+      {:else if session.runState === 'waiting-input'}
+        <MessageCircleQuestion size={14} />
+      {:else}
+        <AlertTriangle size={14} />
       {/if}
-    </div>
-
-    {#if isBusy}
-      <div class="session-activity-shimmer">
-        <Shimmer text={primaryStatus} class="text-xs" />
-      </div>
+    </span>
+    <span class="session-activity-title">{primaryStatus}</span>
+    {#if session.runState === 'failed'}
+      <span class="session-activity-meta">Review the error, update the prompt, or refresh.</span>
+    {:else if session.runState === 'waiting-input'}
+      <span class="session-activity-meta">Respond below to continue.</span>
+    {:else if !session.undo.pendingOperation && !forkPending}
+      <span class="session-activity-meta">Double Esc to cancel</span>
+    {/if}
+    {#if agentBusy && onCancel}
+      <button class="session-activity-cancel" type="button" aria-label="Cancel active session" title="Cancel active session" onclick={onCancel}>
+        <X size={14} />
+      </button>
     {/if}
   </section>
 {/if}

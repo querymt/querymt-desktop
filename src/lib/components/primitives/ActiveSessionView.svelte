@@ -15,7 +15,8 @@
     onCancel,
     onUndo,
     onRedo,
-    onFork
+    onFork,
+    onDisclosureChange
   }: {
     session: ActiveSessionViewModel;
     undoSupported?: boolean;
@@ -25,6 +26,7 @@
     onUndo?: (messageId: string) => void;
     onRedo?: () => void | Promise<void>;
     onFork?: (messageId: string) => void;
+    onDisclosureChange?: (anchor: HTMLElement, expanded: boolean) => void;
   } = $props();
 
   const turns = $derived(buildSessionConversation(session));
@@ -63,6 +65,7 @@
           )}
           undoPending={session.undo.pendingOperation === 'undo'}
           {onUndo}
+          {onDisclosureChange}
         />
       {/each}
     </Conversation>

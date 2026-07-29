@@ -1,8 +1,8 @@
 import '@testing-library/jest-dom/vitest';
-import { render, screen } from '@testing-library/svelte';
-import { describe, expect, it } from 'vitest';
-import SessionActivityBar from './SessionActivityBar.svelte';
+import { cleanup, render, screen } from '@testing-library/svelte';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { ActiveSessionViewModel } from '$lib/domain/types';
+import SessionActivityBar from './SessionActivityBar.svelte';
 
 function session(overrides: Partial<ActiveSessionViewModel> = {}): ActiveSessionViewModel {
   return {
@@ -17,37 +17,53 @@ function session(overrides: Partial<ActiveSessionViewModel> = {}): ActiveSession
     activeToolCallId: null,
     lastStopReason: null,
     lastError: null,
-    usage: {
-      contextUsed: null,
-      contextLimit: null,
-      cumulativeCostUsd: null,
-      activeWorkMs: 0,
-      activeWorkStartedAt: null
-    },
+    usage: { contextUsed: null, contextLimit: null, cumulativeCostUsd: null, activeWorkMs: 0, activeWorkStartedAt: null },
     undo: { stack: [], pendingOperation: null, lastRevertedFiles: [], lastMessage: null },
     ...overrides
   };
 }
 
+afterEach(cleanup);
+
 describe('SessionActivityBar', () => {
   it('stays out of the conversation when the session is idle', () => {
     render(SessionActivityBar, { session: session() });
 
-    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Session usage')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('shows focused feedback while the agent is working', () => {
     render(SessionActivityBar, { session: session({ runState: 'thinking', activityLabel: 'Reviewing files…' }) });
 
-    expect(screen.getAllByText('Reviewing files…')).not.toHaveLength(0);
-    expect(screen.getByText('Double Esc to cancel')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Reviewing files…');
+    expect(screen.getByRole('status')).toHaveTextContent('Double Esc to cancel');
   });
 
-  it('keeps failures visible without showing permanent usage chrome', () => {
-    render(SessionActivityBar, { session: session({ runState: 'failed', lastError: 'Connection lost' }) });
+  it('shows the active semantic tool and preview without duplicate shimmer content', () => {
+    render(SessionActivityBar, {
+      session: session({
+        runState: 'tool-running',
+        activeToolCallId: 'shell-1',
+        toolCalls: [
+          {
+            id: 'shell-1',
+            title: 'Run shell',
+            kind: 'shell',
+            status: 'in_progress',
+            arguments: '{"command":"bun","args":["run","check"]}'
+          }
+        ]
+      })
+    });
 
-    expect(screen.getByText('Failed: Connection lost')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Session usage')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Run command · bun run check');
+    expect(screen.getByRole('status').querySelector('.session-activity-shimmer')).not.toBeInTheDocument();
+  });
+
+  it('announces failures as alerts', () => {
+    render(SessionActivityBar, { session: session({ runState: 'failed', lastError: 'shell failed.' }) });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Failed: shell failed.');
   });
 });
