@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  QMT_METHOD_AUTH_CLEAR_API_TOKEN,
+  QMT_METHOD_AUTH_SET_API_TOKEN,
+  QMT_METHOD_AUTH_SET_METHOD,
   QMT_METHOD_SESSION_REDO,
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK,
@@ -37,6 +40,29 @@ describe('QuerymtExtensions undo and redo', () => {
     expect(extMethod).toHaveBeenNthCalledWith(1, toAcpExtensionMethod(QMT_METHOD_SESSION_UNDO_STACK), { session_id: 's1' });
     expect(extMethod).toHaveBeenNthCalledWith(2, toAcpExtensionMethod(QMT_METHOD_SESSION_UNDO), { session_id: 's1', message_id: 'm1' });
     expect(extMethod).toHaveBeenNthCalledWith(3, toAcpExtensionMethod(QMT_METHOD_SESSION_REDO), { session_id: 's1' });
+  });
+});
+
+describe('QuerymtExtensions auth token mutations', () => {
+  it('calls set/clear/method with the ACP extension wire names and params', async () => {
+    const extMethod = vi.fn(async () => ({ provider: 'groq', success: true, message: 'ok' }));
+    const extensions = new QuerymtExtensions({ extMethod } as never);
+
+    await extensions.setApiToken('groq', 'sk-test');
+    await extensions.clearApiToken('groq');
+    await extensions.setAuthMethod('groq', 'api_key' as never);
+
+    expect(extMethod).toHaveBeenNthCalledWith(1, toAcpExtensionMethod(QMT_METHOD_AUTH_SET_API_TOKEN), {
+      provider: 'groq',
+      api_key: 'sk-test'
+    });
+    expect(extMethod).toHaveBeenNthCalledWith(2, toAcpExtensionMethod(QMT_METHOD_AUTH_CLEAR_API_TOKEN), {
+      provider: 'groq'
+    });
+    expect(extMethod).toHaveBeenNthCalledWith(3, toAcpExtensionMethod(QMT_METHOD_AUTH_SET_METHOD), {
+      provider: 'groq',
+      method: 'api_key'
+    });
   });
 });
 

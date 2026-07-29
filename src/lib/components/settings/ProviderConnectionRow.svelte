@@ -3,15 +3,21 @@
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import {
+    FULL_PROVIDER_AUTH_CAPABILITIES,
+    canEditAuthMethod,
+    canShowClearApiKey,
+    canShowSetApiKey,
     providerAuthMethodOptions,
     providerConnectionState,
     providerConnectionSummary,
-    providerPrimaryAction
+    providerPrimaryAction,
+    type ProviderAuthCapabilities
   } from '$lib/domain/provider-auth';
   import { OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
 
   let {
     provider,
+    authCapabilities = FULL_PROVIDER_AUTH_CAPABILITIES,
     pendingAction = null,
     message = null,
     error = null,
@@ -24,6 +30,7 @@
     onDialogTrigger
   }: {
     provider: AuthProviderEntry;
+    authCapabilities?: ProviderAuthCapabilities;
     pendingAction?: string | null;
     message?: string | null;
     error?: string | null;
@@ -41,6 +48,9 @@
   const primaryAction = $derived(providerPrimaryAction(provider));
   const pending = $derived(Boolean(pendingAction));
   const signingIn = $derived(pendingAction === 'oauth');
+  const showSetApiKey = $derived(canShowSetApiKey(provider, authCapabilities));
+  const showClearApiKey = $derived(canShowClearApiKey(provider, authCapabilities));
+  const authMethodEditable = $derived(canEditAuthMethod(authCapabilities));
 
   function handlePrimaryAction(event: MouseEvent) {
     if (primaryAction === 'reconnect') {
@@ -91,11 +101,18 @@
     {#if detailsOpen}
       <div class="provider-connection-details-content">
         <div class="provider-connection-detail-row">
-          <div><strong>Authentication method</strong><span>Choose the preferred credential source.</span></div>
+          <div>
+            <strong>Authentication method</strong>
+            <span>
+              {authMethodEditable
+                ? 'Choose the preferred credential source.'
+                : 'This agent version does not support changing the preferred auth method.'}
+            </span>
+          </div>
           <AppSelect
             value={provider.preferred_method ?? 'auto'}
             options={providerAuthMethodOptions(provider)}
-            disabled={pendingAction === 'method'}
+            disabled={!authMethodEditable || pendingAction === 'method'}
             pill
             ariaLabel={`Authentication method for ${provider.display_name}`}
             onValueChange={(value) => onAuthMethodChange(provider, value)}
@@ -120,8 +137,10 @@
           {#if provider.supports_oauth && provider.oauth_status === OAuthStatus.Connected}
             <button class="action-btn" type="button" disabled={pending} onclick={(event) => openDialog(event, onDisconnect)}><LogOut size={14} />Disconnect OAuth</button>
           {/if}
-          <button class="action-btn" type="button" disabled={pending} onclick={(event) => openDialog(event, onSetApiKey)}><KeyRound size={14} />{provider.has_stored_api_key ? 'Replace API key' : 'Set API key'}</button>
-          {#if provider.has_stored_api_key}
+          {#if showSetApiKey}
+            <button class="action-btn" type="button" disabled={pending} onclick={(event) => openDialog(event, onSetApiKey)}><KeyRound size={14} />{provider.has_stored_api_key ? 'Replace API key' : 'Set API key'}</button>
+          {/if}
+          {#if showClearApiKey}
             <button class="action-btn action-btn-danger" type="button" disabled={pending} onclick={(event) => openDialog(event, onClearApiKey)}><Trash2 size={14} />Clear API key</button>
           {/if}
         </div>

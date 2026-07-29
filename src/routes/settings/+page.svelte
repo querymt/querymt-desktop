@@ -16,7 +16,10 @@
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
-  import { hasUsableProviderCredential } from '$lib/domain/provider-auth';
+  import {
+    hasUsableProviderCredential,
+    providerAuthCapabilitiesFromAgent
+  } from '$lib/domain/provider-auth';
   import { AuthMethod, OAuthFlowKindTs, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
   import { open } from '@tauri-apps/plugin-shell';
 
@@ -68,6 +71,9 @@
   });
 
   const providers = $derived.by(() => (selectedAgentId ? agentsStore.authProvidersByAgent[selectedAgentId] ?? [] : []));
+  const providerAuthCapabilities = $derived.by(() =>
+    providerAuthCapabilitiesFromAgent(selectedAgentId ? agentsStore.controlCapabilitiesByAgent[selectedAgentId] : null)
+  );
   const connectedProviderCount = $derived(providers.filter((provider) => hasUsableProviderCredential(provider)).length);
   const attentionProviderCount = $derived(
     providers.filter((provider) => !hasUsableProviderCredential(provider) && provider.oauth_status === OAuthStatus.Expired).length
@@ -612,6 +618,7 @@
           {:else}
             <ProviderConnectionList
               {providers}
+              authCapabilities={providerAuthCapabilities}
               pendingAction={providerPendingAction}
               messages={providerMessages}
               errors={providerErrors}

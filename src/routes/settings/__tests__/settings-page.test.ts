@@ -16,7 +16,15 @@ const agentsStore = vi.hoisted(() => ({
   controlCapabilitiesByAgent: {
     'agent-1': {
       querymt_control_version: 1,
-      methods: [],
+      methods: [
+        'querymt/auth/status',
+        'querymt/auth/start',
+        'querymt/auth/complete',
+        'querymt/auth/logout',
+        'querymt/auth/setApiToken',
+        'querymt/auth/clearApiToken',
+        'querymt/auth/setMethod'
+      ],
       features: { models: true, mesh: false, schedules: false, auth: true }
     }
   } as Record<string, { querymt_control_version: number; methods: string[]; features: { models: boolean; mesh: boolean; schedules: boolean; auth: boolean } }>,
@@ -29,7 +37,8 @@ const agentsStore = vi.hoisted(() => ({
         has_stored_api_key: false,
         has_env_api_key: false,
         supports_oauth: true,
-        preferred_method: 'api_key'
+        preferred_method: 'api_key',
+        env_var_name: 'ANTHROPIC_API_KEY'
       }
     ]
   },
@@ -119,7 +128,8 @@ afterEach(() => {
       has_stored_api_key: false,
       has_env_api_key: false,
       supports_oauth: true,
-      preferred_method: 'api_key'
+      preferred_method: 'api_key',
+      env_var_name: 'ANTHROPIC_API_KEY'
     }
   ];
   agentsStore.pluginUpdateStatusByAgent['agent-1'] = null;
@@ -128,7 +138,15 @@ afterEach(() => {
   agentsStore.controlCapabilitiesByAgent = {
     'agent-1': {
       querymt_control_version: 1,
-      methods: [],
+      methods: [
+        'querymt/auth/status',
+        'querymt/auth/start',
+        'querymt/auth/complete',
+        'querymt/auth/logout',
+        'querymt/auth/setApiToken',
+        'querymt/auth/clearApiToken',
+        'querymt/auth/setMethod'
+      ],
       features: { models: true, mesh: false, schedules: false, auth: true }
     }
   };
@@ -243,6 +261,24 @@ describe('Settings controls', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
 
     expect(agentsStore.setProviderApiToken).toHaveBeenCalledWith('agent-1', 'anthropic', 'sk-test');
+  });
+
+  it('hides API key controls when the agent does not advertise token mutation methods', async () => {
+    agentsStore.controlCapabilitiesByAgent = {
+      'agent-1': {
+        querymt_control_version: 1,
+        methods: ['querymt/auth/status', 'querymt/auth/start', 'querymt/auth/complete', 'querymt/auth/logout'],
+        features: { models: true, mesh: false, schedules: false, auth: true }
+      }
+    };
+
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
+
+    expect(screen.getByRole('button', { name: 'Sign in with OAuth' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set API key' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Authentication method for Anthropic')).toBeDisabled();
   });
 
   it('names the API key dialog, focuses its input, and restores focus after Escape', async () => {
@@ -464,7 +500,8 @@ describe('Settings controls', () => {
         has_stored_api_key: false,
         has_env_api_key: false,
         supports_oauth: true,
-        preferred_method: 'oauth'
+        preferred_method: 'oauth',
+        env_var_name: 'ANTHROPIC_API_KEY'
       },
       {
         provider: 'google',
@@ -473,7 +510,8 @@ describe('Settings controls', () => {
         has_stored_api_key: false,
         has_env_api_key: false,
         supports_oauth: false,
-        preferred_method: 'api_key'
+        preferred_method: 'api_key',
+        env_var_name: 'GOOGLE_API_KEY'
       }
     ];
     agentsStore.startProviderSignIn = vi.fn(async () => ({
@@ -512,7 +550,8 @@ describe('Settings controls', () => {
         has_stored_api_key: true,
         has_env_api_key: false,
         supports_oauth: true,
-        preferred_method: 'oauth'
+        preferred_method: 'oauth',
+        env_var_name: 'ANTHROPIC_API_KEY'
       }
     ];
 
@@ -543,7 +582,8 @@ describe('Settings controls', () => {
       has_stored_api_key: true,
       has_env_api_key: false,
       supports_oauth: true,
-      preferred_method: 'oauth'
+      preferred_method: 'oauth',
+      env_var_name: 'ANTHROPIC_API_KEY'
     };
     agentsStore.authProvidersByAgent['agent-1'] = [connectedProvider];
     let clearTrigger!: HTMLElement;
