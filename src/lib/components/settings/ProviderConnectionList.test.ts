@@ -2,6 +2,10 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ProviderConnectionList from './ProviderConnectionList.svelte';
+import {
+  FULL_PROVIDER_AUTH_CAPABILITIES,
+  NO_PROVIDER_AUTH_CAPABILITIES
+} from '$lib/domain/provider-auth';
 import { AuthMethod, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
 
 function provider(overrides: Partial<AuthProviderEntry>): AuthProviderEntry {
@@ -13,6 +17,7 @@ function provider(overrides: Partial<AuthProviderEntry>): AuthProviderEntry {
     has_env_api_key: false,
     supports_oauth: true,
     preferred_method: AuthMethod.ApiKey,
+    env_var_name: 'ANTHROPIC_API_KEY',
     ...overrides
   };
 }
@@ -40,7 +45,11 @@ describe('ProviderConnectionList', () => {
       ...handlers
     });
 
-    expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual(['Attention', 'Setup', 'Connected']);
+    expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
+      'Attention',
+      'Setup',
+      'Connected'
+    ]);
     expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Manage' })).toBeInTheDocument();
@@ -50,6 +59,7 @@ describe('ProviderConnectionList', () => {
   it('reveals credential controls and technical details on request', async () => {
     render(ProviderConnectionList, {
       providers: [provider({ env_var_name: 'ANTHROPIC_API_KEY' })],
+      authCapabilities: FULL_PROVIDER_AUTH_CAPABILITIES,
       ...handlers
     });
 
@@ -65,9 +75,42 @@ describe('ProviderConnectionList', () => {
     expect(screen.queryByLabelText('Authentication method for Anthropic')).not.toBeInTheDocument();
   });
 
+  it('hides API-key actions when the agent only advertises OAuth auth methods', async () => {
+    render(ProviderConnectionList, {
+      providers: [provider({ has_stored_api_key: true })],
+      authCapabilities: NO_PROVIDER_AUTH_CAPABILITIES,
+      ...handlers
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Manage' }));
+
+    expect(screen.getByRole('button', { name: 'Sign in with OAuth' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Disconnect OAuth' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Replace API key' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear API key' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Authentication method for Anthropic')).toBeDisabled();
+  });
+
+  it('hides API-key actions for OAuth-only providers without an env var name', async () => {
+    render(ProviderConnectionList, {
+      providers: [provider({ env_var_name: undefined, has_stored_api_key: true })],
+      authCapabilities: FULL_PROVIDER_AUTH_CAPABILITIES,
+      ...handlers
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Manage' }));
+
+    expect(screen.getByRole('button', { name: 'Sign in with OAuth' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Replace API key' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear API key' })).not.toBeInTheDocument();
+  });
+
   it('keeps pending state local to the affected provider', () => {
     render(ProviderConnectionList, {
-      providers: [provider({ provider: 'anthropic' }), provider({ provider: 'google', display_name: 'Google', supports_oauth: false })],
+      providers: [
+        provider({ provider: 'anthropic' }),
+        provider({ provider: 'google', display_name: 'Google', supports_oauth: false })
+      ],
       pendingAction: { provider: 'anthropic', action: 'oauth' },
       ...handlers
     });

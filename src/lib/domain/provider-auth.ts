@@ -1,7 +1,67 @@
-import { AuthMethod, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
+import {
+  QMT_METHOD_AUTH_CLEAR_API_TOKEN,
+  QMT_METHOD_AUTH_SET_API_TOKEN,
+  QMT_METHOD_AUTH_SET_METHOD
+} from '$lib/querymt/querymt-extensions';
+import { AuthMethod, OAuthStatus, type AuthProviderEntry, type CapabilitiesInfo } from '$lib/querymt/generated/types';
 
 export type ProviderConnectionState = 'attention' | 'setup' | 'connected';
 export type ProviderPrimaryAction = 'reconnect' | 'setup' | 'manage';
+
+/** Agent-side auth mutation methods used by Desktop provider controls. */
+export type ProviderAuthCapabilities = {
+  canSetApiToken: boolean;
+  canClearApiToken: boolean;
+  canSetAuthMethod: boolean;
+};
+
+export const FULL_PROVIDER_AUTH_CAPABILITIES: ProviderAuthCapabilities = {
+  canSetApiToken: true,
+  canClearApiToken: true,
+  canSetAuthMethod: true
+};
+
+export const NO_PROVIDER_AUTH_CAPABILITIES: ProviderAuthCapabilities = {
+  canSetApiToken: false,
+  canClearApiToken: false,
+  canSetAuthMethod: false
+};
+
+export function providerAuthCapabilitiesFromAgent(
+  capabilities: CapabilitiesInfo | null | undefined
+): ProviderAuthCapabilities {
+  const methods = capabilities?.methods ?? [];
+  return {
+    canSetApiToken: methods.includes(QMT_METHOD_AUTH_SET_API_TOKEN),
+    canClearApiToken: methods.includes(QMT_METHOD_AUTH_CLEAR_API_TOKEN),
+    canSetAuthMethod: methods.includes(QMT_METHOD_AUTH_SET_METHOD)
+  };
+}
+
+/** Provider exposes a named API-key storage target (keyring / env var). */
+export function providerSupportsApiKey(provider: AuthProviderEntry): boolean {
+  return Boolean(provider.env_var_name?.trim());
+}
+
+export function canShowSetApiKey(
+  provider: AuthProviderEntry,
+  capabilities: ProviderAuthCapabilities = FULL_PROVIDER_AUTH_CAPABILITIES
+): boolean {
+  return providerSupportsApiKey(provider) && capabilities.canSetApiToken;
+}
+
+export function canShowClearApiKey(
+  provider: AuthProviderEntry,
+  capabilities: ProviderAuthCapabilities = FULL_PROVIDER_AUTH_CAPABILITIES
+): boolean {
+  return provider.has_stored_api_key && providerSupportsApiKey(provider) && capabilities.canClearApiToken;
+}
+
+export function canEditAuthMethod(
+  capabilities: ProviderAuthCapabilities = FULL_PROVIDER_AUTH_CAPABILITIES
+): boolean {
+  return capabilities.canSetAuthMethod;
+}
 
 export function hasUsableProviderCredential(provider: AuthProviderEntry): boolean {
   return provider.oauth_status === OAuthStatus.Connected || provider.has_stored_api_key || provider.has_env_api_key;
