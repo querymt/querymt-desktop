@@ -1,15 +1,13 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { ArrowLeft, Bug, MessagesSquare, RefreshCw } from '@lucide/svelte';
   import { onMount, tick, untrack } from 'svelte';
   import ActiveSessionView from '$lib/components/primitives/ActiveSessionView.svelte';
-  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import InboxRequestCard from '$lib/components/primitives/InboxRequestCard.svelte';
-  import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import SessionScrollToBottomPill from '$lib/components/session/SessionScrollToBottomPill.svelte';
   import SessionForkDialog from '$lib/components/session/SessionForkDialog.svelte';
+  import SessionHeader from '$lib/components/session/SessionHeader.svelte';
   import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
   import SessionUndoDialog from '$lib/components/session/SessionUndoDialog.svelte';
   import {
@@ -21,8 +19,8 @@
   } from '$lib/domain/session-scroll';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { formatSessionTimestamp, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
-  import { getForkTarget, type SessionForkTarget } from '$lib/domain/session-fork';
-  import { getUndoAffectedTurnCount, getUndoableSessionTurns } from '$lib/domain/session-undo';
+  import { getForkTarget, getLatestForkTarget, type SessionForkTarget } from '$lib/domain/session-fork';
+  import { getCurrentUndoTarget, getUndoAffectedTurnCount, getUndoableSessionTurns, isTurnReverted } from '$lib/domain/session-undo';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
@@ -69,6 +67,21 @@
     undoTargetMessageId ? getUndoAffectedTurnCount(agentsStore.activeSession, undoTargetMessageId) : 0
   );
   const latestVisible = $derived(chatPresentationState === 'fixed-free-compact');
+  const sessionTurns = $derived(buildSessionConversation(agentsStore.activeSession));
+  const currentUndoTarget = $derived(getCurrentUndoTarget(agentsStore.activeSession));
+  const revertedMessageIds = $derived(
+    new Set(
+      sessionTurns
+        .filter((turn) => turn.user?.messageId && isTurnReverted(agentsStore.activeSession, turn.user.messageId))
+        .map((turn) => turn.user!.messageId!)
+    )
+  );
+  const latestForkTarget = $derived(getLatestForkTarget(sessionTurns, revertedMessageIds));
+  const sessionOperationBusy = $derived(
+    ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession.runState) ||
+      agentsStore.activeSession.undo.pendingOperation !== null ||
+      agentsStore.forkPending
+  );
   const latestContentSignature = $derived.by(() => {
     const transcript = agentsStore.activeSession.transcript;
     const lastTranscriptItem = transcript.at(-1);
@@ -373,6 +386,23 @@
     });
   }
 
+  function preserveDisclosureAnchor(anchor: HTMLElement, expanded: boolean) {
+    const viewport = scrollViewport ?? resolveScrollViewport().element;
+    const beforeTop = anchor.getBoundingClientRect().top;
+    void tick().then(() => {
+      if (scrollMode === 'following') {
+        scheduleFollowScroll();
+        return;
+      }
+      const delta = anchor.getBoundingClientRect().top - beforeTop;
+      if (Math.abs(delta) > 0.5) {
+        viewport.scrollTop += delta;
+        lastViewportScrollTop = viewport.scrollTop;
+      }
+      if (!expanded) syncDockAlign();
+    });
+  }
+
   async function refreshSession() {
     await agentsStore.refreshSessionsForAgent(agentId);
     lastRequestedSessionKey = null;
@@ -399,44 +429,29 @@
   bind:this={sessionPage}
   class={`session-page session-page-chat ${composerCollapsed ? 'session-page-composer-compact' : 'session-page-composer-expanded'}`}
 >
-  <div class="page-toolbar">
-    <button class="action-btn" type="button" onclick={() => goto('/sessions')}>
-      <ArrowLeft size={16} />
-      <span>Back to sessions</span>
-    </button>
-
-    <div class="compact-toolbar">
-      <IconTooltipButton
-        label={debugEventsTooltip}
-        icon={Bug}
-        size={16}
-        onclick={() => (debugEventsOpen = true)}
-      />
-      <IconTooltipButton label="Refresh session" icon={RefreshCw} size={16} onclick={() => refreshSession()} />
-    </div>
-  </div>
+  <SessionHeader
+    session={agentsStore.activeSession}
+    title={selectedSession?.title ?? 'Session'}
+    workspace={selectedSession ? getSessionWorkspaceName(selectedSession.cwd) : 'Unknown workspace'}
+    agentName={selectedSession?.agentName ?? 'Unknown agent'}
+    updatedAt={selectedSession ? formatSessionTimestamp(selectedSession.updatedAt) : 'Not loaded'}
+    summaryStatus={selectedSession?.status ?? 'idle'}
+    debugLabel={debugEventsTooltip}
+    {undoSupported}
+    {forkSupported}
+    forkPending={agentsStore.forkPending}
+    canUndo={undoSupported && currentUndoTarget !== null && !sessionOperationBusy}
+    canRedo={undoSupported && agentsStore.activeSession.undo.stack.length > 0 && !sessionOperationBusy}
+    canFork={forkSupported && latestForkTarget !== null && !sessionOperationBusy}
+    onBack={() => goto('/sessions')}
+    onRefresh={() => refreshSession()}
+    onDebug={() => (debugEventsOpen = true)}
+    onUndo={() => currentUndoTarget && openUndoDialog(currentUndoTarget.messageId)}
+    onRedo={() => void agentsStore.redoActiveSession()}
+    onFork={() => latestForkTarget && openForkDialog(latestForkTarget.messageId)}
+  />
 
   <SessionTechnicalDetails session={agentsStore.activeSession} bind:open={debugEventsOpen} />
-
-  <div class="page-toolbar">
-    <SectionHeader
-      eyebrow="Session detail"
-      title={selectedSession?.title ?? 'Session'}
-      description="A calmer chat view with conversation first, supporting activity second, and the reply docked at the bottom."
-    />
-
-    <div class="status-strip">
-      <span class="status-item">
-        <MessagesSquare size={14} />
-        <strong>{selectedSession?.status ?? 'unknown'}</strong>
-      </span>
-      {#if selectedSession}
-        <span class="status-item"><strong>{selectedSession.agentName}</strong> agent</span>
-        <span class="status-item"><strong>{getSessionWorkspaceName(selectedSession.cwd)}</strong> workspace</span>
-        <span class="status-item"><strong>{formatSessionTimestamp(selectedSession.updatedAt)}</strong></span>
-      {/if}
-    </div>
-  </div>
 
   <div bind:this={sessionPageContent} class="session-page-content">
     <ActiveSessionView
@@ -448,6 +463,7 @@
       onUndo={openUndoDialog}
       onRedo={() => void agentsStore.redoActiveSession()}
       onFork={openForkDialog}
+      onDisclosureChange={preserveDisclosureAnchor}
     />
 
     {#if pendingElicitations.length > 0}

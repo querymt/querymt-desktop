@@ -1,9 +1,11 @@
 <script lang="ts">
   import {
+    AlertTriangle,
     Bot,
     CirclePlus,
     Info,
     Pencil,
+    LoaderCircle,
     Play,
     RefreshCw,
     RotateCcw,
@@ -15,6 +17,8 @@
   } from '@lucide/svelte';
   import { getContext, onMount } from 'svelte';
   import { Portal } from 'bits-ui';
+  import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
+  import AppDialog from '$lib/components/primitives/AppDialog.svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
@@ -73,6 +77,8 @@
   );
 
   const selectedMessages = $derived.by(() => (selectedCard ? getAgentMessages(selectedCard) : []));
+  const initialLoading = $derived(agentsStore.loading && !agentsStore.error && agentCards.length === 0);
+  const refreshing = $derived(agentsStore.loading && agentCards.length > 0);
 
   function statusClass(state?: string | null, connectionState?: string | null, controlState?: string | null) {
     if (state === 'failed' || connectionState === 'failed' || controlState === 'failed' || controlState === 'degraded') {
@@ -261,6 +267,10 @@
     return () => window.removeEventListener('keydown', handleKeydown, { capture: true });
   });
 
+  async function refreshAgents() {
+    await agentsStore.initialize();
+  }
+
   async function saveAgentDialog() {
     const name = draftName.trim();
     const endpoint = draftTransport === 'websocket' ? draftWebSocketUrl.trim() : draftCommandLine.trim();
@@ -301,35 +311,62 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Agents"
-      description="Manage configured ACP agents and lifecycle controls."
+      description="Configure connections, inspect status, and control agent runtimes."
     />
 
     <div class="compact-toolbar">
-      <IconTooltipButton label="Refresh agents" icon={RefreshCw} size={16} onclick={() => agentsStore.initialize()} />
+      <IconTooltipButton
+        label={refreshing ? 'Refreshing agents' : 'Refresh agents'}
+        icon={refreshing ? LoaderCircle : RefreshCw}
+        iconClass={refreshing ? 'animate-spin' : ''}
+        size={16}
+        disabled={agentsStore.loading}
+        onclick={() => refreshAgents()}
+      />
       <IconTooltipButton label="Add agent" icon={CirclePlus} tone="primary" size={16} onclick={() => openAddDialog()} />
     </div>
   </div>
 
   <div class="agents-unified-panel">
-    <section class="settings-section">
-      <div class="settings-section-header">
-        <div>
-          <h2>Configured agents</h2>
-          <p>Start, stop, edit, and inspect connected agents.</p>
-        </div>
-      </div>
-
-      {#if agentCards.length === 0}
-        <div class="empty-state">
-          <div class="flex items-start gap-3">
-            <span class="icon-swatch"><Bot size={16} /></span>
-            <div>
-              <div class="text-sm font-medium">No agents configured</div>
-              <div class="panel-copy mt-1">Add a command line with the + button and it will appear here as a manageable ACP agent.</div>
+    <section class="settings-section" aria-label="Configured agents">
+      {#if initialLoading}
+        <div class="state-skeleton-list" aria-label="Loading agents" aria-busy="true">
+          {#each Array(3) as _}
+            <div class="state-skeleton-row">
+              <span class="state-skeleton-avatar"></span>
+              <span class="state-skeleton-copy"><i></i><i></i></span>
+              <span class="state-skeleton-actions"></span>
             </div>
+          {/each}
+        </div>
+      {:else if agentsStore.error && agentCards.length === 0}
+        <div class="state-panel state-panel-error" role="alert">
+          <span class="state-panel-icon"><AlertTriangle size={17} /></span>
+          <div class="state-panel-copy">
+            <strong>Agents could not be loaded</strong>
+            <p>{agentsStore.error}</p>
           </div>
+          <button class="action-btn" type="button" onclick={() => refreshAgents()}>Try again</button>
+        </div>
+      {:else if agentCards.length === 0}
+        <div class="state-panel">
+          <span class="state-panel-icon"><Bot size={17} /></span>
+          <div class="state-panel-copy">
+            <strong>No agents configured</strong>
+            <p>Add a local ACP command or connect to an ACP WebSocket endpoint.</p>
+          </div>
+          <button class="action-btn action-btn-primary" type="button" onclick={openAddDialog}>Add agent</button>
         </div>
       {:else}
+        {#if agentsStore.error}
+          <div class="state-inline-error" role="alert">
+            <AlertTriangle size={15} />
+            <span class="min-w-0 flex-1"><strong>Some agents could not be refreshed.</strong> {agentsStore.error}</span>
+            <button class="action-btn !px-3 !py-1.5 text-xs" type="button" onclick={() => refreshAgents()}>Retry</button>
+          </div>
+        {:else if refreshing}
+          <div class="state-inline-progress" role="status"><LoaderCircle size={14} class="animate-spin" /><span>Refreshing agent status…</span></div>
+        {/if}
         <div class="agent-list">
           {#each agentCards as card}
             <article class="agent-list-row">
@@ -410,110 +447,63 @@
   </div>
 
   {#if agentDialogMode}
-    <Portal to={overlayPortalTarget}>
-      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close agent dialog" onclick={() => closeAgentDialog()}></button>
-        <div class="dialog-modal-panel relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-          <div class="dialog-header">
-            <div class="dialog-header-title-block">
-              <div class="dialog-title">{agentDialogMode === 'add' ? 'Add Agent' : 'Edit Agent'}</div>
-              <div class="dialog-subtitle">Choose a local process or an already-running ACP WebSocket endpoint.</div>
-            </div>
-            <div class="dialog-header-actions">
-              <button class="dialog-close-button" type="button" aria-label="Close agent dialog" onclick={() => closeAgentDialog()}>
-                <X size={16} />
-              </button>
-            </div>
-          </div>
+    <AppDialog
+      open={true}
+      title={agentDialogMode === 'add' ? 'Add agent' : 'Edit agent'}
+      description="Choose a local process or an already-running ACP WebSocket endpoint."
+      size="workflow"
+      closeLabel="Close agent dialog"
+      portalTarget={overlayPortalTarget}
+      onDismiss={closeAgentDialog}
+    >
+      <form id="agent-dialog-form" class="app-dialog-form" onsubmit={(event) => { event.preventDefault(); saveAgentDialog(); }}>
+        <label class="app-dialog-field">
+          <span class="app-dialog-field-label">Agent name</span>
+          <input class="input-shell w-full" placeholder="Agent name" bind:value={draftName} />
+          <span class="app-dialog-field-help">Shown in sidebars, settings, and session controls.</span>
+        </label>
 
-          <div class="dialog-body">
-            <div class="dialog-form">
-              <div class="dialog-row-group">
-                <label class="dialog-row">
-                  <div class="dialog-row-main">
-                    <div class="dialog-row-title">Agent name</div>
-                    <div class="dialog-row-description">Shown in sidebars, settings, and session controls.</div>
-                  </div>
-                  <input class="input-shell dialog-row-control" placeholder="Agent name" bind:value={draftName} />
-                </label>
+        <label class="app-dialog-field">
+          <span class="app-dialog-field-label">Connection type</span>
+          <AppSelect bind:value={draftTransport} options={transportOptions} ariaLabel="Agent connection type" />
+          <span class="app-dialog-field-help">Local processes are managed by Desktop. WebSocket agents run independently.</span>
+        </label>
 
-                <div class="dialog-row">
-                  <div class="dialog-row-main">
-                    <div class="dialog-row-title">Connection type</div>
-                    <div class="dialog-row-description">Local processes are managed by Desktop. WebSocket agents run independently.</div>
-                  </div>
-                  <AppSelect bind:value={draftTransport} options={transportOptions} ariaLabel="Agent connection type" />
-                </div>
+        {#if draftTransport === 'stdio'}
+          <label class="app-dialog-field">
+            <span class="app-dialog-field-label">Command line</span>
+            <input class="input-shell w-full" placeholder="/path/to/executable --acp" bind:value={draftCommandLine} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="text" />
+            <span class="app-dialog-field-help">Executable and arguments used to start the ACP agent.</span>
+          </label>
+        {:else}
+          <label class="app-dialog-field">
+            <span class="app-dialog-field-label">Agent address</span>
+            <input class="input-shell w-full" placeholder="127.0.0.1:3030" bind:value={draftWebSocketUrl} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="url" />
+            <span class="app-dialog-field-help">Host and port for an independently running ACP WebSocket server.</span>
+          </label>
+        {/if}
+      </form>
 
-                {#if draftTransport === 'stdio'}
-                  <label class="dialog-row dialog-row-stacked">
-                    <div class="dialog-row-main">
-                      <div class="dialog-row-title">Command line</div>
-                      <div class="dialog-row-description">Executable and arguments used to start the ACP agent.</div>
-                    </div>
-                    <input class="input-shell w-full" placeholder="/path/to/executable --acp" bind:value={draftCommandLine} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="text" />
-                  </label>
-                {:else}
-                  <label class="dialog-row dialog-row-stacked">
-                    <div class="dialog-row-main">
-                      <div class="dialog-row-title">Agent address</div>
-                      <div class="dialog-row-description">Host and port for an already-running ACP server. Desktop always connects with WebSocket ACP.</div>
-                    </div>
-                    <input class="input-shell w-full" placeholder="127.0.0.1:3030" bind:value={draftWebSocketUrl} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="url" />
-                  </label>
-                {/if}
-              </div>
-
-              <div class="dialog-footer">
-                <button class="action-btn" type="button" onclick={() => closeAgentDialog()}>Cancel</button>
-                <button class="action-btn action-btn-primary" type="button" onclick={() => saveAgentDialog()} disabled={!draftName.trim() || !(draftTransport === 'websocket' ? draftWebSocketUrl.trim() : draftCommandLine.trim())}>
-                  {agentDialogMode === 'add' ? 'Add agent' : 'Save changes'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Portal>
+      {#snippet footer()}
+        <button class="action-btn" type="button" onclick={() => closeAgentDialog()}>Cancel</button>
+        <button class="action-btn action-btn-primary" form="agent-dialog-form" type="submit" disabled={!draftName.trim() || !(draftTransport === 'websocket' ? draftWebSocketUrl.trim() : draftCommandLine.trim())}>
+          {agentDialogMode === 'add' ? 'Add agent' : 'Save changes'}
+        </button>
+      {/snippet}
+    </AppDialog>
   {/if}
 
   {#if pendingDeleteAgentId}
-    <Portal to={overlayPortalTarget}>
-      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close delete confirmation" onclick={() => (pendingDeleteAgentId = null)}></button>
-        <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-          <div class="dialog-header">
-            <div class="dialog-header-title-block">
-              <div class="dialog-title">Delete Agent</div>
-              <div class="dialog-subtitle">Remove this configured agent from the desktop app?</div>
-            </div>
-            <div class="dialog-header-actions">
-              <button class="dialog-close-button" type="button" aria-label="Close delete confirmation" onclick={() => (pendingDeleteAgentId = null)}>
-                <X size={16} />
-              </button>
-            </div>
-          </div>
-
-          <div class="dialog-body">
-            <div class="dialog-form">
-              <div class="dialog-row-group">
-                <div class="dialog-row dialog-row-muted dialog-row-full">
-                  <div class="dialog-row-main">
-                    <div class="dialog-row-title">This cannot be undone</div>
-                    <div class="dialog-row-description">Sessions remain on disk, but this desktop configuration will be removed.</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="dialog-footer">
-                <button class="action-btn" type="button" onclick={() => (pendingDeleteAgentId = null)}>Cancel</button>
-                <button class="action-btn action-btn-danger" type="button" onclick={() => confirmDeleteAgent()}>Delete</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Portal>
+    {@const pendingDeleteAgent = agentCards.find((card) => card.config.id === pendingDeleteAgentId)?.config}
+    <AppConfirmDialog
+      open={true}
+      title={`Delete ${pendingDeleteAgent?.name ?? 'agent'}?`}
+      description="The desktop configuration will be removed. Existing session data stays on disk."
+      confirmLabel="Delete"
+      portalTarget={overlayPortalTarget}
+      onConfirm={confirmDeleteAgent}
+      onDismiss={() => (pendingDeleteAgentId = null)}
+    />
   {/if}
 
   {#if selectedCard}

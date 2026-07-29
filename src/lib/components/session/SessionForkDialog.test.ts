@@ -18,7 +18,7 @@ describe('SessionForkDialog', () => {
 
     expect(screen.getByText(/new independent session will branch from Original session/i)).toBeTruthy();
     expect(screen.getByText('Implemented the refactor.')).toBeTruthy();
-    expect(screen.getByText(/source stays unchanged/i)).toBeTruthy();
+    expect(screen.getByText(/source and current workspace stay unchanged/i)).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Create and open fork' }));
     expect(onConfirm).toHaveBeenCalledOnce();
   });

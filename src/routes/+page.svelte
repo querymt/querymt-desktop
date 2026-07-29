@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { FolderOpen } from '@lucide/svelte';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import { agentsStore, LAUNCH_MODE_OPTIONS, LAUNCH_REASONING_OPTIONS } from '$lib/stores/agents.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
@@ -11,6 +12,10 @@
     onlineAgents[0]?.id ?? agentsStore.configs.find((config) => config.enabled)?.id ?? null
   );
   const showAgentBadges = $derived(onlineAgents.length > 1);
+  const workspaceName = $derived.by(() => {
+    const normalized = agentsStore.composerCwd.replace(/[\\/]+$/, '');
+    return normalized.split(/[\\/]/).filter(Boolean).pop() ?? 'Choose workspace';
+  });
 
   const activeNowCount = $derived.by(() => {
     const localActive =
@@ -54,10 +59,11 @@
 <div class="flex min-h-[calc(100vh-7rem)] w-full items-center justify-center px-4">
   <section class="mx-auto w-full max-w-4xl space-y-6">
     <div class="space-y-3 text-center">
-      <div class="section-eyebrow">Desktop control center</div>
+      <div class="section-eyebrow">New session</div>
       <h1 class="text-3xl font-semibold tracking-[-0.02em] text-[var(--text)] md:text-4xl">What should QueryMT do?</h1>
-      <p class="mx-auto max-w-2xl text-sm text-[var(--muted)] md:text-base">
-        Start with a workspace and prompt. QueryMT handles the session, tools, and context from there.
+      <p class="mx-auto flex max-w-2xl items-center justify-center gap-2 text-sm text-[var(--muted)] md:text-base">
+        <FolderOpen size={15} />
+        <span>Working in <strong class="font-semibold text-[var(--text)]">{workspaceName}</strong></span>
       </p>
     </div>
 

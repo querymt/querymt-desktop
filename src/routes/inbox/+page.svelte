@@ -3,7 +3,10 @@
   import InboxList from '$lib/components/primitives/InboxList.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import type { InboxItem } from '$lib/domain/types';
+  import { agentsStore } from '$lib/stores/agents.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
+
+  const disconnected = $derived(agentsStore.connectedAgents.length === 0);
 
   async function openSession(item: InboxItem) {
     if (!item.agentId || !item.sessionId) {
@@ -18,13 +21,18 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Inbox"
-      description="Permission and elicitation requests that need human attention."
+      description="Permission and input requests waiting for your response."
     />
   </div>
 
   <div class="agents-unified-panel">
     <InboxList
       items={inboxStore.items}
+      loading={agentsStore.loading}
+      error={agentsStore.error}
+      {disconnected}
+      onRetry={() => agentsStore.initialize()}
+      onOpenAgents={() => goto('/agents')}
       onAction={(itemId, actionId) => inboxStore.handleAction(itemId, actionId)}
       onFieldChange={(itemId, fieldKey, value) => inboxStore.updateField(itemId, fieldKey, value)}
       onCustomFieldToggle={(itemId, fieldKey, active) => inboxStore.setCustomFieldActive(itemId, fieldKey, active)}

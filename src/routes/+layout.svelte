@@ -7,13 +7,13 @@
   import { Tooltip } from 'bits-ui';
   import RecentSessionRail from '$lib/components/shell/RecentSessionRail.svelte';
   import CommandPalette from '$lib/components/shell/CommandPalette.svelte';
-  import Inspector from '$lib/components/shell/Inspector.svelte';
-  import SessionContextRail from '$lib/components/session/SessionContextRail.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { appearanceStore } from '$lib/stores/appearance.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
   import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
+  import { sidebarStore } from '$lib/stores/sidebar.svelte';
+  import { isMacPlatform as detectMacPlatform } from '$lib/design/platform';
   import type { SectionName } from '$lib/design/tokens';
   import type { SessionRailItem } from '$lib/domain/sessions';
   import type { SessionRunState } from '$lib/domain/types';
@@ -51,7 +51,7 @@
   const isSessionCancellable = $derived(
     isActiveSessionRoute && CANCELLABLE_RUN_STATES.has(agentsStore.activeSession.runState)
   );
-  const layoutClass = 'grid grid-cols-1 gap-4 lg:grid-cols-[48px_minmax(0,1fr)] 2xl:grid-cols-[48px_minmax(0,1fr)_280px]';
+  const layoutClass = $derived(sidebarStore.initialized && sidebarStore.effectiveCollapsed ? 'app-grid-sidebar-collapsed' : 'app-grid-sidebar-expanded');
 
   const section = $derived.by(() => {
     if (pathname.startsWith('/sessions/')) {
@@ -64,10 +64,11 @@
   onMount(() => {
     appearanceStore.initialize();
     chatPreferencesStore.initialize();
+    sidebarStore.initialize();
     void agentsStore.initialize();
     void windowDecorationsStore.initialize();
 
-    isMacPlatform = navigator.platform.toLowerCase().includes('mac');
+    isMacPlatform = detectMacPlatform();
 
     let unlistenResize: (() => void) | undefined;
     let unlistenFocus: (() => void) | undefined;
@@ -245,34 +246,23 @@
       attentionSessionKeys={agentsStore.attentionSessionKeys}
       currentAgentId={currentRailAgentId}
       currentSessionId={currentRailSessionId}
+      collapsed={sidebarStore.initialized && sidebarStore.effectiveCollapsed}
+      collapseLocked={sidebarStore.viewportConstrained}
+      onToggleCollapsed={() => sidebarStore.toggleCollapsed()}
       onOpenSession={(session) => agentsStore.acknowledgeSession(session.agentId, session.sessionId)}
       onVisibleSessionItemsChange={(items) => (visibleRailSessionItems = items)}
     />
 
     <div class={`app-grid grid ${layoutClass}`}>
-      <div class="app-icon-rail-spacer" aria-hidden="true"></div>
+      <div class="app-sidebar-spacer" aria-hidden="true"></div>
 
-      <div class="flex min-w-0 flex-col gap-4">
+      <div class="app-main-column flex min-w-0 flex-col gap-4">
         <main class="min-h-0 flex-1">
           {@render children?.()}
         </main>
         <CommandPalette portalTarget={overlayPortalTarget} />
       </div>
 
-      <div class="app-inspector-column hidden min-h-0 2xl:block">
-        <div class="app-inspector-sticky">
-          <Inspector />
-          {#if isActiveSessionRoute && agentsStore.activeSessionId}
-            <aside class="session-side-rail session-side-rail-inspector">
-              <SessionContextRail
-                session={agentsStore.activeSession}
-                sessionConfigPending={agentsStore.sessionConfigPending}
-                onConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
-              />
-            </aside>
-          {/if}
-        </div>
-      </div>
     </div>
     <div bind:this={overlayPortalTarget} class="app-overlay-root"></div>
   </div>

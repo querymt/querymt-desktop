@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Brain, FilePlus2, Paperclip, Plus, SendHorizontal, SlidersHorizontal, UserRound, X } from '@lucide/svelte';
+  import { Brain, ChevronDown, FilePlus2, Monitor, Paperclip, Plus, SendHorizontal, Settings2, SlidersHorizontal, UserRound, X } from '@lucide/svelte';
   import { tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import type { TransitionConfig } from 'svelte/transition';
@@ -148,7 +148,7 @@
   const sessionPlaceholder = 'Write a reply for this session...';
   const promptMinHeightClass = $derived.by(() => {
     if (chatView && sessionOnly) return 'min-h-[76px]';
-    if (launch) return 'min-h-[132px]';
+    if (launch) return 'min-h-[104px]';
     if (sessionOnly) return 'min-h-[116px]';
     if (minimal) return 'min-h-[168px]';
     if (compact) return 'min-h-[116px]';
@@ -162,6 +162,30 @@
 
   const modeOption = $derived(activeSessionId ? findModeConfigOption(sessionConfigOptions) : undefined);
   const reasoningOption = $derived(activeSessionId ? findReasoningConfigOption(sessionConfigOptions) : undefined);
+  const selectedLaunchReasoningLabel = $derived(
+    launchReasoningOptions.find((option) => option.id === selectedLaunchReasoningId)?.label ?? 'Auto'
+  );
+  const selectedProfileLabel = $derived(
+    profileOptions.find((option) => option.id === selectedProfileId)?.label ?? 'Default'
+  );
+  const selectedTargetLabel = $derived(
+    targetOptions.find((option) => option.id === selectedTargetId)?.label ?? 'Local'
+  );
+  const secondaryOptionCount = $derived(
+    (!activeSessionId && launch && launchReasoningOptions.length > 0 ? 1 : reasoningOption ? 1 : 0) +
+      (!sessionOnly && profileOptions.length > 0 ? 1 : 0) +
+      (!sessionOnly && targetOptions.length > 1 ? 1 : 0)
+  );
+  const optionsSummary = $derived.by(() => {
+    const labels: string[] = [];
+    if (!activeSessionId && launch && launchReasoningOptions.length > 0) labels.push(selectedLaunchReasoningLabel);
+    else if (reasoningOption) {
+      labels.push(getConfigOptionChoices(reasoningOption).find((choice) => choice.value === reasoningOption.currentValue)?.name ?? reasoningOption.name);
+    }
+    if (!sessionOnly && profileOptions.length > 0 && selectedProfileId !== 'default') labels.push(selectedProfileLabel);
+    if (!sessionOnly && targetOptions.length > 1 && selectedTargetId !== 'local') labels.push(selectedTargetLabel);
+    return labels.join(' · ');
+  });
 
   function getNextConfigValue(option: (SessionConfigOption & { type: 'select' }) | undefined): string | null {
     if (!option || sessionConfigPending[option.id]) {
@@ -336,10 +360,7 @@
         value={cwd}
         disabled={false}
         recentPaths={recentWorkspaces}
-        targetOptions={targetOptions}
-        selectedTargetId={selectedTargetId}
         onInput={(value) => onCwdInput?.(value)}
-        onTargetChange={(targetId) => onTargetChange?.(targetId)}
       />
     </div>
   {/if}
@@ -403,28 +424,7 @@
         onSelect={(value) => onModelChange?.(value)}
         onRefresh={onRefreshModels}
       />
-      {#if !activeSessionId && launch && launchReasoningOptions.length > 0}
-        <ComposerSplitPillSelect
-          value={selectedLaunchReasoningId}
-          options={launchReasoningOptions.map((option) => ({ value: option.id, label: option.label }))}
-          icon={Brain}
-          ariaLabel="Reasoning effort"
-          class="composer-control-pill"
-          onValueChange={(value) => onLaunchReasoningChange?.(value)}
-        />
-      {:else if reasoningOption}
-        <ComposerSplitPillSelect
-          value={reasoningOption.currentValue}
-          options={getConfigOptionChoices(reasoningOption).map((choice) => ({ value: choice.value, label: choice.name }))}
-          icon={Brain}
-          pending={!!sessionConfigPending[reasoningOption.id]}
-          disabled={!!sessionConfigPending[reasoningOption.id]}
-          ariaLabel={reasoningOption.name}
-          class="composer-control-pill"
-          onValueChange={(value) => onSessionConfigChange?.(reasoningOption.id, value)}
-        />
-      {/if}
-      {#if !activeSessionId && launch && launchModeOptions.length > 0}
+       {#if !activeSessionId && launch && launchModeOptions.length > 0}
         <ComposerSplitPillSelect
           value={selectedLaunchModeId}
           options={launchModeOptions.map((option) => ({ value: option.id, label: option.label }))}
@@ -445,16 +445,77 @@
           onValueChange={(value) => onSessionConfigChange?.(modeOption.id, value)}
         />
       {/if}
-      {#if !sessionOnly && profileOptions.length > 0}
-        <ComposerSplitPillSelect
-          value={selectedProfileId}
-          options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))}
-          icon={UserRound}
-          ariaLabel="Profile"
-          class="composer-control-pill"
-          onValueChange={(value) => onProfileChange?.(value)}
-        />
-      {/if}
+       {#if secondaryOptionCount > 0}
+         <details class="composer-options">
+           <summary class="composer-options-trigger" aria-label="Session options">
+             <Settings2 size={14} />
+             <span>Options</span>
+             {#if optionsSummary}<small>{optionsSummary}</small>{/if}
+             <ChevronDown class="composer-options-chevron" size={13} />
+           </summary>
+           <div class="composer-options-panel">
+             <div class="composer-options-heading">
+               <strong>Session options</strong>
+               <span>{activeSessionId ? 'Applied to the next reply' : 'Applied when this session starts'}</span>
+             </div>
+             <div class="composer-options-list">
+               {#if !activeSessionId && launch && launchReasoningOptions.length > 0}
+                 <div class="composer-option-row">
+                   <div class="composer-option-copy"><Brain size={15} /><span><strong>Reasoning</strong><small>How deeply the agent should think</small></span></div>
+                   <ComposerSplitPillSelect
+                     value={selectedLaunchReasoningId}
+                     options={launchReasoningOptions.map((option) => ({ value: option.id, label: option.label }))}
+                     icon={Brain}
+                     ariaLabel="Reasoning effort"
+                     class="composer-control-pill"
+                     onValueChange={(value) => onLaunchReasoningChange?.(value)}
+                   />
+                 </div>
+               {:else if reasoningOption}
+                 <div class="composer-option-row">
+                   <div class="composer-option-copy"><Brain size={15} /><span><strong>{reasoningOption.name}</strong><small>Adjust reasoning for the next reply</small></span></div>
+                   <ComposerSplitPillSelect
+                     value={reasoningOption.currentValue}
+                     options={getConfigOptionChoices(reasoningOption).map((choice) => ({ value: choice.value, label: choice.name }))}
+                     icon={Brain}
+                     pending={!!sessionConfigPending[reasoningOption.id]}
+                     disabled={!!sessionConfigPending[reasoningOption.id]}
+                     ariaLabel={reasoningOption.name}
+                     class="composer-control-pill"
+                     onValueChange={(value) => onSessionConfigChange?.(reasoningOption.id, value)}
+                   />
+                 </div>
+               {/if}
+               {#if !sessionOnly && profileOptions.length > 0}
+                 <div class="composer-option-row">
+                   <div class="composer-option-copy"><UserRound size={15} /><span><strong>Profile</strong><small>Agent instructions and defaults</small></span></div>
+                   <ComposerSplitPillSelect
+                     value={selectedProfileId}
+                     options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))}
+                     icon={UserRound}
+                     ariaLabel="Profile"
+                     class="composer-control-pill"
+                     onValueChange={(value) => onProfileChange?.(value)}
+                   />
+                 </div>
+               {/if}
+               {#if !sessionOnly && targetOptions.length > 1}
+                 <div class="composer-option-row">
+                   <div class="composer-option-copy"><Monitor size={15} /><span><strong>Target</strong><small>Where this session will run</small></span></div>
+                   <ComposerSplitPillSelect
+                     value={selectedTargetId}
+                     options={targetOptions.map((target) => ({ value: target.id, label: target.label }))}
+                     icon={Monitor}
+                     ariaLabel="Session target"
+                     class="composer-control-pill"
+                     onValueChange={(value) => onTargetChange?.(value)}
+                   />
+                 </div>
+               {/if}
+             </div>
+           </div>
+         </details>
+       {/if}
     </div>
 
     <div class="flex items-center gap-2">

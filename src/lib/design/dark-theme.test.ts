@@ -24,18 +24,20 @@ describe('dark theme palette', () => {
     expect(darkTheme).toContain('--code-bg: #1b1b1b;');
   });
 
-  it('smoothly transitions to a subtle composer border highlight', () => {
+  it('keeps passive panels quiet while the composer retains a subtle hover highlight', () => {
     const panelStrong = appCss.match(/\.panel-strong \{([\s\S]*?)\n\}/)?.[1] ?? '';
     const composerHover = appCss.match(/\.session-composer-dock-expanded:hover \{([\s\S]*?)\n\}/)?.[1] ?? '';
-    expect(panelStrong).toContain('transition: border-color 180ms cubic-bezier(0.22, 1, 0.36, 1);');
+    expect(panelStrong).not.toContain('transition: border-color');
+    expect(appCss).not.toContain('.panel:hover,');
     expect(composerHover).toContain('border-color: color-mix(in srgb, var(--border), var(--border-strong) 42%);');
   });
 
-  it('gives workspace affordances distinct but restrained contrast', () => {
+  it('gives workspace affordances distinct but neutral contrast', () => {
     const workspaceIcon = appCss.match(/\.session-workspace-icon \{([\s\S]*?)\n\}/)?.[1] ?? '';
     const loadMore = appCss.match(/\.session-workspace-load-more \{([\s\S]*?)\n\}/)?.[1] ?? '';
-    expect(workspaceIcon).toContain('background: var(--accent-dim);');
-    expect(workspaceIcon).toContain('border: 1px solid color-mix(in srgb, var(--accent), transparent 72%);');
+    expect(workspaceIcon).toContain('background: var(--icon-surface);');
+    expect(workspaceIcon).toContain('border: 1px solid var(--subtle-border);');
+    expect(workspaceIcon).toContain('color: var(--text-muted);');
     expect(loadMore).toContain('width: 100%;');
     expect(loadMore).toContain('background: var(--subtle-surface);');
     expect(loadMore).toContain('color: var(--text-muted);');

@@ -1,17 +1,23 @@
 <script lang="ts">
   import { getContext, onMount } from 'svelte';
-  import { CircleStop, KeyRound, LoaderCircle, LogIn, LogOut, RefreshCw, Trash2, X } from '@lucide/svelte';
-  import { Portal } from 'bits-ui';
-  import AppCheckbox from '$lib/components/primitives/AppCheckbox.svelte';
+  import { LoaderCircle, RefreshCw } from '@lucide/svelte';
+  import GeneralSettingsPanel from '$lib/components/settings/GeneralSettingsPanel.svelte';
+  import ProfilesSettingsPanel from '$lib/components/settings/ProfilesSettingsPanel.svelte';
+  import ProviderApiKeyDialog from '$lib/components/settings/ProviderApiKeyDialog.svelte';
+  import ProviderClearKeyDialog from '$lib/components/settings/ProviderClearKeyDialog.svelte';
+  import ProviderConnectionList from '$lib/components/settings/ProviderConnectionList.svelte';
+  import ProviderDisconnectDialog from '$lib/components/settings/ProviderDisconnectDialog.svelte';
+  import ProviderMaintenance from '$lib/components/settings/ProviderMaintenance.svelte';
+  import ProviderOAuthDialog from '$lib/components/settings/ProviderOAuthDialog.svelte';
+  import ProviderOverview from '$lib/components/settings/ProviderOverview.svelte';
+  import { captureProviderDialogFocusTarget, type ProviderDialogFocusTarget } from '$lib/components/settings/provider-dialog-focus';
+  import SettingsSubnav, { type SettingsSectionId } from '$lib/components/settings/SettingsSubnav.svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
-  import { appearanceStore, type AppearanceThemeMode } from '$lib/stores/appearance.svelte';
-  import { chatPreferencesStore, type SendShortcut } from '$lib/stores/chat-preferences.svelte';
-  import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
+  import { hasUsableProviderCredential } from '$lib/domain/provider-auth';
   import { AuthMethod, OAuthFlowKindTs, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
-  import { enableProfileTemplate, listProfileTemplates, type ProfileTemplateInfo } from '$lib/querymt/profile-templates';
   import { open } from '@tauri-apps/plugin-shell';
 
   let selectedAgentId = $state('');
@@ -31,17 +37,19 @@
   let oauthCancelResolver: (() => void) | null = null;
   let disconnectProviderPending = $state<AuthProviderEntry | null>(null);
   let clearKeyProviderPending = $state<AuthProviderEntry | null>(null);
-  let profileTemplates = $state<ProfileTemplateInfo[]>([]);
-  let profileTemplatesLoading = $state(false);
-  let profileTemplateError = $state<string | null>(null);
-  let isMacPlatform = $state(false);
+  let providerDialogFocusTarget = $state<ProviderDialogFocusTarget | null>(null);
+  let selectedSection = $state<SettingsSectionId>('general');
+  let refreshingProviders = $state(false);
+  let refreshingModels = $state(false);
+  let updatingPlugins = $state(false);
+  let maintenanceError = $state<string | null>(null);
+  let maintenanceMessage = $state<string | null>(null);
+  let providerPendingAction = $state<{ provider: string; action: string } | null>(null);
+  let providerMessages = $state<Record<string, string | undefined>>({});
+  let providerErrors = $state<Record<string, string | undefined>>({});
 
   const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
-
-  const selectedAgent = $derived.by(() =>
-    selectedAgentId ? agentsStore.configs.find((config) => config.id === selectedAgentId) ?? null : null
-  );
 
   const authAgents = $derived.by(() =>
     agentsStore.configs.filter((config) => {
@@ -59,156 +67,62 @@
     }
   });
 
-  const selectedCapabilities = $derived.by(() =>
-    selectedAgentId ? agentsStore.controlCapabilitiesByAgent[selectedAgentId] ?? null : null
-  );
   const providers = $derived.by(() => (selectedAgentId ? agentsStore.authProvidersByAgent[selectedAgentId] ?? [] : []));
-  const sortedProviders = $derived.by(() => sortProviders(providers));
+  const connectedProviderCount = $derived(providers.filter((provider) => hasUsableProviderCredential(provider)).length);
+  const attentionProviderCount = $derived(
+    providers.filter((provider) => !hasUsableProviderCredential(provider) && provider.oauth_status === OAuthStatus.Expired).length
+  );
+  const setupProviderCount = $derived(
+    providers.filter((provider) => !hasUsableProviderCredential(provider) && provider.oauth_status !== OAuthStatus.Expired).length
+  );
+  const modelCount = $derived(selectedAgentId ? agentsStore.modelsByAgent[selectedAgentId]?.length ?? 0 : 0);
   const authLoading = $derived.by(() => (selectedAgentId ? agentsStore.authLoadingByAgent[selectedAgentId] ?? false : false));
   const authError = $derived.by(() => (selectedAgentId ? agentsStore.authErrorsByAgent[selectedAgentId] ?? null : null));
-  const modelLoading = $derived.by(() => (selectedAgentId ? agentsStore.modelLoadingByAgent[selectedAgentId] ?? false : false));
   const pluginUpdateStatus = $derived.by(() =>
     selectedAgentId ? agentsStore.pluginUpdateStatusByAgent[selectedAgentId] ?? null : null
   );
   const lastPluginUpdate = $derived.by(() => (selectedAgentId ? agentsStore.lastPluginUpdateByAgent[selectedAgentId] ?? null : null));
   const manualOAuthIsDevicePoll = $derived(manualOAuthFlowKind === OAuthFlowKindTs.DevicePoll);
-  const manualOAuthHasAuthorizationUrl = $derived(Boolean(manualOAuthAuthorizationUrl));
-
-  onMount(() => {
-    appearanceStore.initialize();
-    chatPreferencesStore.initialize();
-    void windowDecorationsStore.initialize();
-    isMacPlatform = /mac/i.test(`${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`);
-  });
-
-  const themeOptions: Array<{ value: AppearanceThemeMode; label: string }> = [
-    { value: 'system', label: 'System' },
-    { value: 'light', label: 'Light' },
-    { value: 'dark', label: 'Dark' }
-  ];
-
-  const sendShortcutOptions = $derived.by(() => {
-    const options: Array<{ value: SendShortcut; label: string }> = [
-      { value: 'enter', label: 'Enter' },
-      { value: 'shift-enter', label: 'Shift+Enter' },
-      { value: 'ctrl-enter', label: 'Ctrl+Enter' }
-    ];
-    if (isMacPlatform) {
-      options.push({ value: 'cmd-enter', label: 'Cmd+Enter' });
-    }
-    return options;
-  });
 
   type OAuthPollResult = 'connected' | 'timeout' | 'cancelled';
 
-  function getAuthMethodOptionsForProvider(provider: AuthProviderEntry): Array<{ value: AuthMethod | 'auto'; label: string }> {
-    const base: Array<{ value: AuthMethod | 'auto'; label: string }> = [
-      { value: 'auto', label: 'Auto' },
-      { value: AuthMethod.ApiKey, label: 'API key' }
-    ];
-    if (provider.supports_oauth) {
-      base.push({ value: AuthMethod.OAuth, label: 'OAuth' });
-    }
-    if (provider.env_var_name) {
-      base.push({ value: AuthMethod.EnvVar, label: 'Env var' });
-    }
-    return base;
-  }
-
   onMount(() => {
-    void refreshProfileTemplates();
+    const section = new URL(window.location.href).searchParams.get('section');
+    if (section === 'general' || section === 'profiles' || section === 'providers') selectedSection = section;
   });
 
-  async function refreshProfileTemplates() {
-    profileTemplatesLoading = true;
-    profileTemplateError = null;
-    try {
-      profileTemplates = await listProfileTemplates();
-    } catch (error) {
-      profileTemplateError = error instanceof Error ? error.message : 'Failed to load profile templates.';
-    } finally {
-      profileTemplatesLoading = false;
-    }
-  }
-
-  async function enableTemplate(template: ProfileTemplateInfo) {
-    setBusy(`profile-template:${template.id}`);
-    pageError = null;
-    pageMessage = null;
-    try {
-      const updated = await enableProfileTemplate(template.id);
-      profileTemplates = profileTemplates.map((entry) => (entry.id === updated.id ? updated : entry));
-      await agentsStore.refreshManagedProfiles();
-      pageMessage = `Enabled ${updated.name}. The running agent will pick up profile changes automatically.`;
-    } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to enable ${template.name}.`;
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  function sortProviders(entries: AuthProviderEntry[]) {
-    return [...entries].sort((left, right) => {
-      const leftRank = providerSortRank(left);
-      const rightRank = providerSortRank(right);
-      if (leftRank !== rightRank) return leftRank - rightRank;
-      return left.display_name.localeCompare(right.display_name);
-    });
-  }
-
-  function hasUsableCredential(provider: AuthProviderEntry) {
-    return provider.oauth_status === OAuthStatus.Connected || provider.has_stored_api_key || provider.has_env_api_key;
-  }
-
-  function providerSortRank(provider: AuthProviderEntry) {
-    if (hasUsableCredential(provider)) return 0;
-    if (provider.oauth_status === OAuthStatus.Expired) return 1;
-    return 2;
-  }
-
-  function authStatusTone(provider: AuthProviderEntry) {
-    if (hasUsableCredential(provider)) return 'connected';
-    if (provider.oauth_status === OAuthStatus.Expired) return 'warning';
-    return 'muted';
-  }
-
-  function authStatusLabel(provider: AuthProviderEntry) {
-    if (provider.oauth_status === OAuthStatus.Connected) return 'Connected';
-    if (provider.has_stored_api_key) return 'API key stored';
-    if (provider.has_env_api_key) return 'Env key available';
-    if (provider.oauth_status === OAuthStatus.Expired) return 'OAuth expired';
-    if (provider.oauth_status === OAuthStatus.NotAuthenticated) return 'Not signed in';
-    return 'Not configured';
-  }
-
-  function authDetail(provider: AuthProviderEntry) {
-    if (provider.oauth_status === OAuthStatus.Connected) return 'OAuth credentials saved';
-    if (provider.has_stored_api_key) return 'Stored in desktop keyring';
-    if (provider.has_env_api_key) return provider.env_var_name ? `Environment key ${provider.env_var_name}` : 'Environment key available';
-    if (provider.oauth_status === OAuthStatus.Expired) return 'Sign in again to refresh OAuth';
-    if (provider.supports_oauth) return 'OAuth available';
-    return provider.env_var_name ? 'Environment variable supported' : 'API key authentication supported';
-  }
-
-  function authHint(provider: AuthProviderEntry) {
-    if (hasUsableCredential(provider)) return '';
-    if (provider.oauth_status === OAuthStatus.Expired) return 'Reconnect this provider to resume OAuth access.';
-    if (provider.oauth_status === OAuthStatus.NotAuthenticated) return 'Sign in with OAuth to enable this provider.';
-    if (provider.env_var_name && provider.preferred_method === AuthMethod.EnvVar) return `Set ${provider.env_var_name} in your environment.`;
-    if (provider.preferred_method === AuthMethod.ApiKey) return 'Store an API key in the desktop keyring.';
-    return provider.env_var_name ? `Set ${provider.env_var_name} or store an API key.` : 'Store an API key to enable this provider.';
-  }
-
-  function selectedCapabilitySummary() {
-    if (!selectedCapabilities) return authLoading ? 'Refreshing provider capabilities' : 'No capabilities reported yet';
-
-    const details = [`API v${selectedCapabilities.querymt_control_version}`, 'Auth'];
-    if (selectedCapabilities.features.models) details.push('Models');
-    return details.join(' · ');
+  function selectSection(section: SettingsSectionId) {
+    selectedSection = section;
+    const url = new URL(window.location.href);
+    if (section === 'general') url.searchParams.delete('section');
+    else url.searchParams.set('section', section);
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
   }
 
   function setBusy(value: string | null) {
     actionLoading = value;
+  }
+
+  function startProviderAction(provider: AuthProviderEntry, action: string) {
+    providerPendingAction = { provider: provider.provider, action };
+    providerMessages = { ...providerMessages, [provider.provider]: undefined };
+    providerErrors = { ...providerErrors, [provider.provider]: undefined };
+  }
+
+  function finishProviderAction(provider: AuthProviderEntry, action: string) {
+    if (providerPendingAction?.provider === provider.provider && providerPendingAction.action === action) {
+      providerPendingAction = null;
+    }
+  }
+
+  function setProviderMessage(provider: AuthProviderEntry, message: string) {
+    providerMessages = { ...providerMessages, [provider.provider]: message };
+    providerErrors = { ...providerErrors, [provider.provider]: undefined };
+  }
+
+  function setProviderError(provider: AuthProviderEntry, message: string) {
+    providerErrors = { ...providerErrors, [provider.provider]: message };
+    providerMessages = { ...providerMessages, [provider.provider]: undefined };
   }
 
   function isOAuthLoading(provider: AuthProviderEntry) {
@@ -233,7 +147,9 @@
     // If stale backend flows become a problem, add backend cancel support instead of using logout, which deletes credentials.
     oauthCancelRequested = true;
     pageError = null;
-    pageMessage = `Cancelled sign-in for ${provider.display_name}.`;
+    pageMessage = null;
+    setProviderMessage(provider, `Cancelled sign-in for ${provider.display_name}.`);
+    providerPendingAction = null;
     closeManualOAuthDialog();
     oauthCancelResolver?.();
   }
@@ -337,48 +253,9 @@
     clearKeyProviderPending = null;
   }
 
-  function closeTopmostDialog() {
-    if (actionLoading) return false;
-
-    if (tokenDialogProvider) {
-      closeTokenDialog();
-      return true;
-    }
-
-    if (manualOAuthProvider) {
-      closeManualOAuthDialog();
-      return true;
-    }
-
-    if (disconnectProviderPending) {
-      closeDisconnectDialog();
-      return true;
-    }
-
-    if (clearKeyProviderPending) {
-      closeClearKeyDialog();
-      return true;
-    }
-
-    return false;
-  }
-
-  onMount(() => {
-    const handleKeydown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      if (closeTopmostDialog()) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeydown, { capture: true });
-    return () => window.removeEventListener('keydown', handleKeydown, { capture: true });
-  });
-
   async function refreshProviders() {
     if (!selectedAgentId) return;
-    setBusy('refresh');
+    refreshingProviders = true;
     pageError = null;
     pageMessage = null;
     try {
@@ -386,42 +263,40 @@
     } catch (error) {
       pageError = error instanceof Error ? error.message : 'Failed to refresh providers.';
     } finally {
-      setBusy(null);
+      refreshingProviders = false;
     }
   }
 
   async function refreshModels() {
     if (!selectedAgentId) return;
-    setBusy('refresh-models');
-    pageError = null;
-    pageMessage = null;
+    refreshingModels = true;
+    maintenanceError = null;
+    maintenanceMessage = null;
     try {
       await agentsStore.refreshModelsForAgent(selectedAgentId);
-      pageMessage = `Refreshed models for ${selectedAgent?.name ?? 'selected agent'}.`;
+      maintenanceMessage = `Refreshed ${agentsStore.modelsByAgent[selectedAgentId]?.length ?? 0} models.`;
     } catch (error) {
-      pageError = error instanceof Error ? error.message : 'Failed to refresh models.';
+      maintenanceError = error instanceof Error ? error.message : 'Failed to refresh models.';
     } finally {
-      setBusy(null);
+      refreshingModels = false;
     }
   }
 
   async function updatePlugins() {
     if (!selectedAgentId) return;
-    setBusy('update-plugins');
-    pageError = null;
-    pageMessage = null;
+    updatingPlugins = true;
+    maintenanceError = null;
+    maintenanceMessage = null;
     try {
       const results = await agentsStore.updatePluginsForAgent(selectedAgentId);
       const succeeded = results.filter((entry) => entry.success).length;
       const failed = results.length - succeeded;
-      pageMessage =
-        failed === 0
-          ? `Updated ${succeeded} plugin${succeeded === 1 ? '' : 's'}.`
-          : `Plugin update finished: ${succeeded} succeeded, ${failed} failed.`;
+      maintenanceMessage = failed === 0 ? `Updated ${succeeded} plugin${succeeded === 1 ? '' : 's'}.` : null;
+      if (failed > 0) maintenanceError = `${failed} of ${results.length} plugin updates failed.`;
     } catch (error) {
-      pageError = error instanceof Error ? error.message : 'Failed to update plugins.';
+      maintenanceError = error instanceof Error ? error.message : 'Failed to update plugins.';
     } finally {
-      setBusy(null);
+      updatingPlugins = false;
     }
   }
 
@@ -444,21 +319,29 @@
     }
 
     setBusy(`oauth-complete:${provider.provider}`);
+    startProviderAction(provider, 'oauth-complete');
     pageError = null;
     pageMessage = null;
 
     try {
       const result = await agentsStore.completeProviderSignIn(agentId, flowId, response);
       if (result.success) {
-        pageMessage = result.message || `Successfully authenticated with ${provider.display_name}.`;
+        const message = result.message || `Successfully authenticated with ${provider.display_name}.`;
+        pageMessage = message;
+        setProviderMessage(provider, message);
         closeManualOAuthDialog();
       } else {
-        pageError = result.message || `Failed to complete sign-in for ${provider.display_name}.`;
+        const message = result.message || `Failed to complete sign-in for ${provider.display_name}.`;
+        pageError = message;
+        setProviderError(provider, message);
       }
     } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to complete sign-in for ${provider.display_name}.`;
+      const message = error instanceof Error ? error.message : `Failed to complete sign-in for ${provider.display_name}.`;
+      pageError = message;
+      setProviderError(provider, message);
     } finally {
       setBusy(null);
+      finishProviderAction(provider, 'oauth-complete');
     }
   }
 
@@ -467,26 +350,35 @@
       return;
     }
 
-    setBusy(`token:${tokenDialogProvider.provider}`);
+    const provider = tokenDialogProvider;
+    setBusy(`token:${provider.provider}`);
+    startProviderAction(provider, 'token');
     pageError = null;
     pageMessage = null;
 
     try {
       const result = await agentsStore.setProviderApiToken(
         selectedAgentId,
-        tokenDialogProvider.provider,
+        provider.provider,
         tokenDialogValue.trim()
       );
       if (result.success) {
-        pageMessage = result.message || `Stored API key for ${tokenDialogProvider.display_name}.`;
+        const message = result.message || `Stored API key for ${provider.display_name}.`;
+        pageMessage = message;
+        setProviderMessage(provider, message);
         closeTokenDialog();
       } else {
-        pageError = result.message || `Failed to store API key for ${tokenDialogProvider.display_name}.`;
+        const message = result.message || `Failed to store API key for ${provider.display_name}.`;
+        pageError = message;
+        setProviderError(provider, message);
       }
     } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to store API key for ${tokenDialogProvider.display_name}.`;
+      const message = error instanceof Error ? error.message : `Failed to store API key for ${provider.display_name}.`;
+      pageError = message;
+      setProviderError(provider, message);
     } finally {
       setBusy(null);
+      finishProviderAction(provider, 'token');
     }
   }
 
@@ -495,21 +387,29 @@
 
     const provider = disconnectProviderPending;
     setBusy(`disconnect:${provider.provider}`);
+    startProviderAction(provider, 'disconnect');
     pageError = null;
     pageMessage = null;
 
     try {
       const result = await agentsStore.disconnectProvider(selectedAgentId, provider.provider);
       if (result.success) {
-        pageMessage = result.message || `Disconnected ${provider.display_name}.`;
+        const message = result.message || `Disconnected ${provider.display_name}.`;
+        pageMessage = message;
+        setProviderMessage(provider, message);
         closeDisconnectDialog();
       } else {
-        pageError = result.message || `Failed to disconnect ${provider.display_name}.`;
+        const message = result.message || `Failed to disconnect ${provider.display_name}.`;
+        pageError = message;
+        setProviderError(provider, message);
       }
     } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to disconnect ${provider.display_name}.`;
+      const message = error instanceof Error ? error.message : `Failed to disconnect ${provider.display_name}.`;
+      pageError = message;
+      setProviderError(provider, message);
     } finally {
       setBusy(null);
+      finishProviderAction(provider, 'disconnect');
     }
   }
 
@@ -518,21 +418,29 @@
 
     const provider = clearKeyProviderPending;
     setBusy(`clear-token:${provider.provider}`);
+    startProviderAction(provider, 'clear-token');
     pageError = null;
     pageMessage = null;
 
     try {
       const result = await agentsStore.clearProviderApiToken(selectedAgentId, provider.provider);
       if (result.success) {
-        pageMessage = result.message || `Cleared API key for ${provider.display_name}.`;
+        const message = result.message || `Cleared API key for ${provider.display_name}.`;
+        pageMessage = message;
+        setProviderMessage(provider, message);
         closeClearKeyDialog();
       } else {
-        pageError = result.message || `Failed to clear API key for ${provider.display_name}.`;
+        const message = result.message || `Failed to clear API key for ${provider.display_name}.`;
+        pageError = message;
+        setProviderError(provider, message);
       }
     } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to clear API key for ${provider.display_name}.`;
+      const message = error instanceof Error ? error.message : `Failed to clear API key for ${provider.display_name}.`;
+      pageError = message;
+      setProviderError(provider, message);
     } finally {
       setBusy(null);
+      finishProviderAction(provider, 'clear-token');
     }
   }
 
@@ -540,6 +448,7 @@
     if (!selectedAgentId) return;
     const agentId = selectedAgentId;
     setBusy(`oauth:${provider.provider}`);
+    startProviderAction(provider, 'oauth');
     oauthCancelRequested = false;
     pageError = null;
     pageMessage = null;
@@ -560,8 +469,10 @@
 
       const pollResult = await pollProviderSignInUntilCancelled(agentId, providerName);
       if (pollResult === 'connected') {
+        const message = `Successfully authenticated with ${providerName}.`;
         closeManualOAuthDialog();
-        pageMessage = `Successfully authenticated with ${providerName}.`;
+        pageMessage = message;
+        setProviderMessage(provider, message);
         return;
       }
       if (pollResult === 'cancelled') {
@@ -572,15 +483,22 @@
       manualOAuthNeedsCallbackInput = true;
     } catch (error) {
       if (!oauthCancelRequested) {
-        pageError = error instanceof Error ? error.message : `Failed to start sign-in for ${provider.provider}.`;
+        const message = error instanceof Error ? error.message : `Failed to start sign-in for ${provider.provider}.`;
+        pageError = message;
+        setProviderError(provider, message);
       }
     } finally {
       oauthCancelRequested = false;
       oauthCancelResolver = null;
       if (actionLoading === `oauth:${provider.provider}`) {
         setBusy(null);
+        finishProviderAction(provider, 'oauth');
       }
     }
+  }
+
+  function rememberProviderDialogTrigger(event: MouseEvent) {
+    providerDialogFocusTarget = captureProviderDialogFocusTarget(event);
   }
 
   function handleDisconnect(provider: AuthProviderEntry) {
@@ -596,42 +514,30 @@
     clearKeyProviderPending = provider;
   }
 
-  function handleThemeChange(value: string) {
-    if (value === 'system' || value === 'light' || value === 'dark') {
-      appearanceStore.setThemeMode(value);
-    }
-  }
-
-  function handleSendShortcutChange(value: string) {
-    if (value === 'enter' || value === 'shift-enter' || value === 'ctrl-enter' || value === 'cmd-enter') {
-      chatPreferencesStore.setSendShortcut(value);
-    }
-  }
-
-  async function handleWindowDecorationChange(enabled: boolean) {
-    try {
-      await windowDecorationsStore.toggleCustomTitlebar(enabled);
-    } catch (error) {
-      pageError = error instanceof Error ? error.message : 'Failed to update window decorations.';
-    }
-  }
-
   async function handleAuthMethodChange(provider: AuthProviderEntry, value: string) {
     if (!selectedAgentId || value === 'auto') return;
     setBusy(`method:${provider.provider}`);
+    startProviderAction(provider, 'method');
     pageError = null;
     pageMessage = null;
     try {
       const result = await agentsStore.setProviderAuthMethod(selectedAgentId, provider.provider, value as AuthMethod);
       if (result.success) {
-        pageMessage = result.message || `Updated auth method for ${provider.display_name}.`;
+        const message = result.message || `Updated auth method for ${provider.display_name}.`;
+        pageMessage = message;
+        setProviderMessage(provider, message);
       } else {
-        pageError = result.message || `Failed to update auth method for ${provider.display_name}.`;
+        const message = result.message || `Failed to update auth method for ${provider.display_name}.`;
+        pageError = message;
+        setProviderError(provider, message);
       }
     } catch (error) {
-      pageError = error instanceof Error ? error.message : `Failed to update auth method for ${provider.display_name}.`;
+      const message = error instanceof Error ? error.message : `Failed to update auth method for ${provider.display_name}.`;
+      pageError = message;
+      setProviderError(provider, message);
     } finally {
       setBusy(null);
+      finishProviderAction(provider, 'method');
     }
   }
 </script>
@@ -640,123 +546,19 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Settings"
-      description="Manage appearance, chat preferences, bundled profiles, and provider authentication."
+      description="Appearance, chat behavior, profiles, and provider access."
     />
   </div>
 
-  <div class="settings-unified-panel">
-    <section class="settings-section">
-      <div class="settings-section-header">
-      <div>
-        <h2>Appearance</h2>
-        <p>Match the QueryMT website style while choosing whether Desktop owns the titlebar or leaves it to the operating system.</p>
-      </div>
-    </div>
+  <div class="settings-layout">
+    <SettingsSubnav selected={selectedSection} onSelect={selectSection} />
 
-    <div class="settings-preference-list">
-      <div class="settings-preference-row">
-        <div class="settings-preference-main">
-          <div class="settings-preference-title">Theme</div>
-          <div class="settings-preference-description">
-            {appearanceStore.themeMode === 'system' ? `Follow the system preference (${appearanceStore.resolvedTheme}).` : `Use ${appearanceStore.themeMode} mode.`}
-          </div>
-        </div>
-        <AppSelect value={appearanceStore.themeMode} options={themeOptions} pill ariaLabel="Theme" onValueChange={handleThemeChange} />
-      </div>
-
-      <div class="settings-preference-row">
-        <div class="settings-preference-main">
-          <div class="settings-preference-title">Send messages with</div>
-          <div class="settings-preference-description">
-            {chatPreferencesStore.sendShortcut === 'enter'
-              ? 'Enter sends. Shift+Enter adds a new line.'
-              : `${sendShortcutOptions.find((option) => option.value === chatPreferencesStore.sendShortcut)?.label ?? 'Selected shortcut'} sends. Enter adds a new line.`}
-          </div>
-        </div>
-        <AppSelect
-          value={chatPreferencesStore.sendShortcut}
-          options={sendShortcutOptions}
-          pill
-          ariaLabel="Send messages with"
-          onValueChange={handleSendShortcutChange}
-        />
-      </div>
-
-      <div class="settings-preference-row">
-        <div class="settings-preference-main">
-          <div class="settings-preference-title">
-            Custom titlebar
-            <span class="badge">Beta</span>
-          </div>
-          <div class:settings-preference-error={windowDecorationsStore.error} class="settings-preference-description">
-            {#if windowDecorationsStore.error}
-              {windowDecorationsStore.error}
-            {:else if !windowDecorationsStore.supported}
-              Available in Tauri desktop builds.
-            {:else}
-              {windowDecorationsStore.mode === 'custom' ? 'QueryMT draws the window controls.' : 'Use the operating system window frame.'}
-            {/if}
-          </div>
-        </div>
-        <AppCheckbox
-          checked={windowDecorationsStore.mode === 'custom'}
-          disabled={!windowDecorationsStore.supported}
-          ariaLabel="Custom titlebar"
-          onCheckedChange={(checked) => void handleWindowDecorationChange(checked)}
-        />
-      </div>
-      </div>
-    </section>
-
-    <section class="settings-section">
-      <div class="settings-section-header settings-section-header-action">
-      <div>
-        <h2>Curated profiles</h2>
-        <p>Enable bundled TOML profile templates into Desktop app-data. Existing user copies are never overwritten.</p>
-      </div>
-      <IconTooltipButton label="Refresh profile templates" icon={RefreshCw} size={16} disabled={profileTemplatesLoading} onclick={() => refreshProfileTemplates()} />
-    </div>
-
-    {#if profileTemplateError}
-      <div class="alert-error">
-        {profileTemplateError}
-      </div>
-    {/if}
-
-    {#if profileTemplates.length === 0 && !profileTemplatesLoading}
-      <div class="surface-muted p-4 text-sm text-[var(--muted)]">No bundled profile templates found.</div>
-    {:else}
-      <div class="profile-template-list" aria-label="Curated profile templates">
-        {#each profileTemplates as template}
-          <article class:profile-template-row-enabled={template.enabled} class="profile-template-row">
-            <div class="min-w-0 flex-1">
-              <div class="profile-template-row-header">
-                <h3>{template.name}</h3>
-                {#if template.tags.length > 0}
-                  <span>{template.tags[0]}</span>
-                {/if}
-              </div>
-              <p>{template.description}</p>
-              {#if template.userPath}
-                <div class="profile-template-path" title={template.userPath}>{template.userPath}</div>
-              {/if}
-            </div>
-
-            <div class="profile-template-action">
-              {#if template.enabled}
-                <span class="profile-template-state">Enabled</span>
-              {:else}
-                <button class="action-btn" type="button" disabled={actionLoading === `profile-template:${template.id}`} onclick={() => enableTemplate(template)}>
-                  Enable
-                </button>
-              {/if}
-            </div>
-          </article>
-        {/each}
-      </div>
-      {/if}
-    </section>
-
+    <div class="settings-content">
+      {#if selectedSection === 'general'}
+        <GeneralSettingsPanel />
+      {:else if selectedSection === 'profiles'}
+        <ProfilesSettingsPanel />
+      {:else}
     {#if authAgents.length === 0}
       <section class="settings-section">
       <div class="settings-section-header">
@@ -768,50 +570,27 @@
       </section>
     {:else}
       <section class="settings-section">
-        <div class="settings-section-header settings-section-header-action">
+        <div class="settings-section-header settings-section-header-action provider-panel-header">
           <div>
             <h2>Providers</h2>
-            <p>Choose the active agent and manage provider authentication.</p>
+            <p>Authentication for models and services.</p>
           </div>
-          <IconTooltipButton label="Refresh providers" icon={RefreshCw} size={16} disabled={!selectedAgentId || authLoading || actionLoading === 'refresh'} onclick={() => refreshProviders()} />
-        </div>
-
-        <div class="settings-subsection">
-          <div class="settings-preference-list">
-            <div class="settings-preference-row">
-              <div class="settings-preference-main">
-                <div class="settings-preference-title">Active agent</div>
-                <div class="settings-preference-description">{selectedCapabilitySummary()}</div>
-              </div>
-              <AppSelect bind:value={selectedAgentId} options={authAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Agent" />
-            </div>
-
-            <div class="settings-preference-row">
-              <div class="settings-preference-main">
-                <div class="settings-preference-title">Models</div>
-                <div class="settings-preference-description">Refresh available models for the selected agent.</div>
-              </div>
-              <div class="settings-preference-actions-single">
-                <button class="action-btn" type="button" disabled={!selectedAgentId || !!actionLoading || modelLoading} onclick={() => refreshModels()}>
-                  Refresh
-                </button>
-              </div>
-            </div>
-
-            <div class="settings-preference-row">
-              <div class="settings-preference-main">
-                <div class="settings-preference-title">Plugins</div>
-                <div class="settings-preference-description">Update installed plugins for the selected agent.</div>
-              </div>
-              <div class="settings-preference-actions-single">
-                <button class="action-btn" type="button" disabled={!selectedAgentId || !!actionLoading} onclick={() => updatePlugins()}>
-                  Update
-                </button>
-              </div>
-            </div>
-
+          <div class="provider-panel-actions">
+            {#if authAgents.length > 1}
+              <AppSelect bind:value={selectedAgentId} options={authAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Provider agent" />
+            {/if}
+            <IconTooltipButton
+              label={refreshingProviders ? 'Refreshing providers' : 'Refresh providers'}
+              icon={refreshingProviders ? LoaderCircle : RefreshCw}
+              iconClass={refreshingProviders ? 'animate-spin' : ''}
+              size={16}
+              disabled={!selectedAgentId || authLoading || refreshingProviders}
+              onclick={() => refreshProviders()}
+            />
           </div>
         </div>
+
+        <ProviderOverview connected={connectedProviderCount} needsSetup={setupProviderCount} attention={attentionProviderCount} models={modelCount} />
 
       {#if authError || pageError}
         <div class="alert-error settings-section-message">
@@ -825,310 +604,94 @@
         </div>
       {/if}
 
-      {#if pluginUpdateStatus}
-        <div class="surface-muted border-[var(--rail)] bg-[var(--accent-dim)] px-4 py-3 text-sm text-[var(--text)] space-y-1">
-          <div class="font-medium">Plugin update in progress</div>
-          <div>{pluginUpdateStatus.plugin_name} - {pluginUpdateStatus.phase}</div>
-          {#if pluginUpdateStatus.percent != null}
-            <div>{pluginUpdateStatus.percent.toFixed(0)}% complete</div>
-          {/if}
-          {#if pluginUpdateStatus.message}
-            <div class="text-[var(--muted)]">{pluginUpdateStatus.message}</div>
-          {/if}
-        </div>
-      {/if}
-
-      {#if lastPluginUpdate && lastPluginUpdate.length > 0}
-        <div class="surface-muted px-4 py-3 text-sm text-[var(--muted)] space-y-2">
-          <div class="font-medium text-[var(--text)]">Last plugin update</div>
-          <div class="space-y-1">
-            {#each lastPluginUpdate as result}
-              <div>
-                <span class="text-[var(--text)]">{result.plugin_name}</span>
-                <span class="text-[var(--muted)]"> - {result.success ? 'ok' : result.message ?? 'failed'}</span>
-              </div>
-            {/each}
-          </div>
-        </div>
-      {/if}
-
-        <div class="settings-subsection">
-          <div class="settings-subsection-header">
-            <h3>Authentication</h3>
-            <p>Review provider credentials and choose preferred authentication methods.</p>
-          </div>
-
+        <div class="settings-subsection" aria-label="Provider authentication">
           {#if providers.length === 0 && !authLoading}
             <div class="surface-muted p-4 text-sm text-[var(--muted)]">
               No auth-enabled providers reported by this agent.
             </div>
           {:else}
-            <div class="settings-provider-list">
-              {#each sortedProviders as provider}
-                <article
-                  class:settings-provider-row-connected={hasUsableCredential(provider)}
-                  class:settings-provider-row-warning={provider.oauth_status === OAuthStatus.Expired}
-                  class:settings-provider-row-unconfigured={!hasUsableCredential(provider) && provider.oauth_status !== OAuthStatus.Expired}
-                  class="settings-provider-row"
-                >
-                  <div class="settings-provider-main">
-                    <div class="settings-provider-title">{provider.display_name}</div>
-                    <div class="settings-provider-id">{provider.provider}</div>
-                  </div>
-
-                  <div class="settings-provider-state">
-                    <div class={`settings-provider-status settings-provider-status-${authStatusTone(provider)}`}>
-                      <span class="settings-provider-status-dot" aria-hidden="true"></span>
-                      <span>{authStatusLabel(provider)}</span>
-                    </div>
-                    <div class="settings-provider-detail">{authDetail(provider)}</div>
-                    {#if authHint(provider)}
-                      <div class="settings-provider-hint">{authHint(provider)}</div>
-                    {/if}
-                  </div>
-
-                  <div class="settings-provider-method">
-                    <AppSelect
-                      value={provider.preferred_method ?? 'auto'}
-                      options={getAuthMethodOptionsForProvider(provider)}
-                      disabled={actionLoading === `method:${provider.provider}`}
-                      pill
-                      ariaLabel="Preferred auth"
-                      onValueChange={(value) => void handleAuthMethodChange(provider, value)}
-                    />
-                  </div>
-
-                  <div class="settings-provider-actions">
-                    {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}
-                      {#if isOAuthLoading(provider)}
-                        <IconTooltipButton label="Signing in" icon={LoaderCircle} iconClass="animate-spin" disabled />
-                        <IconTooltipButton label="Cancel sign-in" icon={CircleStop} tone="danger" onclick={() => requestOAuthCancel(provider)} />
-                      {:else}
-                        <IconTooltipButton label="Sign in" icon={LogIn} disabled={!!actionLoading} onclick={() => handleOAuth(provider)} />
-                      {/if}
-                    {/if}
-                    {#if provider.supports_oauth && provider.oauth_status === OAuthStatus.Connected}
-                      <IconTooltipButton label="Disconnect OAuth" icon={LogOut} disabled={!!actionLoading} onclick={() => handleDisconnect(provider)} />
-                    {/if}
-                    {#if (provider.preferred_method ?? 'auto') === AuthMethod.ApiKey}
-                      <IconTooltipButton label="Set API key" icon={KeyRound} disabled={!!actionLoading} onclick={() => handleSetApiToken(provider)} />
-                    {/if}
-                    {#if provider.has_stored_api_key}
-                      <IconTooltipButton label="Clear stored API key" icon={Trash2} tone="danger" disabled={!!actionLoading} onclick={() => handleClearApiToken(provider)} />
-                    {/if}
-                  </div>
-                </article>
-              {/each}
-            </div>
-            <p class="settings-provider-footnote">OAuth sign-in gives you a browser URL to open or copy. API keys are stored in the desktop keyring.</p>
+            <ProviderConnectionList
+              {providers}
+              pendingAction={providerPendingAction}
+              messages={providerMessages}
+              errors={providerErrors}
+              onSignIn={handleOAuth}
+              onCancelSignIn={requestOAuthCancel}
+              onDisconnect={handleDisconnect}
+              onSetApiKey={handleSetApiToken}
+              onClearApiKey={handleClearApiToken}
+              onAuthMethodChange={handleAuthMethodChange}
+              onDialogTrigger={rememberProviderDialogTrigger}
+            />
           {/if}
         </div>
+
+        <ProviderMaintenance
+          {modelCount}
+          {refreshingModels}
+          {updatingPlugins}
+          pluginProgress={pluginUpdateStatus}
+          {lastPluginUpdate}
+          error={maintenanceError}
+          message={maintenanceMessage}
+          onRefreshModels={refreshModels}
+          onUpdatePlugins={updatePlugins}
+        />
       </section>
     {/if}
+      {/if}
+    </div>
   </div>
 
-  {#if tokenDialogProvider}
-    <Portal to={overlayPortalTarget}>
-      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close API key dialog" onclick={() => closeTopmostDialog()}></button>
-        <div class="dialog-modal-panel relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-          <div class="dialog-header">
-            <div class="dialog-header-title-block">
-              <div class="dialog-title">Set API Key</div>
-              <div class="dialog-subtitle">Store a key for {tokenDialogProvider.display_name} in the desktop agent keyring.</div>
-            </div>
-            <div class="dialog-header-actions">
-              <button class="dialog-close-button" type="button" aria-label="Close API key dialog" onclick={() => closeTokenDialog()} disabled={!!actionLoading}>
-                <X size={16} />
-              </button>
-            </div>
-          </div>
+  <ProviderApiKeyDialog
+    open={tokenDialogProvider !== null}
+    provider={tokenDialogProvider}
+    focusTarget={providerDialogFocusTarget}
+    portalTarget={overlayPortalTarget}
+    bind:value={tokenDialogValue}
+    pending={!!actionLoading}
+    onClose={closeTokenDialog}
+    onSubmit={submitApiToken}
+  />
 
-          <div class="dialog-body">
-            <div class="dialog-form">
-              <div class="dialog-row-group">
-                <label class="dialog-row dialog-row-stacked">
-                  <div class="dialog-row-main">
-                    <div class="dialog-row-title">API key</div>
-                    <div class="dialog-row-description">Stored securely in the desktop keyring.</div>
-                  </div>
-                  <input class="input-shell w-full" type="password" bind:value={tokenDialogValue} placeholder="Paste API key" />
-                </label>
-              </div>
+  <ProviderOAuthDialog
+    open={manualOAuthProvider !== null}
+    provider={manualOAuthProvider}
+    focusTarget={providerDialogFocusTarget}
+    portalTarget={overlayPortalTarget}
+    flowKind={manualOAuthFlowKind}
+    authorizationUrl={manualOAuthAuthorizationUrl}
+    urlCopied={manualOAuthUrlCopied}
+    needsCallbackInput={manualOAuthNeedsCallbackInput}
+    bind:value={manualOAuthValue}
+    waiting={actionLoading?.startsWith('oauth:') ?? false}
+    pending={!!actionLoading}
+    completing={manualOAuthProvider ? isOAuthCompleting(manualOAuthProvider) : false}
+    submitDisabled={isManualOAuthSubmitDisabled()}
+    onDismiss={closeOrCancelManualOAuthDialog}
+    onOpenAuthorizationUrl={openManualOAuthAuthorizationUrl}
+    onCopyAuthorizationUrl={copyManualOAuthAuthorizationUrl}
+    onCancelSignIn={() => manualOAuthProvider && requestOAuthCancel(manualOAuthProvider)}
+    onSubmit={submitManualOAuth}
+  />
 
-              <div class="dialog-footer">
-                <button class="action-btn" type="button" onclick={() => closeTokenDialog()} disabled={!!actionLoading}>Cancel</button>
-                <button class="action-btn action-btn-primary" type="button" onclick={() => submitApiToken()} disabled={!!actionLoading || !tokenDialogValue.trim()}>
-                  Save key
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Portal>
-  {/if}
+  <ProviderDisconnectDialog
+    open={disconnectProviderPending !== null}
+    provider={disconnectProviderPending}
+    focusTarget={providerDialogFocusTarget}
+    portalTarget={overlayPortalTarget}
+    pending={!!actionLoading}
+    onClose={closeDisconnectDialog}
+    onConfirm={confirmDisconnectProvider}
+  />
 
-  {#if manualOAuthProvider}
-    <Portal to={overlayPortalTarget}>
-      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close OAuth dialog" onclick={() => closeOrCancelManualOAuthDialog()}></button>
-        <div class="dialog-modal-panel relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-          <div class="dialog-header">
-            <div class="dialog-header-title-block">
-              <div class="dialog-title">Complete OAuth sign-in</div>
-              <div class="dialog-subtitle">
-                {#if manualOAuthIsDevicePoll}
-                  Open or copy the device authorization URL for {manualOAuthProvider.display_name}, approve access, then check whether authentication completed.
-                {:else if manualOAuthNeedsCallbackInput && manualOAuthHasAuthorizationUrl}
-                  Open or copy the authorization URL for {manualOAuthProvider.display_name}. We'll detect completion automatically, or you can paste a callback URL/code.
-                {:else if manualOAuthNeedsCallbackInput}
-                  Paste the callback URL or returned code for {manualOAuthProvider.display_name}.
-                {:else}
-                  Open or copy the authorization URL for {manualOAuthProvider.display_name}. We'll detect completion automatically.
-                {/if}
-              </div>
-            </div>
-            <div class="dialog-header-actions">
-              <button class="dialog-close-button" type="button" aria-label="Close OAuth dialog" onclick={() => closeOrCancelManualOAuthDialog()}>
-                <X size={16} />
-              </button>
-            </div>
-          </div>
-
-          <div class="dialog-body">
-            <div class="dialog-form">
-              <div class="dialog-row-group">
-                {#if manualOAuthHasAuthorizationUrl}
-                  <div class="dialog-row dialog-row-stacked">
-                    <div class="dialog-row-main">
-                      <div class="dialog-row-title">Authorization URL</div>
-                      <div class="dialog-row-description">Open this URL in your browser or copy it if you want to continue sign-in elsewhere.</div>
-                    </div>
-                    <input class="input-shell dialog-code-field w-full" readonly value={manualOAuthAuthorizationUrl} aria-label="Authorization URL" title={manualOAuthAuthorizationUrl} />
-                    <div class="dialog-segmented dialog-segmented-two">
-                      <button class="action-btn dialog-segmented-button" type="button" onclick={() => openManualOAuthAuthorizationUrl()} disabled={!!actionLoading && !actionLoading.startsWith('oauth:')}>Open in browser</button>
-                      <button class="action-btn dialog-segmented-button" type="button" onclick={() => copyManualOAuthAuthorizationUrl()}>
-                        {manualOAuthUrlCopied ? 'Copied' : 'Copy URL'}
-                      </button>
-                    </div>
-                  </div>
-                {/if}
-
-                {#if manualOAuthNeedsCallbackInput && !manualOAuthIsDevicePoll}
-                  <label class="dialog-row dialog-row-stacked">
-                    <div class="dialog-row-main">
-                      <div class="dialog-row-title">Callback URL or code</div>
-                      <div class="dialog-row-description">
-                        {manualOAuthHasAuthorizationUrl ? 'Paste it here if the local callback does not complete automatically.' : 'Paste the browser callback URL or authorization code to complete sign-in manually.'}
-                      </div>
-                    </div>
-                    <textarea class="input-shell w-full min-h-28" bind:value={manualOAuthValue} placeholder="https://... or pasted code"></textarea>
-                  </label>
-                {/if}
-              </div>
-
-              {#if actionLoading?.startsWith('oauth:')}
-                <div class="dialog-status-row" role="status">
-                  <LoaderCircle size={15} class="animate-spin" />
-                  <span>Waiting for authentication. Paste a code below if the browser does not return automatically.</span>
-                </div>
-              {/if}
-
-              <div class="dialog-footer">
-                {#if actionLoading?.startsWith('oauth:') && manualOAuthProvider}
-                  <button class="action-btn action-btn-danger" type="button" onclick={() => manualOAuthProvider && requestOAuthCancel(manualOAuthProvider)}>Cancel sign-in</button>
-                {:else}
-                  <button class="action-btn" type="button" onclick={() => closeManualOAuthDialog()} disabled={!!actionLoading}>Cancel</button>
-                {/if}
-                {#if manualOAuthIsDevicePoll || manualOAuthNeedsCallbackInput}
-                  <button class="action-btn action-btn-primary" type="button" onclick={() => submitManualOAuth()} disabled={isManualOAuthSubmitDisabled()}>
-                    {manualOAuthIsDevicePoll ? 'Check authentication' : isOAuthCompleting(manualOAuthProvider) ? 'Completing...' : 'Complete sign-in'}
-                  </button>
-                {/if}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Portal>
-  {/if}
-
-  {#if disconnectProviderPending}
-    <Portal to={overlayPortalTarget}>
-      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close disconnect confirmation" onclick={() => closeTopmostDialog()}></button>
-        <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-          <div class="dialog-header">
-            <div class="dialog-header-title-block">
-              <div class="dialog-title">Disconnect Provider</div>
-              <div class="dialog-subtitle">Remove OAuth credentials for {disconnectProviderPending.display_name}?</div>
-            </div>
-            <div class="dialog-header-actions">
-              <button class="dialog-close-button" type="button" aria-label="Close disconnect confirmation" onclick={() => closeDisconnectDialog()} disabled={!!actionLoading}>
-                <X size={16} />
-              </button>
-            </div>
-          </div>
-
-          <div class="dialog-body">
-            <div class="dialog-form">
-              <div class="dialog-row-group">
-                <div class="dialog-row dialog-row-muted dialog-row-full">
-                  <div class="dialog-row-main">
-                    <div class="dialog-row-title">OAuth access will be removed</div>
-                    <div class="dialog-row-description">You can sign in again from Authentication.</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="dialog-footer">
-                <button class="action-btn" type="button" onclick={() => closeDisconnectDialog()} disabled={!!actionLoading}>Cancel</button>
-                <button class="action-btn action-btn-danger" type="button" onclick={() => confirmDisconnectProvider()} disabled={!!actionLoading}>Disconnect</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Portal>
-  {/if}
-
-  {#if clearKeyProviderPending}
-    <Portal to={overlayPortalTarget}>
-      <div class="app-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
-        <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close clear key confirmation" onclick={() => closeTopmostDialog()}></button>
-        <div class="dialog-modal-panel dialog-modal-panel-small relative z-10" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-          <div class="dialog-header">
-            <div class="dialog-header-title-block">
-              <div class="dialog-title">Clear Stored API Key</div>
-              <div class="dialog-subtitle">Remove the saved key for {clearKeyProviderPending.display_name}?</div>
-            </div>
-            <div class="dialog-header-actions">
-              <button class="dialog-close-button" type="button" aria-label="Close clear key confirmation" onclick={() => closeClearKeyDialog()} disabled={!!actionLoading}>
-                <X size={16} />
-              </button>
-            </div>
-          </div>
-
-          <div class="dialog-body">
-            <div class="dialog-form">
-              <div class="dialog-row-group">
-                <div class="dialog-row dialog-row-muted dialog-row-full">
-                  <div class="dialog-row-main">
-                    <div class="dialog-row-title">The key will be removed from the desktop keyring</div>
-                    <div class="dialog-row-description">Environment variables are not changed.</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="dialog-footer">
-                <button class="action-btn" type="button" onclick={() => closeClearKeyDialog()} disabled={!!actionLoading}>Cancel</button>
-                <button class="action-btn action-btn-danger" type="button" onclick={() => confirmClearApiToken()} disabled={!!actionLoading}>Clear key</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Portal>
-  {/if}
+  <ProviderClearKeyDialog
+    open={clearKeyProviderPending !== null}
+    provider={clearKeyProviderPending}
+    focusTarget={providerDialogFocusTarget}
+    portalTarget={overlayPortalTarget}
+    pending={!!actionLoading}
+    onClose={closeClearKeyDialog}
+    onConfirm={confirmClearApiToken}
+  />
 </div>

@@ -46,17 +46,42 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('RecentSessionRail attention indicators', () => {
+describe('RecentSessionRail navigation', () => {
+  it('defaults to a labeled sidebar with grouped navigation and readable sessions', () => {
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
+
+    expect(screen.getByText('Work')).toBeInTheDocument();
+    expect(screen.getByText('Manage')).toBeInTheDocument();
+    expect(screen.getByText('Recent sessions')).toBeInTheDocument();
+    expect(screen.getByText('Waiting session')).toBeInTheDocument();
+    expect(screen.getByText('work · Waiting')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
+  });
+
+  it('locks the automatic compact rail without showing an unavailable expand control', () => {
+    render(RecentSessionRail, {
+      current: 'Sessions',
+      sessions: [activeSession],
+      collapsed: true,
+      collapseLocked: true
+    });
+
+    expect(screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl+1' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Expand sidebar' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Recent sessions')).not.toBeInTheDocument();
+  });
+
   it('shows activity and the shared attention dot together for a session requiring action', () => {
     inboxStore.actionableItems = [{ id: 'request-1', agentId: 'agent-1', sessionId: 'session-1' }];
 
     const { container } = render(RecentSessionRail, {
       current: 'Sessions',
-      sessions: [activeSession]
+      sessions: [activeSession],
+      collapsed: true
     });
 
     const sessionLink = screen.getByRole('link', {
-      name: 'Waiting session, Waiting, action required, Ctrl/Cmd+1'
+      name: 'Waiting session, Waiting, action required, Ctrl+1'
     });
     expect(sessionLink).toBeInTheDocument();
     expect(sessionLink.querySelector('.session-icon-status-active')).not.toBeNull();
@@ -70,9 +95,9 @@ describe('RecentSessionRail attention indicators', () => {
   });
 
   it('keeps stable nested surfaces for the session shape morph', () => {
-    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed: true });
 
-    const sessionLink = screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl/Cmd+1' });
+    const sessionLink = screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl+1' });
     const surface = sessionLink.querySelector('.session-icon-surface');
     const avatar = surface?.querySelector('.session-icon-avatar');
     expect(sessionLink).toHaveClass('session-icon-link');
@@ -82,9 +107,9 @@ describe('RecentSessionRail attention indicators', () => {
   });
 
   it('keeps only the activity spinner when no session action is required', () => {
-    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed: true });
 
-    const sessionLink = screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl/Cmd+1' });
+    const sessionLink = screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl+1' });
     expect(sessionLink.querySelector('.session-icon-status-active')).not.toBeNull();
     expect(sessionLink.querySelector('.sidebar-attention-dot')).toBeNull();
   });
@@ -97,7 +122,7 @@ describe('RecentSessionRail attention indicators', () => {
       title: `Session ${index + 1}`
     }));
 
-    render(RecentSessionRail, { current: 'Sessions', sessions });
+    render(RecentSessionRail, { current: 'Sessions', sessions, collapsed: true });
 
     expect(screen.getAllByRole('link', { name: /Session \d, Waiting/ })).toHaveLength(1);
   });

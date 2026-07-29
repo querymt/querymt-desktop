@@ -1,8 +1,13 @@
 <script lang="ts">
-  import { Pause, Play, Plus, RefreshCw, Trash2, Zap } from '@lucide/svelte';
+  import { CalendarClock, LoaderCircle, Plus, RefreshCw } from '@lucide/svelte';
+  import AutomationDeleteDialog from '$lib/components/automations/AutomationDeleteDialog.svelte';
+  import AutomationGroup from '$lib/components/automations/AutomationGroup.svelte';
+  import AutomationSummary from '$lib/components/automations/AutomationSummary.svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
+  import { classifySchedule, groupSchedules } from '$lib/domain/automations';
+  import type { ScheduleInfo } from '$lib/querymt/generated/types';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
 
@@ -13,222 +18,186 @@
     })
   );
 
-  let selectedAgentId = $state<string>('');
-  let loading = $state(false);
+  let selectedAgentId = $state('');
+  let refreshing = $state(false);
+  let refreshAttempted = $state(false);
   let actionError = $state<string | null>(null);
+  let pendingAction = $state<{ scheduleId: string; action: 'pause' | 'resume' | 'trigger' | 'delete' } | null>(null);
+  let scheduleErrors = $state<Record<string, string | undefined>>({});
+  let pendingDelete = $state<ScheduleInfo | null>(null);
+  let deleteDialogOpen = $state(false);
 
   $effect(() => {
-    if (!selectedAgentId && scheduleAgents.length > 0) {
-      selectedAgentId = scheduleAgents[0].id;
-    }
+    if (!selectedAgentId && scheduleAgents.length > 0) selectedAgentId = scheduleAgents[0].id;
     if (selectedAgentId && !scheduleAgents.some((agent) => agent.id === selectedAgentId)) {
       selectedAgentId = scheduleAgents[0]?.id ?? '';
     }
   });
 
-  const selectedAgent = $derived.by(
-    () => scheduleAgents.find((agent) => agent.id === selectedAgentId) ?? null
-  );
-  const selectedCapabilities = $derived.by(
-    () => (selectedAgentId ? agentsStore.controlCapabilitiesByAgent[selectedAgentId] ?? null : null)
-  );
-  const selectedSchedules = $derived.by(
-    () => (selectedAgentId ? agentsStore.schedulesByAgent[selectedAgentId]?.schedules ?? [] : [])
-  );
-  const lastAction = $derived.by(
-    () => (selectedAgentId ? agentsStore.lastScheduleActionByAgent[selectedAgentId] ?? null : null)
-  );
+  const selectedCapabilities = $derived.by(() => selectedAgentId ? agentsStore.controlCapabilitiesByAgent[selectedAgentId] ?? null : null);
+  const selectedSchedules = $derived.by(() => selectedAgentId ? agentsStore.schedulesByAgent[selectedAgentId]?.schedules ?? [] : []);
+  const scheduleDataLoaded = $derived(Boolean(selectedAgentId && agentsStore.schedulesByAgent[selectedAgentId]));
+  const scheduleGroups = $derived(groupSchedules(selectedSchedules));
+  const activeCount = $derived(selectedSchedules.filter((schedule) => classifySchedule(schedule) === 'active').length);
+  const pausedCount = $derived(selectedSchedules.filter((schedule) => classifySchedule(schedule) === 'paused').length);
+  const attentionCount = $derived(selectedSchedules.filter((schedule) => classifySchedule(schedule) === 'attention').length);
+  const selectedHealth = $derived.by(() => selectedAgentId ? agentsStore.controlHealthByAgent[selectedAgentId] ?? null : null);
+  const healthWarning = $derived(selectedHealth && selectedHealth.state !== 'ready' ? selectedHealth.summary : null);
 
   function canRun(method: string) {
     return selectedCapabilities?.methods.includes(method) ?? false;
   }
 
-  function selectedCapabilitySummary() {
-    if (!selectedCapabilities) return loading ? 'Refreshing schedule capabilities' : 'No capabilities reported yet';
-
-    const details = [`API v${selectedCapabilities.querymt_control_version}`, selectedCapabilities.agent.kind];
-    if (selectedCapabilities.features.schedules) details.push('Schedules');
-    if (selectedCapabilities.features.remote_schedules) details.push('Remote schedules');
-    return details.join(' · ');
-  }
-
-  function selectedHealthSummary() {
-    if (!selectedAgent) return 'No agent selected';
-    return agentsStore.controlHealthByAgent[selectedAgent.id]?.summary ?? 'No control summary yet';
-  }
-
-  function lastActionSummary() {
-    if (!lastAction) return 'No schedule actions yet';
-    return `${lastAction.action} ${lastAction.success ? 'ok' : 'failed'}`;
-  }
-
-  function scheduleMeta(schedule: (typeof selectedSchedules)[number]) {
-    const details = [schedule.state, `runs ${schedule.run_count}`, `failures ${schedule.consecutive_failures}`, `max runtime ${schedule.max_runtime_seconds}s`];
-    if (schedule.max_runs) details.push(`max runs ${schedule.max_runs}`);
-    if (schedule.next_run_at) details.push(`next ${schedule.next_run_at}`);
-    if (schedule.last_run_at) details.push(`last ${schedule.last_run_at}`);
-    return details.join(' · ');
-  }
-
   function openScheduleCreate() {
     commandPaletteStore.openSchedule({
       agentId: selectedAgentId || null,
-      sessionId: agentsStore.activeSessionId,
-      cwd: agentsStore.composerCwd || null,
-      prompt: agentsStore.composerPrompt,
+      sessionId: null,
+      cwd: null,
+      prompt: null,
       nodeId: null
     });
   }
 
   async function refreshSchedules() {
-    if (!selectedAgentId) {
-      return;
-    }
-    loading = true;
+    if (!selectedAgentId) return;
+    refreshing = true;
+    refreshAttempted = true;
     actionError = null;
     try {
       await agentsStore.refreshSchedulesForAgent(selectedAgentId);
     } catch (error) {
-      actionError = error instanceof Error ? error.message : 'Failed to load schedules.';
+      actionError = error instanceof Error ? error.message : 'Failed to load automations.';
     } finally {
-      loading = false;
+      refreshing = false;
     }
   }
 
-  async function runAction(action: 'pause' | 'resume' | 'trigger' | 'delete', schedulePublicId: string, nodeId?: string) {
-    if (!selectedAgentId) {
-      return;
-    }
-    loading = true;
-    actionError = null;
+  async function runAction(action: 'pause' | 'resume' | 'trigger', schedule: ScheduleInfo) {
+    if (!selectedAgentId) return;
+    pendingAction = { scheduleId: schedule.public_id, action };
+    scheduleErrors = { ...scheduleErrors, [schedule.public_id]: undefined };
     try {
-      await agentsStore.runScheduleAction(selectedAgentId, action, schedulePublicId, nodeId);
+      await agentsStore.runScheduleAction(selectedAgentId, action, schedule.public_id, schedule.node_id);
     } catch (error) {
-      actionError = error instanceof Error ? error.message : `Failed to ${action} schedule.`;
+      scheduleErrors = {
+        ...scheduleErrors,
+        [schedule.public_id]: error instanceof Error ? error.message : `Failed to ${action} automation.`
+      };
     } finally {
-      loading = false;
+      pendingAction = null;
+    }
+  }
+
+  function requestDelete(schedule: ScheduleInfo) {
+    pendingDelete = schedule;
+    scheduleErrors = { ...scheduleErrors, [schedule.public_id]: undefined };
+    deleteDialogOpen = true;
+  }
+
+  async function confirmDelete(schedule: ScheduleInfo) {
+    if (!selectedAgentId) return;
+    pendingAction = { scheduleId: schedule.public_id, action: 'delete' };
+    scheduleErrors = { ...scheduleErrors, [schedule.public_id]: undefined };
+    try {
+      await agentsStore.runScheduleAction(selectedAgentId, 'delete', schedule.public_id, schedule.node_id);
+      deleteDialogOpen = false;
+      pendingDelete = null;
+    } catch (error) {
+      scheduleErrors = {
+        ...scheduleErrors,
+        [schedule.public_id]: error instanceof Error ? error.message : 'Failed to delete automation.'
+      };
+    } finally {
+      pendingAction = null;
     }
   }
 </script>
 
-<div class="settings-page">
-  <div class="page-toolbar">
-    <SectionHeader
-      title="Automations"
-      description="Manage scheduled tasks and automation health."
-    />
+<div class="settings-page automations-page">
+  <div class="page-toolbar automations-page-toolbar">
+    <SectionHeader title="Automations" description="Scheduled tasks, run status, and controls." />
+    <div class="automations-page-actions">
+      {#if scheduleAgents.length > 1}
+        <AppSelect bind:value={selectedAgentId} options={scheduleAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Automation agent" />
+      {/if}
+      <IconTooltipButton
+        label={refreshing ? 'Refreshing automations' : 'Refresh automations'}
+        icon={refreshing ? LoaderCircle : RefreshCw}
+        iconClass={refreshing ? 'animate-spin' : ''}
+        size={16}
+        disabled={!selectedAgentId || refreshing}
+        onclick={refreshSchedules}
+      />
+      <IconTooltipButton label="Create automation" icon={Plus} tone="primary" size={16} disabled={!selectedAgentId || !canRun('querymt/schedules/create')} onclick={openScheduleCreate} />
+    </div>
   </div>
 
   <div class="settings-unified-panel">
     {#if scheduleAgents.length === 0}
-      <section class="settings-section">
-        <div class="settings-section-header">
-          <div>
-            <h2>Agent</h2>
-            <p>No connected agents currently advertise `querymt/schedules/list`.</p>
+      <section class="settings-section" aria-label="Automation availability">
+        <div class="state-panel">
+          <span class="state-panel-icon"><CalendarClock size={17} /></span>
+          <div class="state-panel-copy">
+            <strong>Automations are not available</strong>
+            <p>Connect an agent that supports scheduled tasks to create and manage automations.</p>
           </div>
+        </div>
+      </section>
+    {:else if refreshing && !scheduleDataLoaded}
+      <section class="settings-section" aria-label="Loading automations" aria-busy="true">
+        <div class="state-skeleton-list">
+          {#each Array(3) as _}
+            <div class="state-skeleton-row"><span class="state-skeleton-copy"><i></i><i></i></span><span class="state-skeleton-actions"></span></div>
+          {/each}
+        </div>
+      </section>
+    {:else if actionError && !scheduleDataLoaded}
+      <section class="settings-section">
+        <div class="state-panel state-panel-error" role="alert">
+          <span class="state-panel-icon"><CalendarClock size={17} /></span>
+          <div class="state-panel-copy"><strong>Automations could not be loaded</strong><p>{actionError}</p></div>
+          <button class="action-btn" type="button" onclick={refreshSchedules}>Try again</button>
         </div>
       </section>
     {:else}
-      <section class="settings-section">
-        <div class="settings-section-header settings-section-header-action">
-          <div>
-            <h2>Agent</h2>
-            <p>Choose the agent that provides schedule controls.</p>
-          </div>
-          <IconTooltipButton label="Refresh schedules" icon={RefreshCw} size={16} disabled={!selectedAgentId || loading} onclick={() => refreshSchedules()} />
-        </div>
+      <AutomationSummary total={selectedSchedules.length} active={activeCount} paused={pausedCount} attention={attentionCount} healthMessage={healthWarning} />
 
-        <div class="settings-preference-list">
-          <div class="settings-preference-row">
-            <div class="settings-preference-main">
-              <div class="settings-preference-title">Active agent</div>
-              <div class="settings-preference-description">{selectedCapabilitySummary()}</div>
+      {#if actionError}<div class="state-inline-error" role="alert"><span class="min-w-0 flex-1">{actionError}</span><button class="action-btn !px-3 !py-1.5 text-xs" type="button" onclick={refreshSchedules}>Retry</button></div>{/if}
+
+      {#if selectedSchedules.length === 0}
+        <section class="settings-section" aria-label="Automations">
+          <div class="state-panel">
+            <span class="state-panel-icon"><CalendarClock size={17} /></span>
+            <div class="state-panel-copy">
+              <strong>{refreshAttempted || scheduleDataLoaded ? 'No automations yet' : 'No automations loaded yet'}</strong>
+              <p>Schedule prompts to run against new or existing sessions.</p>
             </div>
-            <AppSelect bind:value={selectedAgentId} options={scheduleAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Agent" />
+            <button class="action-btn action-btn-primary" type="button" onclick={openScheduleCreate}><Plus size={15} />Create automation</button>
           </div>
-
-          <div class="settings-preference-row">
-            <div class="settings-preference-main">
-              <div class="settings-preference-title">Health</div>
-              <div class="settings-preference-description">{selectedHealthSummary()}</div>
-            </div>
-          </div>
-
-          <div class="settings-preference-row">
-            <div class="settings-preference-main">
-              <div class="settings-preference-title">Last action</div>
-              <div class="settings-preference-description">{lastActionSummary()}</div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {#if actionError}
-        <div class="alert-error settings-section-message">
-          {actionError}
-        </div>
+        </section>
+      {:else}
+        {#each scheduleGroups as group (group.id)}
+          <AutomationGroup
+            {group}
+            {pendingAction}
+            errors={scheduleErrors}
+            canPause={canRun('querymt/schedules/pause')}
+            canResume={canRun('querymt/schedules/resume')}
+            canTrigger={canRun('querymt/schedules/trigger')}
+            canDelete={canRun('querymt/schedules/delete')}
+            onAction={runAction}
+            onDelete={requestDelete}
+          />
+        {/each}
       {/if}
-
-      <section class="settings-section">
-        <div class="settings-section-header settings-section-header-action">
-          <div>
-            <h2>Schedules</h2>
-            <p>Review active automations and run quick actions.</p>
-          </div>
-          <button class="action-btn action-btn-primary" type="button" onclick={() => openScheduleCreate()}>
-            <Plus size={15} />
-            Create
-          </button>
-        </div>
-
-        {#if selectedSchedules.length === 0}
-          <div class="empty-state">
-            <div class="text-sm font-medium">No schedules loaded yet</div>
-            <div class="panel-copy mt-1">Refresh to inspect the selected agent's automation queue.</div>
-          </div>
-        {:else}
-          <div class="mesh-item-list">
-            {#each selectedSchedules as schedule}
-              <article class="mesh-item-row">
-                <div class="mesh-item-main">
-                  <div class="mesh-item-title">{schedule.public_id}</div>
-                  <div class="mesh-item-description">session {schedule.session_public_id} · task {schedule.task_public_id}{schedule.node_id ? ` · node ${schedule.node_id}` : ''}</div>
-                  <div class="mesh-item-meta">{scheduleMeta(schedule)}</div>
-                </div>
-
-                <div class="mesh-item-actions">
-                  <IconTooltipButton
-                    label="Pause"
-                    icon={Pause}
-                    disabled={!canRun('querymt/schedules/pause') || loading}
-                    onclick={() => runAction('pause', schedule.public_id, schedule.node_id)}
-                  />
-                  <IconTooltipButton
-                    label="Resume"
-                    icon={Play}
-                    disabled={!canRun('querymt/schedules/resume') || loading}
-                    onclick={() => runAction('resume', schedule.public_id, schedule.node_id)}
-                  />
-                  <IconTooltipButton
-                    label="Trigger"
-                    icon={Zap}
-                    disabled={!canRun('querymt/schedules/trigger') || loading}
-                    onclick={() => runAction('trigger', schedule.public_id, schedule.node_id)}
-                  />
-                  <IconTooltipButton
-                    label="Delete"
-                    icon={Trash2}
-                    tone="danger"
-                    disabled={!canRun('querymt/schedules/delete') || loading}
-                    onclick={() => runAction('delete', schedule.public_id, schedule.node_id)}
-                  />
-                </div>
-              </article>
-            {/each}
-          </div>
-        {/if}
-      </section>
     {/if}
   </div>
 </div>
+
+<AutomationDeleteDialog
+  bind:open={deleteDialogOpen}
+  schedule={pendingDelete}
+  pending={pendingAction?.action === 'delete'}
+  error={pendingDelete ? scheduleErrors[pendingDelete.public_id] ?? null : null}
+  onConfirm={confirmDelete}
+/>

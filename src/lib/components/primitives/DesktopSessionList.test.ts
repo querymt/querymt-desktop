@@ -37,6 +37,50 @@ afterEach(() => {
 });
 
 describe('DesktopSessionList', () => {
+  it('shows a stable skeleton while sessions load initially', () => {
+    render(DesktopSessionList, { loading: true });
+
+    expect(screen.getByLabelText('Loading sessions')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument();
+  });
+
+  it('offers the right recovery for empty and disconnected states', async () => {
+    const onCreateSession = vi.fn();
+    const { unmount } = render(DesktopSessionList, { onCreateSession, emptyMessage: 'Start a task first.' });
+
+    expect(screen.getByText('No sessions yet')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    expect(onCreateSession).toHaveBeenCalledOnce();
+    unmount();
+
+    const onOpenAgents = vi.fn();
+    render(DesktopSessionList, { disconnected: true, onOpenAgents });
+    expect(screen.getByText('No agents connected')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Open agents' }));
+    expect(onOpenAgents).toHaveBeenCalledOnce();
+  });
+
+  it('clears a search that has no matching sessions', async () => {
+    render(DesktopSessionList, { sessions });
+    const search = screen.getByPlaceholderText('Search sessions, workspaces, agents…');
+    await fireEvent.input(search, { target: { value: 'missing session' } });
+
+    expect(screen.getByText('No matching sessions')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(search).toHaveValue('');
+    expect(await screen.findByText('Inspect workspace')).toBeInTheDocument();
+  });
+
+  it('keeps loaded sessions visible during refresh errors', async () => {
+    const onRefresh = vi.fn();
+    render(DesktopSessionList, { sessions, loading: true, error: 'Connection timed out.', onRefresh });
+
+    expect(await screen.findByText('Inspect workspace')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Sessions could not be refreshed.');
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
   it('shows agent names on sessions without workspace-level agent pills', async () => {
     const { container } = render(DesktopSessionList, { sessions, onOpenSession: vi.fn() });
 
@@ -86,14 +130,15 @@ describe('DesktopSessionList', () => {
     const onOpenSession = vi.fn();
     render(DesktopSessionList, { sessions, onOpenSession });
 
-    expect(await screen.findByText('8f2a91bc')).toBeInTheDocument();
+    expect(screen.queryByText('8f2a91bc')).not.toBeInTheDocument();
     expect(screen.queryByText('8f2a91bc-1234-5678-9012-abcdefabcdef')).not.toBeInTheDocument();
 
-    await fireEvent.click(screen.getAllByRole('button', { name: 'Copy session ID' })[0]);
+    await fireEvent.click(await screen.findByLabelText('Session actions for Inspect workspace'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy session ID for Inspect workspace' }));
 
     expect(writeText).toHaveBeenCalledWith('8f2a91bc-1234-5678-9012-abcdefabcdef');
     expect(onOpenSession).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Session ID copied' })).toBeInTheDocument();
+    expect(screen.getByText('Copied')).toBeInTheDocument();
   });
 
   it('opens sessions from the row navigation control', async () => {
@@ -105,8 +150,28 @@ describe('DesktopSessionList', () => {
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
   });
 
-  it('continues filtering sessions by agent name', async () => {
-    render(DesktopSessionList, { sessions });
+  it('maps internal lifecycle states into user-facing filters', async () => {
+    const filteredSessions: DesktopSessionSummary[] = [
+      { ...sessions[0], sessionId: 'thinking', title: 'Active work', status: 'thinking' },
+      { ...sessions[0], sessionId: 'waiting', title: 'Needs approval', status: 'waiting' },
+      { ...sessions[0], sessionId: 'completed', title: 'Finished work', status: 'completed' }
+    ];
+    render(DesktopSessionList, { sessions: filteredSessions });
+
+    expect(screen.getByRole('button', { name: 'Active' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Needs input' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Thinking' })).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Needs input' }));
+    expect(screen.getByText('Needs approval')).toBeInTheDocument();
+    expect(screen.queryByText('Active work')).not.toBeInTheDocument();
+  });
+
+  it('hides agent names for a single-agent session list while preserving agent search', async () => {
+    render(DesktopSessionList, { sessions, showAgentNames: false });
+
+    expect(screen.queryByText('WS-QMT')).not.toBeInTheDocument();
+    expect(screen.queryByText('QMTCODE')).not.toBeInTheDocument();
 
     await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), {
       target: { value: 'WS-QMT' }
@@ -128,13 +193,13 @@ describe('DesktopSessionList', () => {
       canDeleteSession: (session) => session.agentId === 'agent-1'
     });
 
-    const deleteButton = await screen.findByRole('button', { name: 'Delete session Inspect workspace' });
-    expect(screen.queryByRole('button', { name: 'Delete session Fix tests' })).not.toBeInTheDocument();
+    await fireEvent.click(await screen.findByLabelText('Session actions for Inspect workspace'));
+    const deleteButton = screen.getByRole('button', { name: 'Delete session Inspect workspace' });
 
     await fireEvent.click(deleteButton);
 
-    const dialog = screen.getByRole('dialog', { name: 'Delete Session' });
-    expect(dialog).toHaveTextContent('Permanently remove "Inspect workspace" from WS-QMT?');
+    const dialog = screen.getByRole('alertdialog', { name: 'Delete Inspect workspace?' });
+    expect(dialog).toHaveTextContent('The session and its history will be permanently removed from WS-QMT.');
     expect(dialog).toHaveTextContent('This cannot be undone');
     expect(onDeleteSession).not.toHaveBeenCalled();
     expect(onOpenSession).not.toHaveBeenCalled();
@@ -142,7 +207,7 @@ describe('DesktopSessionList', () => {
     await fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
 
     expect(onDeleteSession).toHaveBeenCalledWith(sessions[0]);
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete Session' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('alertdialog', { name: 'Delete Inspect workspace?' })).not.toBeInTheDocument());
   });
 
   it('keeps the session when the in-app deletion dialog is cancelled', async () => {
@@ -153,11 +218,12 @@ describe('DesktopSessionList', () => {
       canDeleteSession: () => true
     });
 
-    await fireEvent.click(await screen.findByRole('button', { name: 'Delete session Inspect workspace' }));
+    await fireEvent.click(await screen.findByLabelText('Session actions for Inspect workspace'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete session Inspect workspace' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(onDeleteSession).not.toHaveBeenCalled();
-    expect(screen.queryByRole('dialog', { name: 'Delete Session' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('alertdialog', { name: 'Delete Inspect workspace?' })).not.toBeInTheDocument();
   });
 
   it('reports a deletion failure in the dialog and restores the delete action', async () => {
@@ -170,12 +236,13 @@ describe('DesktopSessionList', () => {
       canDeleteSession: () => true
     });
 
-    await fireEvent.click(await screen.findByRole('button', { name: 'Delete session Inspect workspace' }));
+    await fireEvent.click(await screen.findByLabelText('Session actions for Inspect workspace'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete session Inspect workspace' }));
     await fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Agent refused to delete the session.');
     expect(screen.getByRole('button', { name: /^Delete$/ })).toBeEnabled();
-    expect(screen.getByRole('dialog', { name: 'Delete Session' })).toBeInTheDocument();
+    expect(screen.getByRole('alertdialog', { name: 'Delete Inspect workspace?' })).toBeInTheDocument();
   });
 
   it('does not present an uninitialized workspace as having zero sessions', async () => {
@@ -209,6 +276,24 @@ describe('DesktopSessionList', () => {
     expect(screen.getByLabelText('0 loaded sessions')).toHaveTextContent('0');
     expect(screen.getByLabelText('10 loaded sessions, more available')).toHaveTextContent('10+');
     expect(screen.getByLabelText('10 loaded sessions')).toHaveTextContent('10');
+  });
+
+  it('opens only the latest workspace by default and creates a session in its context', async () => {
+    const onOpenWorkspace = vi.fn(async () => {});
+    const onCreateWorkspaceSession = vi.fn(async () => {});
+    render(DesktopSessionList, {
+      workspaceGroups: [
+        createWorkspaceGroup({ key: '/recent', cwd: '/recent', name: 'recent', latestActivity: '2026-07-19T01:00:00Z' }),
+        createWorkspaceGroup({ key: '/older', cwd: '/older', name: 'older', latestActivity: '2026-07-18T01:00:00Z' })
+      ],
+      onOpenWorkspace,
+      onCreateWorkspaceSession
+    });
+
+    await waitFor(() => expect(onOpenWorkspace).toHaveBeenCalledTimes(1));
+    expect(onOpenWorkspace).toHaveBeenCalledWith('/recent');
+    await fireEvent.click(screen.getByRole('button', { name: 'New session in recent' }));
+    expect(onCreateWorkspaceSession).toHaveBeenCalledWith('/recent');
   });
 
   it('loads an unopened workspace and requests ten more when pagination is available', async () => {

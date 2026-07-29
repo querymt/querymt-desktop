@@ -1,33 +1,16 @@
 <script lang="ts">
-  import { GitFork, LoaderCircle, Redo2, Undo2, XCircle } from '@lucide/svelte';
-  import Shimmer from '$lib/components/ai-elements/shimmer.svelte';
-  import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
+  import { AlertTriangle, LoaderCircle, MessageCircleQuestion, X } from '@lucide/svelte';
+  import { getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
 
   let {
     session,
-    canUndo = false,
-    canRedo = false,
-    undoSupported = false,
-    forkSupported = false,
     forkPending = false,
-    canFork = false,
-    onCancel,
-    onUndo,
-    onRedo,
-    onFork
+    onCancel
   }: {
     session: ActiveSessionViewModel;
-    canUndo?: boolean;
-    canRedo?: boolean;
-    undoSupported?: boolean;
-    forkSupported?: boolean;
     forkPending?: boolean;
-    canFork?: boolean;
     onCancel?: () => void | Promise<void>;
-    onUndo?: () => void;
-    onRedo?: () => void | Promise<void>;
-    onFork?: () => void;
   } = $props();
 
   const agentBusy = $derived(
@@ -37,104 +20,54 @@
       session.runState === 'tool-running'
   );
   const isBusy = $derived(session.undo.pendingOperation !== null || forkPending || agentBusy);
+  const isVisible = $derived(isBusy || session.runState === 'failed' || session.runState === 'waiting-input');
+  const activeTool = $derived(session.toolCalls.find((tool) => tool.id === session.activeToolCallId) ?? null);
+  const activeToolPresentation = $derived(activeTool ? getSessionToolPresentation(activeTool) : null);
 
   const primaryStatus = $derived.by(() => {
     if (forkPending) return 'Creating fork…';
     if (session.undo.pendingOperation === 'undo') return 'Undoing workspace changes…';
     if (session.undo.pendingOperation === 'redo') return 'Restoring workspace changes…';
-    if (session.runState === 'failed') {
-      return session.lastError ? `Failed: ${session.lastError}` : 'Failed';
+    if (session.runState === 'failed') return session.lastError ? `Failed: ${session.lastError}` : 'Session failed';
+    if (session.runState === 'waiting-input') return 'Input needed';
+    if (session.runState === 'tool-running' && activeToolPresentation) {
+      return `${activeToolPresentation.label}${activeToolPresentation.preview ? ` · ${activeToolPresentation.preview}` : ''}`;
     }
-    if (session.runState === 'tool-running') {
-      return session.activityLabel ?? 'Running tool…';
-    }
-    if (session.runState === 'streaming') {
-      return 'Agent is replying…';
-    }
-    if (session.runState === 'thinking') {
-      return session.activityLabel ?? 'Agent is thinking…';
-    }
-    if (session.runState === 'submitting') {
-      return 'Sending prompt…';
-    }
-    if (session.runState === 'completed') {
-      return session.undo.lastMessage ?? 'Completed';
-    }
-    return 'Ready';
+    if (session.runState === 'tool-running') return session.activityLabel ?? 'Running tool…';
+    if (session.runState === 'streaming') return 'Responding…';
+    if (session.runState === 'thinking') return session.activityLabel ?? 'Thinking…';
+    if (session.runState === 'submitting') return 'Sending prompt…';
+    return '';
   });
 </script>
 
-<section class={`session-activity-bar ${isBusy ? 'session-activity-bar-busy' : ''}`}>
-  <div class="session-activity-main">
-    <div class="session-activity-indicator" aria-hidden="true">
+{#if isVisible}
+  <section
+    class={`session-activity-bar ${isBusy ? 'session-activity-bar-busy' : ''} ${session.runState === 'failed' ? 'session-activity-bar-failed' : ''} ${session.runState === 'waiting-input' ? 'session-activity-bar-attention' : ''}`}
+    role={session.runState === 'failed' ? 'alert' : 'status'}
+    aria-live={session.runState === 'failed' ? 'assertive' : 'polite'}
+  >
+    <span class="session-activity-indicator" aria-hidden="true">
       {#if isBusy}
-        <LoaderCircle size={16} class="animate-spin" />
+        <LoaderCircle size={14} class="animate-spin" />
+      {:else if session.runState === 'waiting-input'}
+        <MessageCircleQuestion size={14} />
+      {:else}
+        <AlertTriangle size={14} />
       {/if}
-    </div>
-    <div class="min-w-0 flex-1">
-      <div class="session-activity-title">{primaryStatus}</div>
-      <div class="session-activity-meta">
-        {#if session.lastStopReason && session.runState === 'completed'}
-          <span>stop: {session.lastStopReason}</span>
-        {:else if session.activeToolCallId}
-          <span>Active tool in progress · double Esc to cancel</span>
-        {:else if session.undo.pendingOperation}
-          <span>Updating session history and workspace files</span>
-        {:else if isBusy}
-          <span>Agent busy · double Esc to cancel</span>
-        {:else}
-          <span>Session {session.sessionId ?? 'unselected'}</span>
-        {/if}
-      </div>
-    </div>
-    <div class="session-activity-actions">
-      {#if forkSupported}
-        <button
-          class="icon-btn"
-          type="button"
-          aria-label="Fork latest turn"
-          title="Fork latest turn"
-          disabled={!canFork || isBusy}
-          onclick={() => onFork?.()}
-        >
-          {#if forkPending}<LoaderCircle size={16} class="animate-spin" />{:else}<GitFork size={16} />{/if}
-        </button>
-      {/if}
-      {#if undoSupported}
-        <button
-          class="icon-btn"
-          type="button"
-          aria-label="Undo latest turn"
-          title="Undo latest turn (Ctrl/Cmd+Z)"
-          disabled={!canUndo || session.undo.pendingOperation !== null || isBusy}
-          onclick={() => onUndo?.()}
-        >
-          {#if session.undo.pendingOperation === 'undo'}<LoaderCircle size={16} class="animate-spin" />{:else}<Undo2 size={16} />{/if}
-        </button>
-        <button
-          class="icon-btn"
-          type="button"
-          aria-label="Redo last undone turn"
-          title="Redo last undone turn (Ctrl/Cmd+Shift+Z)"
-          disabled={!canRedo || session.undo.pendingOperation !== null || isBusy}
-          onclick={() => onRedo?.()}
-        >
-          {#if session.undo.pendingOperation === 'redo'}<LoaderCircle size={16} class="animate-spin" />{:else}<Redo2 size={16} />{/if}
-        </button>
-      {/if}
-      {#if agentBusy && onCancel}
-        <button class="icon-btn" type="button" aria-label="Cancel active session" onclick={onCancel}>
-          <XCircle size={16} />
-        </button>
-      {/if}
-    </div>
-  </div>
-
-  {#if isBusy}
-    <div class="session-activity-shimmer">
-      <Shimmer text={primaryStatus} class="text-xs" />
-    </div>
-  {/if}
-
-  <SessionUsageBar usage={session.usage} />
-</section>
+    </span>
+    <span class="session-activity-title">{primaryStatus}</span>
+    {#if session.runState === 'failed'}
+      <span class="session-activity-meta">Review the error, update the prompt, or refresh.</span>
+    {:else if session.runState === 'waiting-input'}
+      <span class="session-activity-meta">Respond below to continue.</span>
+    {:else if !session.undo.pendingOperation && !forkPending}
+      <span class="session-activity-meta">Double Esc to cancel</span>
+    {/if}
+    {#if agentBusy && onCancel}
+      <button class="session-activity-cancel" type="button" aria-label="Cancel active session" title="Cancel active session" onclick={onCancel}>
+        <X size={14} />
+      </button>
+    {/if}
+  </section>
+{/if}

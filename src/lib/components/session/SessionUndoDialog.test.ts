@@ -14,7 +14,7 @@ describe('SessionUndoDialog', () => {
       onConfirm
     });
 
-    expect(screen.getByText('This rolls back this turn and 2 later turns.')).toBeTruthy();
+    expect(screen.getByText(/This rolls back this turn and 2 later turns/)).toBeTruthy();
     expect(screen.getByText('Refactor the session store')).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Undo changes' }));
     expect(onConfirm).toHaveBeenCalledOnce();
@@ -30,6 +30,6 @@ describe('SessionUndoDialog', () => {
     });
 
     expect(screen.getByRole('button', { name: 'Undoing...' })).toHaveProperty('disabled', true);
-    expect(screen.getAllByRole('button', { name: 'Close undo confirmation' }).every((button) => button.hasAttribute('disabled'))).toBe(true);
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveProperty('disabled', true);
   });
 });

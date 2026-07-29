@@ -12,7 +12,7 @@ import type { Component } from 'svelte';
 
 export const appMeta = {
   title: 'QueryMT Desktop',
-  subtitle: 'Agent control center'
+  subtitle: 'Agent workspace'
 };
 
 export const sectionOrder = [

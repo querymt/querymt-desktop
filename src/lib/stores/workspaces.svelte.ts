@@ -10,6 +10,12 @@ class WorkspacesStore {
   loading = $state(false);
   error = $state<string | null>(null);
 
+  removeWorkspace(workspaceId: string) {
+    this.items = this.items.filter((item) => item.id !== workspaceId);
+    this.error = null;
+    persistUserWorkspaces(this.items);
+  }
+
   async addWorkspaceFromDialog() {
     this.loading = true;
     this.error = null;

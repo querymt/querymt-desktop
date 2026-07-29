@@ -30,6 +30,18 @@ export type SessionToolContent = {
 
 export type SessionConversationContent = SessionReasoningContent | SessionAssistantContent | SessionToolContent;
 
+export type SessionConversationWorkGroup = {
+  type: 'work-group';
+  id: string;
+  content: Array<SessionReasoningContent | SessionToolContent>;
+  toolCount: number;
+  reasoningCount: number;
+  failedToolCount: number;
+  settled: boolean;
+};
+
+export type SessionConversationPresentationItem = SessionAssistantContent | SessionConversationWorkGroup;
+
 export type SessionConversationTurn = {
   id: string;
   forkMessageId: string | null;
@@ -40,6 +52,8 @@ export type SessionConversationTurn = {
     text: string;
   };
   content: SessionConversationContent[];
+  presentation?: SessionConversationPresentationItem[];
+  settled?: boolean;
 };
 
 type RawConversationItem =
@@ -67,7 +81,9 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
           html: renderMarkdownToHtml(item.group.text),
           text: item.group.text
         },
-        content: []
+        content: [],
+        presentation: [],
+        settled: false
       };
       turns.push(current);
       continue;
@@ -75,7 +91,7 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
 
     if (!current) {
       const id = item.type === 'group' ? item.group.id : item.tool.id;
-      current = { id: `turn-${id}`, forkMessageId: null, content: [] };
+      current = { id: `turn-${id}`, forkMessageId: null, content: [], presentation: [], settled: false };
       turns.push(current);
     }
 
@@ -107,7 +123,52 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
     });
   }
 
-  return turns.filter((turn) => turn.user || turn.content.length > 0);
+  const visibleTurns = turns.filter((turn) => turn.user || turn.content.length > 0);
+  const busy = ['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState);
+  const activeTurnIndex = busy ? visibleTurns.length - 1 : -1;
+
+  return visibleTurns.map((turn, index) => {
+    const settled = index !== activeTurnIndex;
+    return {
+      ...turn,
+      settled,
+      presentation: buildTurnPresentation(turn.content, settled)
+    };
+  });
+}
+
+export function buildTurnPresentation(
+  content: SessionConversationContent[],
+  settled: boolean
+): SessionConversationPresentationItem[] {
+  const items: SessionConversationPresentationItem[] = [];
+  let work: Array<SessionReasoningContent | SessionToolContent> = [];
+
+  const flushWork = () => {
+    if (work.length === 0) return;
+    const tools = work.filter((item): item is SessionToolContent => item.type === 'tool');
+    items.push({
+      type: 'work-group',
+      id: `work-${work[0].id}`,
+      content: work,
+      toolCount: tools.length,
+      reasoningCount: work.length - tools.length,
+      failedToolCount: tools.filter((item) => item.tool.status === 'failed').length,
+      settled,
+    });
+    work = [];
+  };
+
+  for (const item of content) {
+    if (item.type === 'assistant') {
+      flushWork();
+      items.push(item);
+    } else {
+      work.push(item);
+    }
+  }
+  flushWork();
+  return items;
 }
 
 function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionToolCallItem[]): OrderedConversationItem[] {
