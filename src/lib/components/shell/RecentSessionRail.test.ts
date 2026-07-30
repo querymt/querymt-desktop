@@ -71,6 +71,15 @@ describe('RecentSessionRail navigation', () => {
     expect(screen.queryByText('Recent sessions')).not.toBeInTheDocument();
   });
 
+  it('shows the compact brand subtitle only in the expanded sidebar', () => {
+    const { rerender } = render(RecentSessionRail, { current: 'Today', sessions: [], collapsed: false });
+
+    expect(screen.getByText('Agents command and control').closest('.app-sidebar-brand-copy')).not.toBeNull();
+
+    rerender({ current: 'Today', sessions: [], collapsed: true });
+    expect(screen.queryByText('Agents command and control')).not.toBeInTheDocument();
+  });
+
   it('shows activity and the shared attention dot together for a session requiring action', () => {
     inboxStore.actionableItems = [{ id: 'request-1', agentId: 'agent-1', sessionId: 'session-1' }];
 

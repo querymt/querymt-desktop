@@ -157,6 +157,7 @@ describe('Agents page', () => {
   it('renders a simple agent row without verbose details by default', () => {
     render(AgentsPage);
 
+    expect(screen.getByRole('button', { name: 'Add agent' })).not.toHaveClass('icon-btn-primary');
     expect(screen.getByText('QMTCODE')).toBeInTheDocument();
     expect(screen.getByText('/usr/local/bin/qmtcode --acp')).toBeInTheDocument();
     expect(screen.getByText('running')).toBeInTheDocument();
@@ -216,6 +217,17 @@ describe('Agents page', () => {
 
     expect(container.querySelector('.status-dot-degraded')).toBeTruthy();
     expect(screen.getByText('running')).toBeInTheDocument();
+  });
+
+  it('keeps delete visible with the other row actions', async () => {
+    render(AgentsPage);
+
+    const deleteButton = screen.getByRole('button', { name: 'Delete QMTCODE' });
+    expect(deleteButton).toHaveClass('icon-btn-danger');
+    expect(screen.queryByLabelText('More actions for QMTCODE')).not.toBeInTheDocument();
+    await fireEvent.click(deleteButton);
+
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Delete QMTCODE?');
   });
 
   it('opens the details drawer for extended information', async () => {

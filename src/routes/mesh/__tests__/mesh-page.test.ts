@@ -49,18 +49,21 @@ function createAgentsStore() {
     remoteSessionsByAgent: {} as Record<string, Record<string, unknown>>,
     refreshMeshForAgent: vi.fn(async () => undefined),
     refreshRemoteSessionsForAgent: vi.fn(async () => undefined),
+    attachRemoteSession: vi.fn(async () => 'remote-session-1'),
     createMeshInvite: vi.fn(async () => ({ invite_id: 'invite-new', url: 'https://mesh.invalid/invite-new', expires_at: 0, max_uses: 1 })),
     revokeMeshInvite: vi.fn(async () => undefined),
     dismissRemoteSession: vi.fn(async () => undefined)
   };
 }
 
+const goto = vi.hoisted(() => vi.fn(async () => undefined));
 const agentsStore = vi.hoisted(() => createAgentsStore());
 const commandPaletteStore = vi.hoisted(() => ({
   openRemoteCreate: vi.fn(),
   openRemoteAttach: vi.fn()
 }));
 
+vi.mock('$app/navigation', () => ({ goto }));
 vi.mock('$lib/stores/agents.svelte', () => ({ agentsStore }));
 vi.mock('$lib/stores/command-palette.svelte', () => ({ commandPaletteStore }));
 
@@ -85,6 +88,29 @@ describe('Mesh page', () => {
     expect(screen.queryByRole('heading', { name: 'Remote sessions' })).not.toBeInTheDocument();
   });
 
+  it('keeps compact mesh identity metadata on one copyable summary line', async () => {
+    const peerId = '12D3KooWPtRjf6xSzZKwyRWP2kBA1kZhqYjr4XxEmtHfunWZUT62';
+    agentsStore.meshStatusByAgent['agent-1'] = {
+      ...agentsStore.meshStatusByAgent['agent-1'],
+      peer_id: peerId,
+      known_peer_count: 0
+    };
+
+    render(MeshPage);
+
+    expect(screen.getByText('12D3KooWPtRj...unWZUT62')).toBeInTheDocument();
+    expect(screen.getByText('Transport')).toBeInTheDocument();
+    expect(screen.getByText('iroh', { selector: '.mesh-overview-context-value' })).toBeInTheDocument();
+    expect(screen.getByText('Known peers')).toBeInTheDocument();
+    expect(screen.getByText('0', { selector: '.mesh-overview-context-count' })).toBeInTheDocument();
+
+    const copyButton = screen.getByRole('button', { name: `Copy peer ID ${peerId}` });
+    expect(copyButton).toHaveAttribute('title', peerId);
+    await fireEvent.click(copyButton);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(peerId);
+    expect(screen.getByRole('button', { name: 'Peer ID copied' })).toBeInTheDocument();
+  });
+
   it('shows a page-scoped selector when multiple mesh agents are available', () => {
     agentsStore.configs = [...agentsStore.configs, { ...agentsStore.configs[0], id: 'agent-2', name: 'Second agent' }];
     agentsStore.controlCapabilitiesByAgent = { ...agentsStore.controlCapabilitiesByAgent, 'agent-2': capabilities() };
@@ -92,6 +118,24 @@ describe('Mesh page', () => {
     render(MeshPage);
 
     expect(screen.getByLabelText('Mesh agent')).toBeInTheDocument();
+  });
+
+  it('shows compact copyable IDs for remote peers', async () => {
+    const nodeId = 'r12D3KooWPtRjf6xSzZKwyRWP2kBA1kZhqYjr4XxEmtHfunWZUT62';
+    agentsStore.meshNodesByAgent['agent-1'] = {
+      nodes: [{ ...agentsStore.meshNodesByAgent['agent-1'].nodes[0], id: nodeId, transport: 'unknown' }]
+    };
+
+    render(MeshPage);
+
+    expect(screen.getByText('r12D3KooWPtR...unWZUT62')).toBeInTheDocument();
+    expect(screen.queryByText('unknown')).not.toBeInTheDocument();
+    const copyButton = screen.getByRole('button', { name: `Copy remote peer ID ${nodeId}` });
+    expect(copyButton).toHaveAttribute('title', nodeId);
+
+    await fireEvent.click(copyButton);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(nodeId);
+    expect(screen.getByRole('button', { name: 'Remote peer ID copied' })).toBeInTheDocument();
   });
 
   it('opens node actions with selected agent and node context', async () => {
@@ -111,6 +155,87 @@ describe('Mesh page', () => {
     expect(agentsStore.refreshRemoteSessionsForAgent).toHaveBeenCalledWith('agent-1', 'node-1');
   });
 
+  it('renders loaded remote sessions like session-list rows with attach and menu actions', async () => {
+    agentsStore.remoteSessionsByAgent = {
+      'agent-1': {
+        'node-1': {
+          node_id: 'node-1',
+          total_count: 1,
+          sessions: [{ id: 'remote-session-1', node_id: 'node-1', title: 'Review the deployment', cwd: '/srv/app', updated_at: '2026-07-29T22:30:00Z' }]
+        }
+      }
+    };
+
+    render(MeshPage);
+
+    expect(screen.getByText('Review the deployment')).toBeInTheDocument();
+    expect(screen.queryByText('Remote')).not.toBeInTheDocument();
+    expect(screen.getByText('/srv/app')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Attach Review the deployment' })).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Attach remote session Review the deployment' }));
+    await waitFor(() => expect(agentsStore.attachRemoteSession).toHaveBeenCalledWith('agent-1', 'node-1', 'remote-session-1'));
+    expect(commandPaletteStore.openRemoteAttach).not.toHaveBeenCalled();
+    expect(goto).toHaveBeenCalledWith('/sessions/agent-1/remote-session-1');
+
+    await fireEvent.click(screen.getByText('Review the deployment').closest('.session-row')!.querySelector('summary')!);
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy remote session ID for Review the deployment' }));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('remote-session-1');
+  });
+
+  it('shows row-level pending feedback while a remote session attaches', async () => {
+    let resolveAttach: (() => void) | undefined;
+    agentsStore.attachRemoteSession.mockImplementationOnce(() => new Promise<string>((resolve) => (resolveAttach = () => resolve('remote-session-1'))));
+    agentsStore.remoteSessionsByAgent = {
+      'agent-1': {
+        'node-1': {
+          node_id: 'node-1',
+          total_count: 1,
+          sessions: [{ id: 'remote-session-1', node_id: 'node-1', title: 'Review the deployment' }]
+        }
+      }
+    };
+
+    render(MeshPage);
+    await fireEvent.click(screen.getByRole('button', { name: 'Attach remote session Review the deployment' }));
+
+    expect(screen.getByRole('status', { name: 'Attaching Review the deployment' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Attach remote session Review the deployment' })).toBeDisabled();
+
+    expect(goto).not.toHaveBeenCalled();
+    resolveAttach?.();
+    await waitFor(() => expect(goto).toHaveBeenCalledWith('/sessions/agent-1/remote-session-1'));
+    expect(screen.queryByRole('status', { name: 'Attaching Review the deployment' })).not.toBeInTheDocument();
+  });
+
+  it('stays on Mesh and shows the node error when remote attach fails', async () => {
+    agentsStore.attachRemoteSession.mockRejectedValueOnce(new Error('Remote session unavailable'));
+    agentsStore.remoteSessionsByAgent = {
+      'agent-1': {
+        'node-1': {
+          node_id: 'node-1',
+          total_count: 1,
+          sessions: [{ id: 'remote-session-1', node_id: 'node-1', title: 'Review the deployment' }]
+        }
+      }
+    };
+
+    render(MeshPage);
+    await fireEvent.click(screen.getByRole('button', { name: 'Attach remote session Review the deployment' }));
+
+    expect(await screen.findByText('Remote session unavailable')).toBeInTheDocument();
+    expect(goto).not.toHaveBeenCalled();
+  });
+
+  it('keeps management creates neutral and invite revoke visible', () => {
+    render(MeshPage);
+
+    expect(screen.getByRole('button', { name: 'Create remote session' })).not.toHaveClass('icon-btn-primary');
+    expect(screen.getByRole('button', { name: 'Create mesh invite' })).not.toHaveClass('icon-btn-primary');
+    expect(screen.getByRole('button', { name: 'Revoke invite-1' })).toHaveClass('icon-btn-danger');
+    expect(screen.queryByLabelText('More actions for invite invite-1')).not.toBeInTheDocument();
+  });
+
   it('creates invites in a focused dialog and shows the share result', async () => {
     render(MeshPage);
 
@@ -123,6 +248,7 @@ describe('Mesh page', () => {
     await waitFor(() => expect(agentsStore.createMeshInvite).toHaveBeenCalledWith('agent-1', { ttl: '24h', max_uses: 1 }));
     expect(await screen.findByText('Invite ready')).toBeInTheDocument();
     expect(screen.getByText('invite-new')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Done' }));
   });
 
   it('shows a focused unavailable state without mesh-capable agents', () => {

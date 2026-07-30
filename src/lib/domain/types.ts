@@ -83,6 +83,9 @@ export interface DesktopSessionSummary {
   runtimeId: string;
   runtimeName: string;
   source: 'acp';
+  location?: 'local' | 'remote';
+  remoteNodeId?: string;
+  remoteNodeLabel?: string;
   status: SessionStatus;
   parentSessionId?: string | null;
   forkOrigin?: string | null;

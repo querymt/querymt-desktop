@@ -69,7 +69,19 @@ const mockClient = vi.hoisted(() => {
     onExtensionNotification: vi.fn(() => () => undefined),
     onPermissionRequest: vi.fn(() => permissionUnsubscribe),
     onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
-    setSessionConfigOption: vi.fn(async (): Promise<SessionConfigOption[]> => [])
+    setSessionConfigOption: vi.fn(async (): Promise<SessionConfigOption[]> => []),
+    listRemoteSessions: vi.fn(async (request: { node_id: string }) => ({ node_id: request.node_id, sessions: [], total_count: 0 })),
+    attachRemoteSession: vi.fn(async () => ({
+      session_id: 'remote-session-1',
+      node_id: 'node-1',
+      attached: true,
+      config_options: [],
+      snapshot: {
+        audit: {
+          events: [{ seq: 1, timestamp: 1, kind: { type: 'prompt_received', data: { message_id: 'm1', content: 'Review deployment' } } }]
+        }
+      }
+    }))
   };
 });
 
@@ -187,6 +199,49 @@ describe('AgentsStore connections', () => {
     expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '/tmp/work');
     expect(mockClient.permissionUnsubscribe()).not.toHaveBeenCalled();
     expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
+  });
+
+  it('hydrates and activates an attached remote session without reloading it immediately', async () => {
+    const store = createStore();
+    store.remoteSessionsByAgent = {
+      'agent-1': {
+        'node-1': {
+          node_id: 'node-1',
+          total_count: 1,
+          sessions: [{
+            id: 'remote-session-1',
+            node_id: 'node-1',
+            title: 'Review deployment',
+            cwd: '/srv/app',
+            updated_at: '2026-07-29T22:30:00Z'
+          }]
+        }
+      }
+    };
+
+    await expect(store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1')).resolves.toBe('remote-session-1');
+
+    expect(mockClient.attachRemoteSession).toHaveBeenCalledWith({ node_id: 'node-1', session_id: 'remote-session-1' });
+    expect(store.activeAgentId).toBe('agent-1');
+    expect(store.activeSessionId).toBe('remote-session-1');
+    expect(store.activeSession.transcript).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'user_message_chunk', text: 'Review deployment' })
+    ]));
+    expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sessionId: 'remote-session-1',
+        title: 'Review deployment',
+        cwd: '/srv/app',
+        location: 'remote',
+        remoteNodeId: 'node-1'
+      })
+    ]));
+    expect(store.workspaceSessionGroups).toEqual(expect.arrayContaining([
+      expect.objectContaining({ cwd: '/srv/app', location: 'remote' })
+    ]));
+
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
   });
 
   it('forks at the selected message, refreshes sessions, and inserts a fallback summary', async () => {

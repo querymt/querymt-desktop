@@ -128,7 +128,7 @@
         disabled={!selectedAgentId || refreshing}
         onclick={refreshSchedules}
       />
-      <IconTooltipButton label="Create automation" icon={Plus} tone="primary" size={16} disabled={!selectedAgentId || !canRun('querymt/schedules/create')} onclick={openScheduleCreate} />
+      <IconTooltipButton label="Create automation" icon={Plus} size={16} disabled={!selectedAgentId || !canRun('querymt/schedules/create')} onclick={openScheduleCreate} />
     </div>
   </div>
 
@@ -162,7 +162,7 @@
     {:else}
       <AutomationSummary total={selectedSchedules.length} active={activeCount} paused={pausedCount} attention={attentionCount} healthMessage={healthWarning} />
 
-      {#if actionError}<div class="state-inline-error" role="alert"><span class="min-w-0 flex-1">{actionError}</span><button class="action-btn !px-3 !py-1.5 text-xs" type="button" onclick={refreshSchedules}>Retry</button></div>{/if}
+      {#if actionError}<div class="state-inline-error" role="alert"><span class="min-w-0 flex-1">{actionError}</span><button class="action-btn action-btn-compact" type="button" onclick={refreshSchedules}>Retry</button></div>{/if}
 
       {#if selectedSchedules.length === 0}
         <section class="settings-section" aria-label="Automations">

@@ -323,7 +323,7 @@
         disabled={agentsStore.loading}
         onclick={() => refreshAgents()}
       />
-      <IconTooltipButton label="Add agent" icon={CirclePlus} tone="primary" size={16} onclick={() => openAddDialog()} />
+      <IconTooltipButton label="Add agent" icon={CirclePlus} size={16} onclick={() => openAddDialog()} />
     </div>
   </div>
 
@@ -362,7 +362,7 @@
           <div class="state-inline-error" role="alert">
             <AlertTriangle size={15} />
             <span class="min-w-0 flex-1"><strong>Some agents could not be refreshed.</strong> {agentsStore.error}</span>
-            <button class="action-btn !px-3 !py-1.5 text-xs" type="button" onclick={() => refreshAgents()}>Retry</button>
+            <button class="action-btn action-btn-compact" type="button" onclick={() => refreshAgents()}>Retry</button>
           </div>
         {:else if refreshing}
           <div class="state-inline-progress" role="status"><LoaderCircle size={14} class="animate-spin" /><span>Refreshing agent status…</span></div>
@@ -404,7 +404,7 @@
                     icon={card.config.autoStart ? ToggleRight : ToggleLeft}
                     onclick={() => agentsStore.updateConfig(card.config.id, { autoStart: !card.config.autoStart })}
                   />
-                  <IconTooltipButton label="Delete" icon={Trash2} tone="danger" onclick={() => (pendingDeleteAgentId = card.config.id)} />
+                  <IconTooltipButton label={`Delete ${card.config.name}`} icon={Trash2} tone="danger" onclick={() => (pendingDeleteAgentId = card.config.id)} />
                 </div>
               </div>
             </article>
@@ -436,7 +436,7 @@
                   <div class="mt-1 truncate text-xs text-[var(--muted)]">{getAttentionMessage(card)}</div>
                 </div>
               </div>
-              <button class="action-btn !px-3 !py-1.5 text-xs" type="button" onclick={() => openDetails(card.config.id)}>
+              <button class="action-btn action-btn-compact" type="button" onclick={() => openDetails(card.config.id)}>
                 Details
               </button>
             </article>
@@ -486,7 +486,7 @@
 
       {#snippet footer()}
         <button class="action-btn" type="button" onclick={() => closeAgentDialog()}>Cancel</button>
-        <button class="action-btn action-btn-primary" form="agent-dialog-form" type="submit" disabled={!draftName.trim() || !(draftTransport === 'websocket' ? draftWebSocketUrl.trim() : draftCommandLine.trim())}>
+        <button class="action-btn action-btn-accent" form="agent-dialog-form" type="submit" disabled={!draftName.trim() || !(draftTransport === 'websocket' ? draftWebSocketUrl.trim() : draftCommandLine.trim())}>
           {agentDialogMode === 'add' ? 'Add agent' : 'Save changes'}
         </button>
       {/snippet}

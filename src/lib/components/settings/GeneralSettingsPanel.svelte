@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ChevronDown } from '@lucide/svelte';
-  import AppCheckbox from '$lib/components/primitives/AppCheckbox.svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import AppSwitch from '$lib/components/primitives/AppSwitch.svelte';
   import { isMacPlatform as detectMacPlatform } from '$lib/design/platform';
   import { appearanceStore, type AppearanceThemeMode } from '$lib/stores/appearance.svelte';
   import { chatPreferencesStore, type SendShortcut } from '$lib/stores/chat-preferences.svelte';
@@ -92,7 +92,7 @@
               {/if}
             </p>
           </div>
-          <AppCheckbox
+          <AppSwitch
             checked={windowDecorationsStore.mode === 'custom'}
             disabled={!windowDecorationsStore.supported}
             ariaLabel="Custom titlebar"

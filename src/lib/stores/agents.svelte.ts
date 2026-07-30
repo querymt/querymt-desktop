@@ -24,6 +24,8 @@ import {
   getSessionKey,
   getSessionWorkspaceKey,
   getSessionWorkspaceName,
+  getWorkspaceLocation,
+  getWorkspaceRemoteMachines,
   isActiveSessionStatus,
   mapAcpSessionsToDesktopSessions,
   type WorkspaceSessionGroup,
@@ -144,6 +146,7 @@ export class AgentsStore {
   private seenWorkspaceCursors = new Map<string, Set<string>>();
   private completedWorkspaceDiscoveries = new Set<string>();
   private workspaceDiscoveryPromises = new Map<string, Promise<void>>();
+  private hydratedRemoteSessionKeys = new Set<string>();
 
   configs = $state<AgentConfig[]>(loadInitialAgents());
   statuses = $state<Record<string, AgentRuntimeStatus>>({});
@@ -241,6 +244,8 @@ export class AgentsStore {
           name: cwd ? getSessionWorkspaceName(cwd) : 'No workspace',
           path: cwd || 'No workspace path recorded',
           sessions: sessions.slice(0, visibleLimit),
+          location: getWorkspaceLocation(sessions),
+          remoteMachines: getWorkspaceRemoteMachines(sessions),
           latestActivity,
           initialized: sources.every((source) => source.initialized),
           loading: sources.some((source) => source.loading),
@@ -852,13 +857,14 @@ export class AgentsStore {
     for (const [cwd, workspaceSessions] of discovered) {
       const current = currentSources[cwd];
       const latestActivity = maxTimestamp(workspaceSessions.map((session) => session.updatedAt));
-      const fallbackSessions = cwd ? [] : workspaceSessions;
+      const hasRemoteSessions = workspaceSessions.some((session) => session.location === 'remote');
+      const fallbackSessions = cwd && !hasRemoteSessions ? [] : workspaceSessions;
       nextSources[cwd] = {
         agentId: config.id,
         agentName: config.name,
         cwd,
         sessions: current
-          ? cwd
+          ? cwd && !hasRemoteSessions
             ? updateKnownSessions(current.sessions, workspaceSessions)
             : mergeSessions(current.sessions, workspaceSessions)
           : fallbackSessions,
@@ -1146,6 +1152,16 @@ export class AgentsStore {
   }
 
   async loadSession(agentId: string, sessionId: string, pendingOperation: 'undo' | 'redo' | null = null) {
+    const sessionKey = buildSessionKey(agentId, sessionId);
+    if (
+      pendingOperation === null &&
+      this.hydratedRemoteSessionKeys.delete(sessionKey) &&
+      this.isSelectedSession(agentId, sessionId)
+    ) {
+      this.acknowledgeSession(agentId, sessionId);
+      return;
+    }
+
     const summary = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
     if (!summary) {
       await this.refreshSessionsForAgent(agentId);
@@ -1804,14 +1820,12 @@ export class AgentsStore {
 
   private async createAttachedRemoteSession(agentId: string, node_id: string, cwd: string): Promise<string> {
     const result = await this.createRemoteSessionAttach(agentId, node_id, cwd);
-    const sessionId = result.session_id;
-    this.resetActiveSession(agentId, sessionId);
-    this.activeSession.configOptions = result.config_options ?? [];
-    const snapshot = activeSessionFromLoadResponse(sessionId, { _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot } });
-    snapshot.configOptions = this.activeSession.configOptions;
-    this.activeSession = normalizeHistoricalSession(snapshot);
-    await this.refreshRemoteSessionsForAgent(agentId, node_id);
-    return sessionId;
+    return this.hydrateRemoteAttach(agentId, node_id, result, {
+      id: result.session_id,
+      node_id,
+      cwd,
+      updated_at: new Date().toISOString()
+    });
   }
 
   private async createRemoteSessionAttach(agentId: string, node_id: string, cwd?: string) {
@@ -1826,6 +1840,7 @@ export class AgentsStore {
   }
 
   async attachRemoteSession(agentId: string, node_id: string, session_id: string) {
+    const remoteSession = this.remoteSessionsByAgent[agentId]?.[node_id]?.sessions.find((session) => session.id === session_id);
     const record = this.ensureClientRecord(agentId);
     await this.connectAgent(agentId);
     const result = await record.client.attachRemoteSession({ node_id, session_id });
@@ -1833,8 +1848,52 @@ export class AgentsStore {
       ...this.lastRemoteAttachByAgent,
       [agentId]: result
     };
-    await this.refreshRemoteSessionsForAgent(agentId, node_id);
-    return result;
+    return this.hydrateRemoteAttach(agentId, node_id, result, remoteSession ?? { id: session_id, node_id });
+  }
+
+  private async hydrateRemoteAttach(
+    agentId: string,
+    nodeId: string,
+    result: RemoteSessionAttachInfo,
+    remoteSession: { id: string; node_id: string; title?: string; cwd?: string; updated_at?: string }
+  ): Promise<string> {
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) throw new Error(`Unable to locate agent ${agentId}.`);
+
+    const sessionId = result.session_id;
+    this.resetActiveSession(agentId, sessionId);
+    const configOptions = result.config_options ?? [];
+    const snapshot = activeSessionFromLoadResponse(sessionId, {
+      _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
+    });
+    snapshot.configOptions = configOptions;
+    this.activeSession = normalizeHistoricalSession(snapshot, { loadCompleted: true });
+    this.composerProfileId = getCurrentProfileId(configOptions) ?? this.composerProfileId;
+
+    const summary: DesktopSessionSummary = {
+      agentId,
+      agentName: config.name,
+      sessionId,
+      title: remoteSession.title?.trim() || sessionId,
+      cwd: remoteSession.cwd ?? '',
+      updatedAt: remoteSession.updated_at ?? new Date().toISOString(),
+      runtimeId: agentId,
+      runtimeName: config.name,
+      source: 'acp',
+      location: 'remote',
+      remoteNodeId: nodeId,
+      remoteNodeLabel: this.meshNodesByAgent[agentId]?.nodes.find((node) => node.id === nodeId)?.label,
+      status: 'idle'
+    };
+    this.sessionsByAgent = {
+      ...this.sessionsByAgent,
+      [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [summary])
+    };
+    // Remote workspace origin is runtime-only until session/list exposes persisted remote bookmarks.
+    this.updateWorkspaceDiscovery(config, [summary], false);
+    this.hydratedRemoteSessionKeys.add(buildSessionKey(agentId, sessionId));
+    await this.refreshRemoteSessionsForAgent(agentId, nodeId);
+    return sessionId;
   }
 
   async dismissRemoteSession(agentId: string, node_id: string, session_id: string) {

@@ -243,7 +243,7 @@
             <Dialog.Description class="app-picker-description">Search by model, provider, or mesh node.</Dialog.Description>
           </div>
           {#if onRefresh}
-            <IconTooltipButton label="Refresh models" icon={RefreshCw} size={14} iconClass={loading ? 'animate-spin' : ''} disabled={loading} onclick={onRefresh} />
+            <IconTooltipButton label="Refresh models" icon={RefreshCw} controlSize="compact" iconClass={loading ? 'animate-spin' : ''} disabled={loading} onclick={onRefresh} />
           {/if}
           <button class="app-picker-header-action" type="button" aria-label="Close model picker" onclick={closePicker}>
             <X size={16} />

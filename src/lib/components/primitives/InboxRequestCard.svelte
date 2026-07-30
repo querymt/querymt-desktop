@@ -20,9 +20,13 @@
     onOpenSession?: ((item: InboxItem) => void | Promise<void>) | null;
   } = $props();
 
-  function isPrimaryAction(kind: string) {
-    return kind === 'accept' || kind.startsWith('allow');
-  }
+  const primaryActionId = $derived.by(() => {
+    const actions = item.actions ?? [];
+    return actions.find((action) => action.kind === 'accept')?.id
+      ?? actions.find((action) => action.kind === 'allow_once')?.id
+      ?? actions.find((action) => action.kind.startsWith('allow'))?.id
+      ?? null;
+  });
 </script>
 
 <article class={`surface-muted ${compact ? 'p-3' : 'p-4'}`}>
@@ -47,7 +51,7 @@
         {#if item.sessionId}<span> / Session: {item.sessionId}</span>{/if}
       </div>
       {#if item.sessionId && item.agentId && onOpenSession}
-        <button class="action-btn !px-3 !py-1.5 text-xs" type="button" onclick={() => onOpenSession?.(item)}>
+        <button class="action-btn action-btn-compact" type="button" onclick={() => onOpenSession?.(item)}>
           Open session
         </button>
       {/if}
@@ -176,7 +180,7 @@
     <div class="mt-4 flex flex-wrap gap-2">
       {#each item.actions as action}
         <button
-          class={`action-btn ${isPrimaryAction(action.kind) ? 'action-btn-primary' : ''}`}
+          class={`action-btn ${action.id === primaryActionId ? 'action-btn-primary' : ''}`}
           type="button"
           onclick={() => onAction?.(item.id, action.id)}
         >

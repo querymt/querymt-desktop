@@ -97,16 +97,16 @@ Object.defineProperty(navigator, 'clipboard', {
   configurable: true
 });
 
-vi.mock('$lib/stores/window-decorations.svelte', () => ({
-  windowDecorationsStore: {
-    mode: 'os',
-    supported: true,
-    initialized: true,
-    error: null,
-    initialize: vi.fn(async () => {}),
-    toggleCustomTitlebar: vi.fn(async () => {})
-  }
+const windowDecorationsStore = vi.hoisted(() => ({
+  mode: 'os',
+  supported: true,
+  initialized: true,
+  error: null,
+  initialize: vi.fn(async () => {}),
+  toggleCustomTitlebar: vi.fn(async () => {})
 }));
+
+vi.mock('$lib/stores/window-decorations.svelte', () => ({ windowDecorationsStore }));
 
 beforeEach(() => {
   window.history.replaceState({}, '', '/settings');
@@ -191,7 +191,11 @@ describe('Settings controls', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
     expect(screen.getByText('Custom titlebar')).toBeInTheDocument();
     expect(screen.getByText('Beta')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'Custom titlebar' })).not.toBeChecked();
+    const titlebarSwitch = screen.getByRole('switch', { name: 'Custom titlebar' });
+    expect(titlebarSwitch).not.toBeChecked();
+
+    await fireEvent.click(titlebarSwitch);
+    expect(windowDecorationsStore.toggleCustomTitlebar).toHaveBeenCalledWith(true);
   });
 
   it('defaults to Enter and updates the send shortcut preference', async () => {
@@ -603,7 +607,7 @@ describe('Settings controls', () => {
 
     await waitFor(() => expect(screen.queryByRole('alertdialog', { name: 'Remove the stored Anthropic key?' })).not.toBeInTheDocument());
     expect(clearTrigger.isConnected).toBe(false);
-    const primaryAction = screen.getByRole('button', { name: 'Close' });
+    const primaryAction = screen.getByRole('button', { name: 'Manage' });
     await waitFor(() => expect(primaryAction).toHaveFocus());
     expect(providerRow).toContainElement(primaryAction);
     expect(document.body).not.toHaveFocus();

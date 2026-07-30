@@ -73,6 +73,9 @@
   --radius-sm: 8px;
   --radius-control: 8px;
   --radius-lg: 16px;
+  --control-height-compact: 2rem;
+  --control-height-standard: 2.25rem;
+  --control-height-large: 2.75rem;
   --app-shell-inset: 1rem;
   --app-sidebar-expanded-width: 252px;
   --app-sidebar-collapsed-width: 48px;
@@ -520,8 +523,12 @@ select {
   line-height: 1.25;
 }
 
-.provider-overview-value-danger {
-  color: var(--danger) !important;
+.provider-overview-value-success {
+  color: var(--status-success) !important;
+}
+
+.provider-overview-value-warning {
+  color: var(--status-warn) !important;
 }
 
 .provider-maintenance {
@@ -957,7 +964,7 @@ html:has(.app-shell-custom-titlebar) body {
 }
 
 .custom-titlebar-controls button:hover {
-  background: var(--accent-dim);
+  background: var(--bg-card-hover);
   color: var(--text);
 }
 
@@ -1041,14 +1048,34 @@ html:has(.app-shell-custom-titlebar) body {
 
 .action-btn {
   display: inline-flex;
+  height: var(--control-height-standard);
+  flex: 0 0 auto;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
   border-radius: var(--radius-control);
   border: 1px solid var(--border);
   background: var(--bg-card);
   color: var(--text);
-  padding: 0.6rem 0.95rem;
+  padding: 0 0.95rem;
+  font-size: 0.82rem;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
   transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.action-btn-compact {
+  height: var(--control-height-compact);
+  gap: 0.4rem;
+  padding-inline: 0.75rem;
+  font-size: 0.75rem;
+}
+
+.action-btn-large {
+  height: var(--control-height-large);
+  padding-inline: 1.1rem;
+  font-size: 0.9rem;
 }
 
 .action-btn:hover:enabled {
@@ -1115,6 +1142,18 @@ html:has(.app-shell-custom-titlebar) body {
   color: #ffffff;
 }
 
+.action-btn-accent {
+  border-color: color-mix(in srgb, var(--accent), var(--border) 72%);
+  background: color-mix(in srgb, var(--accent-dim), var(--bg-card) 68%);
+  color: var(--accent);
+}
+
+.action-btn-accent:hover:enabled {
+  border-color: color-mix(in srgb, var(--accent), var(--border) 52%);
+  background: color-mix(in srgb, var(--accent-dim), var(--bg-card-hover) 56%);
+  color: var(--accent-hover);
+}
+
 .action-btn-danger {
   border-color: var(--status-danger-border);
   background: var(--status-danger-bg);
@@ -1131,8 +1170,8 @@ html:has(.app-shell-custom-titlebar) body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--control-height-standard);
+  height: var(--control-height-standard);
   border-radius: var(--radius-control);
   border: 1px solid var(--border);
   background: var(--bg-card);
@@ -1143,6 +1182,11 @@ html:has(.app-shell-custom-titlebar) body {
 .icon-btn:hover:enabled {
   border-color: var(--border-strong);
   background: var(--bg-card-hover);
+}
+
+.icon-btn-compact {
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
 }
 
 .icon-btn:disabled {
@@ -1159,6 +1203,18 @@ html:has(.app-shell-custom-titlebar) body {
 .icon-btn-primary:hover:enabled {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+}
+
+.icon-btn-accent {
+  border-color: color-mix(in srgb, var(--accent), var(--border) 72%);
+  background: color-mix(in srgb, var(--accent-dim), var(--bg-card) 68%);
+  color: var(--accent);
+}
+
+.icon-btn-accent:hover:enabled {
+  border-color: color-mix(in srgb, var(--accent), var(--border) 52%);
+  background: color-mix(in srgb, var(--accent-dim), var(--bg-card-hover) 56%);
+  color: var(--accent-hover);
 }
 
 .kbd {
@@ -1421,11 +1477,14 @@ summary:focus-visible {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
+  gap: 0.45rem;
 }
 
 .profile-row-enabled {
   display: inline-flex;
+  min-width: 5.25rem;
   align-items: center;
+  justify-content: center;
   gap: 0.35rem;
   color: var(--status-success);
   font-size: 0.74rem;
@@ -1433,7 +1492,7 @@ summary:focus-visible {
 }
 
 .profile-row-feedback,
-.profile-row-details {
+.profile-row-details-content {
   grid-column: 1 / -1;
 }
 
@@ -1449,30 +1508,31 @@ summary:focus-visible {
   color: var(--danger);
 }
 
-.profile-row-details {
-  border-top: 1px solid var(--subtle-border);
-  margin-top: 0.25rem;
-  padding-top: 0.45rem;
+.profile-row-enable-action,
+.profile-row-details-action {
+  font-size: 0.74rem;
 }
 
-.profile-row-details > button {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  color: var(--text-dim);
-  font-size: 0.68rem;
+.profile-row-enable-action {
+  min-width: 5.25rem;
+  justify-content: center;
 }
 
-.profile-row-details > button:hover,
-.profile-row-details > button:focus-visible {
-  color: var(--text);
-  outline: none;
+.profile-row-details-action {
+  color: var(--text-muted);
+}
+
+.profile-row-details-action svg {
+  transition: transform 0.15s ease;
 }
 
 .profile-row-details-content {
   display: grid;
   gap: 0.35rem;
-  margin-top: 0.5rem;
+  margin-top: 0.25rem;
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.75rem;
+  background: var(--subtle-surface);
 }
 
 .profile-row-details-content div {
@@ -1542,20 +1602,31 @@ summary:focus-visible {
   .provider-overview-stat:nth-child(4) {
     border-top: 1px solid var(--border);
   }
+
+  .profile-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-row-action {
+    justify-content: flex-start;
+  }
+
+  .profile-row-details-content div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.15rem;
+  }
 }
 
 @media (max-width: 640px) {
   .settings-section-header-action,
   .settings-preference-row,
-  .profile-template-row,
   .settings-simple-row {
     align-items: stretch;
     flex-direction: column;
   }
 
   .settings-preference-actions,
-  .settings-preference-actions-single,
-  .profile-template-action {
+  .settings-preference-actions-single {
     justify-content: flex-start;
   }
 
@@ -1881,6 +1952,62 @@ summary:focus-visible {
   background: var(--bg-card-hover);
 }
 
+.app-switch-control {
+  position: relative;
+  display: inline-flex;
+  width: 2.25rem;
+  height: 1.25rem;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--recessed-surface);
+  padding: 0.125rem;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.app-switch-control:hover:not(:disabled) {
+  border-color: var(--text-dim);
+}
+
+.app-switch-control[data-state='checked'] {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.app-switch-control:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.app-switch-control:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.app-switch-thumb {
+  display: block;
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 999px;
+  background: var(--text-dim);
+  box-shadow: var(--shadow-sm);
+  transform: translateX(0);
+  transition: background 0.15s ease, transform 0.18s ease;
+}
+
+.app-switch-thumb[data-state='checked'] {
+  background: #fff;
+  transform: translateX(1rem);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-switch-control,
+  .app-switch-thumb {
+    transition: none;
+  }
+}
+
 .elicitation-option-list {
   display: grid;
   gap: 0.65rem;
@@ -2105,8 +2232,8 @@ summary:focus-visible {
 
 .automation-row-menu-trigger {
   display: inline-flex;
-  width: 2rem;
-  height: 2rem;
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-control);
@@ -2257,17 +2384,98 @@ summary:focus-visible {
 
 .mesh-overview-context {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 1rem;
+  min-width: 0;
+  align-items: center;
+  overflow: hidden;
   border-top: 1px solid var(--border);
-  padding: 0.55rem 1rem;
+  padding: 0.5rem 1rem;
   background: color-mix(in srgb, var(--bg-panel), var(--bg-card) 54%);
   color: var(--text-dim);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.mesh-overview-context-item {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.mesh-overview-context-item + .mesh-overview-context-item::before {
+  content: '';
+  width: 1px;
+  height: 0.75rem;
+  flex: 0 0 auto;
+  margin-inline: 0.75rem;
+  background: var(--border-strong);
+  opacity: 0.65;
+}
+
+.mesh-overview-peer {
+  flex-shrink: 1;
+}
+
+.mesh-overview-context-label {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-weight: 550;
+}
+
+.mesh-overview-context-value,
+.mesh-overview-peer-button {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.mesh-overview-context-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.mesh-overview-peer-button {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 4px;
+  padding: 0.1rem 0.2rem;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.mesh-overview-peer-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mesh-overview-peer-button svg {
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.mesh-overview-peer-button:hover,
+.mesh-overview-peer-button:focus-visible {
+  background: var(--subtle-surface-hover);
+  color: var(--text);
+  outline: none;
+}
+
+.mesh-overview-peer-button:hover svg,
+.mesh-overview-peer-button:focus-visible svg,
+.mesh-overview-peer-button[aria-label='Peer ID copied'] svg {
+  opacity: 1;
 }
 
 .mesh-overview-warning {
+  margin-left: auto;
+  overflow: hidden;
   color: var(--status-warn);
+  text-overflow: ellipsis;
+}
+
+.mesh-overview-warning::before {
+  margin-left: 1rem !important;
 }
 
 .mesh-empty-row {
@@ -2345,7 +2553,7 @@ summary:focus-visible {
   border-top: 1px solid var(--border);
 }
 
-.mesh-item-row:hover {
+.mesh-item-list:not(.mesh-node-list) .mesh-item-row:hover {
   background: var(--bg-card-hover);
 }
 
@@ -2397,6 +2605,55 @@ summary:focus-visible {
   color: var(--text-dim);
 }
 
+.mesh-node-description {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.mesh-node-peer-button {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 4px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  padding: 0.05rem 0.16rem;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.mesh-node-peer-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mesh-node-peer-button svg {
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.mesh-node-peer-button:hover,
+.mesh-node-peer-button:focus-visible {
+  background: var(--subtle-surface-hover);
+  color: var(--text);
+  outline: none;
+}
+
+.mesh-node-peer-button:hover svg,
+.mesh-node-peer-button:focus-visible svg,
+.mesh-node-peer-button[aria-label='Remote peer ID copied'] svg {
+  opacity: 1;
+}
+
+.mesh-node-description-separator {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
 .mesh-item-actions {
   display: inline-flex;
   flex: 0 0 auto;
@@ -2432,26 +2689,45 @@ summary:focus-visible {
 
 .mesh-remote-session-list {
   display: grid;
-  gap: 0.35rem;
-  margin-top: 0.25rem;
-  border-left: 2px solid var(--subtle-border);
-  padding-left: 0.75rem;
+  margin-top: 0.35rem;
+  border-top: 1px solid var(--subtle-border);
+  padding-top: 0.25rem;
 }
 
 .mesh-remote-session-empty {
-  padding: 0.55rem 0.7rem;
+  padding: 0.7rem 0.55rem 0.45rem;
   color: var(--muted);
   font-size: 0.76rem;
 }
 
 .mesh-remote-session-row {
   display: flex;
+  margin: 0.12rem 0;
+}
+
+.mesh-remote-session-row + .mesh-remote-session-row::before {
+  position: absolute;
+  top: -0.12rem;
+  right: 0.55rem;
+  left: 0.55rem;
+  height: 1px;
+  background: var(--subtle-border);
+  content: '';
+  pointer-events: none;
+}
+
+.mesh-remote-session-side {
+  gap: 0.35rem;
+  pointer-events: auto;
+}
+
+.mesh-remote-session-pending {
+  display: inline-flex;
+  width: 1.8rem;
+  height: 1.8rem;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  border-radius: var(--radius-sm);
-  padding: 0.65rem 0.75rem;
-  background: color-mix(in srgb, var(--bg-panel), var(--bg-card) 55%);
+  justify-content: center;
+  color: var(--accent);
 }
 
 @media (max-width: 720px) {
@@ -2558,8 +2834,6 @@ summary:focus-visible {
 }
 
 .provider-connection-action {
-  min-height: 2rem;
-  padding: 0.42rem 0.72rem;
   color: var(--text-muted);
   font-size: 0.74rem;
 }
@@ -2569,7 +2843,7 @@ summary:focus-visible {
 }
 
 .provider-connection-feedback,
-.provider-connection-details {
+.provider-connection-details-content {
   grid-column: 1 / -1;
 }
 
@@ -2585,29 +2859,13 @@ summary:focus-visible {
   color: var(--status-warn);
 }
 
-.provider-connection-details {
-  border-top: 1px solid var(--subtle-border);
-  margin-top: 0.25rem;
-  padding-top: 0.45rem;
-}
-
-.provider-connection-details > button {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  color: var(--text-dim);
-  font-size: 0.68rem;
-}
-
-.provider-connection-details > button:hover,
-.provider-connection-details > button:focus-visible {
-  color: var(--text);
-  outline: none;
+.provider-connection-action svg {
+  transition: transform 0.15s ease;
 }
 
 .provider-connection-details-content {
   display: grid;
-  margin-top: 0.5rem;
+  margin-top: 0.25rem;
   overflow: hidden;
   border-radius: var(--radius-sm);
   background: var(--subtle-surface);
@@ -2672,10 +2930,6 @@ summary:focus-visible {
   padding: 0.7rem 0.75rem;
 }
 
-.provider-connection-detail-actions .action-btn {
-  min-height: 2rem;
-}
-
 .app-tooltip-content {
   z-index: 120;
   border: 1px solid var(--border);
@@ -2713,6 +2967,7 @@ summary:focus-visible {
   display: inline-flex;
   min-width: 12rem;
   max-width: 100%;
+  min-height: var(--control-height-large);
   align-items: center;
   justify-content: space-between;
   gap: 0.65rem;
@@ -2748,8 +3003,10 @@ summary:focus-visible {
 .app-select-trigger-pill {
   min-width: 8rem;
   max-width: 22rem;
+  min-height: var(--control-height-standard);
+  height: var(--control-height-standard);
   border-radius: var(--radius-control);
-  padding: 0.32rem 0.65rem;
+  padding: 0 0.65rem;
   font-size: 0.75rem;
   line-height: 1rem;
   box-shadow: none;
@@ -3131,8 +3388,8 @@ summary:focus-visible {
 
 .app-picker-header-action {
   display: inline-flex;
-  width: 2rem;
-  height: 2rem;
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
@@ -3358,12 +3615,6 @@ summary:focus-visible {
   padding-top: 0.25rem;
 }
 
-.app-picker .action-btn-primary {
-  border-color: color-mix(in srgb, var(--accent), var(--border) 72%);
-  background: color-mix(in srgb, var(--accent-dim), var(--bg-card) 68%);
-  color: var(--accent);
-}
-
 .app-backdrop {
   background: var(--overlay-backdrop);
 }
@@ -3498,18 +3749,6 @@ summary:focus-visible {
   justify-content: flex-end;
   gap: 0.6rem;
   padding: 0 1.5rem 1.4rem;
-}
-
-.app-dialog .action-btn-primary {
-  border-color: color-mix(in srgb, var(--accent), var(--border) 72%);
-  background: color-mix(in srgb, var(--accent-dim), var(--bg-card) 68%);
-  color: var(--accent);
-}
-
-.app-dialog .action-btn-primary:hover:enabled {
-  border-color: color-mix(in srgb, var(--accent), var(--border) 52%);
-  background: color-mix(in srgb, var(--accent-dim), var(--bg-card-hover) 56%);
-  color: var(--accent-hover);
 }
 
 .app-confirm-dialog-header {
@@ -4536,8 +4775,8 @@ summary:focus-visible {
 
 .session-activity-cancel {
   display: inline-flex;
-  width: 1.85rem;
-  height: 1.85rem;
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
@@ -4875,8 +5114,8 @@ summary:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.9rem;
-  height: 1.9rem;
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
   border: 1px solid transparent;
   border-radius: 999px;
   background: transparent;
@@ -5323,8 +5562,8 @@ summary:focus-visible {
 
 .session-tool-copy {
   display: inline-flex;
-  width: 1.6rem;
-  height: 1.6rem;
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
   align-items: center;
   justify-content: center;
   border: 0;
@@ -5661,7 +5900,7 @@ summary:focus-visible {
   text-decoration: none;
 }
 
-.app-sidebar-brand > span {
+.app-sidebar-brand > span:first-child {
   display: inline-flex;
   width: 2rem;
   height: 2rem;
@@ -5675,12 +5914,31 @@ summary:focus-visible {
   font-weight: 800;
 }
 
-.app-sidebar-brand strong {
+.app-sidebar-brand-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.05rem;
+  line-height: 1;
+}
+
+.app-sidebar-brand strong,
+.app-sidebar-brand small {
   overflow: hidden;
-  font-size: 0.88rem;
-  font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.app-sidebar-brand strong {
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.app-sidebar-brand small {
+  color: var(--text-dim);
+  font-size: 0.58rem;
+  font-weight: 550;
+  line-height: calc(1em + 2px);
+  letter-spacing: 0.01em;
 }
 
 .app-sidebar-navigation {
@@ -6408,6 +6666,12 @@ summary:focus-visible {
   color: var(--text-muted);
 }
 
+.session-workspace-icon-remote {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--subtle-border));
+  background: color-mix(in srgb, var(--accent-dim), var(--icon-surface) 76%);
+  color: var(--accent);
+}
+
 .session-workspace-copy {
   display: grid;
   min-width: 0;
@@ -6421,11 +6685,24 @@ summary:focus-visible {
 }
 
 .session-workspace-path {
+  display: flex;
+  min-width: 0;
   overflow: hidden;
   color: var(--muted);
   font-size: 0.76rem;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-workspace-path > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-workspace-machine {
+  flex: 0 0 auto;
+  margin-left: 0.35rem;
+  color: var(--text-dim);
+  font-weight: 550;
 }
 
 .session-workspace-meta {
@@ -6663,6 +6940,12 @@ summary:focus-visible {
   color: var(--status-running);
 }
 
+.session-relationship-badge-remote {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  color: var(--accent);
+}
+
 .session-relationship-badge-child,
 .session-relationship-badge-count {
   background: var(--status-muted-bg);
@@ -6742,8 +7025,8 @@ summary:focus-visible {
 
 .session-row-menu-trigger {
   display: inline-flex;
-  width: 1.8rem;
-  height: 1.8rem;
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-control);

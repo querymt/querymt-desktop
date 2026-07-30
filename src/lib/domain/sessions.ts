@@ -19,12 +19,21 @@ export interface WorkspaceSessionSource {
   error: string | null;
 }
 
+export type WorkspaceLocation = 'local' | 'remote' | 'mixed';
+
+export interface WorkspaceRemoteMachine {
+  id: string;
+  label: string | null;
+}
+
 export interface WorkspaceSessionGroup {
   key: string;
   cwd: string;
   name: string;
   path: string;
   sessions: DesktopSessionSummary[];
+  location?: WorkspaceLocation;
+  remoteMachines?: WorkspaceRemoteMachine[];
   latestActivity: string | null;
   initialized: boolean;
   loading: boolean;
@@ -82,6 +91,7 @@ export function mapAcpSessionsToDesktopSessions(
     runtimeId: agent.agentId,
     runtimeName: agent.agentName,
     source: 'acp',
+    location: 'local',
     status: inferSessionStatus(session),
     ...readSessionRelationshipMeta(session)
   }));
@@ -209,6 +219,8 @@ export function groupSessionsByWorkspace(sessions: DesktopSessionSummary[]): Wor
         name: key === '__no_workspace__' ? 'No workspace' : getSessionWorkspaceName(key),
         path,
         sessions: sortedSessions,
+        location: getWorkspaceLocation(sortedSessions),
+        remoteMachines: getWorkspaceRemoteMachines(sortedSessions),
         latestActivity,
         initialized: true,
         loading: false,
@@ -217,6 +229,30 @@ export function groupSessionsByWorkspace(sessions: DesktopSessionSummary[]): Wor
       };
     })
     .sort((a, b) => compareNullableTimestamps(b.latestActivity, a.latestActivity));
+}
+
+export function getWorkspaceLocation(sessions: DesktopSessionSummary[]): WorkspaceLocation {
+  const hasRemote = sessions.some((session) => session.location === 'remote');
+  const hasLocal = sessions.some((session) => session.location !== 'remote');
+  return hasRemote && hasLocal ? 'mixed' : hasRemote ? 'remote' : 'local';
+}
+
+export function compactRemoteNodeId(nodeId: string): string {
+  if (nodeId.length <= 24) return nodeId;
+  return `${nodeId.slice(0, 12)}...${nodeId.slice(-8)}`;
+}
+
+export function getWorkspaceRemoteMachines(sessions: DesktopSessionSummary[]): WorkspaceRemoteMachine[] {
+  const machines = new Map<string, WorkspaceRemoteMachine>();
+  for (const session of sessions) {
+    if (session.location !== 'remote' || !session.remoteNodeId) continue;
+    const current = machines.get(session.remoteNodeId);
+    const label = session.remoteNodeLabel?.trim() || null;
+    if (!current || (!current.label && label)) {
+      machines.set(session.remoteNodeId, { id: session.remoteNodeId, label });
+    }
+  }
+  return [...machines.values()].sort((a, b) => (a.label ?? a.id).localeCompare(b.label ?? b.id));
 }
 
 function compareSessionRailItems(a: SessionRailItem, b: SessionRailItem): number {

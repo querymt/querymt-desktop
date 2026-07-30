@@ -57,7 +57,7 @@
 
   {#snippet footer()}
     <button class="action-btn" type="button" onclick={onClose} disabled={pending}>Cancel</button>
-    <button class="action-btn action-btn-primary" form="provider-api-key-form" type="submit" disabled={pending || !value.trim()}>
+    <button class="action-btn action-btn-accent" form="provider-api-key-form" type="submit" disabled={pending || !value.trim()}>
       Save key
     </button>
   {/snippet}

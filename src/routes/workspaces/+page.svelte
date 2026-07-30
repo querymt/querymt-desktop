@@ -24,7 +24,6 @@
       label={workspacesStore.loading ? 'Opening folder picker' : 'Pick folder'}
       icon={workspacesStore.loading ? LoaderCircle : FolderPlus}
       iconClass={workspacesStore.loading ? 'animate-spin' : ''}
-      tone="primary"
       size={16}
       disabled={workspacesStore.loading}
       onclick={() => workspacesStore.addWorkspaceFromDialog()}

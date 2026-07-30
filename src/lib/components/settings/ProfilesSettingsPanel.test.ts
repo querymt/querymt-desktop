@@ -44,9 +44,17 @@ describe('ProfilesSettingsPanel', () => {
     expect(screen.queryByText(profile.userPath)).not.toBeInTheDocument();
     expect(screen.queryByText('research, mcp, curated')).not.toBeInTheDocument();
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    const detailsButton = screen.getByRole('button', { name: 'Details' });
+    expect(detailsButton).toHaveAttribute('aria-expanded', 'false');
+
+    await fireEvent.click(detailsButton);
+    expect(detailsButton).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText(profile.userPath)).toBeInTheDocument();
     expect(screen.getByText('research, mcp, curated')).toBeInTheDocument();
+
+    await fireEvent.click(detailsButton);
+    expect(detailsButton).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(profile.userPath)).not.toBeInTheDocument();
   });
 
   it('enables a profile with row-local success feedback', async () => {
@@ -59,6 +67,8 @@ describe('ProfilesSettingsPanel', () => {
     expect(refreshManagedProfiles).toHaveBeenCalled();
     expect(screen.getByText('Research is ready to use.')).toBeInTheDocument();
     expect(screen.getByText('Enabled')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Details' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(profile.userPath)).not.toBeInTheDocument();
   });
 
   it('explains technical behavior only on request', async () => {

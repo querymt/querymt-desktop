@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
-import { getRecentSessionRailItems, inferSessionStatus, mapAcpSessionsToDesktopSessions } from './sessions';
+import { getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, mapAcpSessionsToDesktopSessions } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 
 function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionId: string }): DesktopSessionSummary {
@@ -14,6 +14,9 @@ function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionI
     runtimeId: input.runtimeId ?? 'agent-1',
     runtimeName: input.runtimeName ?? 'QMTCODE',
     source: 'acp',
+    location: input.location,
+    remoteNodeId: input.remoteNodeId,
+    remoteNodeLabel: input.remoteNodeLabel,
     status: input.status ?? 'idle'
   };
 }
@@ -48,6 +51,7 @@ describe('session relationship metadata', () => {
     );
 
     expect(session).toMatchObject({
+      location: 'local',
       parentSessionId: 'parent-1',
       forkOrigin: 'user',
       sessionKind: 'custom',
@@ -85,6 +89,21 @@ describe('session relationship metadata', () => {
       hasChildren: false,
       forkCount: 0
     });
+  });
+});
+
+describe('workspace location', () => {
+  it('classifies local, remote, and mixed workspace groups', () => {
+    const local = createDesktopSession({ sessionId: 'local', cwd: '/tmp/local', location: 'local' });
+    const remote = createDesktopSession({ sessionId: 'remote', cwd: '/tmp/remote', location: 'remote', remoteNodeId: 'node-1', remoteNodeLabel: 'sapr' });
+    const mixedRemote = createDesktopSession({ sessionId: 'mixed-remote', cwd: '/tmp/mixed', location: 'remote', remoteNodeId: 'node-2' });
+    const mixedLocal = createDesktopSession({ sessionId: 'mixed-local', cwd: '/tmp/mixed', location: 'local' });
+
+    expect(groupSessionsByWorkspace([local, remote, mixedRemote, mixedLocal])).toEqual(expect.arrayContaining([
+      expect.objectContaining({ cwd: '/tmp/local', location: 'local' }),
+      expect.objectContaining({ cwd: '/tmp/remote', location: 'remote', remoteMachines: [{ id: 'node-1', label: 'sapr' }] }),
+      expect.objectContaining({ cwd: '/tmp/mixed', location: 'mixed', remoteMachines: [{ id: 'node-2', label: null }] })
+    ]));
   });
 });
 

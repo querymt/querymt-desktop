@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { LoaderCircle, Network, Plus, RefreshCw, Ticket } from '@lucide/svelte';
   import MeshInviteDialog from '$lib/components/mesh/MeshInviteDialog.svelte';
   import MeshInviteList from '$lib/components/mesh/MeshInviteList.svelte';
@@ -26,6 +27,7 @@
   let inviteDialogError = $state<string | null>(null);
   let inviteResult = $state<MeshInviteCreatedInfo | null>(null);
   let revokingInviteId = $state<string | null>(null);
+  let attachingSessionKey = $state<string | null>(null);
   let dismissingSessionKey = $state<string | null>(null);
   let copiedInviteId = $state<string | null>(null);
   let copiedCreatedInvite = $state(false);
@@ -103,8 +105,23 @@
     commandPaletteStore.openRemoteCreate({ agentId: selectedAgentId || null, nodeId });
   }
 
-  function openRemoteAttach(nodeId: string | null = null, sessionId: string | null = null) {
-    commandPaletteStore.openRemoteAttach({ agentId: selectedAgentId || null, nodeId, sessionId });
+  function openRemoteAttach(nodeId: string) {
+    commandPaletteStore.openRemoteAttach({ agentId: selectedAgentId || null, nodeId, sessionId: null });
+  }
+
+  async function attachRemoteSession(nodeId: string, sessionId: string) {
+    if (!selectedAgentId) return;
+    const key = `${nodeId}:${sessionId}`;
+    attachingSessionKey = key;
+    nodeErrors = { ...nodeErrors, [nodeId]: undefined };
+    try {
+      const attachedSessionId = await agentsStore.attachRemoteSession(selectedAgentId, nodeId, sessionId);
+      await goto(`/sessions/${encodeURIComponent(selectedAgentId)}/${encodeURIComponent(attachedSessionId)}`);
+    } catch (error) {
+      nodeErrors = { ...nodeErrors, [nodeId]: error instanceof Error ? error.message : 'Failed to attach remote session.' };
+    } finally {
+      if (attachingSessionKey === key) attachingSessionKey = null;
+    }
   }
 
   async function revokeInvite(invite: MeshInviteInfo) {
@@ -190,12 +207,13 @@
             <h2 id="mesh-nodes-title">Nodes</h2>
             <p>Remote peers available through the selected agent.</p>
           </div>
-          <IconTooltipButton label="Create remote session" icon={Plus} tone="primary" disabled={!canRun('querymt/remote/createSession') || meshNodes.length === 0} onclick={() => openRemoteCreate()} />
+          <IconTooltipButton label="Create remote session" icon={Plus} disabled={!canRun('querymt/remote/createSession') || meshNodes.length === 0} onclick={() => openRemoteCreate()} />
         </div>
         <MeshNodeList
           nodes={meshNodes}
           {sessionsByNode}
           {loadingNodeId}
+          {attachingSessionKey}
           {dismissingSessionKey}
           {nodeErrors}
           canCreate={canRun('querymt/remote/createSession')}
@@ -203,7 +221,8 @@
           canListSessions={canRun('querymt/remote/sessions')}
           canDismiss={canRun('querymt/remote/dismissSession')}
           onCreate={openRemoteCreate}
-          onAttach={openRemoteAttach}
+          onOpenAttach={openRemoteAttach}
+          onAttachSession={attachRemoteSession}
           onLoadSessions={loadRemoteSessions}
           onDismiss={dismissRemoteSession}
         />
@@ -216,7 +235,7 @@
               <h2 id="mesh-invites-title">Invites</h2>
               <p>Access links for peers joining this mesh.</p>
             </div>
-            <IconTooltipButton label="Create mesh invite" icon={Ticket} tone="primary" disabled={!canRun('querymt/mesh/createInvite')} onclick={openInviteDialog} />
+            <IconTooltipButton label="Create mesh invite" icon={Ticket} disabled={!canRun('querymt/mesh/createInvite')} onclick={openInviteDialog} />
           </div>
           <MeshInviteList
             invites={meshInvites}

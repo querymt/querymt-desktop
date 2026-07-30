@@ -64,7 +64,7 @@
       <div class="state-inline-error" role="alert">
         <AlertTriangle size={15} />
         <span class="min-w-0 flex-1"><strong>Request status may be out of date.</strong> {error}</span>
-        {#if onRetry}<button class="action-btn !px-3 !py-1.5 text-xs" type="button" onclick={onRetry}>Retry</button>{/if}
+        {#if onRetry}<button class="action-btn action-btn-compact" type="button" onclick={onRetry}>Retry</button>{/if}
       </div>
     {:else if loading}
       <div class="state-inline-progress" role="status"><LoaderCircle size={14} class="animate-spin" /><span>Refreshing agent connections…</span></div>

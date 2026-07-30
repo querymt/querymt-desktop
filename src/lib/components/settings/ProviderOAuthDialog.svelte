@@ -123,7 +123,7 @@
       <button class="action-btn" type="button" onclick={onOpenAuthorizationUrl} disabled={pending && !waiting}>Open in browser</button>
     {/if}
     {#if isDevicePoll || (needsCallbackInput && (!hasAuthorizationUrl || Boolean(value.trim())))}
-      <button class="action-btn action-btn-primary" type="button" onclick={onSubmit} disabled={submitDisabled}>
+      <button class="action-btn action-btn-accent" type="button" onclick={onSubmit} disabled={submitDisabled}>
         {isDevicePoll ? 'Check authentication' : completing ? 'Completing...' : 'Complete sign-in'}
       </button>
     {/if}

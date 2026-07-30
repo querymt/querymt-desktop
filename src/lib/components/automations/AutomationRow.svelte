@@ -50,6 +50,7 @@
         label={`Resume ${scheduleTriggerLabel(schedule)}`}
         icon={pendingAction === 'resume' ? LoaderCircle : Play}
         iconClass={pendingAction === 'resume' ? 'animate-spin' : ''}
+        controlSize="compact"
         disabled={!canResume || pending}
         onclick={() => onAction('resume', schedule)}
       />
@@ -58,6 +59,7 @@
         label={`Run ${scheduleTriggerLabel(schedule)} now`}
         icon={pendingAction === 'trigger' ? LoaderCircle : Zap}
         iconClass={pendingAction === 'trigger' ? 'animate-spin' : ''}
+        controlSize="compact"
         disabled={!canTrigger || pending}
         onclick={() => onAction('trigger', schedule)}
       />
@@ -65,6 +67,7 @@
         label={`Pause ${scheduleTriggerLabel(schedule)}`}
         icon={pendingAction === 'pause' ? LoaderCircle : Pause}
         iconClass={pendingAction === 'pause' ? 'animate-spin' : ''}
+        controlSize="compact"
         disabled={!canPause || pending}
         onclick={() => onAction('pause', schedule)}
       />

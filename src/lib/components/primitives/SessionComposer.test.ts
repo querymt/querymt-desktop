@@ -157,6 +157,12 @@ describe('SessionComposer', () => {
     expect(screen.getByLabelText('Session options').closest('.composer-options')).not.toBeNull();
   });
 
+  it('keeps send as the strong primary action', () => {
+    renderComposer({ launch: true, prompt: 'Ship the change' });
+
+    expect(screen.getByRole('button', { name: 'Start session' })).toHaveClass('action-btn-primary');
+  });
+
   it('morphs between stable overlaid blank-session and send states', async () => {
     const { container, rerender } = renderComposer({ launch: true, prompt: '' });
     const morph = container.querySelector('.composer-action-morph');

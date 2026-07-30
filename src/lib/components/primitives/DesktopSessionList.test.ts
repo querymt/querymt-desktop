@@ -99,6 +99,61 @@ describe('DesktopSessionList', () => {
     expect(screen.getAllByText('QMTCODE')).toHaveLength(1);
   });
 
+  it('uses the remote workspace icon only for remote-only groups', () => {
+    const remote = { ...sessions[0], sessionId: 'remote', location: 'remote' as const };
+    const local = { ...sessions[1], sessionId: 'local', location: 'local' as const };
+    const { container } = render(DesktopSessionList, {
+      sessions: [
+        { ...remote, cwd: '/projects/remote' },
+        { ...local, cwd: '/projects/local' },
+        { ...remote, sessionId: 'mixed-remote', cwd: '/projects/mixed' },
+        { ...local, sessionId: 'mixed-local', cwd: '/projects/mixed' }
+      ]
+    });
+
+    expect(screen.getByLabelText('Remote workspace').querySelector('.lucide-folder-sync')).not.toBeNull();
+    expect(container.querySelectorAll('.session-workspace-icon-remote')).toHaveLength(1);
+    expect(container.querySelectorAll('.lucide-folder-kanban')).toHaveLength(2);
+  });
+
+  it('shows the owning machine on remote and mixed workspace path lines', () => {
+    const longNodeId = '12D3KooWPtRjf6xSzZKwyRWP2kBA1kZhqYjr4XxEmtHfunWZUT62';
+    render(DesktopSessionList, {
+      sessions: [
+        { ...sessions[0], sessionId: 'remote', cwd: '/srv/app', location: 'remote', remoteNodeId: 'node-sapr', remoteNodeLabel: 'sapr' },
+        { ...sessions[0], sessionId: 'mixed-remote', cwd: '/srv/mixed', location: 'remote', remoteNodeId: longNodeId },
+        { ...sessions[1], sessionId: 'mixed-local', cwd: '/srv/mixed', location: 'local' },
+        { ...sessions[0], sessionId: 'machine-a', cwd: '/srv/shared', location: 'remote', remoteNodeId: 'node-a', remoteNodeLabel: 'alpha' },
+        { ...sessions[1], sessionId: 'machine-b', cwd: '/srv/shared', location: 'remote', remoteNodeId: 'node-b', remoteNodeLabel: 'beta' }
+      ]
+    });
+
+    expect(screen.getByText('· on sapr')).toHaveAttribute('title', 'Remote workspace on sapr');
+    expect(screen.getByText('· local + 12D3KooWPtRj...unWZUT62')).toHaveAttribute(
+      'title',
+      'Local workspace and remote workspace on 12D3KooWPtRj...unWZUT62'
+    );
+    expect(screen.getByText('· on 2 machines')).toHaveAttribute('title', 'Remote workspace on alpha, beta');
+  });
+
+  it('labels only remote sessions inside mixed workspaces', () => {
+    const { container } = render(DesktopSessionList, {
+      sessions: [
+        { ...sessions[0], sessionId: 'remote-only', title: 'Remote only', cwd: '/remote', location: 'remote' },
+        { ...sessions[0], sessionId: 'mixed-remote', title: 'Mixed remote', cwd: '/mixed', location: 'remote' },
+        { ...sessions[1], sessionId: 'mixed-local', title: 'Mixed local', cwd: '/mixed', location: 'local' },
+        { ...sessions[1], sessionId: 'local-only', title: 'Local only', cwd: '/local', location: 'local' }
+      ]
+    });
+
+    const remotePills = container.querySelectorAll('.session-relationship-badge-remote');
+    expect(remotePills).toHaveLength(1);
+    expect(remotePills[0]).toHaveTextContent('Remote');
+    expect(screen.getByText('Mixed remote').closest('.session-row-title-line')?.querySelector('.session-relationship-badge-remote')).not.toBeNull();
+    expect(screen.getByText('Remote only').closest('.session-row-title-line')?.querySelector('.session-relationship-badge-remote')).toBeNull();
+    expect(screen.getByText('Mixed local').closest('.session-row-title-line')?.querySelector('.session-relationship-badge-remote')).toBeNull();
+  });
+
   it('shows fork relationships and parent fork counts without inferring from titles', async () => {
     const hierarchySessions: DesktopSessionSummary[] = [
       { ...sessions[0], sessionId: 'parent', title: 'Parent', hasChildren: true, forkCount: 2 },

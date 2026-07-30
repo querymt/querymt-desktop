@@ -51,8 +51,9 @@ describe('ProviderConnectionList', () => {
       'Connected'
     ]);
     expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Set up' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Manage' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Set up' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('button', { name: 'Manage' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'Connection details' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Set API key' })).not.toBeInTheDocument();
   });
 
@@ -63,15 +64,18 @@ describe('ProviderConnectionList', () => {
       ...handlers
     });
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
+    const setupButton = screen.getByRole('button', { name: 'Set up' });
+    await fireEvent.click(setupButton);
 
+    expect(setupButton).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByLabelText('Authentication method for Anthropic')).toBeInTheDocument();
     expect(screen.getByText('anthropic')).toBeInTheDocument();
     expect(screen.getByText('ANTHROPIC_API_KEY')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign in with OAuth' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Set API key' })).toBeInTheDocument();
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await fireEvent.click(setupButton);
+    expect(setupButton).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByLabelText('Authentication method for Anthropic')).not.toBeInTheDocument();
   });
 
@@ -115,7 +119,13 @@ describe('ProviderConnectionList', () => {
       ...handlers
     });
 
-    expect(screen.getByRole('button', { name: 'Signing in…' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Set up' })).toBeEnabled();
+    const signingInButton = screen.getByRole('button', { name: 'Signing in…' });
+    const setupButton = screen.getByRole('button', { name: 'Set up' });
+
+    expect(signingInButton).toBeDisabled();
+    expect(signingInButton).toHaveClass('action-btn-compact', 'provider-connection-action');
+    expect(setupButton).toBeEnabled();
+    expect(setupButton).toHaveClass('action-btn-compact', 'provider-connection-action');
+    expect(screen.getByRole('button', { name: 'Cancel sign-in' })).toHaveClass('icon-btn-compact');
   });
 });

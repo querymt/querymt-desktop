@@ -92,13 +92,13 @@
   {#snippet footer()}
     {#if result}
       <button class="action-btn" type="button" onclick={() => (open = false)}>Done</button>
-      <button class="action-btn action-btn-primary" type="button" onclick={() => onCopy(result)}>
+      <button class="action-btn action-btn-accent" type="button" onclick={() => onCopy(result)}>
         <Clipboard size={15} />
         {copied ? 'Copied' : 'Copy link'}
       </button>
     {:else}
       <button class="action-btn" type="button" disabled={pending} onclick={() => (open = false)}>Cancel</button>
-      <button class="action-btn action-btn-primary" form="mesh-invite-form" type="submit" disabled={pending || (expiryPreset === 'custom' && !customTtl.trim())}>
+      <button class="action-btn action-btn-accent" form="mesh-invite-form" type="submit" disabled={pending || (expiryPreset === 'custom' && !customTtl.trim())}>
         {#if pending}<LoaderCircle size={15} class="animate-spin" />{/if}
         {pending ? 'Creating...' : 'Create invite'}
       </button>

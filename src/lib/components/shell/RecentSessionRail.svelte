@@ -253,7 +253,10 @@
       </div>
     {:else}
       <div class="app-sidebar-header">
-        <a class="app-sidebar-brand" href="/" aria-label="Today"><span>Q</span><strong>QueryMT</strong></a>
+        <a class="app-sidebar-brand" href="/" aria-label="Today">
+          <span>Q</span>
+          <span class="app-sidebar-brand-copy"><strong>QueryMT</strong><small>Agents command and control</small></span>
+        </a>
         <button class="icon-btn app-sidebar-collapse" type="button" aria-label="Collapse sidebar" title="Collapse sidebar" onclick={onToggleCollapsed}><ChevronLeft size={16} /></button>
       </div>
 

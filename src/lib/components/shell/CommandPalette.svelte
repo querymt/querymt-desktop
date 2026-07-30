@@ -627,7 +627,7 @@
               <button class="action-btn" type="button" onclick={() => commandPaletteStore.close()}>
                 Cancel
               </button>
-              <button class="action-btn action-btn-primary" type="button" disabled={submitting} onclick={() => submitSchedule()}>
+              <button class="action-btn action-btn-accent" type="button" disabled={submitting} onclick={() => submitSchedule()}>
                 <SendHorizontal size={15} />
                 Create
               </button>
@@ -667,7 +667,7 @@
 
             <div class="app-picker-footer">
               <button class="action-btn" type="button" onclick={() => commandPaletteStore.close()}>Cancel</button>
-              <button class="action-btn action-btn-primary" type="button" disabled={submitting || !scheduleAgentId || !remoteNodeId} onclick={() => submitRemoteCreate()}>
+              <button class="action-btn action-btn-accent" type="button" disabled={submitting || !scheduleAgentId || !remoteNodeId} onclick={() => submitRemoteCreate()}>
                 <MessageSquarePlus size={15} />
                 Create
               </button>
@@ -735,7 +735,7 @@
 
             <div class="app-picker-footer">
               <button class="action-btn" type="button" onclick={() => commandPaletteStore.close()}>Cancel</button>
-              <button class="action-btn action-btn-primary" type="button" disabled={submitting || loadingRemoteSessions || !scheduleAgentId || !attachNodeId || !attachSessionId} onclick={() => submitRemoteAttach()}>
+              <button class="action-btn action-btn-accent" type="button" disabled={submitting || loadingRemoteSessions || !scheduleAgentId || !attachNodeId || !attachSessionId} onclick={() => submitRemoteAttach()}>
                 <Link size={15} />
                 Attach
               </button>

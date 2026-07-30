@@ -1,9 +1,9 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { Accordion } from 'bits-ui';
-  import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, Plus, RefreshCw, Search, SearchX, Trash2 } from '@lucide/svelte';
+  import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, FolderSync, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, Plus, RefreshCw, Search, SearchX, Trash2 } from '@lucide/svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
-  import { formatSessionTimestamp, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
+  import { compactRemoteNodeId, formatSessionTimestamp, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
 
@@ -59,6 +59,24 @@
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
 
   const sourceWorkspaceGroups = $derived(workspaceGroups ?? groupSessionsByWorkspace(sessions));
+
+  function machineName(machine: { id: string; label: string | null }) {
+    return machine.label ?? compactRemoteNodeId(machine.id);
+  }
+
+  function workspaceMachineText(group: WorkspaceSessionGroup) {
+    const machines = group.remoteMachines ?? [];
+    if (machines.length === 0) return null;
+    if (machines.length > 1) return group.location === 'mixed' ? `local + ${machines.length} machines` : `on ${machines.length} machines`;
+    const name = machineName(machines[0]);
+    return group.location === 'mixed' ? `local + ${name}` : `on ${name}`;
+  }
+
+  function workspaceMachineTitle(group: WorkspaceSessionGroup) {
+    const names = (group.remoteMachines ?? []).map(machineName).join(', ');
+    if (!names) return undefined;
+    return group.location === 'mixed' ? `Local workspace and remote workspace on ${names}` : `Remote workspace on ${names}`;
+  }
   const initialLoading = $derived(loading && sourceWorkspaceGroups.length === 0);
   const refreshing = $derived(loading && sourceWorkspaceGroups.length > 0);
   const hasActiveFilters = $derived(query.trim().length > 0 || statusFilter !== 'all');
@@ -269,7 +287,7 @@
         <div class="state-inline-error" role="alert">
           <AlertTriangle size={15} />
           <span class="min-w-0 flex-1"><strong>Sessions could not be refreshed.</strong> {error}</span>
-          {#if onRefresh}<button class="action-btn !px-3 !py-1.5 text-xs" type="button" onclick={onRefresh}>Retry</button>{/if}
+          {#if onRefresh}<button class="action-btn action-btn-compact" type="button" onclick={onRefresh}>Retry</button>{/if}
         </div>
       {:else if refreshing}
         <div class="state-inline-progress" role="status"><LoaderCircle size={14} class="animate-spin" /><span>Refreshing sessions…</span></div>
@@ -281,10 +299,19 @@
                <Accordion.Header level={3} class="session-workspace-header">
                  <Accordion.Trigger class="session-workspace-trigger">
                    <span class="session-workspace-trigger-main">
-                     <span class="session-workspace-icon"><FolderKanban size={16} /></span>
+                      {#if group.location === 'remote'}
+                        <span class="session-workspace-icon session-workspace-icon-remote" aria-label="Remote workspace" title="Remote workspace"><FolderSync size={16} /></span>
+                      {:else}
+                        <span class="session-workspace-icon"><FolderKanban size={16} /></span>
+                      {/if}
                      <span class="session-workspace-copy">
                        <span class="session-workspace-name">{group.name}</span>
-                       <span class="session-workspace-path">{group.path}</span>
+                        <span class="session-workspace-path">
+                          <span>{group.path}</span>
+                          {#if workspaceMachineText(group)}
+                            <span class="session-workspace-machine" title={workspaceMachineTitle(group)}>· {workspaceMachineText(group)}</span>
+                          {/if}
+                        </span>
                      </span>
                    </span>
                    <span class="session-workspace-meta">
@@ -343,9 +370,12 @@
                     </span>
                     <span class="session-row-main">
                        <span class="session-row-title-line">
-                         <span class="session-row-title">{session.title}</span>
-                         <span class={`session-row-status session-row-status-${session.status}`}>{getStatusLabel(session.status)}</span>
-                        {#if session.parentSessionId}
+                          <span class="session-row-title">{session.title}</span>
+                          <span class={`session-row-status session-row-status-${session.status}`}>{getStatusLabel(session.status)}</span>
+                          {#if group.location === 'mixed' && session.location === 'remote'}
+                            <span class="session-relationship-badge session-relationship-badge-remote">Remote</span>
+                          {/if}
+                         {#if session.parentSessionId}
                           {#if session.forkOrigin === 'user'}
                             <span class="session-relationship-badge session-relationship-badge-fork"><GitFork size={11} />Fork</span>
                           {:else if session.forkOrigin === 'delegation'}

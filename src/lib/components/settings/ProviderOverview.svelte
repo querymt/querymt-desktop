@@ -14,9 +14,9 @@
 
 <section class="provider-overview" aria-label="Provider overview">
   <div class="provider-overview-stats">
-    <div class="provider-overview-stat"><span>Connected</span><strong>{connected}</strong></div>
+    <div class="provider-overview-stat"><span>Connected</span><strong class:provider-overview-value-success={connected > 0}>{connected}</strong></div>
     <div class="provider-overview-stat"><span>Needs setup</span><strong>{needsSetup}</strong></div>
-    <div class="provider-overview-stat"><span>Needs attention</span><strong class:provider-overview-value-danger={attention > 0}>{attention}</strong></div>
+    <div class="provider-overview-stat"><span>Needs attention</span><strong class:provider-overview-value-warning={attention > 0}>{attention}</strong></div>
     <div class="provider-overview-stat"><span>Models</span><strong>{models}</strong></div>
   </div>
 </section>

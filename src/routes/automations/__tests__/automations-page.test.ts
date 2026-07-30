@@ -89,10 +89,12 @@ describe('Automations page', () => {
     expect(screen.getByLabelText('Automation agent')).toBeInTheDocument();
   });
 
-  it('opens create from the header with clean selected-agent context', async () => {
+  it('opens create from the neutral header action with clean selected-agent context', async () => {
     render(AutomationsPage);
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Create automation' }));
+    const createButton = screen.getByRole('button', { name: 'Create automation' });
+    expect(createButton).not.toHaveClass('icon-btn-primary');
+    await fireEvent.click(createButton);
     expect(commandPaletteStore.openSchedule).toHaveBeenCalledWith({ agentId: 'agent-1', sessionId: null, cwd: null, prompt: null, nodeId: null });
   });
 
@@ -128,7 +130,9 @@ describe('Automations page', () => {
     render(AutomationsPage);
 
     expect(screen.getByText('No automations yet')).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'Create automation' })).toHaveLength(2);
+    const createButtons = screen.getAllByRole('button', { name: 'Create automation' });
+    expect(createButtons).toHaveLength(2);
+    expect(createButtons.filter((button) => button.classList.contains('action-btn-primary'))).toHaveLength(1);
   });
 
   it('shows a focused unavailable state when no agents support schedules', () => {

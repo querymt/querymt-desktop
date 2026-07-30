@@ -55,6 +55,26 @@ describe('InboxRequestCard', () => {
     expect(onAction).toHaveBeenCalledWith('elicitation-1', 'accept');
   });
 
+  it('emphasizes at most one permission action and prefers allow once', () => {
+    const permissionItem: InboxItem = {
+      ...item,
+      type: 'permission',
+      actions: [
+        { id: 'allow-always', label: 'Allow always', kind: 'allow_always' },
+        { id: 'allow-once', label: 'Allow once', kind: 'allow_once' },
+        { id: 'reject', label: 'Reject', kind: 'reject_once' }
+      ],
+      formFields: undefined
+    };
+
+    const { container } = render(InboxRequestCard, { item: permissionItem });
+
+    expect(screen.getByRole('button', { name: 'Allow once' })).toHaveClass('action-btn-primary');
+    expect(screen.getByRole('button', { name: 'Allow always' })).not.toHaveClass('action-btn-primary');
+    expect(screen.getByRole('button', { name: 'Reject' })).not.toHaveClass('action-btn-primary');
+    expect(container.querySelectorAll('.action-btn-primary')).toHaveLength(1);
+  });
+
   it('renders single-select fields as radios and supports a custom answer', async () => {
     const singleItem: InboxItem = {
       ...item,

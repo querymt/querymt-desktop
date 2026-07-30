@@ -79,7 +79,7 @@
       <footer class="app-dialog-footer app-confirm-dialog-footer">
         <button bind:this={cancelButton} class="action-btn" type="button" disabled={pending} onclick={cancel}>{cancelLabel}</button>
         <button
-          class={`action-btn ${tone === 'danger' ? 'action-btn-danger' : tone === 'primary' ? 'action-btn-primary' : ''}`}
+          class={`action-btn ${tone === 'danger' ? 'action-btn-danger' : tone === 'primary' ? 'action-btn-accent' : ''}`}
           type="button"
           disabled={pending}
           onclick={onConfirm}

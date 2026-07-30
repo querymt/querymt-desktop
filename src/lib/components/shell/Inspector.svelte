@@ -38,7 +38,7 @@
           {/if}
           {#if item.sessionId && item.agentId}
             <div class="mt-3">
-              <button class="action-btn !px-3 !py-1.5 text-xs" type="button" onclick={() => openSession(item)}>
+              <button class="action-btn action-btn-compact" type="button" onclick={() => openSession(item)}>
                 Open session
               </button>
             </div>

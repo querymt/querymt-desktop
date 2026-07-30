@@ -50,7 +50,7 @@
 
     {#snippet footer()}
       <button class="action-btn" type="button" onclick={() => (open = false)} disabled={pending}>Cancel</button>
-      <button class="action-btn action-btn-primary" type="button" onclick={confirm} disabled={pending}>
+      <button class="action-btn action-btn-accent" type="button" onclick={confirm} disabled={pending}>
         {pending ? 'Creating fork...' : 'Create and open fork'}
       </button>
     {/snippet}
