@@ -122,6 +122,52 @@ export interface QuerymtModelInfoResponse {
   models: Record<string, ModelInfo | null>;
 }
 
+type QuerymtModelInfoWire = ModelInfo & {
+  attachment?: boolean;
+  reasoning?: boolean;
+  temperature?: boolean;
+  tool_call?: boolean;
+  modalities?: NonNullable<ModelInfo['capabilities']>['modalities'];
+  limit?: ModelInfo['limits'];
+  cost?: ModelInfo['pricing'];
+};
+
+type QuerymtModelInfoWireResponse = {
+  models?: Record<string, QuerymtModelInfoWire | null>;
+};
+
+export function normalizeQuerymtModelInfoResponse(response: QuerymtModelInfoWireResponse): QuerymtModelInfoResponse {
+  const models = Object.fromEntries(
+    Object.entries(response.models ?? {}).map(([key, info]) => {
+      if (!info) return [key, null];
+
+      const capabilities = info.capabilities ?? {};
+      return [
+        key,
+        {
+          id: info.id,
+          name: info.name,
+          knowledge: info.knowledge,
+          release_date: info.release_date,
+          last_updated: info.last_updated,
+          open_weights: info.open_weights,
+          capabilities: {
+            attachment: info.attachment ?? capabilities.attachment,
+            reasoning: info.reasoning ?? capabilities.reasoning,
+            temperature: info.temperature ?? capabilities.temperature,
+            tool_call: info.tool_call ?? capabilities.tool_call,
+            modalities: info.modalities ?? capabilities.modalities
+          },
+          limits: info.limit ?? info.limits,
+          pricing: info.cost ?? info.pricing
+        } satisfies ModelInfo
+      ];
+    })
+  );
+
+  return { models };
+}
+
 export interface QuerymtAuthStatusResponse {
   providers: AuthProviderEntry[];
 }
@@ -200,10 +246,8 @@ export class QuerymtExtensions {
   }
 
   async modelInfo(models: Array<{ provider: string; model: string }>): Promise<QuerymtModelInfoResponse> {
-    const response = await this.call<QuerymtModelInfoResponse>(QMT_METHOD_MODEL_INFO, { models });
-    return {
-      models: response.models ?? {}
-    };
+    const response = await this.call<QuerymtModelInfoWireResponse>(QMT_METHOD_MODEL_INFO, { models });
+    return normalizeQuerymtModelInfoResponse(response);
   }
 
   async meshStatus(): Promise<MeshStatusInfo> {

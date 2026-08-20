@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InitializeResponse, PromptResponse, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
+import type { ModelEntry } from '$lib/domain/types';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
+import { tick } from 'svelte';
 import { AgentsStore } from './agents.svelte';
 
 const mockListManagedProfiles = vi.hoisted(() => vi.fn(async () => []));
@@ -46,7 +48,8 @@ const mockClient = vi.hoisted(() => {
     })),
     getControlCapabilities: vi.fn(() => null),
     getControlHealth: vi.fn(() => ({ state: 'unknown', summary: 'unknown', missingMethods: [], missingFeatures: [] })),
-    listModels: vi.fn(async () => []),
+    listModels: vi.fn(async (): Promise<ModelEntry[]> => []),
+    refreshAndListModels: vi.fn(async (): Promise<ModelEntry[]> => []),
     getModelInfo: vi.fn(async () => ({})),
     onConnectionLost: vi.fn((handler: (reason: string) => void) => {
       connectionLossHandler = handler;
@@ -143,6 +146,9 @@ beforeEach(() => {
   mockListen.mockResolvedValue(() => undefined);
   mockListManagedProfiles.mockResolvedValue([]);
   mockClient.resetSessionUpdateHandler();
+  mockClient.listModels.mockResolvedValue([]);
+  mockClient.refreshAndListModels.mockResolvedValue([]);
+  mockClient.getModelInfo.mockResolvedValue({});
 });
 
 describe('AgentsStore connections', () => {
@@ -477,6 +483,101 @@ describe('AgentsStore connections', () => {
   });
 });
 
+describe('AgentsStore model info cache', () => {
+  const localModel = {
+    id: 'anthropic/claude-sonnet-4',
+    provider: 'anthropic',
+    model: 'claude-sonnet-4',
+    label: 'Claude Sonnet 4'
+  };
+  const remoteModel = { ...localModel, node_id: 'node-1', node_label: 'Build server' };
+  const modelInfo = {
+    id: 'claude-sonnet-4',
+    capabilities: { modalities: { input: ['text', 'image'], output: ['text'] } }
+  };
+
+  it('batches unique model identities once and reuses them for mesh copies', async () => {
+    const store = createStore();
+    mockClient.listModels.mockResolvedValue([localModel, remoteModel]);
+    mockClient.getModelInfo.mockResolvedValue({ 'anthropic/claude-sonnet-4': modelInfo });
+
+    await store.loadInitialModelsForAgent('agent-1');
+    await store.loadInitialModelsForAgent('agent-1');
+
+    expect(mockClient.getModelInfo).toHaveBeenCalledOnce();
+    expect(mockClient.getModelInfo).toHaveBeenCalledWith([
+      { provider: 'anthropic', model: 'claude-sonnet-4' }
+    ]);
+    expect(store.modelInfoByAgent['agent-1'][getModelSelectionKey(localModel)]).toEqual(modelInfo);
+    expect(store.modelInfoByAgent['agent-1'][getModelSelectionKey(remoteModel)]).toEqual(modelInfo);
+  });
+
+  it('shares cached model info across agents for the app lifetime', async () => {
+    const store = createStore();
+    store.configs.push({
+      id: 'agent-2',
+      name: 'QMTPLAN',
+      transport: 'stdio',
+      commandLine: '/usr/local/bin/qmtplan --acp',
+      enabled: true,
+      autoStart: false
+    });
+    mockClient.listModels.mockResolvedValue([localModel]);
+    mockClient.getModelInfo.mockResolvedValue({ 'anthropic/claude-sonnet-4': modelInfo });
+
+    await store.loadInitialModelsForAgent('agent-1');
+    await store.loadInitialModelsForAgent('agent-2');
+
+    expect(mockClient.getModelInfo).toHaveBeenCalledOnce();
+    expect(store.modelInfoByAgent['agent-2'][localModel.id]).toEqual(modelInfo);
+  });
+
+  it('shares in-flight model info requests across concurrent agent loads', async () => {
+    const store = createStore();
+    store.configs.push({
+      id: 'agent-2',
+      name: 'QMTPLAN',
+      transport: 'stdio',
+      commandLine: '/usr/local/bin/qmtplan --acp',
+      enabled: true,
+      autoStart: false
+    });
+    mockClient.listModels.mockResolvedValue([localModel]);
+    let resolveInfo!: (value: Record<string, typeof modelInfo>) => void;
+    mockClient.getModelInfo.mockReturnValue(new Promise((resolve) => (resolveInfo = resolve)));
+
+    const firstLoad = store.loadInitialModelsForAgent('agent-1');
+    await tick();
+    const secondLoad = store.loadInitialModelsForAgent('agent-2');
+    await tick();
+    expect(mockClient.getModelInfo).toHaveBeenCalledOnce();
+
+    resolveInfo({ 'anthropic/claude-sonnet-4': modelInfo });
+    await Promise.all([firstLoad, secondLoad]);
+
+    expect(store.modelInfoByAgent['agent-1'][localModel.id]).toEqual(modelInfo);
+    expect(store.modelInfoByAgent['agent-2'][localModel.id]).toEqual(modelInfo);
+  });
+
+  it('caches unknown model info until an explicit model refresh', async () => {
+    const store = createStore();
+    mockClient.listModels.mockResolvedValue([localModel]);
+    mockClient.refreshAndListModels.mockResolvedValue([localModel]);
+    mockClient.getModelInfo.mockResolvedValueOnce({ 'anthropic/claude-sonnet-4': null });
+
+    await store.loadInitialModelsForAgent('agent-1');
+    await store.loadInitialModelsForAgent('agent-1');
+    expect(mockClient.getModelInfo).toHaveBeenCalledOnce();
+    expect(store.modelInfoByAgent['agent-1'][localModel.id]).toBeNull();
+
+    mockClient.getModelInfo.mockResolvedValueOnce({ 'anthropic/claude-sonnet-4': modelInfo });
+    await store.refreshModelsForAgent('agent-1');
+
+    expect(mockClient.getModelInfo).toHaveBeenCalledTimes(2);
+    expect(store.modelInfoByAgent['agent-1'][localModel.id]).toEqual(modelInfo);
+  });
+});
+
 describe('AgentsStore agent availability', () => {
   it('only includes enabled agents that are running without a failed connection', () => {
     const store = createStore();
@@ -637,7 +738,12 @@ describe('AgentsStore prompt session start', () => {
     const sessionId = await store.createSession('agent-1');
 
     expect(sessionId).toBe('session-1');
-    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({ configId: 'mode' })
+    );
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({ configId: 'reasoning_effort' })
+    );
     expect(store.composerModeId).toBe('build');
     expect(store.composerReasoningId).toBe('auto');
   });

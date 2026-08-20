@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot, Check, RefreshCw, Search, X } from '@lucide/svelte';
+  import { AudioLines, Bot, FileText, Gauge, Image, Network, Paperclip, RefreshCw, Search, Type, Video, X } from '@lucide/svelte';
   import { getContext, tick } from 'svelte';
   import { Dialog } from 'bits-ui';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
@@ -9,6 +9,14 @@
   type ModelGroup = {
     label: string;
     items: ModelEntry[];
+  };
+
+  const modalityIcons = {
+    text: Type,
+    image: Image,
+    pdf: FileText,
+    audio: AudioLines,
+    video: Video
   };
 
   let {
@@ -157,10 +165,41 @@
     }
   }
 
+  function knownInputModalities(model: ModelEntry): string[] {
+    const modalities = modelInfo[getModelSelectionKey(model)]?.capabilities?.modalities?.input;
+    if (!modalities?.length) return [];
+    return [...new Set(modalities.map((modality) => modality.trim().toLowerCase()).filter(Boolean))];
+  }
+
+  function displayedInputModalities(model: ModelEntry): string[] {
+    const modalities = knownInputModalities(model);
+    return modalities.length > 0 ? modalities : ['text'];
+  }
+
+  function modalityIcon(modality: string) {
+    return modalityIcons[modality as keyof typeof modalityIcons] ?? Paperclip;
+  }
+
+  function modalityLabel(modality: string, known: boolean) {
+    return known ? `Supports ${modality} input` : 'Model modalities unknown';
+  }
+
+  function formatContextSize(tokens: number) {
+    if (tokens >= 1_000_000) return `${Math.round(tokens / 1_000_000)}M`;
+    if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
+    return tokens.toLocaleString('en-US');
+  }
+
+  function showFamily(model: ModelEntry) {
+    if (!model.family) return false;
+    const family = model.family.toLocaleLowerCase();
+    return family !== model.model.toLocaleLowerCase() && family !== model.label?.toLocaleLowerCase();
+  }
+
   function scoreModel(model: ModelEntry, normalizedQuery: string): number {
     if (!normalizedQuery) return 1;
 
-    const fields = [model.label, model.model, model.provider, model.node_label, model.family]
+    const fields = [model.label, model.model, model.provider, model.node_label, model.family, ...knownInputModalities(model)]
       .filter((value): value is string => Boolean(value))
       .map((value) => value.toLowerCase());
 
@@ -279,34 +318,57 @@
                       {@const selectionKey = getModelSelectionKey(model)}
                       {@const index = flatResults.findIndex((entry) => getModelSelectionKey(entry) === selectionKey)}
                       {@const info = modelInfo[selectionKey]}
+                      {@const knownModalities = knownInputModalities(model)}
                       <button
                         class="app-picker-row"
                         class:app-picker-row-highlighted={highlightedIndex === index}
                         type="button"
+                        aria-pressed={selectedModelId === selectionKey}
                         onclick={() => handleSelect(selectionKey)}
                         onmousemove={() => (highlightedIndex = index)}
                       >
                         <div class="min-w-0 flex-1">
-                          <div class="app-picker-row-title">{model.label ?? model.model}</div>
+                          <div class="app-picker-row-title" class:app-picker-row-title-selected={selectedModelId === selectionKey}>
+                            {model.label ?? model.model}
+                          </div>
                           <div class="app-picker-row-description">
-                            {model.provider} · {model.model}
-                            {#if agentLabel}
-                              · {agentLabel}
-                            {/if}
+                            <span>{model.provider}</span>
+                            {#if agentLabel}<span>{agentLabel}</span>{/if}
                             {#if model.node_label}
-                              · {model.node_label}
+                              <span class="app-picker-row-meta" aria-label={`Mesh node ${model.node_label}`} title={`Mesh node ${model.node_label}`}>
+                                <Network size={12} aria-hidden="true" />
+                                <span>{model.node_label}</span>
+                              </span>
                             {/if}
-                            {#if model.family}
-                              · {model.family}
-                            {/if}
+                            {#if showFamily(model)}<span>{model.family}</span>{/if}
                           </div>
                         </div>
                         <div class="app-picker-row-detail">
-                          {#if model.node_id}<span>mesh</span>{/if}
-                          {#if info?.limits?.context}<span>{info.limits.context.toLocaleString()} ctx</span>{/if}
-                          {#if selectedModelId === selectionKey}
-                            <span class="app-picker-row-check"><Check size={14} /></span>
+                          {#if info?.limits?.context}
+                            <span
+                              class="app-picker-row-context"
+                              aria-label={`${info.limits.context.toLocaleString('en-US')} token context window`}
+                              title={`${info.limits.context.toLocaleString('en-US')} token context window`}
+                            >
+                              <Gauge size={12} aria-hidden="true" />
+                              <span>{formatContextSize(info.limits.context)}</span>
+                            </span>
                           {/if}
+                          <span
+                            class="app-picker-model-modalities"
+                            aria-label={knownModalities.length > 0 ? `Input modalities: ${knownModalities.join(', ')}` : 'Input modalities unknown'}
+                          >
+                            {#each displayedInputModalities(model) as modality}
+                              {@const ModalityIcon = modalityIcon(modality)}
+                              <span
+                                class="app-picker-model-modality"
+                                aria-label={modalityLabel(modality, knownModalities.length > 0)}
+                                title={modalityLabel(modality, knownModalities.length > 0)}
+                              >
+                                <ModalityIcon size={13} strokeWidth={1.9} aria-hidden="true" />
+                              </span>
+                            {/each}
+                          </span>
                         </div>
                       </button>
                     {/each}

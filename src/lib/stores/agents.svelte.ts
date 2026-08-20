@@ -157,6 +157,8 @@ export class AgentsStore {
   private hydratedRemoteSessionKeys = new Set<string>();
   private unlistenAgentLogs: UnlistenFn | null = null;
   private agentLogSubscriptionPending = false;
+  private modelInfoCache = new Map<string, ModelInfo | null>();
+  private modelInfoRequests = new Map<string, Promise<void>>();
 
   configs = $state<AgentConfig[]>(loadInitialAgents());
   statuses = $state<Record<string, AgentRuntimeStatus>>({});
@@ -1959,14 +1961,16 @@ export class AgentsStore {
   async refreshModelsForAgent(agentId: string) {
     const record = this.ensureClientRecord(agentId);
     await this.connectAgent(agentId);
-    await this.loadModelsForAgent(agentId, () => record.client.refreshAndListModels(), 'Failed to refresh models.');
+    await this.loadModelsForAgent(agentId, () => record.client.refreshAndListModels(), 'Failed to refresh models.', {
+      refreshModelInfo: true
+    });
   }
 
   private async loadModelsForAgent(
     agentId: string,
     load: () => Promise<ModelEntry[]>,
     errorMessage: string,
-    options: { keepExistingOnEmpty?: boolean; suppressEmptyError?: boolean } = {}
+    options: { keepExistingOnEmpty?: boolean; suppressEmptyError?: boolean; refreshModelInfo?: boolean } = {}
   ): Promise<number> {
     this.modelLoadingByAgent = {
       ...this.modelLoadingByAgent,
@@ -1986,7 +1990,7 @@ export class AgentsStore {
         ...this.modelsByAgent,
         [agentId]: models
       };
-      await this.hydrateModelInfo(agentId, models);
+      await this.hydrateModelInfo(agentId, models, options.refreshModelInfo);
       this.selectComposerModelForAgent(agentId, models);
       return models.length;
     } catch (error) {
@@ -2148,33 +2152,66 @@ export class AgentsStore {
     }
   }
 
-  private async hydrateModelInfo(agentId: string, models: ModelEntry[]) {
+  private async hydrateModelInfo(agentId: string, models: ModelEntry[], refresh = false) {
     if (models.length === 0) {
+      this.modelInfoByAgent = { ...this.modelInfoByAgent, [agentId]: {} };
       return;
     }
 
-    const pending = models.filter((entry) => !this.modelInfoByAgent[agentId]?.[getModelSelectionKey(entry)]);
-    if (pending.length === 0) {
-      return;
+    const identities = new Map<string, { provider: string; model: string }>();
+    for (const entry of models) {
+      identities.set(`${entry.provider}/${entry.model}`, { provider: entry.provider, model: entry.model });
     }
 
-    const record = this.ensureClientRecord(agentId);
-    const infoByKey = await record.client.getModelInfo(
-      pending.map((entry) => ({ provider: entry.provider, model: entry.model }))
+    const requests = new Set<Promise<void>>();
+    const missing = [...identities.entries()].filter(([key]) => {
+      if (refresh) return true;
+      const pending = this.modelInfoRequests.get(key);
+      if (pending) requests.add(pending);
+      return !this.modelInfoCache.has(key) && !pending;
+    });
+
+    if (missing.length > 0) {
+      const record = this.ensureClientRecord(agentId);
+      let request!: Promise<void>;
+      request = record.client
+        .getModelInfo(missing.map(([, identity]) => identity))
+        .then((infoByKey) => {
+          for (const [key] of missing) {
+            this.modelInfoCache.set(key, infoByKey[key] ?? null);
+          }
+          this.projectModelInfoForAllAgents();
+        })
+        .catch((error) => {
+          console.error('Failed to load model capabilities', error);
+          for (const [key] of missing) this.modelInfoCache.set(key, null);
+          this.projectModelInfoForAllAgents();
+        })
+        .finally(() => {
+          for (const [key] of missing) {
+            if (this.modelInfoRequests.get(key) === request) this.modelInfoRequests.delete(key);
+          }
+        });
+
+      for (const [key] of missing) this.modelInfoRequests.set(key, request);
+      requests.add(request);
+    }
+
+    await Promise.all(requests);
+    this.projectModelInfoForAllAgents();
+  }
+
+  private projectModelInfoForAllAgents() {
+    const projected = Object.fromEntries(
+      Object.entries(this.modelsByAgent).map(([agentId, models]) => [
+        agentId,
+        models.reduce<Record<string, ModelInfo | null>>((acc, entry) => {
+          acc[getModelSelectionKey(entry)] = this.modelInfoCache.get(`${entry.provider}/${entry.model}`) ?? null;
+          return acc;
+        }, {})
+      ])
     );
-
-    const mapped = pending.reduce<Record<string, ModelInfo | null>>((acc, entry) => {
-      acc[getModelSelectionKey(entry)] = infoByKey[`${entry.provider}/${entry.model}`] ?? null;
-      return acc;
-    }, {});
-
-    this.modelInfoByAgent = {
-      ...this.modelInfoByAgent,
-      [agentId]: {
-        ...(this.modelInfoByAgent[agentId] ?? {}),
-        ...mapped
-      }
-    };
+    this.modelInfoByAgent = projected;
   }
 
   private resetActiveSession(agentId: string, sessionId: string) {

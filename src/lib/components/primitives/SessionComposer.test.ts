@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SessionComposer from './SessionComposer.svelte';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
@@ -195,6 +195,46 @@ describe('SessionComposer', () => {
     expect(screen.getByPlaceholderText('Search models, providers, nodes…')).toHaveFocus();
   });
 
+  it('shows supported input modality icons and defaults unknown metadata to text', async () => {
+    const imageModel = { ...modelOptions[0], id: 'anthropic/claude-vision', model: 'claude-vision', label: 'Claude Vision' };
+    renderComposer({
+      modelOptions: [modelOptions[0], imageModel],
+      modelInfo: {
+        [imageModel.id]: {
+          capabilities: { modalities: { input: ['text', 'image', 'pdf', 'audio', 'video'], output: ['text'] } },
+          limits: { context: 200000 }
+        }
+      }
+    });
+
+    await fireEvent.click(screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0]);
+
+    expect(screen.getByLabelText('Input modalities unknown')).toBeInTheDocument();
+    expect(screen.getByLabelText('Model modalities unknown')).toBeInTheDocument();
+    expect(screen.getByLabelText('Supports image input')).toBeInTheDocument();
+    expect(screen.getByLabelText('Supports pdf input')).toBeInTheDocument();
+    expect(screen.getByLabelText('Supports audio input')).toBeInTheDocument();
+    expect(screen.getByLabelText('Supports video input')).toBeInTheDocument();
+    expect(screen.getByLabelText('200,000 token context window')).toHaveTextContent('200K');
+  });
+
+  it('finds models by supported modality', async () => {
+    const imageModel = { ...modelOptions[0], id: 'anthropic/claude-vision', model: 'claude-vision', label: 'Claude Vision' };
+    renderComposer({
+      modelOptions: [modelOptions[0], imageModel],
+      modelInfo: {
+        [imageModel.id]: { capabilities: { modalities: { input: ['text', 'image'], output: ['text'] } } }
+      }
+    });
+
+    await fireEvent.click(screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0]);
+    await fireEvent.input(screen.getByPlaceholderText('Search models, providers, nodes…'), { target: { value: 'image' } });
+
+    const picker = screen.getByRole('dialog', { name: 'Switch model' });
+    expect(within(picker).getByRole('button', { name: /Claude Vision/i })).toBeInTheDocument();
+    expect(within(picker).queryByRole('button', { name: /Claude Sonnet 4/i })).not.toBeInTheDocument();
+  });
+
   it('closes the model picker with Escape and restores focus to its trigger', async () => {
     renderComposer();
     const trigger = screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0];
@@ -206,11 +246,18 @@ describe('SessionComposer', () => {
     expect(trigger).toHaveFocus();
   });
 
-  it('distinguishes local and mesh copies of the same model', async () => {
+  it('distinguishes local and mesh copies without shifting selected model capabilities', async () => {
     const onModelChange = vi.fn();
-    const remoteModel = { ...modelOptions[0], node_id: 'node-1', node_label: 'Build server' };
+    const remoteModel = { ...modelOptions[0], node_id: 'node-1', node_label: 'flkr' };
     renderComposer({
       modelOptions: [modelOptions[0], remoteModel],
+      modelInfo: {
+        [modelOptions[0].id]: { capabilities: { modalities: { input: ['text', 'image'], output: ['text'] } }, limits: { context: 1_050_000 } },
+        [getModelSelectionKey(remoteModel)]: {
+          capabilities: { modalities: { input: ['text', 'image'], output: ['text'] } },
+          limits: { context: 128_000 }
+        }
+      },
       selectedModelId: getModelSelectionKey(remoteModel),
       onModelChange
     });
@@ -219,8 +266,18 @@ describe('SessionComposer', () => {
 
     const rows = screen.getAllByRole('button', { name: /Claude Sonnet 4/i }).filter((button) => button.classList.contains('app-picker-row'));
     expect(rows).toHaveLength(2);
-    expect(rows.filter((row) => row.querySelector('.lucide-check'))).toHaveLength(1);
-    expect(rows[1].querySelector('.lucide-check')).not.toBeNull();
+    expect(rows[0]).toHaveTextContent('anthropic');
+    expect(rows[0].querySelector('.app-picker-row-description')).not.toHaveTextContent('claude-sonnet-4');
+    expect(within(rows[0]).getByLabelText('1,050,000 token context window')).toHaveTextContent('1M');
+    expect(rows[0].querySelector('.app-picker-row-detail')?.firstElementChild).toHaveClass('app-picker-row-context');
+    expect(rows[0].querySelector('.app-picker-row-detail')?.lastElementChild).toHaveClass('app-picker-model-modalities');
+    expect(within(rows[1]).getByLabelText('Mesh node flkr')).toBeInTheDocument();
+    expect(within(rows[1]).getByLabelText('128,000 token context window')).toHaveTextContent('128K');
+    expect(rows[1]).toHaveAttribute('aria-pressed', 'true');
+    expect(rows[1].querySelector('.app-picker-row-title-selected')).toHaveTextContent('Claude Sonnet 4');
+    expect(rows[1].querySelector('.lucide-check')).toBeNull();
+    expect(rows[0].querySelectorAll('.app-picker-model-modality')).toHaveLength(2);
+    expect(rows[1].querySelectorAll('.app-picker-model-modality')).toHaveLength(2);
 
     await fireEvent.click(rows[1]);
     expect(onModelChange).toHaveBeenCalledWith(getModelSelectionKey(remoteModel));

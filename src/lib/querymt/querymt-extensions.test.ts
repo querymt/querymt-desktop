@@ -7,6 +7,7 @@ import {
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK,
   QuerymtExtensions,
+  normalizeQuerymtModelInfoResponse,
   normalizeQuerymtModelsResponse,
   toAcpExtensionMethod
 } from './querymt-extensions';
@@ -62,6 +63,41 @@ describe('QuerymtExtensions auth token mutations', () => {
     expect(extMethod).toHaveBeenNthCalledWith(3, toAcpExtensionMethod(QMT_METHOD_AUTH_SET_METHOD), {
       provider: 'groq',
       method: 'api_key'
+    });
+  });
+});
+
+describe('normalizeQuerymtModelInfoResponse', () => {
+  it('normalizes flattened model capabilities, limits, and pricing', () => {
+    expect(
+      normalizeQuerymtModelInfoResponse({
+        models: {
+          'xai/grok-4.6': {
+            id: 'grok-4.6',
+            name: 'Grok 4.6',
+            attachment: true,
+            reasoning: true,
+            temperature: false,
+            tool_call: true,
+            modalities: { input: ['text', 'image'], output: ['text'] },
+            limit: { context: 200000, output: 32000 },
+            cost: { input: 3, output: 15 }
+          }
+        }
+      }).models['xai/grok-4.6']
+    ).toEqual(expect.objectContaining({
+      capabilities: expect.objectContaining({
+        attachment: true,
+        modalities: { input: ['text', 'image'], output: ['text'] }
+      }),
+      limits: { context: 200000, output: 32000 },
+      pricing: { input: 3, output: 15 }
+    }));
+  });
+
+  it('preserves null entries for unknown models', () => {
+    expect(normalizeQuerymtModelInfoResponse({ models: { 'custom/model': null } }).models).toEqual({
+      'custom/model': null
     });
   });
 });
