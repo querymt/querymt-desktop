@@ -4,6 +4,7 @@ import { getModelSelectionKey } from '$lib/querymt/config-options';
 import { AgentsStore } from './agents.svelte';
 
 const mockListManagedProfiles = vi.hoisted(() => vi.fn(async () => []));
+const mockListen = vi.hoisted(() => vi.fn());
 
 const mockClient = vi.hoisted(() => {
   let sessionUpdateHandler: ((notification: SessionNotification) => void) | null = null;
@@ -85,6 +86,10 @@ const mockClient = vi.hoisted(() => {
   };
 });
 
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: mockListen
+}));
+
 vi.mock('$lib/querymt/profile-templates', () => ({
   listManagedProfiles: mockListManagedProfiles
 }));
@@ -135,11 +140,34 @@ function createStore() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockListen.mockResolvedValue(() => undefined);
   mockListManagedProfiles.mockResolvedValue([]);
   mockClient.resetSessionUpdateHandler();
 });
 
 describe('AgentsStore connections', () => {
+  it('subscribes to live agent logs and retains the latest 200 entries', async () => {
+    type LogEvent = { payload: { agentId: string; entry: { timestamp: string; stream: 'system'; message: string } } };
+    let handleLog: ((event: LogEvent) => void) | undefined;
+    mockListen.mockImplementation(async (_eventName: string, handler: (event: LogEvent) => void) => {
+      handleLog = handler;
+      return () => undefined;
+    });
+    const store = createStore();
+    store.configs = [];
+
+    await store.initialize();
+
+    expect(mockListen).toHaveBeenCalledWith('querymt://agent/log', expect.any(Function));
+    const emitLog = handleLog as (event: LogEvent) => void;
+    for (let index = 0; index < 205; index += 1) {
+      emitLog({ payload: { agentId: 'agent-1', entry: { timestamp: String(index), stream: 'system', message: `line ${index}` } } });
+    }
+    expect(store.logsByAgent['agent-1']).toHaveLength(200);
+    expect(store.logsByAgent['agent-1'][0].message).toBe('line 5');
+    expect(store.logsByAgent['agent-1'][199].message).toBe('line 204');
+  });
+
   it('completes workspace discovery during initialization when profile loading fails', async () => {
     const store = createStore();
     mockListManagedProfiles.mockRejectedValueOnce(new Error('profile service unavailable'));

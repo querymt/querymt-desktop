@@ -27,10 +27,9 @@
   import type { AgentConfig } from '$lib/domain/types';
 
   type AgentDialogMode = 'add' | 'edit' | null;
-  type AgentMessageTone = 'error' | 'warning' | 'info';
+  type AgentMessageTone = 'error' | 'warning';
 
   interface AgentMessage {
-    id: string;
     label: string;
     detail: string;
     tone: AgentMessageTone;
@@ -40,6 +39,7 @@
   let selectedAgentId = $state<string | null>(null);
   let editingAgentId = $state<string | null>(null);
   let pendingDeleteAgentId = $state<string | null>(null);
+  let logViewerOpen = $state(false);
   let draftName = $state('');
   let draftTransport = $state<AgentConfig['transport']>('stdio');
   let draftCommandLine = $state('');
@@ -106,6 +106,19 @@
     return config.transport === 'websocket' ? config.websocketUrl ?? 'WebSocket endpoint missing' : config.commandLine;
   }
 
+  function transportLabel(config: AgentConfig) {
+    return config.transport === 'websocket' ? 'WebSocket endpoint' : 'Local process';
+  }
+
+  function stateTone(state: string | null | undefined) {
+    if (state === 'running' || state === 'initialized' || state === 'ready') return 'success';
+    if (state === 'failed') return 'danger';
+    if (state === 'starting' || state === 'stopping' || state === 'connecting' || state === 'reconnecting' || state === 'degraded' || state === 'legacy') {
+      return 'warning';
+    }
+    return 'muted';
+  }
+
   function isConnected(config: AgentConfig) {
     return config.transport === 'websocket'
       ? agentsStore.connectionStates[config.id] === 'initialized' || agentsStore.connectionStates[config.id] === 'loading-sessions'
@@ -144,7 +157,7 @@
     const detail = message.detail.trim();
     if (!detail) return;
 
-    const key = `${message.label}:${detail}`;
+    const key = detail.replace(/\s+/g, ' ').toLocaleLowerCase();
     if (seen.has(key)) return;
 
     seen.add(key);
@@ -156,39 +169,42 @@
     const seen = new Set<string>();
 
     addAgentMessage(messages, seen, {
-      id: 'runtime-error',
       label: 'Runtime error',
       detail: card.status?.lastError ?? '',
       tone: 'error'
     });
     addAgentMessage(messages, seen, {
-      id: 'client-error',
       label: 'Client error',
       detail: card.error ?? '',
       tone: 'error'
     });
-    addAgentMessage(messages, seen, {
-      id: 'runtime-message',
-      label: 'Runtime message',
-      detail: card.status?.message ?? '',
-      tone: card.status?.state === 'failed' ? 'error' : 'info'
-    });
-    addAgentMessage(messages, seen, {
-      id: 'connection-state',
-      label: 'Connection',
-      detail: card.connectionState === 'failed' ? 'Connection to this agent failed.' : card.connectionState,
-      tone: card.connectionState === 'failed' ? 'error' : 'info'
-    });
-    addAgentMessage(messages, seen, {
-      id: 'control-health',
-      label: 'Control health',
-      detail: card.controlHealth.summary,
-      tone: card.controlHealth.state === 'failed' ? 'error' : card.controlHealth.state === 'degraded' ? 'warning' : 'info'
-    });
+
+    if (card.status?.state === 'failed' || card.status?.state === 'starting' || card.status?.state === 'stopping') {
+      addAgentMessage(messages, seen, {
+        label: 'Runtime message',
+        detail: card.status.message,
+        tone: card.status.state === 'failed' ? 'error' : 'warning'
+      });
+    }
+
+    if (card.connectionState === 'failed' || card.connectionState === 'reconnecting') {
+      addAgentMessage(messages, seen, {
+        label: 'Connection',
+        detail: card.connectionState === 'failed' ? 'Connection to this agent failed.' : 'Reconnecting to this agent.',
+        tone: card.connectionState === 'failed' ? 'error' : 'warning'
+      });
+    }
+
+    if (card.controlHealth.state === 'legacy' || card.controlHealth.state === 'degraded' || card.controlHealth.state === 'failed') {
+      addAgentMessage(messages, seen, {
+        label: 'Control health',
+        detail: card.controlHealth.summary,
+        tone: card.controlHealth.state === 'failed' ? 'error' : 'warning'
+      });
+    }
 
     if (card.controlHealth.missingMethods.length > 0) {
       addAgentMessage(messages, seen, {
-        id: 'missing-methods',
         label: 'Missing methods',
         detail: card.controlHealth.missingMethods.join(', '),
         tone: 'warning'
@@ -197,7 +213,6 @@
 
     if (card.controlHealth.missingFeatures.length > 0) {
       addAgentMessage(messages, seen, {
-        id: 'missing-features',
         label: 'Missing features',
         detail: card.controlHealth.missingFeatures.join(', '),
         tone: 'warning'
@@ -236,14 +251,21 @@
   }
 
   function openDetails(agentId: string) {
+    logViewerOpen = false;
     selectedAgentId = agentId;
   }
 
   function closeDetails() {
+    logViewerOpen = false;
     selectedAgentId = null;
   }
 
   function closeTopmostOverlay() {
+    if (logViewerOpen) {
+      logViewerOpen = false;
+      return true;
+    }
+
     if (agentDialogMode) {
       closeAgentDialog();
       return true;
@@ -519,125 +541,197 @@
     <Portal to={overlayPortalTarget}>
       <div class="app-backdrop fixed inset-0 z-40 flex justify-end">
         <button class="absolute inset-0 h-full w-full cursor-default" type="button" aria-label="Close details" onclick={() => closeDetails()}></button>
-        <div class="agent-details-panel relative z-10 h-full w-full max-w-2xl overflow-auto border-l border-[var(--border)] bg-[var(--bg-panel-strong)] p-5" role="dialog" aria-modal="true" tabindex="-1" data-blocking-overlay="true">
-        <div class="flex items-start justify-between gap-3">
-          <div>
-              <div class="flex items-center gap-3">
-                <span class={`status-dot ${statusClass(selectedCard.status?.state, selectedCard.connectionState, selectedCard.controlHealth.state)}`}></span>
-
-              <div class="text-lg font-semibold">{selectedCard.config.name}</div>
-            </div>
-            <div class="mt-1 text-sm text-[var(--muted)]">{endpointLabel(selectedCard.config)}</div>
-          </div>
-          <IconTooltipButton label="Close details" icon={X} onclick={() => closeDetails()} />
-        </div>
-
-        <div class="mt-5 space-y-4">
-          <section class="surface-muted p-4 space-y-2">
-            <div class="text-sm font-medium">{selectedCard.config.transport === 'websocket' ? 'Connection' : 'Runtime'}</div>
-            <div class="text-sm text-[var(--muted)]">State: {selectedCard.status?.state ?? selectedCard.connectionState}</div>
-            {#if selectedCard.config.transport === 'websocket'}
-              {#if selectedCard.status?.message}<div class="text-sm text-[var(--muted)]">{selectedCard.status.message}</div>{/if}
-              <div class="text-sm text-[var(--muted)]">This server is managed independently. Desktop can only connect or disconnect.</div>
-            {:else}
-              {#if selectedCard.status?.pid != null}<div class="text-sm text-[var(--muted)]">PID: {selectedCard.status.pid}</div>{/if}
-              {#if selectedCard.status?.version}<div class="text-sm text-[var(--muted)]">Version: {selectedCard.status.version}</div>{/if}
-              {#if selectedCard.status?.message}<div class="text-sm text-[var(--muted)]">{selectedCard.status.message}</div>{/if}
-            {/if}
-          </section>
-
-          <section class="surface-muted p-4 space-y-3">
-            <div class="flex items-center justify-between gap-3">
-              <div class="text-sm font-medium">Control health</div>
-              <IconTooltipButton
-                label="Refresh capabilities"
-                icon={RefreshCw}
-                onclick={() => agentsStore.refreshCapabilities(selectedCard.config.id)}
-              />
-            </div>
-            <div class="text-sm text-[var(--muted)]">{selectedCard.controlHealth.summary}</div>
-            <div class="flex flex-wrap gap-2 text-xs">
-              <span class="badge">{selectedCard.controlHealth.state}</span>
-              <span class="badge">{selectedCard.connectionState}</span>
-              {#if selectedCard.controlCapabilities}
-                <span class="badge">api v{selectedCard.controlCapabilities.querymt_control_version}</span>
-                <span class="badge">{selectedCard.controlCapabilities.agent.kind}</span>
-              {/if}
-            </div>
-            {#if selectedCard.controlHealth.missingMethods.length > 0}
-              <div class="text-sm text-[var(--muted)]">Missing methods: {selectedCard.controlHealth.missingMethods.join(', ')}</div>
-            {/if}
-            {#if selectedCard.controlHealth.missingFeatures.length > 0}
-              <div class="text-sm text-[var(--muted)]">Missing features: {selectedCard.controlHealth.missingFeatures.join(', ')}</div>
-            {/if}
-          </section>
-
-          <section class="surface-muted p-4 space-y-2">
-            <div class="text-sm font-medium">Capabilities</div>
-            {#if selectedCard.controlCapabilities}
-              <div class="flex flex-wrap gap-2 text-xs">
-                {#if selectedCard.controlCapabilities.agent.display_name}<span class="badge">{selectedCard.controlCapabilities.agent.display_name}</span>{/if}
-                {#if selectedCard.controlCapabilities.agent.version}<span class="badge">{selectedCard.controlCapabilities.agent.version}</span>{/if}
-                {#if selectedCard.controlCapabilities.transport.mesh}<span class="badge">mesh</span>{/if}
-                {#if selectedCard.controlCapabilities.transport.websocket}<span class="badge">websocket</span>{/if}
-                {#if selectedCard.controlCapabilities.features.models}<span class="badge">models</span>{/if}
-                {#if selectedCard.controlCapabilities.features.schedules}<span class="badge">schedules</span>{/if}
-                {#if selectedCard.controlCapabilities.features.remote_sessions}<span class="badge">remote sessions</span>{/if}
-                {#if selectedCard.controlCapabilities.features.mesh_invites}<span class="badge">mesh invites</span>{/if}
-                {#if selectedCard.controlCapabilities.features.auth}<span class="badge">auth</span>{/if}
+        <div
+          class="agent-details-panel relative z-10"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="agent-details-title"
+          tabindex="-1"
+          data-blocking-overlay="true"
+        >
+          <header class="agent-details-header">
+            <div class="agent-details-heading">
+              <span class={`status-dot ${statusClass(selectedCard.status?.state, selectedCard.connectionState, selectedCard.controlHealth.state)}`}></span>
+              <div>
+                <h2 id="agent-details-title">{selectedCard.config.name}</h2>
+                <p>{transportLabel(selectedCard.config)}</p>
               </div>
-            {:else}
-              <div class="text-sm text-[var(--muted)]">No capabilities loaded yet.</div>
-            {/if}
-          </section>
-
-          <section class="surface-muted p-4 space-y-3">
-            <div class="flex items-center justify-between gap-3">
-              <div class="text-sm font-medium">Sessions</div>
-              <span class="badge">{selectedCard.sessions.length}</span>
             </div>
-            {#if selectedCard.sessions.length === 0}
-              <div class="text-sm text-[var(--muted)]">No sessions loaded for this agent.</div>
-            {:else}
-              <div class="space-y-2">
-                {#each selectedCard.sessions as session}
-                  <div class="surface-muted px-3 py-2">
-                    <div class="text-sm font-medium">{session.title}</div>
-                    <div class="mt-1 text-xs text-[var(--muted)]">{session.sessionId}</div>
-                    {#if session.cwd}<div class="mt-1 text-xs text-[var(--muted)]">{session.cwd}</div>{/if}
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          </section>
+            <IconTooltipButton label="Close details" icon={X} onclick={() => closeDetails()} />
+          </header>
 
-          <section class="surface-muted p-4 space-y-3">
-            <div class="flex items-center justify-between gap-3">
-              <div class="text-sm font-medium">Messages</div>
-              <span class="badge">{selectedMessages.length}</span>
-            </div>
-            {#if selectedMessages.length === 0}
-              <div class="text-sm text-[var(--muted)]">No structured status messages for this agent.</div>
-            {:else}
-              <div class="agent-message-list">
-                {#each selectedMessages as message}
-                  <div class={`agent-message-row agent-message-row-${message.tone}`}>
-                    <div class="agent-message-label">{message.label}</div>
-                    <div class="agent-message-detail">{message.detail}</div>
-                  </div>
-                {/each}
+          <div class="agent-details-body">
+            <section class="agent-details-overview" aria-label="Agent overview">
+              <div class="agent-details-overview-stats">
+                <div class="agent-details-overview-stat">
+                  <span>Runtime</span>
+                  <strong class={`agent-details-tone-${stateTone(selectedCard.config.transport === 'websocket' ? 'external' : selectedCard.status?.state)}`}>
+                    {selectedCard.config.transport === 'websocket' ? 'External' : selectedCard.status?.state ?? 'Stopped'}
+                  </strong>
+                </div>
+                <div class="agent-details-overview-stat">
+                  <span>Connection</span>
+                  <strong class={`agent-details-tone-${stateTone(selectedCard.connectionState)}`}>{selectedCard.connectionState}</strong>
+                </div>
+                <div class="agent-details-overview-stat">
+                  <span>Sessions</span>
+                  <strong aria-label={`${selectedCard.sessions.length} ${selectedCard.sessions.length === 1 ? 'session' : 'sessions'}`}>{selectedCard.sessions.length}</strong>
+                </div>
+                <div class="agent-details-overview-stat">
+                  <span>Control health</span>
+                  <strong class={`agent-details-tone-${stateTone(selectedCard.controlHealth.state)}`}>{selectedCard.controlHealth.state}</strong>
+                </div>
               </div>
-            {/if}
-          </section>
-
-          {#if selectedCard.config.transport === 'stdio'}
-            <section class="space-y-3">
-              <div class="text-sm font-medium">Logs</div>
-              <SidecarLogList logs={selectedCard.logs} title={`${selectedCard.config.name} logs`} emptyMessage="No logs yet for this agent." />
+              <div class="agent-details-overview-context">
+                <span class="agent-details-context-label">Endpoint</span>
+                <code title={endpointLabel(selectedCard.config)}>{endpointLabel(selectedCard.config)}</code>
+                <span class="agent-details-context-separator" aria-hidden="true"></span>
+                <span>{selectedCard.config.transport}</span>
+              </div>
             </section>
-          {/if}
+
+            <section class="agent-details-section" aria-labelledby="agent-runtime-title">
+              <div class="agent-details-section-header">
+                <div>
+                  <h3 id="agent-runtime-title">Runtime</h3>
+                  <p>{selectedCard.config.transport === 'websocket' ? 'Connection configuration for this independently managed server.' : 'Local process and connection configuration.'}</p>
+                </div>
+              </div>
+              <dl class="agent-details-list">
+                {#if selectedCard.config.transport === 'stdio'}
+                  <div><dt>Process ID</dt><dd class="agent-details-mono">{selectedCard.status?.pid ?? 'Unavailable'}</dd></div>
+                  <div><dt>Version</dt><dd class="agent-details-mono">{selectedCard.status?.version ?? 'Unavailable'}</dd></div>
+                {/if}
+                <div><dt>Enabled</dt><dd>{selectedCard.config.enabled ? 'Yes' : 'No'}</dd></div>
+                <div><dt>Auto start</dt><dd>{selectedCard.config.autoStart ? 'On' : 'Off'}</dd></div>
+              </dl>
+            </section>
+
+            <section class="agent-details-section" aria-labelledby="agent-control-title">
+              <div class="agent-details-section-header agent-details-section-header-action">
+                <div>
+                  <h3 id="agent-control-title">Control health</h3>
+                  <p>Compatibility between Desktop and this agent's control API.</p>
+                </div>
+                <IconTooltipButton
+                  label="Refresh capabilities"
+                  icon={RefreshCw}
+                  controlSize="compact"
+                  onclick={() => agentsStore.refreshCapabilities(selectedCard.config.id)}
+                />
+              </div>
+              <dl class="agent-details-list">
+                <div><dt>Control API</dt><dd class="agent-details-mono">{selectedCard.controlCapabilities ? `v${selectedCard.controlCapabilities.querymt_control_version}` : 'Not loaded'}</dd></div>
+                <div><dt>Agent</dt><dd>{selectedCard.controlCapabilities?.agent.display_name ?? selectedCard.config.name}</dd></div>
+                <div><dt>Methods</dt><dd>{selectedCard.controlCapabilities?.methods.length ?? 0}</dd></div>
+                <div><dt>Notifications</dt><dd>{selectedCard.controlCapabilities?.notifications?.length ?? 0}</dd></div>
+              </dl>
+            </section>
+
+            <section class="agent-details-section" aria-labelledby="agent-capabilities-title">
+              <div class="agent-details-section-header">
+                <div>
+                  <h3 id="agent-capabilities-title">Capabilities</h3>
+                  <p>Transports and product features reported by the agent.</p>
+                </div>
+              </div>
+              {#if selectedCard.controlCapabilities}
+                <div class="agent-details-capability-list">
+                  <div class="agent-details-capability-row">
+                    <span>Agent</span>
+                    <div>
+                      <span class="agent-details-chip">{selectedCard.controlCapabilities.agent.kind}</span>
+                      {#if selectedCard.controlCapabilities.agent.version}<span class="agent-details-chip">v{selectedCard.controlCapabilities.agent.version}</span>{/if}
+                    </div>
+                  </div>
+                  <div class="agent-details-capability-row">
+                    <span>Transport</span>
+                    <div>
+                      {#if selectedCard.controlCapabilities.transport.acp}<span class="agent-details-chip">ACP</span>{/if}
+                      {#if selectedCard.controlCapabilities.transport.stdio}<span class="agent-details-chip">stdio</span>{/if}
+                      {#if selectedCard.controlCapabilities.transport.websocket}<span class="agent-details-chip">WebSocket</span>{/if}
+                      {#if selectedCard.controlCapabilities.transport.mesh}<span class="agent-details-chip">mesh</span>{/if}
+                    </div>
+                  </div>
+                  <div class="agent-details-capability-row">
+                    <span>Features</span>
+                    <div>
+                      {#if selectedCard.controlCapabilities.features.models}<span class="agent-details-chip">models</span>{/if}
+                      {#if selectedCard.controlCapabilities.features.schedules}<span class="agent-details-chip">schedules</span>{/if}
+                      {#if selectedCard.controlCapabilities.features.remote_schedules}<span class="agent-details-chip">remote schedules</span>{/if}
+                      {#if selectedCard.controlCapabilities.features.remote_sessions}<span class="agent-details-chip">remote sessions</span>{/if}
+                      {#if selectedCard.controlCapabilities.features.mesh}<span class="agent-details-chip">mesh</span>{/if}
+                      {#if selectedCard.controlCapabilities.features.mesh_invites}<span class="agent-details-chip">mesh invites</span>{/if}
+                      {#if selectedCard.controlCapabilities.features.profiles}<span class="agent-details-chip">profiles</span>{/if}
+                      {#if selectedCard.controlCapabilities.features.auth}<span class="agent-details-chip">auth</span>{/if}
+                    </div>
+                  </div>
+                </div>
+              {:else}
+                <div class="agent-details-empty">No capabilities loaded yet.</div>
+              {/if}
+            </section>
+
+            {#if selectedMessages.length > 0}
+              <section class="agent-details-section" aria-labelledby="agent-diagnostics-title">
+                <div class="agent-details-section-header agent-details-section-header-action">
+                  <div>
+                    <h3 id="agent-diagnostics-title">Diagnostics</h3>
+                    <p>Issues requiring attention from the runtime, connection, or control API.</p>
+                  </div>
+                  <span class="agent-details-section-count">{selectedMessages.length}</span>
+                </div>
+                <div class="agent-message-list">
+                  {#each selectedMessages as message}
+                    <div class={`agent-message-row agent-message-row-${message.tone}`}>
+                      <div class="agent-message-label">{message.label}</div>
+                      <div class="agent-message-detail">{message.detail}</div>
+                    </div>
+                  {/each}
+                </div>
+              </section>
+            {/if}
+
+            {#if selectedCard.config.transport === 'stdio'}
+              <section class="agent-details-logs-summary" aria-labelledby="agent-runtime-logs-title">
+                <div>
+                  <h3 id="agent-runtime-logs-title">Runtime logs</h3>
+                  <p>{selectedCard.logs.length} {selectedCard.logs.length === 1 ? 'entry' : 'entries'} retained</p>
+                </div>
+                <button class="action-btn action-btn-compact" type="button" onclick={() => (logViewerOpen = true)}>Open log console</button>
+              </section>
+            {/if}
+          </div>
         </div>
-        </div>
+
+        {#if logViewerOpen}
+          <div class="agent-log-viewer-layer">
+            <button class="agent-log-viewer-backdrop" type="button" aria-label="Dismiss expanded logs" onclick={() => (logViewerOpen = false)}></button>
+            <div
+              class="agent-log-viewer"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="agent-log-viewer-title"
+              data-blocking-overlay="true"
+            >
+              <header class="agent-log-viewer-header">
+                <div>
+                  <h2 id="agent-log-viewer-title">{selectedCard.config.name} runtime logs</h2>
+                  <p>{selectedCard.logs.length} {selectedCard.logs.length === 1 ? 'entry' : 'entries'} retained</p>
+                </div>
+                <IconTooltipButton label="Close expanded logs" icon={X} onclick={() => (logViewerOpen = false)} />
+              </header>
+              <div class="agent-log-viewer-body">
+                <SidecarLogList
+                  logs={selectedCard.logs}
+                  title={`${selectedCard.config.name} runtime logs`}
+                  showHeader={false}
+                  emptyMessage="No logs yet for this agent."
+                />
+              </div>
+            </div>
+          </div>
+        {/if}
       </div>
     </Portal>
   {/if}

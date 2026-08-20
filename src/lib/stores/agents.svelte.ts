@@ -8,6 +8,7 @@ import type {
   SessionInfo,
   SessionNotification
 } from '@agentclientprotocol/sdk';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { tick } from 'svelte';
 import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
@@ -88,7 +89,7 @@ import {
 } from '$lib/querymt/querymt-extensions';
 import { sendDesktopNotification } from '$lib/querymt/notifications';
 import { listManagedProfiles } from '$lib/querymt/profile-templates';
-import { getAgentLogs, getAgentStatus, restartAgent, startAgent, stopAgent, validateWorkspaceDirectory } from '$lib/querymt/sidecar';
+import { getAgentLogs, getAgentStatus, restartAgent, startAgent, stopAgent, validateWorkspaceDirectory, type AgentLogEntry } from '$lib/querymt/sidecar';
 import { inboxStore } from '$lib/stores/inbox.svelte';
 
 const AGENTS_STORAGE_KEY = 'querymt-desktop.agents';
@@ -98,6 +99,8 @@ const RECENT_MODELS_LIMIT = 5;
 const RECENT_WORKSPACES_LIMIT = 8;
 const WEBSOCKET_RECONNECT_MAX_DELAY_MS = 8_000;
 const WORKSPACE_SESSION_PAGE_SIZE = 10;
+const MAX_AGENT_LOG_ENTRIES = 200;
+const AGENT_LOG_EVENT = 'querymt://agent/log';
 const PROMPT_ACTIVE_RUN_STATES = new Set<SessionRunState>(['thinking', 'streaming', 'tool-running']);
 
 // TODO: Replace these desktop defaults with agent-provided launch config metadata once the server exposes it before session/new.
@@ -113,6 +116,11 @@ export const LAUNCH_REASONING_OPTIONS: ComposerOption[] = [
   { id: 'high', label: 'High', description: 'Thorough thinking.' },
   { id: 'max', label: 'Max', description: 'Deepest thinking and highest budget.' }
 ];
+
+interface AgentLogEvent {
+  agentId: string;
+  entry: AgentLogEntry;
+}
 
 interface AgentClientRecord {
   client: DesktopAcpClient;
@@ -147,6 +155,8 @@ export class AgentsStore {
   private completedWorkspaceDiscoveries = new Set<string>();
   private workspaceDiscoveryPromises = new Map<string, Promise<void>>();
   private hydratedRemoteSessionKeys = new Set<string>();
+  private unlistenAgentLogs: UnlistenFn | null = null;
+  private agentLogSubscriptionPending = false;
 
   configs = $state<AgentConfig[]>(loadInitialAgents());
   statuses = $state<Record<string, AgentRuntimeStatus>>({});
@@ -307,6 +317,7 @@ export class AgentsStore {
     this.error = null;
 
     try {
+      await this.ensureAgentLogSubscription();
       await Promise.allSettled(this.configs.map((config) => this.refreshAgent(config)));
       await Promise.allSettled(
         this.configs
@@ -326,6 +337,23 @@ export class AgentsStore {
       this.error = error instanceof Error ? error.message : 'Failed to initialize configured agents.';
     } finally {
       this.loading = false;
+    }
+  }
+
+  private async ensureAgentLogSubscription() {
+    if (this.unlistenAgentLogs || this.agentLogSubscriptionPending || typeof window === 'undefined') return;
+
+    this.agentLogSubscriptionPending = true;
+    try {
+      this.unlistenAgentLogs = await listen<AgentLogEvent>(AGENT_LOG_EVENT, ({ payload }) => {
+        const current = this.logsByAgent[payload.agentId] ?? [];
+        const next = [...current, payload.entry].slice(-MAX_AGENT_LOG_ENTRIES);
+        this.logsByAgent = { ...this.logsByAgent, [payload.agentId]: next };
+      });
+    } catch (error) {
+      console.error('Failed to subscribe to agent logs', error);
+    } finally {
+      this.agentLogSubscriptionPending = false;
     }
   }
 

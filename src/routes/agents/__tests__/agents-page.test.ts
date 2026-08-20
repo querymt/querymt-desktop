@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AgentsPage from '../+page.svelte';
 
@@ -23,7 +23,7 @@ function createAgentsStore() {
         pid: 1234,
         version: '1.0.0',
         message: 'Running',
-        lastError: null
+        lastError: null as string | null
       }
     },
     sessionsByAgent: {
@@ -66,11 +66,11 @@ function createAgentsStore() {
       'agent-1': {
         state: 'ready',
         summary: 'All controls available.',
-        missingMethods: [],
-        missingFeatures: []
+        missingMethods: [] as string[],
+        missingFeatures: [] as string[]
       }
     },
-    agentErrors: { 'agent-1': null },
+    agentErrors: { 'agent-1': null as string | null },
     loading: false,
     error: null as string | null,
     initialize: vi.fn(async () => undefined),
@@ -206,19 +206,31 @@ describe('Agents page', () => {
     expect(agentsStore.refreshAgent).toHaveBeenCalled();
   });
 
-  it('shows degraded runtime state when ACP control is failing', () => {
+  it('shows unique actionable diagnostics when ACP control is failing', async () => {
+    agentsStore.statuses['agent-1'] = {
+      ...agentsStore.statuses['agent-1'],
+      state: 'failed',
+      message: 'Agent failed to initialize.',
+      lastError: 'Agent failed to initialize.'
+    };
     agentsStore.connectionStates['agent-1'] = 'failed';
     agentsStore.controlHealthByAgent['agent-1'] = {
       state: 'failed',
       summary: 'Agent failed to initialize.',
-      missingMethods: [],
+      missingMethods: ['session/list'],
       missingFeatures: []
     };
+    agentsStore.agentErrors['agent-1'] = 'Agent failed to initialize.';
 
     const { container } = render(AgentsPage);
 
     expect(container.querySelector('.status-dot-degraded')).toBeTruthy();
-    expect(screen.getByText('running')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Details for QMTCODE' }));
+    const drawer = screen.getByRole('dialog', { name: 'QMTCODE' });
+    expect(within(drawer).getByRole('heading', { name: 'Diagnostics' })).toBeInTheDocument();
+    expect(within(drawer).getAllByText('Agent failed to initialize.')).toHaveLength(1);
+    expect(within(drawer).getByText('Connection to this agent failed.')).toBeInTheDocument();
+    expect(within(drawer).getByText('session/list')).toBeInTheDocument();
   });
 
   it('keeps delete visible with the other row actions', async () => {
@@ -232,16 +244,36 @@ describe('Agents page', () => {
     expect(screen.getByRole('alertdialog')).toHaveTextContent('Delete QMTCODE?');
   });
 
-  it('opens the details drawer for extended information', async () => {
+  it('opens a structured details drawer without listing individual sessions', async () => {
     render(AgentsPage);
 
     await fireEvent.click(screen.getByRole('button', { name: 'Details for QMTCODE' }));
 
-    expect(screen.getByText('Runtime')).toBeInTheDocument();
-    expect(screen.getByText('Capabilities')).toBeInTheDocument();
-    expect(screen.getByText('Sessions')).toBeInTheDocument();
+    const drawer = screen.getByRole('dialog', { name: 'QMTCODE' });
+    expect(drawer).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Agent overview' })).toHaveTextContent('Runtime');
+    expect(screen.getByRole('region', { name: 'Agent overview' })).toHaveTextContent('Connection');
+    expect(screen.getByLabelText('1 session')).toBeInTheDocument();
+    expect(screen.queryByText('Investigate auth issue')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Control health' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Capabilities' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Diagnostics' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Runtime state')).not.toBeInTheDocument();
+    expect(screen.queryByText('All controls available.')).not.toBeInTheDocument();
     expect(screen.getByText('QMT Code')).toBeInTheDocument();
-    expect(screen.getByText('Investigate auth issue')).toBeInTheDocument();
-    expect(screen.getByText('QMTCODE logs')).toBeInTheDocument();
+    expect(screen.getByText('Process ID').nextElementSibling).toHaveTextContent('1234');
+    expect(screen.getByRole('heading', { name: 'Runtime logs' }).nextElementSibling).toHaveTextContent('1 entry retained');
+    expect(screen.queryByRole('log', { name: 'QMTCODE runtime logs' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Search logs' })).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Open log console' }));
+
+    expect(screen.getByRole('dialog', { name: 'QMTCODE runtime logs' })).toBeInTheDocument();
+    expect(screen.getByRole('log', { name: 'QMTCODE runtime logs' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy all logs' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Copy log entry/ })).not.toBeInTheDocument();
+    await fireEvent.click(within(screen.getByRole('dialog', { name: 'QMTCODE runtime logs' })).getByRole('button', { name: 'Close expanded logs' }));
+    expect(screen.queryByRole('dialog', { name: 'QMTCODE runtime logs' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'QMTCODE' })).toBeInTheDocument();
   });
 });
