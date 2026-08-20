@@ -185,6 +185,8 @@ describe('Agents page', () => {
     render(AgentsPage);
 
     await fireEvent.click(screen.getByRole('button', { name: 'Edit QMTCODE' }));
+    expect(screen.getByRole('dialog', { name: 'Edit agent' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close details' })).not.toBeInTheDocument();
     const nameInput = screen.getByDisplayValue('QMTCODE');
     const commandInput = screen.getByDisplayValue('/usr/local/bin/qmtcode --acp');
     expect(commandInput).toHaveAttribute('autocomplete', 'off');

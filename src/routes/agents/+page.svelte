@@ -38,6 +38,7 @@
 
   let agentDialogMode = $state<AgentDialogMode>(null);
   let selectedAgentId = $state<string | null>(null);
+  let editingAgentId = $state<string | null>(null);
   let pendingDeleteAgentId = $state<string | null>(null);
   let draftName = $state('');
   let draftTransport = $state<AgentConfig['transport']>('stdio');
@@ -74,6 +75,10 @@
 
   const selectedCard = $derived.by(() =>
     selectedAgentId ? agentCards.find((card) => card.config.id === selectedAgentId) ?? null : null
+  );
+
+  const editingCard = $derived.by(() =>
+    editingAgentId ? agentCards.find((card) => card.config.id === editingAgentId) ?? null : null
   );
 
   const selectedMessages = $derived.by(() => (selectedCard ? getAgentMessages(selectedCard) : []));
@@ -204,6 +209,7 @@
 
   function openAddDialog() {
     agentDialogMode = 'add';
+    editingAgentId = null;
     draftName = '';
     draftTransport = 'stdio';
     draftCommandLine = '';
@@ -212,7 +218,8 @@
 
   function openEditDialog(card: (typeof agentCards)[number]) {
     agentDialogMode = 'edit';
-    selectedAgentId = card.config.id;
+    editingAgentId = card.config.id;
+    selectedAgentId = null;
     draftName = card.config.name;
     draftTransport = card.config.transport;
     draftCommandLine = card.config.commandLine;
@@ -221,6 +228,7 @@
 
   function closeAgentDialog() {
     agentDialogMode = null;
+    editingAgentId = null;
     draftName = '';
     draftTransport = 'stdio';
     draftCommandLine = '';
@@ -285,14 +293,15 @@
       return;
     }
 
-    if (agentDialogMode === 'edit' && selectedCard) {
+    if (agentDialogMode === 'edit' && editingCard) {
+      const config = editingCard.config;
       const updates =
         draftTransport === 'websocket'
           ? { name, transport: draftTransport, commandLine: '', websocketUrl: endpoint }
           : { name, transport: draftTransport, commandLine: endpoint, websocketUrl: undefined };
-      agentsStore.updateConfig(selectedCard.config.id, updates);
+      agentsStore.updateConfig(config.id, updates);
       closeAgentDialog();
-      await agentsStore.refreshAgent({ ...selectedCard.config, ...updates });
+      await agentsStore.refreshAgent({ ...config, ...updates });
     }
   }
 
