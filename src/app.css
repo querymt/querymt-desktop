@@ -83,7 +83,6 @@
   --session-composer-bottom-offset: 0.25rem;
   --session-composer-expanded-clearance: 13rem;
   --session-composer-compact-clearance: 4.75rem;
-  --session-chat-min: 48rem;
   --session-chat-max: 52rem;
   --font-display: "IBM Plex Sans Variable", "IBM Plex Sans", "Segoe UI", sans-serif;
   --font-body: "IBM Plex Sans Variable", "IBM Plex Sans", "Segoe UI", sans-serif;
@@ -689,7 +688,7 @@ select {
 }
 
 .session-page-chat {
-  width: clamp(var(--session-chat-min), 100%, var(--session-chat-max));
+  width: min(100%, var(--session-chat-max));
   margin-inline: auto;
 }
 
@@ -1576,7 +1575,7 @@ summary:focus-visible {
   line-height: 1.5;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 800px) {
   .settings-layout {
     grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
@@ -2730,7 +2729,7 @@ summary:focus-visible {
   color: var(--accent);
 }
 
-@media (max-width: 720px) {
+@media (max-width: 800px) {
   .mesh-overview-stats,
   .automation-overview-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2766,10 +2765,14 @@ summary:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .mesh-item-row,
   .mesh-item-row-stacked {
+    align-items: stretch;
+    flex-direction: column;
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .mesh-item-row > .mesh-item-actions,
   .mesh-item-row-stacked > .mesh-item-actions {
     justify-content: flex-start;
   }
@@ -6561,7 +6564,7 @@ summary:focus-visible {
   gap: 0.75rem;
 }
 
-@media (min-width: 860px) {
+@media (min-width: 720px) {
   .session-browser-toolbar {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
@@ -6799,6 +6802,22 @@ summary:focus-visible {
 
 .session-workspace-trigger[data-state='open'] .session-workspace-chevron {
   transform: rotate(180deg);
+}
+
+@media (max-width: 800px) {
+  .session-browser-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .session-workspace-updated,
+  .session-workspace-signal {
+    display: none;
+  }
+
+  .session-workspace-content {
+    padding-left: 1rem;
+  }
 }
 
 .session-workspace-content {
@@ -7145,6 +7164,25 @@ summary:focus-visible {
   }
 }
 
+@media (max-width: 800px) {
+  .agent-list-row-inner {
+    flex-wrap: nowrap;
+  }
+
+  .agent-list-row-inner > .compact-toolbar {
+    flex: 0 0 auto;
+  }
+
+  .agent-attention-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .agent-attention-row > .action-btn {
+    align-self: flex-end;
+  }
+}
+
 .agent-details-panel {
   display: flex;
   width: min(42rem, 100%);
@@ -7237,6 +7275,21 @@ summary:focus-visible {
 
 .agent-details-overview-stat + .agent-details-overview-stat {
   border-left: 1px solid var(--border);
+}
+
+@media (max-width: 800px) {
+  .agent-details-overview-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-details-overview-stat:nth-child(3) {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  .agent-details-overview-stat:nth-child(4) {
+    border-top: 1px solid var(--border);
+  }
 }
 
 .agent-details-overview-stat > span {
