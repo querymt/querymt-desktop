@@ -1,8 +1,10 @@
 <script lang="ts">
   import { Check, Copy, GitFork, LoaderCircle, Undo2 } from '@lucide/svelte';
+  import SessionPromptError from '$lib/components/session/SessionPromptError.svelte';
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
   import { buildTurnPresentation, type SessionAssistantContent, type SessionConversationTurn } from '$lib/domain/session-conversation';
+  import type { PromptFailure } from '$lib/domain/prompt-errors';
 
   let {
     turn,
@@ -11,6 +13,10 @@
     reverted = false,
     undoPending = false,
     forkPending = false,
+    promptFailure = null,
+    retryPending = false,
+    onRetryPrompt,
+    onDismissPromptFailure,
     onUndo,
     onFork,
     onDisclosureChange
@@ -21,6 +27,10 @@
     reverted?: boolean;
     undoPending?: boolean;
     forkPending?: boolean;
+    promptFailure?: PromptFailure | null;
+    retryPending?: boolean;
+    onRetryPrompt?: (() => void | Promise<void>) | null;
+    onDismissPromptFailure?: (() => void) | null;
     onUndo?: (messageId: string) => void;
     onFork?: () => void;
     onDisclosureChange?: (anchor: HTMLElement, expanded: boolean) => void;
@@ -89,6 +99,14 @@
   {/if}
 
   <div class="session-turn-content">
+    {#if promptFailure && onDismissPromptFailure}
+      <SessionPromptError
+        failure={promptFailure}
+        {retryPending}
+        onRetry={onRetryPrompt}
+        onDismiss={onDismissPromptFailure}
+      />
+    {/if}
     {#each presentation as item (item.id)}
       {#if item.type === 'work-group'}
         <SessionWorkGroup group={item} {onDisclosureChange} />

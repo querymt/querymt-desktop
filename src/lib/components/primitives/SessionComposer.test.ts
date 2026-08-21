@@ -18,6 +18,7 @@ const modelOptions = [
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   if (elementAnimateDescriptor) {
     Object.defineProperty(Element.prototype, 'animate', elementAnimateDescriptor);

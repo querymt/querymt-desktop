@@ -5,6 +5,7 @@
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { getForkTarget } from '$lib/domain/session-fork';
   import { canUndoToMessage, isTurnReverted } from '$lib/domain/session-undo';
+  import type { PromptFailure } from '$lib/domain/prompt-errors';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
 
   let {
@@ -12,6 +13,10 @@
     undoSupported = false,
     forkSupported = false,
     forkPending = false,
+    promptFailure = null,
+    promptRetryPending = false,
+    onRetryPrompt,
+    onDismissPromptFailure,
     onCancel,
     onUndo,
     onRedo,
@@ -22,6 +27,10 @@
     undoSupported?: boolean;
     forkSupported?: boolean;
     forkPending?: boolean;
+    promptFailure?: PromptFailure | null;
+    promptRetryPending?: boolean;
+    onRetryPrompt?: (() => void | Promise<void>) | null;
+    onDismissPromptFailure?: (() => void) | null;
     onCancel?: () => void | Promise<void>;
     onUndo?: (messageId: string) => void;
     onRedo?: () => void | Promise<void>;
@@ -53,6 +62,10 @@
         <SessionTurn
           {turn}
           {reverted}
+          promptFailure={turn.user?.eventIndex === promptFailure?.turnEventIndex ? promptFailure : null}
+          retryPending={promptRetryPending}
+          {onRetryPrompt}
+          {onDismissPromptFailure}
           forkAvailable={Boolean(forkSupported && !busy && !reverted && forkTarget)}
           {forkPending}
           onFork={() => forkTarget && onFork?.(forkTarget.messageId)}

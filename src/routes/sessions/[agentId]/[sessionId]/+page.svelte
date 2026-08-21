@@ -92,6 +92,7 @@
       lastTranscriptItem?.id ?? '',
       lastTranscriptItem?.text.length ?? 0,
       tools.map((tool) => `${tool.id}:${tool.status}:${tool.result?.length ?? 0}`).join(','),
+      agentsStore.promptFailure?.id ?? '',
       pendingIds
     ].join('|');
   });
@@ -459,6 +460,10 @@
       {undoSupported}
       {forkSupported}
       forkPending={agentsStore.forkPending}
+      promptFailure={agentsStore.promptFailure}
+      promptRetryPending={agentsStore.promptRetryPending}
+      onRetryPrompt={() => agentsStore.retryPromptFailure()}
+      onDismissPromptFailure={() => agentsStore.dismissPromptFailure()}
       onCancel={() => agentsStore.cancelActiveSession()}
       onUndo={openUndoDialog}
       onRedo={() => void agentsStore.redoActiveSession()}

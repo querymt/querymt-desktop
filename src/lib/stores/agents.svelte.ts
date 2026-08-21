@@ -10,6 +10,7 @@ import type {
 } from '@agentclientprotocol/sdk';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { tick } from 'svelte';
+import { normalizePromptError, type PromptFailure } from '$lib/domain/prompt-errors';
 import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
 import {
@@ -221,6 +222,8 @@ export class AgentsStore {
   promptFocusToken = $state(0);
   loading = $state(false);
   error = $state<string | null>(null);
+  promptFailure = $state<PromptFailure | null>(null);
+  promptRetryPending = $state(false);
   modelsByAgent = $state<Record<string, ModelEntry[]>>({});
   modelInfoByAgent = $state<Record<string, Record<string, ModelInfo | null>>>({});
   modelLoadingByAgent = $state<Record<string, boolean>>({});
@@ -377,6 +380,15 @@ export class AgentsStore {
     this.error = null;
   }
 
+  dismissPromptFailure() {
+    this.promptFailure = null;
+    this.activeSession.lastError = null;
+    if (this.activeSession.runState === 'failed') {
+      this.activeSession.runState = 'idle';
+      this.activeSession.activityLabel = null;
+    }
+  }
+
   setComposerProfile(profileId: string) {
     this.composerProfileId = profileId;
   }
@@ -393,13 +405,15 @@ export class AgentsStore {
     this.composerTargetId = targetId;
   }
 
-  addPromptAttachments(attachments: PromptAttachment[]) {
+    addPromptAttachments(attachments: PromptAttachment[]) {
     const existingIds = new Set(this.promptAttachments.map((attachment) => attachment.id));
     this.promptAttachments = [...this.promptAttachments, ...attachments.filter((attachment) => !existingIds.has(attachment.id))];
+    this.error = null;
   }
 
-  removePromptAttachment(attachmentId: string) {
+    removePromptAttachment(attachmentId: string) {
     this.promptAttachments = this.promptAttachments.filter((attachment) => attachment.id !== attachmentId);
+    this.error = null;
   }
 
   clearPromptAttachments() {
@@ -447,8 +461,9 @@ export class AgentsStore {
     return targets;
   }
 
-  async setComposerModel(modelId: string) {
+    async setComposerModel(modelId: string) {
     this.composerModelId = modelId;
+    this.promptFailure = null;
 
     if (this.activeAgentId && this.activeSessionId) {
       await this.applySelectedModelToSession(this.activeAgentId, this.activeSessionId, modelId);
@@ -1105,9 +1120,10 @@ export class AgentsStore {
     return sessionId;
   }
 
-  async sendPromptToActiveSession() {
+        async sendPromptToActiveSession(retryFailure: PromptFailure | null = null) {
     this.error = null;
-    const prompt = this.composerPrompt.trim();
+    this.promptFailure = null;
+    const prompt = (retryFailure?.prompt ?? this.composerPrompt).trim();
     if (!prompt) {
       this.error = 'Prompt text is required to send a session prompt.';
       return;
@@ -1119,11 +1135,11 @@ export class AgentsStore {
     }
 
     const record = this.ensureClientRecord(this.activeAgentId);
+    const attachments = (retryFailure?.attachments ?? this.promptAttachments).map((attachment) => ({ ...attachment }));
+    const sessionId = this.activeSessionId;
+    const turnEventIndex = retryFailure?.turnEventIndex ?? this.addOptimisticUserPrompt(sessionId, prompt);
 
     try {
-      const attachments = this.promptAttachments;
-      const sessionId = this.activeSessionId;
-      this.addOptimisticUserPrompt(sessionId, prompt);
       this.activeSession.undo.stack = [];
       this.activeSession.undo.lastRevertedFiles = [];
       this.activeSession.undo.lastMessage = null;
@@ -1131,8 +1147,10 @@ export class AgentsStore {
       this.activeSession.activityLabel = 'Waiting for the agent to respond…';
       beginSessionWork(this.activeSession);
       this.activeSession.lastError = null;
-      this.composerPrompt = '';
-      this.clearPromptAttachments();
+      if (!retryFailure) {
+        this.composerPrompt = '';
+        this.clearPromptAttachments();
+      }
       await this.connectAgent(this.activeAgentId);
       this.lastPromptResponse = await record.client.sendPrompt(sessionId, prompt, attachments);
       this.activeSession.lastStopReason = this.lastPromptResponse.stopReason ?? null;
@@ -1147,10 +1165,32 @@ export class AgentsStore {
       await this.refreshSessionsForAgent(this.activeAgentId);
     } catch (error) {
       endSessionWork(this.activeSession);
+      const normalizedError = normalizePromptError(error);
       this.activeSession.runState = 'failed';
-      this.activeSession.lastError = error instanceof Error ? error.message : 'Failed to send ACP prompt.';
-      this.activeSession.activityLabel = this.activeSession.lastError;
-      this.error = this.activeSession.lastError;
+      this.promptFailure = {
+        ...normalizedError,
+        id: `${sessionId}-prompt-failure-${turnEventIndex}`,
+        sessionId,
+        turnEventIndex,
+        prompt,
+        attachments
+      };
+      this.activeSession.lastError = normalizedError.message;
+      this.activeSession.activityLabel = normalizedError.title;
+    }
+  }
+
+    async retryPromptFailure() {
+    const failure = this.promptFailure;
+    if (!failure || !failure.retryable || failure.sessionId !== this.activeSessionId || this.promptRetryPending) {
+      return;
+    }
+
+    this.promptRetryPending = true;
+    try {
+      await this.sendPromptToActiveSession(failure);
+    } finally {
+      this.promptRetryPending = false;
     }
   }
 
@@ -2214,11 +2254,12 @@ export class AgentsStore {
     this.modelInfoByAgent = projected;
   }
 
-  private resetActiveSession(agentId: string, sessionId: string) {
+    private resetActiveSession(agentId: string, sessionId: string) {
     this.activeAgentId = agentId;
     this.activeSessionId = sessionId;
     this.activeSession = createEmptyActiveSession();
     this.activeSession.sessionId = sessionId;
+    this.promptFailure = null;
 
     const record = this.ensureClientRecord(agentId);
     record.recentSessionUpdateKeys = [];
@@ -2261,7 +2302,7 @@ export class AgentsStore {
     return this.activeAgentId === agentId && this.activeSessionId === sessionId;
   }
 
-  private addOptimisticUserPrompt(sessionId: string, prompt: string) {
+    private addOptimisticUserPrompt(sessionId: string, prompt: string): number {
     const eventIndex = getNextConversationEventIndex(this.activeSession);
     const id = `${sessionId}-optimistic-user-${eventIndex + 1}`;
     this.activeSession.transcript.push({
@@ -2277,6 +2318,7 @@ export class AgentsStore {
       text: prompt,
       messageId: id
     });
+    return eventIndex;
   }
 
   private removeMatchingOptimisticUserPrompt(notification: SessionNotification): number | undefined {

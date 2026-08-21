@@ -50,6 +50,7 @@ export type SessionConversationTurn = {
     messageId: string | null;
     html: string;
     text: string;
+    eventIndex?: number;
   };
   content: SessionConversationContent[];
   presentation?: SessionConversationPresentationItem[];
@@ -79,7 +80,8 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
           id: item.group.id,
           messageId: item.group.messageId,
           html: renderMarkdownToHtml(item.group.text),
-          text: item.group.text
+          text: item.group.text,
+          eventIndex: item.group.eventIndex
         },
         content: [],
         presentation: [],

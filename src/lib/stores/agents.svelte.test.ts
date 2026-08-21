@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { InitializeResponse, PromptResponse, SessionConfigOption, SessionNotification } from '@agentclientprotocol/sdk';
+import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionNotification } from '@agentclientprotocol/sdk';
 import type { ModelEntry } from '$lib/domain/types';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
 import { tick } from 'svelte';
@@ -649,6 +649,67 @@ describe('AgentsStore prompt session start', () => {
       expect(mockClient.sendPrompt).toHaveBeenCalledWith('session-1', 'Fix the failing tests', []);
     });
     resolvePrompt();
+  });
+
+  it('stores structured provider failures against the failed turn', async () => {
+    mockClient.sendPrompt.mockRejectedValueOnce(
+      new RequestError(-32010, 'Provider request failed', {
+        category: 'provider',
+        kind: 'quota_exceeded',
+        message: 'The usage limit has been reached',
+        provider: 'codex',
+        model: 'gpt-5.6-sol',
+        retryable: false
+      })
+    );
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+
+    await store.sendPromptToActiveSession();
+
+    expect(store.promptFailure).toEqual(
+      expect.objectContaining({
+        kind: 'quota_exceeded',
+        title: 'Usage limit reached',
+        message: 'The usage limit has been reached',
+        provider: 'codex',
+        model: 'gpt-5.6-sol',
+        retryable: false,
+        sessionId: 'session-1',
+        turnEventIndex: 0,
+        prompt: 'Fix the failing tests',
+        attachments: []
+      })
+    );
+    expect(store.error).toBe(null);
+    expect(store.activeSession.runState).toBe('failed');
+    expect(store.activeSession.activityLabel).toBe('Usage limit reached');
+  });
+
+  it('retries transient prompt failures with the original prompt', async () => {
+    mockClient.sendPrompt
+      .mockRejectedValueOnce(
+        new RequestError(-32010, 'Provider request failed', {
+          category: 'provider',
+          kind: 'rate_limited',
+          message: 'Try again shortly',
+          provider: 'codex',
+          model: 'gpt-5.6-sol',
+          retryable: true
+        })
+      )
+      .mockResolvedValueOnce({ stopReason: 'end_turn' });
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+
+    await store.sendPromptToActiveSession();
+    await store.retryPromptFailure();
+
+    expect(mockClient.sendPrompt).toHaveBeenNthCalledWith(2, 'session-1', 'Fix the failing tests', []);
+    expect(store.promptFailure).toBe(null);
+    expect(store.promptRetryPending).toBe(false);
   });
 
   it('applies supported launch mode and reasoning before sending the first prompt', async () => {

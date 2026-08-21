@@ -5037,6 +5037,68 @@ summary:focus-visible {
   gap: 0.65rem;
 }
 
+.session-prompt-error {
+  display: grid;
+  grid-template-columns: 1.7rem minmax(0, 1fr);
+  gap: 0.75rem;
+  width: min(42rem, 100%);
+  border: 1px solid var(--status-danger-border);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--status-danger-bg) 74%, var(--bg-card));
+  padding: 0.85rem 0.9rem;
+}
+
+.session-prompt-error-mark {
+  display: grid;
+  width: 1.7rem;
+  height: 1.7rem;
+  place-items: center;
+  border: 1px solid var(--status-danger-border);
+  border-radius: 999px;
+  color: var(--status-danger);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.session-prompt-error-body {
+  min-width: 0;
+}
+
+.session-prompt-error-heading {
+  margin-bottom: 0.35rem;
+}
+
+.session-prompt-error-heading strong {
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+.session-prompt-error-body > p {
+  color: var(--status-danger);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.session-prompt-error-body > .session-prompt-error-guidance {
+  margin-top: 0.25rem;
+  color: var(--text-dim);
+  font-size: 0.76rem;
+}
+
+.session-prompt-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+}
+
+.session-prompt-error-actions .action-btn {
+  height: 1.9rem;
+  padding-inline: 0.65rem;
+  font-size: 0.72rem;
+}
+
 .session-work-group {
   min-width: 0;
   padding-inline: 0.25rem;
