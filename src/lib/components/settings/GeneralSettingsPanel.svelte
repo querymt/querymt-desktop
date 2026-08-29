@@ -3,6 +3,7 @@
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import AppSwitch from '$lib/components/primitives/AppSwitch.svelte';
   import { isMacPlatform as detectMacPlatform } from '$lib/design/platform';
+  import type { ImageSendMode } from '$lib/domain/types';
   import { appearanceStore, type AppearanceThemeMode } from '$lib/stores/appearance.svelte';
   import { chatPreferencesStore, type SendShortcut } from '$lib/stores/chat-preferences.svelte';
   import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
@@ -14,6 +15,11 @@
     { value: 'system', label: 'System' },
     { value: 'light', label: 'Light' },
     { value: 'dark', label: 'Dark' }
+  ];
+
+  const imageModeOptions: Array<{ value: ImageSendMode; label: string }> = [
+    { value: 'image', label: 'Native image' },
+    { value: 'resource', label: 'Embedded resource' }
   ];
 
   const sendShortcutOptions = $derived.by(() => {
@@ -42,6 +48,10 @@
       chatPreferencesStore.setSendShortcut(value);
     }
   }
+
+  function handleImageModeChange(value: string) {
+    if (value === 'image' || value === 'resource') chatPreferencesStore.setImageSendMode(value);
+  }
 </script>
 
 <section class="settings-panel" aria-labelledby="general-settings-title">
@@ -65,6 +75,14 @@
         <p>Choose the shortcut that submits a message.</p>
       </div>
       <AppSelect value={chatPreferencesStore.sendShortcut} options={sendShortcutOptions} pill ariaLabel="Send messages with" onValueChange={handleSendShortcutChange} />
+    </div>
+
+    <div class="settings-simple-row">
+      <div class="settings-simple-main">
+        <h3>Image attachment encoding</h3>
+        <p>Send images as native ACP image blocks or embedded resources.</p>
+      </div>
+      <AppSelect value={chatPreferencesStore.imageSendMode} options={imageModeOptions} pill ariaLabel="Image attachment encoding" onValueChange={handleImageModeChange} />
     </div>
   </div>
 

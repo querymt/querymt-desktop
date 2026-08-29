@@ -3,6 +3,7 @@ import type {
   ActiveSessionViewModel,
   SessionEventItem,
   SessionPlanEntry,
+  SessionContentBlock,
   SessionToolCallItem,
   SessionTranscriptGroup,
   SessionTranscriptItem
@@ -67,7 +68,7 @@ export function applySessionNotification(
 ): ActiveSessionViewModel {
   const next: ActiveSessionViewModel = {
     sessionId: current.sessionId,
-    transcript: current.transcript.map((item) => ({ ...item })),
+    transcript: current.transcript.map((item) => ({ ...item, blocks: item.blocks?.map((block) => ({ ...block })) })),
     toolCalls: current.toolCalls.map((item) => ({ ...item })),
     plans: current.plans.map((item) => ({ ...item })),
     events: current.events.map((item) => ({ ...item })),
@@ -100,7 +101,9 @@ export function applySessionNotification(
         id: `${notification.sessionId}-${next.transcript.length + 1}`,
         kind: update.sessionUpdate,
         text: getTextContent(update.content),
+        blocks: normalizeContentBlocks([update.content]),
         messageId: update.messageId ?? null,
+        clientPromptId: readClientPromptId(update) ?? readClientPromptId(notification),
         eventIndex: conversationEventIndex
       });
       next.runState = 'thinking';
@@ -111,6 +114,7 @@ export function applySessionNotification(
         id: `${notification.sessionId}-${next.transcript.length + 1}`,
         kind: update.sessionUpdate,
         text: getTextContent(update.content),
+        blocks: normalizeContentBlocks([update.content]),
         messageId: update.messageId ?? null,
         eventIndex: conversationEventIndex
       });
@@ -123,6 +127,7 @@ export function applySessionNotification(
         id: `${notification.sessionId}-${next.transcript.length + 1}`,
         kind: update.sessionUpdate,
         text: getTextContent(update.content),
+        blocks: normalizeContentBlocks([update.content]),
         messageId: update.messageId ?? null,
         eventIndex: conversationEventIndex
       });
@@ -281,6 +286,7 @@ export function groupTranscriptItems(items: SessionTranscriptItem[]): SessionTra
 
     if (previous && previous.role === role && previous.messageId === item.messageId) {
       previous.text = `${previous.text}${item.text}`;
+      previous.blocks = [...(previous.blocks ?? []), ...getTranscriptBlocks(item)];
       previous.eventIds = [...previous.eventIds, item.id];
       continue;
     }
@@ -289,7 +295,9 @@ export function groupTranscriptItems(items: SessionTranscriptItem[]): SessionTra
         id: item.id,
         role,
         text: item.text,
+        blocks: getTranscriptBlocks(item),
         messageId: item.messageId,
+        clientPromptId: item.clientPromptId,
         eventIds: [item.id],
         eventIndex: item.eventIndex
       });
@@ -300,11 +308,108 @@ export function groupTranscriptItems(items: SessionTranscriptItem[]): SessionTra
 }
 
 function getTextContent(content: { type: string; text?: string }): string {
-  if (content.type === 'text' && typeof content.text === 'string') {
-    return content.text;
+  return content.type === 'text' && typeof content.text === 'string' ? content.text : '';
+}
+
+export function getTranscriptBlocks(item: Pick<SessionTranscriptItem, 'text' | 'blocks'>): SessionContentBlock[] {
+  return item.blocks?.length ? item.blocks : item.text ? [{ type: 'text', text: item.text }] : [];
+}
+
+export function normalizeContentBlocks(values: unknown): SessionContentBlock[] {
+  if (!Array.isArray(values)) return [];
+  return values.map(normalizeContentBlock).filter((block): block is SessionContentBlock => block !== null);
+}
+
+export function normalizeContentBlock(value: unknown): SessionContentBlock | null {
+  if (!value || typeof value !== 'object') return null;
+  const block = value as Record<string, unknown>;
+  if (block.type === 'text' && typeof block.text === 'string') return { type: 'text', text: block.text };
+
+  const meta = readAttachmentMeta(block._meta);
+  if (block.type === 'image') {
+    const mimeType = readString(block.mimeType) ?? readString(block.mime_type) ?? 'image/*';
+    const data = readStringAllowEmpty(block.data);
+    return {
+      type: 'image',
+      data,
+      mimeType,
+      uri: readString(block.uri),
+      ...meta,
+      unavailable: !data || !mimeType.startsWith('image/')
+    };
   }
 
-  return `[${content.type}]`;
+  if (block.type !== 'resource' || !block.resource || typeof block.resource !== 'object') return null;
+  const resource = block.resource as Record<string, unknown>;
+  const resourceMeta = { ...readAttachmentMeta(resource._meta), ...meta };
+  const uri = readString(resource.uri) ?? 'attachment:///unavailable/attachment';
+  const mimeType = readString(resource.mimeType) ?? readString(resource.mime_type);
+  const data = readStringAllowEmpty(resource.blob);
+  if (mimeType?.startsWith('image/')) {
+    return {
+      type: 'image',
+      data,
+      mimeType,
+      uri,
+      ...resourceMeta,
+      unavailable: !data
+    };
+  }
+  return {
+    type: 'resource',
+    uri,
+    mimeType,
+    data,
+    text: readString(resource.text),
+    ...resourceMeta,
+    unavailable: data === null && typeof resource.text !== 'string'
+  };
+}
+
+export function summarizeContentBlocks(blocks: SessionContentBlock[]): string {
+  const text = blocks.filter((block): block is Extract<SessionContentBlock, { type: 'text' }> => block.type === 'text')
+    .map((block) => block.text).join('');
+  if (text) return text;
+  if (blocks.length === 1 && blocks[0].type === 'image') return blocks[0].name ?? 'Image attachment';
+  if (blocks.length === 1 && blocks[0].type === 'resource') return blocks[0].name ?? 'File attachment';
+  return `${blocks.length} attachments`;
+}
+
+function readAttachmentMeta(value: unknown): { id?: string; name?: string; size?: number } {
+  if (!value || typeof value !== 'object') return {};
+  const root = value as Record<string, unknown>;
+  const querymt = root.querymt && typeof root.querymt === 'object' ? root.querymt as Record<string, unknown> : root;
+  return {
+    id: readString(querymt.attachment_id) ?? readString(querymt.attachmentId),
+    name: readString(querymt.filename) ?? readString(querymt.name),
+    size: typeof querymt.size === 'number' && Number.isFinite(querymt.size) ? querymt.size : undefined
+  };
+}
+
+export function readClientPromptId(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const root = value as Record<string, unknown>;
+  const direct = readString(root.client_prompt_id)
+    ?? readString(root.clientPromptId)
+    ?? readString(root['querymt.client_prompt_id']);
+  if (direct) return direct;
+
+  for (const key of ['_meta', 'metadata', 'querymt', 'content'] as const) {
+    const nested = root[key];
+    if (nested && typeof nested === 'object' && nested !== value) {
+      const clientPromptId = readClientPromptId(nested);
+      if (clientPromptId) return clientPromptId;
+    }
+  }
+  return null;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function readStringAllowEmpty(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
 }
 
 function readMessageId(value: unknown): string | null {
@@ -388,7 +493,7 @@ function summarizeUpdate(notification: SessionNotification): string {
     case 'user_message_chunk':
     case 'agent_message_chunk':
     case 'agent_thought_chunk':
-      return getTextContent(update.content);
+      return summarizeContentBlocks(normalizeContentBlocks([update.content]));
     case 'tool_call':
       return `${update.title} (${update.status ?? 'pending'})`;
     case 'tool_call_update':

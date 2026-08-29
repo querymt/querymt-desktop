@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ChatPreferencesStore } from './chat-preferences.svelte';
 
 const storageKey = 'querymt.sendShortcut';
+const imageModeStorageKey = 'querymt.imageAttachmentMode';
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -14,6 +15,7 @@ describe('ChatPreferencesStore', () => {
     store.initialize();
 
     expect(store.sendShortcut).toBe('enter');
+    expect(store.imageSendMode).toBe('image');
   });
 
   it('restores a saved send shortcut', () => {
@@ -32,6 +34,16 @@ describe('ChatPreferencesStore', () => {
     store.initialize();
 
     expect(store.sendShortcut).toBe('enter');
+  });
+
+  it('restores and persists image attachment encoding', () => {
+    window.localStorage.setItem(imageModeStorageKey, 'resource');
+    const store = new ChatPreferencesStore();
+    store.initialize();
+    expect(store.imageSendMode).toBe('resource');
+
+    store.setImageSendMode('image');
+    expect(window.localStorage.getItem(imageModeStorageKey)).toBe('image');
   });
 
   it('persists shortcut changes', () => {

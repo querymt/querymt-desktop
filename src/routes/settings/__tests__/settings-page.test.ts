@@ -6,9 +6,11 @@ import SettingsPage from '../+page.svelte';
 
 const chatPreferencesStore = vi.hoisted(() => ({
   sendShortcut: 'enter',
+  imageSendMode: 'image',
   initialized: true,
   initialize: vi.fn(),
-  setSendShortcut: vi.fn()
+  setSendShortcut: vi.fn(),
+  setImageSendMode: vi.fn()
 }));
 
 const agentsStore = vi.hoisted(() => ({
@@ -211,6 +213,20 @@ describe('Settings controls', () => {
     await fireEvent.pointerUp(shiftEnterOption, { button: 0, pointerType: 'mouse' });
 
     expect(chatPreferencesStore.setSendShortcut).toHaveBeenCalledWith('shift-enter');
+  });
+
+  it('updates the default image attachment encoding', async () => {
+    render(SettingsPage);
+
+    const encodingSelect = screen.getByRole('button', { name: 'Image attachment encoding' });
+    expect(encodingSelect).toHaveTextContent('Native image');
+
+    await fireEvent.pointerDown(encodingSelect, { button: 0, pointerType: 'mouse' });
+    const resourceOption = await screen.findByRole('option', { name: 'Embedded resource' });
+    await fireEvent.pointerDown(resourceOption, { button: 0, pointerType: 'mouse' });
+    await fireEvent.pointerUp(resourceOption, { button: 0, pointerType: 'mouse' });
+
+    expect(chatPreferencesStore.setImageSendMode).toHaveBeenCalledWith('resource');
   });
 
   it('offers Cmd+Enter on macOS', async () => {

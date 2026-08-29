@@ -52,6 +52,75 @@ describe('conversation event ordering', () => {
   });
 });
 
+describe('structured content updates', () => {
+  it('normalizes native images without placeholder text or base64 summaries', () => {
+    const next = applySessionNotification(
+      createEmptyActiveSession(),
+      notification({
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'image', data: 'aW1n', mimeType: 'image/png' },
+        messageId: 'u1'
+      })
+    );
+    expect(next.transcript[0]).toMatchObject({ text: '', blocks: [{ type: 'image', data: 'aW1n', mimeType: 'image/png' }] });
+    expect(next.events[0].text).toBe('Image attachment');
+    expect(next.events[0].text).not.toContain('aW1n');
+  });
+
+  it('extracts client correlation metadata from update, content, and notification shapes', () => {
+    const shapes = [
+      notification({
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'update meta' },
+        messageId: 'u1',
+        _meta: { querymt: { client_prompt_id: 'client-update' } }
+      } as SessionNotification['update']),
+      notification({
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'content meta', _meta: { querymt: { client_prompt_id: 'client-content' } } },
+        messageId: 'u2'
+      } as SessionNotification['update']),
+      {
+        ...notification({
+          sessionUpdate: 'user_message_chunk',
+          content: { type: 'text', text: 'notification metadata' },
+          messageId: 'u3'
+        }),
+        metadata: { querymt: { clientPromptId: 'client-notification' } }
+      } as SessionNotification
+    ];
+
+    let session = createEmptyActiveSession();
+    for (const shape of shapes) session = applySessionNotification(session, shape);
+    expect(session.transcript.map((item) => item.clientPromptId)).toEqual([
+      'client-update',
+      'client-content',
+      'client-notification'
+    ]);
+  });
+
+  it('normalizes resource images and preserves generic files', () => {
+    let session = applySessionNotification(
+      createEmptyActiveSession(),
+      notification({
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'resource', resource: { uri: 'attachment:///1/pic.png', blob: 'aW1n', mimeType: 'image/png' } },
+        messageId: 'u1'
+      })
+    );
+    session = applySessionNotification(
+      session,
+      notification({
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'resource', resource: { uri: 'attachment:///2/notes.txt', blob: 'dGV4dA==', mimeType: 'text/plain' } },
+        messageId: 'u1'
+      })
+    );
+    expect(session.transcript.map((item) => item.blocks?.[0]?.type)).toEqual(['image', 'resource']);
+    expect(session.transcript[1].blocks?.[0]).toMatchObject({ type: 'resource', mimeType: 'text/plain', data: 'dGV4dA==' });
+  });
+});
+
 describe('session usage updates', () => {
   it('stores live context-window and USD cost updates', () => {
     const next = applySessionNotification(

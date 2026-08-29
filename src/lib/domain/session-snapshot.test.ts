@@ -54,6 +54,166 @@ describe('getSnapshotProviderChange', () => {
 });
 
 describe('activeSessionFromLoadResponse', () => {
+  it('prefers structured v1 user prompts and restores native/resource attachments', () => {
+    const session = activeSessionFromLoadResponse('session-structured', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          user_prompt_records: [
+            {
+              message_id: 'u1',
+              event_index: 1,
+              content_blocks: [
+                { type: 'image', data: 'aW1n', mimeType: 'image/png', _meta: { querymt: { filename: 'first.png' } } },
+                { type: 'text', text: 'Review these' },
+                { type: 'resource', resource: { uri: 'attachment:///f/notes.txt', blob: 'dGV4dA==', mimeType: 'text/plain' }, _meta: { querymt: { filename: 'notes.txt', size: 4 } } }
+              ]
+            }
+          ],
+          audit: { events: [{ seq: 1, kind: { type: 'prompt_received', data: { message_id: 'u1', content: 'lossy fallback' } } }] }
+        }
+      }
+    });
+
+    expect(session.transcript).toHaveLength(1);
+    expect(session.transcript[0]).toMatchObject({ messageId: 'u1', text: 'Review these', eventIndex: 1 });
+    expect(session.transcript[0].blocks?.map((block) => block.type)).toEqual(['image', 'text', 'resource']);
+    expect(session.transcript[0].blocks?.[0]).toMatchObject({ type: 'image', name: 'first.png', data: 'aW1n' });
+    expect(session.transcript[0].blocks?.[2]).toMatchObject({ type: 'resource', name: 'notes.txt', size: 4 });
+  });
+
+  it('restores actual backend-shaped prompts at matching audit sequences without using messageOrder as event order', () => {
+    const session = activeSessionFromLoadResponse('session-backend-wire', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          userPrompts: [
+            {
+              messageId: 'user-2',
+              messageOrder: 2,
+              timestamp: 1710000020,
+              blocks: [
+                { type: 'image', data: 'c2Vjb25k', mimeType: 'image/jpeg', _meta: { querymt: { filename: 'second.jpg' } } }
+              ]
+            },
+            {
+              messageId: 'user-1',
+              messageOrder: 1,
+              timestamp: 1710000000,
+              blocks: [
+                { type: 'text', text: 'first' },
+                { type: 'image', data: 'Zmlyc3Q=', mimeType: 'image/png', _meta: { querymt: { filename: 'first.png' } } }
+              ]
+            }
+          ],
+          audit: {
+            events: [
+              { seq: 10, kind: { type: 'prompt_received', data: { message_id: 'user-1', content: 'lossy first' } } },
+              {
+                seq: 11,
+                kind: {
+                  type: 'tool_call_start',
+                  data: { tool_call_id: 'tool-1', tool_name: 'inspect', assistant_message_id: 'assistant-1', arguments: '{}' }
+                }
+              },
+              {
+                seq: 12,
+                kind: {
+                  type: 'tool_call_end',
+                  data: { tool_call_id: 'tool-1', tool_name: 'inspect', assistant_message_id: 'assistant-1', result: 'done' }
+                }
+              },
+              { seq: 13, kind: { type: 'assistant_message_stored', data: { message_id: 'assistant-1', content: 'first answer' } } },
+              { seq: 20, kind: { type: 'prompt_received', data: { message_id: 'user-2', content: 'lossy second' } } },
+              { seq: 21, kind: { type: 'assistant_message_stored', data: { message_id: 'assistant-2', content: 'second answer' } } }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(session.transcript.map((item) => [item.messageId, item.eventIndex])).toEqual([
+      ['user-1', 10],
+      ['assistant-1', 13],
+      ['user-2', 20],
+      ['assistant-2', 21]
+    ]);
+    expect(session.transcript.find((item) => item.messageId === 'user-1')?.blocks).toEqual([
+      { type: 'text', text: 'first' },
+      expect.objectContaining({ type: 'image', data: 'Zmlyc3Q=', mimeType: 'image/png', name: 'first.png' })
+    ]);
+    expect(session.transcript.find((item) => item.messageId === 'user-2')?.blocks).toEqual([
+      expect.objectContaining({ type: 'image', data: 'c2Vjb25k', mimeType: 'image/jpeg', name: 'second.jpg' })
+    ]);
+
+    const turns = buildSessionConversation(session);
+    expect(turns.map((turn) => turn.user?.messageId)).toEqual(['user-1', 'user-2']);
+    expect(turns[0].content.map((item) => item.id)).toEqual(['tool-1', 'snapshot-13']);
+    expect(turns[1].content.map((item) => item.id)).toEqual(['snapshot-21']);
+    expect(turns[1].user).toMatchObject({ text: '', eventIndex: 20 });
+    expect(turns[1].user?.blocks?.[0]).toMatchObject({ type: 'image', name: 'second.jpg' });
+  });
+
+  it('materializes a structured prompt only once when duplicate prompt_received events are present', () => {
+    const session = activeSessionFromLoadResponse('session-duplicate-prompt-event', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          userPrompts: [
+            { messageId: 'user-1', messageOrder: 1, timestamp: 1710000000, blocks: [{ type: 'text', text: 'once' }] }
+          ],
+          audit: {
+            events: [
+              { seq: 4, kind: { type: 'prompt_received', data: { message_id: 'user-1', content: 'lossy' } } },
+              { seq: 5, kind: { type: 'prompt_received', data: { message_id: 'user-1', content: 'duplicate' } } }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(session.transcript).toEqual([
+      expect.objectContaining({ messageId: 'user-1', text: 'once', eventIndex: 4 })
+    ]);
+  });
+
+  it('appends unmatched structured prompts in deterministic history order without journal indexes', () => {
+    const session = activeSessionFromLoadResponse('session-unmatched', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          userPrompts: [
+            { messageId: 'later', messageOrder: 9, timestamp: 200, blocks: [{ type: 'text', text: 'later' }] },
+            { messageId: 'earlier', messageOrder: 4, timestamp: 100, blocks: [{ type: 'text', text: 'earlier' }] }
+          ]
+        }
+      }
+    });
+
+    expect(session.transcript.map((item) => ({ messageId: item.messageId, eventIndex: item.eventIndex }))).toEqual([
+      { messageId: 'earlier', eventIndex: undefined },
+      { messageId: 'later', eventIndex: undefined }
+    ]);
+  });
+
+  it('degrades malformed historical images to an unavailable preview', () => {
+    const session = activeSessionFromLoadResponse('session-malformed', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          userPrompts: [{ messageId: 'u1', content: [{ type: 'image', data: 42, mimeType: 'image/png' }] }]
+        }
+      }
+    });
+    expect(session.transcript[0].blocks?.[0]).toMatchObject({ type: 'image', data: null, unavailable: true });
+  });
+
+  it('reads legacy resource content arrays from prompt audit events', () => {
+    const session = activeSessionFromLoadResponse('legacy-resource', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: { events: [{ seq: 1, kind: { type: 'prompt_received', data: { message_id: 'u1', content: [{ type: 'resource', resource: { uri: 'attachment:///old/image.png', blob: 'b2xk', mimeType: 'image/png' } }] } } }] }
+        }
+      }
+    });
+    expect(session.transcript[0].blocks?.[0]).toMatchObject({ type: 'image', data: 'b2xk', mimeType: 'image/png' });
+  });
+
   it('restores context, cumulative cost, and completed active work from QueryMT snapshots', () => {
     const session = activeSessionFromLoadResponse('session-usage', {
       _meta: {

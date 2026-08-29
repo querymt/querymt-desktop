@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionNotification } from '@agentclientprotocol/sdk';
-import type { ModelEntry } from '$lib/domain/types';
+import type { ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
 import { tick } from 'svelte';
 import { AgentsStore } from './agents.svelte';
@@ -34,7 +34,12 @@ const mockClient = vi.hoisted(() => {
       response: { configOptions: [] },
       replay: []
     })),
-    sendPrompt: vi.fn(async (): Promise<PromptResponse> => ({ stopReason: 'end_turn' })),
+    sendPrompt: vi.fn(async (
+      _sessionId: string,
+      _prompt: string,
+      _attachments: PromptAttachment[] = [],
+      _options: PromptSendOptions = {}
+    ): Promise<PromptResponse> => ({ stopReason: 'end_turn' })),
     cancelSession: vi.fn(async () => undefined),
     supportsQuerymtMethod: vi.fn(() => true),
     getUndoStack: vi.fn(async (): Promise<{ undo_stack: Array<{ message_id: string }> }> => ({ undo_stack: [] })),
@@ -46,6 +51,8 @@ const mockClient = vi.hoisted(() => {
     })),
     redoSession: vi.fn(async () => ({ success: true, restored: true, undo_stack: [] })),
     forkSession: vi.fn(async () => ({ sessionId: 'fork-session' })),
+    supportsImagePrompts: vi.fn(() => true),
+    supportsEmbeddedContext: vi.fn(() => true),
     getInitializeResponse: vi.fn(() => ({
       protocolVersion: 1,
       agentCapabilities: {},
@@ -742,9 +749,70 @@ describe('AgentsStore prompt session start', () => {
     ]);
 
     await vi.waitFor(() => {
-      expect(mockClient.sendPrompt).toHaveBeenCalledWith('session-1', 'Fix the failing tests', []);
+      expect(mockClient.sendPrompt).toHaveBeenCalledWith(
+        'session-1',
+        'Fix the failing tests',
+        [],
+        expect.objectContaining({ imageMode: 'image', clientPromptId: expect.any(String) })
+      );
     });
     resolvePrompt();
+  });
+
+  it('sends attachment-only prompts and keeps structured optimistic blocks', async () => {
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = '';
+    store.promptAttachments = [
+      { id: 'image-1', name: 'photo.png', mimeType: 'image/png', size: 3, data: 'aW1n' },
+      { id: 'file-1', name: 'notes.txt', mimeType: 'text/plain', size: 4, data: 'dGV4dA==' }
+    ];
+
+    await store.sendPromptToActiveSession();
+
+    expect(mockClient.sendPrompt).toHaveBeenCalledWith(
+      'session-1',
+      '',
+      expect.arrayContaining([expect.objectContaining({ id: 'image-1' }), expect.objectContaining({ id: 'file-1' })]),
+      expect.objectContaining({ imageMode: 'image', clientPromptId: expect.any(String) })
+    );
+    expect(store.activeSession.transcript[0].blocks?.map((block) => block.type)).toEqual(['image', 'resource']);
+    expect(store.promptAttachments).toEqual([]);
+  });
+
+  it('preserves the draft when native image capability preflight fails', async () => {
+    mockClient.supportsImagePrompts.mockReturnValueOnce(false);
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Review';
+    store.promptAttachments = [{ id: 'image-1', name: 'photo.png', mimeType: 'image/png', size: 3, data: 'aW1n' }];
+
+    await store.sendPromptToActiveSession();
+
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    expect(store.composerPrompt).toBe('Review');
+    expect(store.promptAttachments).toHaveLength(1);
+    expect(store.activeSession.transcript).toEqual([]);
+    expect(store.error).toContain('does not support native image prompts');
+  });
+
+  it('preserves the draft when embedded resource capability preflight fails', async () => {
+    mockClient.supportsEmbeddedContext.mockReturnValueOnce(false);
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Review';
+    store.promptAttachments = [{ id: 'file-1', name: 'notes.pdf', mimeType: 'application/pdf', size: 4, data: 'cGRm' }];
+
+    await store.sendPromptToActiveSession();
+
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    expect(store.composerPrompt).toBe('Review');
+    expect(store.promptAttachments).toHaveLength(1);
+    expect(store.activeSession.transcript).toEqual([]);
+    expect(store.error).toContain('does not support embedded resources');
   });
 
   it('stores structured provider failures against the failed turn', async () => {
@@ -803,7 +871,13 @@ describe('AgentsStore prompt session start', () => {
     await store.sendPromptToActiveSession();
     await store.retryPromptFailure();
 
-    expect(mockClient.sendPrompt).toHaveBeenNthCalledWith(2, 'session-1', 'Fix the failing tests', []);
+    expect(mockClient.sendPrompt).toHaveBeenNthCalledWith(
+      2,
+      'session-1',
+      'Fix the failing tests',
+      [],
+      expect.objectContaining({ imageMode: 'image', clientPromptId: expect.any(String) })
+    );
     expect(store.promptFailure).toBe(null);
     expect(store.promptRetryPending).toBe(false);
   });
@@ -939,7 +1013,12 @@ describe('AgentsStore prompt session start', () => {
 
     void store.sendPromptToActiveSession();
     await vi.waitFor(() => {
-      expect(mockClient.sendPrompt).toHaveBeenCalledWith('session-1', 'Fix the failing tests', []);
+      expect(mockClient.sendPrompt).toHaveBeenCalledWith(
+        'session-1',
+        'Fix the failing tests',
+        [],
+        expect.objectContaining({ imageMode: 'image', clientPromptId: expect.any(String) })
+      );
     });
 
     mockClient.emitSessionUpdate({
@@ -952,20 +1031,173 @@ describe('AgentsStore prompt session start', () => {
         content: []
       }
     });
+    const clientPromptId = mockClient.sendPrompt.mock.calls[0]?.[3]?.clientPromptId as string;
     mockClient.emitSessionUpdate({
       sessionId: 'session-1',
       update: {
         sessionUpdate: 'user_message_chunk',
         content: { type: 'text', text: 'Fix the failing tests' },
-        messageId: 'real-user'
+        messageId: 'real-user',
+        _meta: { querymt: { client_prompt_id: clientPromptId } }
       }
-    });
+    } as SessionNotification);
 
     expect(store.activeSession.transcript.find((item) => item.messageId === 'real-user')).toMatchObject({ eventIndex: 19 });
     expect(store.activeSession.toolCalls[0]).toMatchObject({ id: 'question-1', eventIndex: 20 });
     expect(store.activeSession.transcript.filter((item) => item.text === 'Fix the failing tests')).toHaveLength(1);
 
     resolvePrompt();
+  });
+
+  it('replaces optimistic slash text and rebuilds ordered authoritative blocks by client prompt ID', async () => {
+    let resolvePrompt!: () => void;
+    mockClient.sendPrompt.mockImplementationOnce(
+      () => new Promise<PromptResponse>((resolve) => {
+        resolvePrompt = () => resolve({ stopReason: 'end_turn' });
+      })
+    );
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.composerPrompt = '/review';
+    store.promptAttachments = [
+      { id: 'image-1', name: 'photo.png', mimeType: 'image/png', size: 3, data: 'aW1n' },
+      { id: 'file-1', name: 'notes.pdf', mimeType: 'application/pdf', size: 4, data: 'cGRm' }
+    ];
+
+    void store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalled());
+    const clientPromptId = mockClient.sendPrompt.mock.calls[0]?.[3]?.clientPromptId as string;
+    expect(store.activeSession.transcript[0].blocks?.map((block) => block.type)).toEqual(['text', 'image', 'resource']);
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'Review the current changes' },
+        messageId: 'canonical-user-1',
+        _meta: { querymt: { client_prompt_id: clientPromptId } }
+      }
+    } as SessionNotification);
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: {
+          type: 'image',
+          data: 'aW1n',
+          mimeType: 'image/png',
+          _meta: { querymt: { client_prompt_id: clientPromptId, filename: 'photo.png' } }
+        },
+        messageId: 'canonical-user-1'
+      }
+    } as SessionNotification);
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      metadata: { querymt: { clientPromptId } },
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: {
+          type: 'resource',
+          resource: { uri: 'attachment:///file-1/notes.pdf', blob: 'cGRm', mimeType: 'application/pdf' },
+          _meta: { querymt: { filename: 'notes.pdf' } }
+        },
+        messageId: 'canonical-user-1'
+      }
+    } as SessionNotification);
+
+    expect(store.activeSession.transcript).toHaveLength(3);
+    expect(store.activeSession.transcript.map((item) => item.messageId)).toEqual([
+      'canonical-user-1',
+      'canonical-user-1',
+      'canonical-user-1'
+    ]);
+    expect(store.activeSession.transcript.map((item) => item.eventIndex)).toEqual([0, 0, 0]);
+    expect(store.activeSession.transcript.flatMap((item) => item.blocks ?? []).map((block) => block.type)).toEqual([
+      'text',
+      'image',
+      'resource'
+    ]);
+    expect(store.activeSession.transcript[0].text).toBe('Review the current changes');
+    expect(store.activeSession.transcript.some((item) => item.text === '/review')).toBe(false);
+    expect(store.activeSession.transcript.flatMap((item) => item.blocks ?? []).filter((block) => block.type === 'image')).toHaveLength(1);
+    resolvePrompt();
+  });
+
+  it('uses correlation IDs to keep identical in-flight prompts associated with their reserved positions', async () => {
+    const promptResolvers: Array<() => void> = [];
+    mockClient.sendPrompt.mockImplementation(
+      () => new Promise<PromptResponse>((resolve) => {
+        promptResolvers.push(() => resolve({ stopReason: 'end_turn' }));
+      })
+    );
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.composerPrompt = 'same prompt';
+
+    void store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledTimes(1));
+    const firstClientId = mockClient.sendPrompt.mock.calls[0]?.[3]?.clientPromptId as string;
+    store.composerPrompt = 'same prompt';
+    void store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledTimes(2));
+    const secondClientId = mockClient.sendPrompt.mock.calls[1]?.[3]?.clientPromptId as string;
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'same prompt' },
+        messageId: 'canonical-second',
+        _meta: { querymt: { client_prompt_id: secondClientId } }
+      }
+    } as SessionNotification);
+    expect(store.activeSession.transcript.find((item) => item.messageId === 'canonical-second')).toMatchObject({ eventIndex: 1 });
+    expect(store.activeSession.transcript.find((item) => item.clientPromptId === firstClientId)?.id).toContain('-optimistic-user-');
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'same prompt' },
+        messageId: 'canonical-first',
+        _meta: { querymt: { client_prompt_id: firstClientId } }
+      }
+    } as SessionNotification);
+
+    expect(store.activeSession.transcript.filter((item) => item.id.includes('-optimistic-user-'))).toHaveLength(0);
+    expect(store.activeSession.transcript.find((item) => item.messageId === 'canonical-first')).toMatchObject({ eventIndex: 0 });
+    expect(store.activeSession.transcript.find((item) => item.messageId === 'canonical-second')).toMatchObject({ eventIndex: 1 });
+    promptResolvers.forEach((resolve) => resolve());
+  });
+
+  it('does not content-match identical optimistic prompts when correlation metadata is absent', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.transcript = [
+      { id: 'session-1-optimistic-user-1', kind: 'user_message_chunk', text: 'same', blocks: [{ type: 'text', text: 'same' }], messageId: 'session-1-optimistic-user-1', clientPromptId: 'client-1', eventIndex: 0 },
+      { id: 'session-1-optimistic-user-2', kind: 'user_message_chunk', text: 'same', blocks: [{ type: 'text', text: 'same' }], messageId: 'session-1-optimistic-user-2', clientPromptId: 'client-2', eventIndex: 1 }
+    ];
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'same' },
+        messageId: 'uncorrelated-server-message'
+      }
+    });
+
+    expect(store.activeSession.transcript.filter((item) => item.id.includes('-optimistic-user-'))).toHaveLength(2);
+    expect(store.activeSession.transcript.find((item) => item.messageId === 'uncorrelated-server-message')).toMatchObject({ eventIndex: 2 });
   });
 
   it('marks a streaming prompt completed when the prompt response returns a stop reason', async () => {
@@ -981,7 +1213,12 @@ describe('AgentsStore prompt session start', () => {
     void store.startSessionWithPrompt('agent-1');
 
     await vi.waitFor(() => {
-      expect(mockClient.sendPrompt).toHaveBeenCalledWith('session-1', 'Fix the failing tests', []);
+      expect(mockClient.sendPrompt).toHaveBeenCalledWith(
+        'session-1',
+        'Fix the failing tests',
+        [],
+        expect.objectContaining({ imageMode: 'image', clientPromptId: expect.any(String) })
+      );
     });
     mockClient.emitSessionUpdate({
       sessionId: 'session-1',

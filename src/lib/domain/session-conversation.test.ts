@@ -192,6 +192,29 @@ describe('buildSessionConversation', () => {
     expect(turns[1].presentation?.[0]).toMatchObject({ type: 'work-group', settled: false });
   });
 
+  it('keeps image-only and generic-file turns with ordered structured blocks', () => {
+    const session = baseSession();
+    session.transcript = [
+      {
+        id: 'u1',
+        kind: 'user_message_chunk',
+        text: '',
+        blocks: [
+          { type: 'image', data: 'aW1n', mimeType: 'image/png', name: 'photo.png' },
+          { type: 'resource', uri: 'attachment:///f/notes.txt', data: 'dGV4dA==', mimeType: 'text/plain', name: 'notes.txt' }
+        ],
+        messageId: 'm-user',
+        eventIndex: 0
+      }
+    ];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0].user).toMatchObject({ text: '', messageId: 'm-user' });
+    expect(turns[0].user?.blocks?.map((block) => block.type)).toEqual(['image', 'resource']);
+  });
+
   it('starts a new turn for each user prompt without requiring assistant text', () => {
     const session = baseSession();
     session.transcript = [

@@ -106,12 +106,55 @@ export interface ModelEntry {
   quant?: string | null;
 }
 
+export type ImageSendMode = 'image' | 'resource';
+
 export interface PromptAttachment {
   id: string;
   name: string;
   mimeType: string;
   size: number;
   data: string;
+}
+
+export interface SessionTextBlock {
+  type: 'text';
+  text: string;
+}
+
+export interface SessionImageBlock {
+  type: 'image';
+  data: string | null;
+  mimeType: string;
+  id?: string;
+  name?: string;
+  size?: number;
+  uri?: string;
+  unavailable?: boolean;
+}
+
+export interface SessionImageGalleryItem {
+  key: string;
+  name: string;
+  block: SessionImageBlock;
+}
+
+export interface SessionResourceBlock {
+  type: 'resource';
+  uri: string;
+  mimeType?: string;
+  data?: string | null;
+  text?: string;
+  id?: string;
+  name?: string;
+  size?: number;
+  unavailable?: boolean;
+}
+
+export type SessionContentBlock = SessionTextBlock | SessionImageBlock | SessionResourceBlock;
+
+export interface PromptSendOptions {
+  imageMode?: ImageSendMode;
+  clientPromptId?: string;
 }
 
 export interface ComposerOption {
@@ -158,7 +201,9 @@ export interface SessionTranscriptItem {
   id: string;
   kind: 'user_message_chunk' | 'agent_message_chunk' | 'agent_thought_chunk';
   text: string;
+  blocks?: SessionContentBlock[];
   messageId: string | null;
+  clientPromptId?: string | null;
   eventIndex?: number;
 }
 
@@ -166,7 +211,9 @@ export interface SessionTranscriptGroup {
   id: string;
   role: 'user' | 'assistant' | 'thought';
   text: string;
+  blocks?: SessionContentBlock[];
   messageId: string | null;
+  clientPromptId?: string | null;
   eventIds: string[];
   eventIndex?: number;
 }
