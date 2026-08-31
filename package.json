@@ -9,6 +9,9 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:ui": "vitest run",
+    "test:session-load": "vitest run src/lib/perf/*.test.ts",
+    "bench:session-load": "vitest bench src/lib/perf/*.bench.ts --run",
+    "bench:session-load:ci": "vitest bench src/lib/perf/*.bench.ts --run --outputJson=.session-load-benchmark.json && node scripts/check-session-load-benchmark.mjs",
     "tauri": "tauri"
   },
   "devDependencies": {

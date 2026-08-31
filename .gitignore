@@ -38,4 +38,5 @@ src-tauri/acl-manifests.json
 # Misc caches
 .direnv/
 coverage/
+.session-load-benchmark.json
 result
