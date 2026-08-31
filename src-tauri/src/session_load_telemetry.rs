@@ -60,6 +60,7 @@ impl SessionLoadTelemetry {
             session.load.operation_id = %operation_id,
             session.load.status = tracing::field::Empty,
             session.load.elapsed_ms = tracing::field::Empty,
+            session.load.applied_notification_count = tracing::field::Empty,
         );
         let now = Instant::now();
         self.operations

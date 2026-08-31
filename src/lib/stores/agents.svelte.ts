@@ -1322,6 +1322,14 @@ export class AgentsStore {
       }
       const replaySession = reduceSessionReplay(sessionId, replay);
       this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
+      const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
+      checkpoint('frontend.snapshot_transform');
+      const hasReplayHistory =
+        replaySession.transcript.length > 0 || replaySession.toolCalls.length > 0 || replaySession.events.length > 0;
+      const hasSnapshotHistory =
+        snapshotSession.transcript.length > 0 || snapshotSession.toolCalls.length > 0 || snapshotSession.events.length > 0;
+      this.activeSession = hasReplayHistory ? replaySession : hasSnapshotHistory ? snapshotSession : replaySession;
+      this.activeLoadMeasurement?.increment('historyAssignments');
       const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
       checkpoint('frontend.queued_replay');
       if (!this.isSelectedSession(agentId, sessionId)) {
@@ -1336,15 +1344,6 @@ export class AgentsStore {
         drainedCount,
         totalEvents: this.activeSession.events.length
       });
-
-      const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
-      checkpoint('frontend.snapshot_transform');
-      const hasReplayHistory =
-        replaySession.transcript.length > 0 || replaySession.toolCalls.length > 0 || replaySession.events.length > 0;
-      const hasSnapshotHistory =
-        snapshotSession.transcript.length > 0 || snapshotSession.toolCalls.length > 0 || snapshotSession.events.length > 0;
-      this.activeSession = hasReplayHistory ? replaySession : hasSnapshotHistory ? snapshotSession : replaySession;
-      this.activeLoadMeasurement?.increment('historyAssignments');
 
       this.activeSession.configOptions = loadedSession.configOptions ?? [];
       this.composerProfileId = getCurrentProfileId(this.activeSession.configOptions) ?? this.composerProfileId;
@@ -1408,6 +1407,7 @@ export class AgentsStore {
       if (heartbeat) clearInterval(heartbeat);
       await telemetryQueue;
       await finishSessionLoadTelemetry(telemetryOperationId, telemetryStatus, telemetryCounters());
+      measurement.cleanup();
       if (this.activeLoadMeasurement === measurement) this.activeLoadMeasurement = null;
     }
   }

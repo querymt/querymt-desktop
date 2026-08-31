@@ -773,8 +773,10 @@ fn spawn_stdout_reader(
                             pending.notification_count += 1;
                             pending.notification_bytes += line.len() as u64;
                         }
-                    } else if let Some(id) = value.get("id") {
-                        finish_pending_request(process, id, line.len());
+                    } else if is_acp_response(&value) {
+                        if let Some(id) = value.get("id") {
+                            finish_pending_request(process, id, line.len());
+                        }
                     }
                 }
 
@@ -852,6 +854,10 @@ fn append_log(
             },
         );
     }
+}
+
+fn is_acp_response(value: &serde_json::Value) -> bool {
+    value.get("id").is_some() && value.get("method").is_none()
 }
 
 fn recovery_session_update(line: &str, delivered: bool) -> Option<serde_json::Value> {
@@ -964,6 +970,21 @@ mod tests {
         let (output, pending) = instrument_acp_request("agent-1", input, None).unwrap();
         assert_eq!(output, input);
         assert!(pending.is_none());
+    }
+
+    #[test]
+    fn response_detection_excludes_agent_initiated_requests() {
+        assert!(is_acp_response(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "result": {}
+        })));
+        assert!(!is_acp_response(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "session/request_permission",
+            "params": {}
+        })));
     }
 
     #[test]

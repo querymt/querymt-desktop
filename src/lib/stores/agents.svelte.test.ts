@@ -7,6 +7,7 @@ import { AgentsStore } from './agents.svelte';
 
 const mockListManagedProfiles = vi.hoisted(() => vi.fn(async () => []));
 const mockListen = vi.hoisted(() => vi.fn());
+const mockDrainAgentSessionUpdates = vi.hoisted(() => vi.fn(async () => [] as SessionNotification[]));
 
 const mockClient = vi.hoisted(() => {
   let sessionUpdateHandler: ((notification: SessionNotification) => void) | null = null;
@@ -108,7 +109,7 @@ vi.mock('$lib/querymt/acp-client', () => ({
 }));
 
 vi.mock('$lib/querymt/sidecar', () => ({
-  drainAgentSessionUpdates: vi.fn(async () => []),
+  drainAgentSessionUpdates: mockDrainAgentSessionUpdates,
   getAgentLogs: vi.fn(async () => []),
   getAgentStatus: vi.fn(async () => ({ state: 'running' })),
   restartAgent: vi.fn(async () => ({ state: 'running' })),
@@ -153,6 +154,7 @@ beforeEach(() => {
   mockClient.listModels.mockResolvedValue([]);
   mockClient.refreshAndListModels.mockResolvedValue([]);
   mockClient.getModelInfo.mockResolvedValue({});
+  mockDrainAgentSessionUpdates.mockResolvedValue([]);
 });
 
 describe('AgentsStore connections', () => {
@@ -363,6 +365,46 @@ describe('AgentsStore connections', () => {
       replayReactiveNotifications: 0,
       historyAssignments: 1,
       drainedNotifications: 0
+    }));
+  });
+
+  it('applies recovery updates after selecting the replay base session', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'A', cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [] },
+      replay: [{
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'user_message_chunk',
+          messageId: 'user-1',
+          content: { type: 'text', text: 'Question' }
+        }
+      }]
+    });
+    mockDrainAgentSessionUpdates.mockResolvedValueOnce([{
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: 'agent-1',
+        content: { type: 'text', text: 'Recovered answer' }
+      }
+    }]);
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activeSession.transcript).toEqual([
+      expect.objectContaining({ messageId: 'user-1', text: 'Question' }),
+      expect.objectContaining({ messageId: 'agent-1', text: 'Recovered answer' })
+    ]);
+    expect(store.lastSessionLoadMetrics).toEqual(expect.objectContaining({
+      drainedNotifications: 1,
+      appliedNotifications: 1
     }));
   });
 

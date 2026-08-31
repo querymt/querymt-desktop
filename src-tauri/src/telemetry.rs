@@ -29,6 +29,12 @@ fn build_provider(
         .build())
 }
 
+fn telemetry_filter(value: Option<String>) -> EnvFilter {
+    value
+        .and_then(|value| EnvFilter::try_new(value).ok())
+        .unwrap_or_else(|| EnvFilter::new("info"))
+}
+
 pub fn setup() {
     let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
         .unwrap_or_else(|_| "http://127.0.0.1:4317".to_string());
@@ -40,8 +46,7 @@ pub fn setup() {
         }
     };
     let tracer = provider.tracer("querymt-desktop");
-    let filter =
-        EnvFilter::new(std::env::var("QMT_TELEMETRY_LEVEL").unwrap_or_else(|_| "info".to_string()));
+    let filter = telemetry_filter(std::env::var("QMT_TELEMETRY_LEVEL").ok());
     if tracing_subscriber::registry()
         .with(OpenTelemetryLayer::new(tracer).with_filter(filter))
         .try_init()
@@ -66,6 +71,18 @@ pub fn flush() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_filter_falls_back_without_panicking() {
+        assert_eq!(
+            telemetry_filter(Some("[malformed".to_string())).to_string(),
+            "info"
+        );
+        assert_eq!(telemetry_filter(None).to_string(), "info");
+        assert!(telemetry_filter(Some("querymt_desktop=debug".to_string()))
+            .to_string()
+            .contains("querymt_desktop=debug"));
+    }
 
     #[test]
     fn tonic_exporter_builds_inside_tauri_runtime() {

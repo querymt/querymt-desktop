@@ -46,6 +46,7 @@ export class SessionLoadMeasurement {
   private phases: SessionLoadPhase[] = [];
   private longTaskObserver: PerformanceObserver | null = null;
   private longTasks: number[] = [];
+  private cleanedUp = false;
   private counterValues: Record<CounterName, number> = {
     liveNotifications: 0,
     drainedNotifications: 0,
@@ -102,13 +103,20 @@ export class SessionLoadMeasurement {
     };
   }
 
+  cleanup(): void {
+    if (this.cleanedUp) return;
+    this.cleanedUp = true;
+    this.longTaskObserver?.disconnect();
+    this.longTaskObserver = null;
+    this.longTasks = [];
+  }
+
   finish(counts: {
     snapshotEvents: number;
     transcriptItems: number;
     toolCalls: number;
     debugEvents: number;
   }): SessionLoadMetrics {
-    this.longTaskObserver?.disconnect();
     const metrics: SessionLoadMetrics = {
       operationId: this.operationId,
       agentId: this.agentId,
@@ -130,6 +138,7 @@ export class SessionLoadMeasurement {
       }
     }
     console.info('querymt session/load metrics', metrics);
+    this.cleanup();
     return metrics;
   }
 
