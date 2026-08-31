@@ -1,0 +1,27 @@
+name: session-load-performance
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-session-load:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - run: npm run test:session-load
+      - run: npm run bench:session-load:ci
+      - uses: actions/upload-artifact@v4
+        with:
+          name: session-load-benchmark
+          path: .session-load-benchmark.json

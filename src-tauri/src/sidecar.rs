@@ -1,3 +1,5 @@
+use opentelemetry::trace::TraceContextExt;
+use opentelemetry::Context;
 use serde::Serialize;
 use std::{
     collections::{HashMap, VecDeque},
@@ -6,9 +8,10 @@ use std::{
     path::PathBuf,
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{ipc::Channel, AppHandle, Emitter, Manager};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 const MAX_LOG_LINES: usize = 200;
 const MAX_SESSION_UPDATES: usize = 4000;
@@ -63,7 +66,15 @@ struct ManagedAgentProcess {
     stdout_channel: Option<Channel<String>>,
     logs: VecDeque<AgentLogEntry>,
     session_updates: VecDeque<serde_json::Value>,
+    pending_requests: HashMap<String, PendingAcpRequest>,
     state: ManagedAgentState,
+}
+
+struct PendingAcpRequest {
+    span: tracing::Span,
+    started: Instant,
+    notification_count: u64,
+    notification_bytes: u64,
 }
 
 #[derive(Clone)]
@@ -111,6 +122,7 @@ impl ManagedAgentProcess {
             stdout_channel: None,
             logs: VecDeque::new(),
             session_updates: VecDeque::new(),
+            pending_requests: HashMap::new(),
             state: ManagedAgentState::configured(agent_id, command_line),
         }
     }
@@ -185,6 +197,7 @@ impl AcpAgentManager {
         let pid = child.id();
         process.stdin = Some(stdin);
         process.child = Some(child);
+        close_pending_requests(process, "agent_restarted");
         process.session_updates.clear();
         process.state.state = AgentState::Running;
         process.state.pid = Some(pid);
@@ -233,6 +246,7 @@ impl AcpAgentManager {
         let _ = child.wait();
 
         process.session_updates.clear();
+        close_pending_requests(process, "agent_stopped");
         process.state.state = AgentState::Stopped;
         process.state.pid = None;
         process.state.message = "ACP stdio agent stopped.".to_string();
@@ -274,6 +288,7 @@ impl AcpAgentManager {
             let _ = child.wait();
 
             process.session_updates.clear();
+            close_pending_requests(process, "application_shutdown");
             process.state.state = AgentState::Stopped;
             process.state.pid = None;
             process.state.message = "Agent process stopped during app shutdown.".to_string();
@@ -336,31 +351,179 @@ impl AcpAgentManager {
         drained
     }
 
-    pub fn write_acp_line(&self, agent_id: String, line: String) -> Result<(), String> {
+    pub fn write_acp_line(
+        &self,
+        agent_id: String,
+        line: String,
+        operation_parent: Option<Context>,
+    ) -> Result<(), String> {
         let mut inner = self.inner.lock().expect("agent manager lock poisoned");
         let process = inner
             .get_mut(&agent_id)
             .ok_or_else(|| format!("No process registered for agent {agent_id}"))?;
 
         reconcile_child_state(process);
+        let (line, pending) = instrument_acp_request(&agent_id, &line, operation_parent)?;
         push_log(&mut process.logs, "system", &summarize_acp_in_line(&line));
 
-        let stdin = process
-            .stdin
-            .as_mut()
-            .ok_or_else(|| format!("ACP stdin is not available for agent {agent_id}"))?;
+        if let Some((request_id, pending)) = pending {
+            process.pending_requests.insert(request_id, pending);
+        }
 
-        stdin
-            .write_all(line.as_bytes())
-            .map_err(|error| format!("Failed to write ACP line: {error}"))?;
-        stdin
-            .write_all(b"\n")
-            .map_err(|error| format!("Failed to terminate ACP line: {error}"))?;
-        stdin
-            .flush()
-            .map_err(|error| format!("Failed to flush ACP line: {error}"))?;
+        let write_result = (|| {
+            let stdin = process
+                .stdin
+                .as_mut()
+                .ok_or_else(|| format!("ACP stdin is not available for agent {agent_id}"))?;
+            stdin
+                .write_all(line.as_bytes())
+                .map_err(|error| format!("Failed to write ACP line: {error}"))?;
+            stdin
+                .write_all(b"\n")
+                .map_err(|error| format!("Failed to terminate ACP line: {error}"))?;
+            stdin
+                .flush()
+                .map_err(|error| format!("Failed to flush ACP line: {error}"))
+        })();
+        if write_result.is_err() {
+            fail_pending_request_for_line(process, &line, "stdin_write_failed");
+        }
+        write_result
+    }
+}
 
-        Ok(())
+fn request_id_key(value: &serde_json::Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+}
+
+fn instrument_acp_request(
+    agent_id: &str,
+    line: &str,
+    operation_parent: Option<Context>,
+) -> Result<(String, Option<(String, PendingAcpRequest)>), String> {
+    let Ok(mut message) = serde_json::from_str::<serde_json::Value>(line) else {
+        return Ok((line.to_string(), None));
+    };
+    let Some(id) = message.get("id").cloned() else {
+        return Ok((line.to_string(), None));
+    };
+    let Some(method) = message
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+    else {
+        return Ok((line.to_string(), None));
+    };
+    let session_id = message
+        .pointer("/params/sessionId")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let span = tracing::info_span!(
+        "desktop.acp.request",
+        rpc.system = "jsonrpc",
+        rpc.method = %method,
+        agent.id = %agent_id,
+        session.id = %session_id,
+        request.bytes = line.len() as i64,
+        response.bytes = tracing::field::Empty,
+        response.elapsed_ms = tracing::field::Empty,
+        notification.count = tracing::field::Empty,
+        notification.bytes = tracing::field::Empty,
+        request.status = tracing::field::Empty,
+    );
+    if let Some(parent) = operation_parent {
+        let _ = span.set_parent(parent);
+    }
+    let context = span.context();
+    let context_span = context.span();
+    let span_context = context_span.span_context();
+    if span_context.is_valid() {
+        let flags = if span_context.is_sampled() {
+            "01"
+        } else {
+            "00"
+        };
+        let traceparent = format!(
+            "00-{}-{}-{flags}",
+            span_context.trace_id(),
+            span_context.span_id()
+        );
+        let params = message
+            .as_object_mut()
+            .ok_or_else(|| "ACP request must be a JSON object".to_string())?
+            .entry("params")
+            .or_insert_with(|| serde_json::json!({}));
+        let params = params
+            .as_object_mut()
+            .ok_or_else(|| "ACP request params must be a JSON object".to_string())?;
+        let meta = params
+            .entry("_meta")
+            .or_insert_with(|| serde_json::json!({}));
+        let meta = meta
+            .as_object_mut()
+            .ok_or_else(|| "ACP request _meta must be a JSON object".to_string())?;
+        meta.entry("traceparent".to_string())
+            .or_insert(serde_json::Value::String(traceparent));
+        let tracestate = span_context.trace_state().header();
+        if !tracestate.is_empty() {
+            meta.entry("tracestate".to_string())
+                .or_insert(serde_json::Value::String(tracestate));
+        }
+    }
+    let line = serde_json::to_string(&message)
+        .map_err(|error| format!("Failed to serialize traced ACP request: {error}"))?;
+    Ok((
+        line,
+        Some((
+            request_id_key(&id),
+            PendingAcpRequest {
+                span,
+                started: Instant::now(),
+                notification_count: 0,
+                notification_bytes: 0,
+            },
+        )),
+    ))
+}
+
+fn finish_pending_request(process: &mut ManagedAgentProcess, id: &serde_json::Value, bytes: usize) {
+    let Some(pending) = process.pending_requests.remove(&request_id_key(id)) else {
+        return;
+    };
+    pending.span.record("response.bytes", bytes as i64);
+    pending.span.record(
+        "response.elapsed_ms",
+        pending.started.elapsed().as_millis() as i64,
+    );
+    pending
+        .span
+        .record("notification.count", pending.notification_count as i64);
+    pending
+        .span
+        .record("notification.bytes", pending.notification_bytes as i64);
+    pending.span.record("request.status", "ok");
+}
+
+fn fail_pending_request_for_line(
+    process: &mut ManagedAgentProcess,
+    line: &str,
+    status: &'static str,
+) {
+    let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+        return;
+    };
+    let Some(id) = message.get("id") else {
+        return;
+    };
+    if let Some(pending) = process.pending_requests.remove(&request_id_key(id)) {
+        pending.span.record("request.status", status);
+    }
+}
+
+fn close_pending_requests(process: &mut ManagedAgentProcess, status: &'static str) {
+    for (_, pending) in process.pending_requests.drain() {
+        pending.span.record("request.status", status);
     }
 }
 
@@ -543,7 +706,10 @@ fn reconcile_child_state(process: &mut ManagedAgentProcess) {
                 .code()
                 .map(|code| code.to_string())
                 .unwrap_or_else(|| "terminated by signal".to_string());
-            let expected_stop = matches!(process.state.state, AgentState::Stopping | AgentState::Stopped);
+            let expected_stop = matches!(
+                process.state.state,
+                AgentState::Stopping | AgentState::Stopped
+            );
             push_log(
                 &mut process.logs,
                 "system",
@@ -552,6 +718,7 @@ fn reconcile_child_state(process: &mut ManagedAgentProcess) {
             process.child = None;
             process.stdin = None;
             process.session_updates.clear();
+            close_pending_requests(process, "agent_exited");
             process.state.pid = None;
             if expected_stop {
                 process.state.state = AgentState::Stopped;
@@ -559,12 +726,14 @@ fn reconcile_child_state(process: &mut ManagedAgentProcess) {
                 process.state.last_error = None;
             } else {
                 process.state.state = AgentState::Failed;
-                process.state.last_error = Some(format!("Agent process exited with status {exit}."));
+                process.state.last_error =
+                    Some(format!("Agent process exited with status {exit}."));
                 process.state.message = "ACP stdio agent exited unexpectedly.".to_string();
             }
         }
         Ok(None) => {}
         Err(error) => {
+            close_pending_requests(process, "agent_poll_failed");
             process.state.state = AgentState::Failed;
             process.state.last_error = Some(error.to_string());
             push_log(
@@ -584,7 +753,6 @@ fn spawn_stdout_reader(
 ) {
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let mut should_emit = false;
             {
                 let mut locked = inner.lock().expect("agent manager lock poisoned");
                 let Some(process) = locked.get_mut(&agent_id) else {
@@ -601,33 +769,41 @@ fn spawn_stdout_reader(
                     if value.get("method").and_then(serde_json::Value::as_str)
                         == Some("session/update")
                     {
-                        if process.session_updates.len() >= MAX_SESSION_UPDATES {
-                            process.session_updates.pop_front();
+                        for pending in process.pending_requests.values_mut() {
+                            pending.notification_count += 1;
+                            pending.notification_bytes += line.len() as u64;
                         }
-                        process.session_updates.push_back(value);
+                    } else if is_acp_response(&value) {
+                        if let Some(id) = value.get("id") {
+                            finish_pending_request(process, id, line.len());
+                        }
                     }
                 }
 
-                if let Some(channel) = &process.stdout_channel {
-                    let _ = channel.send(line.clone());
+                let delivered = process
+                    .stdout_channel
+                    .as_ref()
+                    .is_some_and(|channel| channel.send(line.clone()).is_ok());
+                if let Some(value) = recovery_session_update(&line, delivered) {
+                    if process.session_updates.len() >= MAX_SESSION_UPDATES {
+                        process.session_updates.pop_front();
+                    }
+                    process.session_updates.push_back(value);
                 }
-                should_emit = true;
             }
 
-            if should_emit {
-                let entry = AgentLogEntry {
-                    timestamp: unix_timestamp(),
-                    stream: "system".to_string(),
-                    message: format!("ACP-OUT {}", summarize_acp_out_line(&line)),
-                };
-                let _ = app.emit(
-                    LOG_EVENT,
-                    AgentLogEvent {
-                        agent_id: agent_id.clone(),
-                        entry,
-                    },
-                );
-            }
+            let entry = AgentLogEntry {
+                timestamp: unix_timestamp(),
+                stream: "system".to_string(),
+                message: format!("ACP-OUT {}", summarize_acp_out_line(&line)),
+            };
+            let _ = app.emit(
+                LOG_EVENT,
+                AgentLogEvent {
+                    agent_id: agent_id.clone(),
+                    entry,
+                },
+            );
         }
     });
 }
@@ -678,6 +854,19 @@ fn append_log(
             },
         );
     }
+}
+
+fn is_acp_response(value: &serde_json::Value) -> bool {
+    value.get("id").is_some() && value.get("method").is_none()
+}
+
+fn recovery_session_update(line: &str, delivered: bool) -> Option<serde_json::Value> {
+    if delivered {
+        return None;
+    }
+    let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    (value.get("method").and_then(serde_json::Value::as_str) == Some("session/update"))
+        .then_some(value)
 }
 
 fn push_log(logs: &mut VecDeque<AgentLogEntry>, stream: &str, message: &str) {
@@ -737,4 +926,71 @@ fn unix_timestamp() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs().to_string())
         .unwrap_or_else(|_| "0".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acp_instrumentation_preserves_existing_meta() {
+        let input = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "session/load",
+            "params": {
+                "sessionId": "session-1",
+                "_meta": {
+                    "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+                    "custom": "value"
+                }
+            }
+        })
+        .to_string();
+        let (output, pending) = instrument_acp_request("agent-1", &input, None).unwrap();
+        let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            output
+                .pointer("/params/_meta/custom")
+                .and_then(|v| v.as_str()),
+            Some("value")
+        );
+        assert_eq!(
+            output
+                .pointer("/params/_meta/traceparent")
+                .and_then(|v| v.as_str()),
+            Some("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+        );
+        assert_eq!(pending.unwrap().0, "7");
+    }
+
+    #[test]
+    fn notifications_are_not_tracked_as_pending_requests() {
+        let input = r#"{"jsonrpc":"2.0","method":"session/cancel","params":{}}"#;
+        let (output, pending) = instrument_acp_request("agent-1", input, None).unwrap();
+        assert_eq!(output, input);
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn response_detection_excludes_agent_initiated_requests() {
+        assert!(is_acp_response(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "result": {}
+        })));
+        assert!(!is_acp_response(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "session/request_permission",
+            "params": {}
+        })));
+    }
+
+    #[test]
+    fn successful_channel_delivery_does_not_enter_recovery_queue() {
+        let line = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}"#;
+        assert!(recovery_session_update(line, true).is_none());
+        assert!(recovery_session_update(line, false).is_some());
+    }
 }

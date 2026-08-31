@@ -16,6 +16,7 @@ import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from 
 import {
   createEmptyActiveSession,
   applySessionNotification,
+  reduceSessionReplay,
   beginSessionWork,
   endSessionWork,
   getNextConversationEventIndex
@@ -89,6 +90,18 @@ import {
   QMT_METHOD_SESSION_UNDO_STACK
 } from '$lib/querymt/querymt-extensions';
 import { sendDesktopNotification } from '$lib/querymt/notifications';
+import {
+  SessionLoadMeasurement,
+  countSnapshotEvents,
+  type SessionLoadMetrics,
+  type SessionLoadTelemetryCounters
+} from '$lib/perf/session-load-metrics';
+import {
+  checkpointSessionLoadTelemetry,
+  finishSessionLoadTelemetry,
+  heartbeatSessionLoadTelemetry,
+  startSessionLoadTelemetry
+} from '$lib/querymt/session-load-telemetry';
 import { listManagedProfiles } from '$lib/querymt/profile-templates';
 import { getAgentLogs, getAgentStatus, restartAgent, startAgent, stopAgent, validateWorkspaceDirectory, type AgentLogEntry } from '$lib/querymt/sidecar';
 import { inboxStore } from '$lib/stores/inbox.svelte';
@@ -160,6 +173,8 @@ export class AgentsStore {
   private agentLogSubscriptionPending = false;
   private modelInfoCache = new Map<string, ModelInfo | null>();
   private modelInfoRequests = new Map<string, Promise<void>>();
+  private activeLoadMeasurement: SessionLoadMeasurement | null = null;
+  private applyingDrainedUpdates = false;
 
   configs = $state<AgentConfig[]>(loadInitialAgents());
   statuses = $state<Record<string, AgentRuntimeStatus>>({});
@@ -227,6 +242,7 @@ export class AgentsStore {
   modelsByAgent = $state<Record<string, ModelEntry[]>>({});
   modelInfoByAgent = $state<Record<string, Record<string, ModelInfo | null>>>({});
   modelLoadingByAgent = $state<Record<string, boolean>>({});
+  lastSessionLoadMetrics = $state<SessionLoadMetrics | null>(null);
   recentModelsByAgent = $state<Record<string, string[]>>(loadRecentModels());
   recentWorkspaces = $state<string[]>(loadRecentWorkspaces());
 
@@ -1253,6 +1269,30 @@ export class AgentsStore {
       return;
     }
 
+    const measurement = new SessionLoadMeasurement(agentId, sessionId);
+    this.activeLoadMeasurement = measurement;
+    const telemetryOperationId = await startSessionLoadTelemetry(agentId, sessionId);
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+    const telemetryCounters = (): SessionLoadTelemetryCounters => ({
+      ...measurement.counters(),
+      transcriptItems: this.activeSession.transcript.length,
+      toolCalls: this.activeSession.toolCalls.length,
+      debugEvents: this.activeSession.events.length,
+      domNodes: typeof document === 'undefined' ? 0 : document.querySelectorAll('*').length
+    });
+    let telemetryQueue = Promise.resolve();
+    const checkpoint = (phase: string) => {
+      const durationMs = measurement.phase(phase);
+      telemetryQueue = telemetryQueue.then(() =>
+        checkpointSessionLoadTelemetry(telemetryOperationId, phase, durationMs, telemetryCounters())
+      );
+    };
+    if (telemetryOperationId) {
+      heartbeat = setInterval(() => {
+        void heartbeatSessionLoadTelemetry(telemetryOperationId, telemetryCounters());
+      }, 10_000);
+    }
+    let telemetryStatus = 'success';
     try {
       this.resetActiveSession(agentId, sessionId);
       this.activeSession.undo.pendingOperation = pendingOperation;
@@ -1260,39 +1300,50 @@ export class AgentsStore {
       this.activeSession.activityLabel = 'Loading session history...';
       this.activeSession.lastError = null;
       await tick();
-      const loadedSession = await record.client.loadSession(target.sessionId, target.cwd);
+      checkpoint('frontend.prepare');
+      const loaded = telemetryOperationId
+        ? await record.client.loadSession(target.sessionId, target.cwd, telemetryOperationId)
+        : await record.client.loadSession(target.sessionId, target.cwd);
+      const loadedSession = 'response' in loaded ? loaded.response : (loaded as unknown as LoadSessionResponse);
+      const replay = 'replay' in loaded ? loaded.replay : [];
+      checkpoint('frontend.acp_wait');
       if (!this.isSelectedSession(agentId, sessionId)) {
+        telemetryStatus = 'cancelled';
         return;
       }
       this.lastLoadedSession = loadedSession;
       await Promise.resolve();
       await tick();
       await new Promise((resolve) => setTimeout(resolve, 0));
+      checkpoint('frontend.response_flush');
       if (!this.isSelectedSession(agentId, sessionId)) {
+        telemetryStatus = 'cancelled';
         return;
       }
-      const liveReplayCount = this.activeSession.events.length;
+      const replaySession = reduceSessionReplay(sessionId, replay);
+      this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
+      const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
+      checkpoint('frontend.snapshot_transform');
+      const hasReplayHistory =
+        replaySession.transcript.length > 0 || replaySession.toolCalls.length > 0 || replaySession.events.length > 0;
+      const hasSnapshotHistory =
+        snapshotSession.transcript.length > 0 || snapshotSession.toolCalls.length > 0 || snapshotSession.events.length > 0;
+      this.activeSession = hasReplayHistory ? replaySession : hasSnapshotHistory ? snapshotSession : replaySession;
+      this.activeLoadMeasurement?.increment('historyAssignments');
       const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
+      checkpoint('frontend.queued_replay');
       if (!this.isSelectedSession(agentId, sessionId)) {
+        telemetryStatus = 'cancelled';
         return;
       }
 
       console.debug('querymt session/load replay', {
         agentId,
         sessionId,
-        liveReplayCount,
+        liveReplayCount: replay.length,
         drainedCount,
         totalEvents: this.activeSession.events.length
       });
-
-      const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
-      const hasReplayHistory =
-        this.activeSession.transcript.length > 0 || this.activeSession.toolCalls.length > 0 || this.activeSession.events.length > 0;
-      const hasSnapshotHistory =
-        snapshotSession.transcript.length > 0 || snapshotSession.toolCalls.length > 0 || snapshotSession.events.length > 0;
-      if (!hasReplayHistory && hasSnapshotHistory) {
-        this.activeSession = snapshotSession;
-      }
 
       this.activeSession.configOptions = loadedSession.configOptions ?? [];
       this.composerProfileId = getCurrentProfileId(this.activeSession.configOptions) ?? this.composerProfileId;
@@ -1317,19 +1368,47 @@ export class AgentsStore {
         });
       }
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });
+      checkpoint('frontend.normalize');
       this.activeSession.undo.pendingOperation = pendingOperation;
       await this.hydrateUndoStack(agentId, sessionId, record.client);
-      if (!this.isSelectedSession(agentId, sessionId)) return;
+      checkpoint('frontend.undo_hydrate');
+      if (!this.isSelectedSession(agentId, sessionId)) {
+        telemetryStatus = 'cancelled';
+        return;
+      }
       if (!hasReplayHistory && !hasSnapshotHistory && drainedCount === 0) {
         this.activeSession.activityLabel = 'Session loaded, but the agent returned no replayable history.';
       }
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
+      checkpoint('frontend.model_hydrate');
+      await tick();
+      await new Promise<void>((resolve) => {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        } else {
+          resolve();
+        }
+      });
+      checkpoint('frontend.render_frames');
+      this.lastSessionLoadMetrics = measurement.finish({
+        snapshotEvents: countSnapshotEvents(loadedSession),
+        transcriptItems: this.activeSession.transcript.length,
+        toolCalls: this.activeSession.toolCalls.length,
+        debugEvents: this.activeSession.events.length
+      });
     } catch (error) {
+      telemetryStatus = 'error';
       const message = error instanceof Error ? error.message : 'Failed to load ACP session.';
       this.activeSession.runState = 'failed';
       this.activeSession.lastError = message;
       this.activeSession.activityLabel = message;
       this.error = message;
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+      await telemetryQueue;
+      await finishSessionLoadTelemetry(telemetryOperationId, telemetryStatus, telemetryCounters());
+      measurement.cleanup();
+      if (this.activeLoadMeasurement === measurement) this.activeLoadMeasurement = null;
     }
   }
 
@@ -1982,7 +2061,9 @@ export class AgentsStore {
     const { drainAgentSessionUpdates } = await import('$lib/querymt/sidecar');
     try {
       const queued = await drainAgentSessionUpdates(agentId, sessionId);
+      this.activeLoadMeasurement?.increment('drainedNotifications', queued.length);
       let applied = 0;
+      this.applyingDrainedUpdates = true;
       for (const notification of queued as SessionNotification[]) {
         const record = this.ensureClientRecord(agentId);
         const before = this.activeSession.events.length;
@@ -1991,8 +2072,10 @@ export class AgentsStore {
           applied += 1;
         }
       }
+      this.applyingDrainedUpdates = false;
       return applied;
     } catch {
+      this.applyingDrainedUpdates = false;
       // Ignore drain failures and continue with live session streaming.
       return 0;
     }
@@ -2399,8 +2482,10 @@ export class AgentsStore {
       return;
     }
 
+    if (!this.applyingDrainedUpdates) this.activeLoadMeasurement?.increment('liveNotifications');
     const notificationKey = getSessionNotificationKey(notification);
     if (record.recentSessionUpdateKeys.includes(notificationKey)) {
+      this.activeLoadMeasurement?.increment('duplicateNotifications');
       console.debug('querymt session/update duplicate', {
         agentId,
         sessionId: notification.sessionId,
@@ -2416,6 +2501,7 @@ export class AgentsStore {
     const optimisticEventIndex = this.removeMatchingOptimisticUserPrompt(notification);
     const beforeEvents = this.activeSession.events.length;
     this.activeSession = applySessionNotification(this.activeSession, notification, optimisticEventIndex);
+    this.activeLoadMeasurement?.increment('appliedNotifications');
     console.debug('querymt session/update applied', {
       agentId,
       sessionId: notification.sessionId,

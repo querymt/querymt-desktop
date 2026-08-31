@@ -7,6 +7,7 @@ import { AgentsStore } from './agents.svelte';
 
 const mockListManagedProfiles = vi.hoisted(() => vi.fn(async () => []));
 const mockListen = vi.hoisted(() => vi.fn());
+const mockDrainAgentSessionUpdates = vi.hoisted(() => vi.fn(async () => [] as SessionNotification[]));
 
 const mockClient = vi.hoisted(() => {
   let sessionUpdateHandler: ((notification: SessionNotification) => void) | null = null;
@@ -26,8 +27,12 @@ const mockClient = vi.hoisted(() => {
     })),
     listSessions: vi.fn(async () => ({ sessions: [] })),
     deleteSession: vi.fn(async () => undefined),
-    loadSession: vi.fn(async (_sessionId?: string, _cwd?: string): Promise<Record<string, unknown> & { configOptions: SessionConfigOption[] }> => ({
-      configOptions: []
+    loadSession: vi.fn(async (_sessionId?: string, _cwd?: string): Promise<{
+      response: { configOptions: SessionConfigOption[]; _meta?: Record<string, unknown> };
+      replay: SessionNotification[];
+    }> => ({
+      response: { configOptions: [] },
+      replay: []
     })),
     sendPrompt: vi.fn(async (): Promise<PromptResponse> => ({ stopReason: 'end_turn' })),
     cancelSession: vi.fn(async () => undefined),
@@ -104,7 +109,7 @@ vi.mock('$lib/querymt/acp-client', () => ({
 }));
 
 vi.mock('$lib/querymt/sidecar', () => ({
-  drainAgentSessionUpdates: vi.fn(async () => []),
+  drainAgentSessionUpdates: mockDrainAgentSessionUpdates,
   getAgentLogs: vi.fn(async () => []),
   getAgentStatus: vi.fn(async () => ({ state: 'running' })),
   restartAgent: vi.fn(async () => ({ state: 'running' })),
@@ -149,6 +154,7 @@ beforeEach(() => {
   mockClient.listModels.mockResolvedValue([]);
   mockClient.refreshAndListModels.mockResolvedValue([]);
   mockClient.getModelInfo.mockResolvedValue({});
+  mockDrainAgentSessionUpdates.mockResolvedValue([]);
 });
 
 describe('AgentsStore connections', () => {
@@ -318,6 +324,90 @@ describe('AgentsStore connections', () => {
     expect(mockClient.forkSession).not.toHaveBeenCalled();
   });
 
+  it('batch-reduces captured ACP replay without invoking live handlers', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'A', cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [] },
+      replay: [
+        {
+          sessionId: 'session-1',
+          update: {
+            sessionUpdate: 'user_message_chunk',
+            messageId: 'user-1',
+            content: { type: 'text', text: 'Question' }
+          }
+        },
+        {
+          sessionId: 'session-1',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            messageId: 'agent-1',
+            content: { type: 'text', text: 'Answer' }
+          }
+        }
+      ]
+    });
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activeSession.transcript).toEqual([
+      expect.objectContaining({ messageId: 'user-1', text: 'Question' }),
+      expect.objectContaining({ messageId: 'agent-1', text: 'Answer' })
+    ]);
+    expect(store.lastSessionLoadMetrics).toEqual(expect.objectContaining({
+      replayCapturedNotifications: 2,
+      replayReactiveNotifications: 0,
+      historyAssignments: 1,
+      drainedNotifications: 0
+    }));
+  });
+
+  it('applies recovery updates after selecting the replay base session', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'A', cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [] },
+      replay: [{
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'user_message_chunk',
+          messageId: 'user-1',
+          content: { type: 'text', text: 'Question' }
+        }
+      }]
+    });
+    mockDrainAgentSessionUpdates.mockResolvedValueOnce([{
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: 'agent-1',
+        content: { type: 'text', text: 'Recovered answer' }
+      }
+    }]);
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activeSession.transcript).toEqual([
+      expect.objectContaining({ messageId: 'user-1', text: 'Question' }),
+      expect.objectContaining({ messageId: 'agent-1', text: 'Recovered answer' })
+    ]);
+    expect(store.lastSessionLoadMetrics).toEqual(expect.objectContaining({
+      drainedNotifications: 1,
+      appliedNotifications: 1
+    }));
+  });
+
   it('hydrates the server-authoritative undo stack with session history', async () => {
     const store = createStore();
     store.sessionsByAgent = {
@@ -400,21 +490,24 @@ describe('AgentsStore connections', () => {
       ]
     };
     mockClient.loadSession.mockImplementation(async (sessionId?: string) => ({
-      configOptions: [],
-      _meta: {
-        'querymt/sessionLoadSnapshot.v1': {
-          audit: {
-            events: [{
-              kind: {
-                type: 'provider_changed',
-                data: sessionId === 'session-a'
-                  ? { provider: 'anthropic', model: 'claude-sonnet-4' }
-                  : { provider: 'openai', model: 'gpt-5' }
-              }
-            }]
+      response: {
+        configOptions: [],
+        _meta: {
+          'querymt/sessionLoadSnapshot.v1': {
+            audit: {
+              events: [{
+                kind: {
+                  type: 'provider_changed',
+                  data: sessionId === 'session-a'
+                    ? { provider: 'anthropic', model: 'claude-sonnet-4' }
+                    : { provider: 'openai', model: 'gpt-5' }
+                }
+              }]
+            }
           }
         }
-      }
+      },
+      replay: []
     }));
 
     await store.loadSession('agent-1', 'session-a');
@@ -440,17 +533,20 @@ describe('AgentsStore connections', () => {
       }]
     };
     mockClient.loadSession.mockResolvedValueOnce({
-      configOptions: [{
-        id: 'model', name: 'Model', type: 'select', currentValue: localModel.id,
-        options: [{ value: localModel.id, name: localModel.label }]
-      }],
-      _meta: {
-        'querymt/sessionLoadSnapshot.v1': {
-          audit: { events: [{ kind: { type: 'provider_changed', data: {
-            provider: remoteModel.provider, model: remoteModel.model, provider_node_id: remoteModel.node_id
-          } } }] }
+      response: {
+        configOptions: [{
+          id: 'model', name: 'Model', type: 'select', currentValue: localModel.id,
+          options: [{ value: localModel.id, name: localModel.label }]
+        }],
+        _meta: {
+          'querymt/sessionLoadSnapshot.v1': {
+            audit: { events: [{ kind: { type: 'provider_changed', data: {
+              provider: remoteModel.provider, model: remoteModel.model, provider_node_id: remoteModel.node_id
+            } } }] }
+          }
         }
-      }
+      },
+      replay: []
     });
 
     await store.loadSession('agent-1', 'session-1');

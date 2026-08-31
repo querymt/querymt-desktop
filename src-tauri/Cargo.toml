@@ -16,6 +16,14 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 toml = "1.0"
+opentelemetry = "0.32"
+opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic", "tls-ring", "tls-webpki-roots"] }
+opentelemetry_sdk = { version = "0.32", features = ["trace"] }
+tracing = "0.1"
+tracing-opentelemetry = "0.33"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tonic = { version = "0.14", default-features = false, features = ["tls-webpki-roots"] }
+tokio = { version = "1", features = ["time"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

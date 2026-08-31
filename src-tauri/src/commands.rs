@@ -1,4 +1,7 @@
-use crate::sidecar::{AcpAgentManager, AgentLogEntry, AgentRuntimeStatus};
+use crate::{
+    session_load_telemetry::{SessionLoadCounters, SessionLoadTelemetry},
+    sidecar::{AcpAgentManager, AgentLogEntry, AgentRuntimeStatus},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -30,6 +33,40 @@ pub struct AgentSessionDrainRequest {
 pub struct AgentWriteRequest {
     pub agent_id: String,
     pub line: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLoadStartRequest {
+    pub agent_id: String,
+    pub session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLoadCheckpointRequest {
+    pub operation_id: String,
+    pub phase: String,
+    pub duration_ms: f64,
+    #[serde(default)]
+    pub counters: SessionLoadCounters,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLoadHeartbeatRequest {
+    pub operation_id: String,
+    #[serde(default)]
+    pub counters: SessionLoadCounters,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLoadFinishRequest {
+    pub operation_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub counters: SessionLoadCounters,
 }
 
 #[derive(Debug, Deserialize)]
@@ -322,11 +359,66 @@ pub fn querymt_agent_drain_session_updates(
 }
 
 #[tauri::command]
+pub fn querymt_session_load_start(
+    telemetry: State<'_, SessionLoadTelemetry>,
+    request: SessionLoadStartRequest,
+) -> String {
+    telemetry.start(request.agent_id, request.session_id)
+}
+
+#[tauri::command]
+pub async fn querymt_session_load_checkpoint(
+    telemetry: State<'_, SessionLoadTelemetry>,
+    request: SessionLoadCheckpointRequest,
+) -> Result<(), String> {
+    telemetry
+        .checkpoint(
+            &request.operation_id,
+            request.phase,
+            request.duration_ms,
+            request.counters,
+        )
+        .await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn querymt_session_load_heartbeat(
+    telemetry: State<'_, SessionLoadTelemetry>,
+    request: SessionLoadHeartbeatRequest,
+) -> Result<(), String> {
+    telemetry
+        .heartbeat(&request.operation_id, request.counters)
+        .await;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn querymt_session_load_finish(
+    telemetry: State<'_, SessionLoadTelemetry>,
+    request: SessionLoadFinishRequest,
+) {
+    telemetry.finish(&request.operation_id, &request.status, request.counters);
+}
+
+#[tauri::command]
 pub fn querymt_agent_write_acp_line(
     agents: State<'_, AcpAgentManager>,
+    telemetry: State<'_, SessionLoadTelemetry>,
     request: AgentWriteRequest,
 ) -> Result<(), String> {
-    agents.write_acp_line(request.agent_id, request.line)
+    let operation_id = serde_json::from_str::<serde_json::Value>(&request.line)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/params/_meta/querymt/session_load_operation_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
+    let parent = operation_id
+        .as_deref()
+        .and_then(|operation_id| telemetry.context(operation_id));
+    agents.write_acp_line(request.agent_id, request.line, parent)
 }
 
 #[tauri::command]

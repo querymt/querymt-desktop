@@ -8,8 +8,14 @@ import type {
 } from '@agentclientprotocol/sdk';
 import type { QuerymtExtensionNotification } from '$lib/querymt/querymt-extensions';
 
+export interface SessionReplayCapture {
+  sessionId: string;
+  notifications: SessionNotification[];
+}
+
 export class BrowserClient implements Client {
   private sessionUpdateHandlers: Array<(notification: SessionNotification) => void> = [];
+  private replayCaptures = new Map<string, SessionReplayCapture>();
   private permissionRequestHandlers: Array<
     (request: RequestPermissionRequest) => Promise<RequestPermissionResponse>
   > = [];
@@ -19,12 +25,36 @@ export class BrowserClient implements Client {
   private extensionNotificationHandlers: Array<(notification: QuerymtExtensionNotification) => void> = [];
 
   async sessionUpdate(params: SessionNotification): Promise<void> {
-    console.debug('querymt session/update received', {
-      sessionId: params.sessionId,
-      update: params.update.sessionUpdate
-    });
+    const capture = this.replayCaptures.get(params.sessionId);
+    if (capture) {
+      capture.notifications.push(params);
+      return;
+    }
     for (const handler of this.sessionUpdateHandlers) {
       handler(params);
+    }
+  }
+
+  beginSessionReplay(sessionId: string): SessionReplayCapture {
+    if (this.replayCaptures.has(sessionId)) {
+      throw new Error(`A replay capture is already active for session ${sessionId}.`);
+    }
+    const capture = { sessionId, notifications: [] };
+    this.replayCaptures.set(sessionId, capture);
+    return capture;
+  }
+
+  completeSessionReplay(capture: SessionReplayCapture): SessionNotification[] {
+    if (this.replayCaptures.get(capture.sessionId) !== capture) {
+      throw new Error('Session replay capture is no longer active.');
+    }
+    this.replayCaptures.delete(capture.sessionId);
+    return capture.notifications;
+  }
+
+  abortSessionReplay(capture: SessionReplayCapture): void {
+    if (this.replayCaptures.get(capture.sessionId) === capture) {
+      this.replayCaptures.delete(capture.sessionId);
     }
   }
 

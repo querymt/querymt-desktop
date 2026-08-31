@@ -37,6 +37,18 @@ export function createEmptyActiveSession(): ActiveSessionViewModel {
   };
 }
 
+export function reduceSessionReplay(
+  sessionId: string,
+  notifications: readonly SessionNotification[]
+): ActiveSessionViewModel {
+  let session = createEmptyActiveSession();
+  session.sessionId = sessionId;
+  for (const notification of notifications) {
+    session = applySessionNotification(session, notification);
+  }
+  return session;
+}
+
 export function getNextConversationEventIndex(session: ActiveSessionViewModel): number {
   let maxIndex = -1;
   for (const item of session.transcript) {

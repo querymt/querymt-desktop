@@ -16,6 +16,7 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionConfigOption,
+  type SessionNotification,
   type SetSessionConfigOptionRequest
 } from '@agentclientprotocol/sdk';
 import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment } from '$lib/domain/types';
@@ -87,6 +88,11 @@ import { createTauriAcpStream, createWebSocketAcpStream } from '$lib/querymt/tra
 import type { Stream } from '@agentclientprotocol/sdk';
 
 const PROTOCOL_VERSION = 1;
+
+export interface LoadedAcpSession {
+  response: LoadSessionResponse;
+  replay: SessionNotification[];
+}
 
 export class DesktopAcpClient {
   private config: AgentConfig;
@@ -191,16 +197,33 @@ export class DesktopAcpClient {
     });
   }
 
-  async loadSession(sessionId: string, cwd: string): Promise<LoadSessionResponse> {
+  async loadSession(sessionId: string, cwd: string, operationId?: string | null): Promise<LoadedAcpSession> {
     if (!this.connection) {
       await this.connect();
     }
 
-    return this.connection!.loadSession({
-      sessionId,
-      cwd,
-      mcpServers: []
-    });
+    const capture = this.browserClient.beginSessionReplay(sessionId);
+    try {
+      const response = await this.connection!.loadSession({
+        sessionId,
+        cwd,
+        mcpServers: [],
+        _meta: operationId
+          ? {
+              querymt: {
+                session_load_operation_id: operationId
+              }
+            }
+          : undefined
+      });
+      return {
+        response,
+        replay: this.browserClient.completeSessionReplay(capture)
+      };
+    } catch (error) {
+      this.browserClient.abortSessionReplay(capture);
+      throw error;
+    }
   }
 
   async forkSession(sessionId: string, cwd: string, messageId: string): Promise<ForkSessionResponse> {
