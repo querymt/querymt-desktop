@@ -9,6 +9,12 @@ use session_load_telemetry::SessionLoadTelemetry;
 use sidecar::AcpAgentManager;
 use tauri::Manager;
 
+#[cfg(all(feature = "cef", target_os = "linux"))]
+pub type BrowserEngine = tauri_runtime_cef::CefRuntime<tauri::EventLoopMessage>;
+
+#[cfg(not(all(feature = "cef", target_os = "linux")))]
+pub type BrowserEngine = tauri::Wry;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Tonic's lazy OTLP channel starts background tasks while it is constructed.
@@ -22,7 +28,7 @@ pub fn run() {
             heartbeat_telemetry.report_still_running().await;
         }
     });
-    tauri::Builder::default()
+    tauri::Builder::<BrowserEngine>::new()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(AcpAgentManager::default())

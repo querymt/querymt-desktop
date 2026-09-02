@@ -7,7 +7,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use tauri::{ipc::Channel, AppHandle, Manager, State};
+use tauri::{ipc::Channel, Manager, State};
+
+use crate::BrowserEngine;
+type AppHandle = tauri::AppHandle<BrowserEngine>;
 
 #[derive(Serialize)]
 pub struct PingResponse {

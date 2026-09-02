@@ -10,9 +10,11 @@ use std::{
     sync::{Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{ipc::Channel, AppHandle, Emitter, Manager};
+use tauri::{ipc::Channel, Emitter, Manager};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::BrowserEngine;
+type AppHandle = tauri::AppHandle<BrowserEngine>;
 const MAX_LOG_LINES: usize = 200;
 const MAX_SESSION_UPDATES: usize = 4000;
 pub const LOG_EVENT: &str = "querymt://agent/log";

@@ -32,12 +32,12 @@ jobs:
             target: x86_64-pc-windows-msvc
             qmtcode_asset_glob: qmtcode-*-x86_64-pc-windows-msvc.zip
             tauri_args: --target x86_64-pc-windows-msvc --bundles nsis
-          - name: Linux x64
+          - name: Linux x64 (Wry)
             platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             qmtcode_asset_glob: qmtcode-*-x86_64-unknown-linux-musl.tar.gz
             tauri_args: --target x86_64-unknown-linux-gnu --bundles appimage,deb
-          - name: Linux arm64
+          - name: Linux arm64 (Wry)
             platform: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             qmtcode_asset_glob: qmtcode-*-aarch64-unknown-linux-musl.tar.gz
@@ -133,3 +133,126 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.tauri_args }}
+
+  linux-cef:
+    name: Linux ${{ matrix.arch }} (CEF)
+    needs: release
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            qmtcode_asset_glob: qmtcode-*-x86_64-unknown-linux-musl.tar.gz
+            nfpm_arch: x86_64
+            nfpm_sha256: 0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783
+            appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+            # The runtime tag is moving, so its digest is pinned separately.
+            appimage_runtime_sha256: 1cc49bcf1e2ccd593c379adb17c9f85a36d619088296504de95b1d06215aebbf
+          - arch: aarch64
+            platform: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            qmtcode_asset_glob: qmtcode-*-aarch64-unknown-linux-musl.tar.gz
+            nfpm_arch: arm64
+            nfpm_sha256: 1c0f5f2999b9a974bfb04fdb0cc3306096de530ac5dbb25d739cc5f5219c919c
+            appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+            appimage_runtime_sha256: 7d5d772b7c32f0c84caf0a452a3072a5709027d7eac5856feb89a7a7a8881372
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install CEF build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake curl libasound2-dev libatk1.0-dev \
+            libcups2-dev libdbus-1-dev libdrm-dev libgtk-3-dev libnss3-dev libx11-dev \
+            libwebkit2gtk-4.1-dev libxcomposite-dev libxdamage-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libxrandr-dev ninja-build patchelf pkg-config xz-utils
+
+      - name: Install packaging tools
+        env:
+          NFPM_ARCH: ${{ matrix.nfpm_arch }}
+          NFPM_SHA256: ${{ matrix.nfpm_sha256 }}
+          APPIMAGE_ARCH: ${{ matrix.arch }}
+          APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
+          APPIMAGE_RUNTIME_SHA256: ${{ matrix.appimage_runtime_sha256 }}
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o /tmp/nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v2.47.0/nfpm_2.47.0_Linux_${NFPM_ARCH}.tar.gz"
+          echo "${NFPM_SHA256}  /tmp/nfpm.tar.gz" | sha256sum --check --strict
+          tar -xzf /tmp/nfpm.tar.gz -C "$HOME/.local/bin" nfpm
+          curl -fsSL -o "$HOME/.local/bin/appimagetool" \
+            "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${APPIMAGE_ARCH}.AppImage"
+          echo "${APPIMAGETOOL_SHA256}  $HOME/.local/bin/appimagetool" | sha256sum --check --strict
+          curl -fsSL -o "$HOME/.local/bin/appimage-runtime" \
+            "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-${APPIMAGE_ARCH}"
+          echo "${APPIMAGE_RUNTIME_SHA256}  $HOME/.local/bin/appimage-runtime" | sha256sum --check --strict
+          chmod +x "$HOME/.local/bin/nfpm" "$HOME/.local/bin/appimagetool" \
+            "$HOME/.local/bin/appimage-runtime"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Download latest qmtcode sidecar
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QMTCODE_ASSET_GLOB: ${{ matrix.qmtcode_asset_glob }}
+          TAURI_TARGET: ${{ matrix.target }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{
+            Accept = 'application/vnd.github+json'
+            Authorization = "Bearer $env:GH_TOKEN"
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $release = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/querymt/querymt/releases/latest'
+          $asset = $release.assets | Where-Object { $_.name -like $env:QMTCODE_ASSET_GLOB } | Select-Object -First 1
+          if (-not $asset) { throw "No qmtcode asset matching '$env:QMTCODE_ASSET_GLOB' found." }
+
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          New-Item -ItemType Directory -Force -Path qmtcode-extract | Out-Null
+          Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile $asset.name
+          tar -xzf $asset.name -C qmtcode-extract
+          $binary = Get-ChildItem qmtcode-extract -Recurse -File |
+            Where-Object { $_.Name -eq 'qmtcode' } | Select-Object -First 1
+          if (-not $binary) { throw 'Downloaded qmtcode archive did not contain qmtcode.' }
+          $destination = "src-tauri/binaries/qmtcode-$env:TAURI_TARGET"
+          Copy-Item $binary.FullName $destination -Force
+          chmod +x $destination
+          "QMTCODE_VERSION=$($release.tag_name)" >> $env:GITHUB_ENV
+          "QMTCODE_ASSET=$($asset.name)" >> $env:GITHUB_ENV
+
+      - name: Build Linux CEF binary
+        run: npm run tauri:cef -- build --target ${{ matrix.target }}
+
+      - name: Package Linux CEF bundles
+        run: |
+          APPIMAGE_RUNTIME_FILE="$HOME/.local/bin/appimage-runtime" \
+            npm run package:cef -- "${GITHUB_REF_NAME#v}" ${{ matrix.target }}
+
+      - name: Upload CEF bundles to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
+            src-tauri/target/release/bundle/appimage/* \
+            src-tauri/target/release/bundle/deb/* \
+            src-tauri/target/release/bundle/tar/* \
+            --clobber
