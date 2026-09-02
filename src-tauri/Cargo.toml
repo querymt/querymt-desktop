@@ -26,6 +26,7 @@ tonic = { version = "0.14", default-features = false, features = ["tls-webpki-ro
 tokio = { version = "1", features = ["time"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Tauri's CEF runtime is not published yet; Sable ports the experimental runtime to released Tauri crates.
 tauri-runtime-cef = { git = "https://github.com/SableClient/tauri-runtime-cef", rev = "eace83edf055acc17e811b2bc75d4b6eadf39670", optional = true }
 cef = { version = "=150.2.1", optional = true }
 
