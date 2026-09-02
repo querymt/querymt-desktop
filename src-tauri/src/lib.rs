@@ -53,6 +53,28 @@ pub fn run() {
             commands::querymt_workspace_suggest_paths,
             commands::querymt_workspace_validate_directory
         ])
+        .setup(|app| {
+            #[cfg(desktop)]
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let Some(window) = handle.get_webview_window("main") else {
+                        return;
+                    };
+                    if window.is_visible().unwrap_or(true) {
+                        return;
+                    }
+
+                    eprintln!(
+                        "Frontend did not show the main window within 5 seconds; force-showing it."
+                    );
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                });
+            }
+            Ok(())
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {

@@ -61,26 +61,57 @@
     return routeToSection[pathname] ?? 'Today';
   });
 
+  function showOnFirstPaint(callback: () => void): () => void {
+    if (document.visibilityState === 'hidden') {
+      if (document.readyState === 'complete') {
+        callback();
+        return () => {};
+      }
+
+      window.addEventListener('load', callback, { once: true });
+      return () => window.removeEventListener('load', callback);
+    }
+
+    const frame = requestAnimationFrame(callback);
+    return () => cancelAnimationFrame(frame);
+  }
+
   onMount(() => {
     appearanceStore.initialize();
     chatPreferencesStore.initialize();
     sidebarStore.initialize();
     void agentsStore.initialize();
-    void windowDecorationsStore.initialize();
 
     isMacPlatform = detectMacPlatform();
 
+    let disposed = false;
+    let cancelShow: (() => void) | undefined;
     let unlistenResize: (() => void) | undefined;
     let unlistenFocus: (() => void) | undefined;
     if ('__TAURI_INTERNALS__' in window) {
-      void currentWindow().then(async (appWindow) => {
+      void (async () => {
+        await windowDecorationsStore.initialize();
+        const appWindow = await currentWindow();
+        if (disposed) {
+          return;
+        }
+
         const updateMaximized = async () => {
           windowMaximized = await appWindow.isMaximized();
         };
         await updateMaximized();
         unlistenResize = await appWindow.onResized(updateMaximized);
         unlistenFocus = await appWindow.onFocusChanged(updateMaximized);
+        cancelShow = showOnFirstPaint(() => {
+          void appWindow.show().then(() => appWindow.setFocus()).catch((error) => {
+            console.error('Failed to show the desktop window.', error);
+          });
+        });
+      })().catch((error) => {
+        console.error('Failed to initialize the desktop window.', error);
       });
+    } else {
+      void windowDecorationsStore.initialize();
     }
 
     const onKeyDown = async (event: KeyboardEvent) => {
@@ -139,7 +170,9 @@
 
     window.addEventListener('keydown', onKeyDown);
     return () => {
+      disposed = true;
       window.removeEventListener('keydown', onKeyDown);
+      cancelShow?.();
       unlistenResize?.();
       unlistenFocus?.();
     };
