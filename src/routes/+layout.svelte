@@ -102,11 +102,13 @@
         await updateMaximized();
         unlistenResize = await appWindow.onResized(updateMaximized);
         unlistenFocus = await appWindow.onFocusChanged(updateMaximized);
-        cancelShow = showOnFirstPaint(() => {
-          void appWindow.show().then(() => appWindow.setFocus()).catch((error) => {
-            console.error('Failed to show the desktop window.', error);
+        if (!(await appWindow.isVisible())) {
+          cancelShow = showOnFirstPaint(() => {
+            void appWindow.show().then(() => appWindow.setFocus()).catch((error) => {
+              console.error('Failed to show the desktop window.', error);
+            });
           });
-        });
+        }
       })().catch((error) => {
         console.error('Failed to initialize the desktop window.', error);
       });

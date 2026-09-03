@@ -53,7 +53,10 @@ class WindowDecorationsStore {
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const currentWindow = getCurrentWindow();
-      await currentWindow.setDecorations(this.mode === 'os');
+      const useOsDecorations = this.mode === 'os';
+      if ((await currentWindow.isDecorated()) !== useOsDecorations) {
+        await currentWindow.setDecorations(useOsDecorations);
+      }
       await currentWindow.setShadow(true);
     } catch (error) {
       this.error = error instanceof Error ? error.message : 'Failed to update window decorations.';

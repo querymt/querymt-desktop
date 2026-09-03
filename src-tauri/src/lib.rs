@@ -28,6 +28,24 @@ pub fn run() {
             heartbeat_telemetry.report_still_running().await;
         }
     });
+
+    let context = tauri::generate_context!();
+    #[cfg(all(feature = "cef", target_os = "linux"))]
+    let context = {
+        let mut context = context;
+        if let Some(window) = context
+            .config_mut()
+            .app
+            .windows
+            .iter_mut()
+            .find(|window| window.label == "main")
+        {
+            window.visible = false;
+            window.transparent = false;
+        }
+        context
+    };
+
     tauri::Builder::<BrowserEngine>::new()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -53,10 +71,10 @@ pub fn run() {
             commands::querymt_workspace_suggest_paths,
             commands::querymt_workspace_validate_directory
         ])
-        .setup(|app| {
-            #[cfg(desktop)]
+        .setup(|_app| {
+            #[cfg(all(feature = "cef", target_os = "linux"))]
             {
-                let handle = app.handle().clone();
+                let handle = _app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     let Some(window) = handle.get_webview_window("main") else {
@@ -75,7 +93,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             if matches!(
