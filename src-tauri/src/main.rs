@@ -14,6 +14,9 @@ fn main() {
             return;
         }
 
+        // QueryMT has one application window; prevent links and scripts from spawning Chromium windows.
+        tauri_runtime_cef::set_popup_policy(|_| false);
+
         tauri_runtime_cef::set_permission_policy(|request, responder| {
             if request.webview_label == "main"
                 && request
@@ -42,7 +45,22 @@ fn main() {
 
 #[cfg(all(feature = "cef", target_os = "linux"))]
 fn cef_command_line_args() -> Vec<(String, Option<String>)> {
-    let mut args = Vec::new();
+    // Chromium's actor UI crashes when CEF attaches an embedded browser.
+    // Its local-network checks also block tauri://localhost from ACP's loopback WebSocket.
+    let mut args = vec![
+        ("--disable-background-timer-throttling".into(), None),
+        (
+            "--enable-features".into(),
+            Some("OverlayScrollbar".into()),
+        ),
+        (
+            "--disable-features".into(),
+            Some(
+                "AutofillActorMode,GlicActorUi,IntensiveWakeUpThrottling,LensOverlay,LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,SpareRendererForSitePerProcess"
+                    .into(),
+            ),
+        ),
+    ];
 
     if let Ok(port) = std::env::var("QUERYMT_CEF_DEVTOOLS") {
         args.push(("--remote-debugging-port".into(), Some(port)));

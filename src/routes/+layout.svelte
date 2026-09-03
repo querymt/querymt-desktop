@@ -61,6 +61,20 @@
     return routeToSection[pathname] ?? 'Today';
   });
 
+  function preventNewWindowNavigation(event: MouseEvent) {
+    const target = event.target instanceof Element ? event.target.closest('a[href]') : null;
+    if (!target) {
+      return;
+    }
+
+    const opensNewWindow = target.getAttribute('target') === '_blank'
+      || event.button === 1
+      || (event.button === 0 && (event.ctrlKey || event.metaKey || event.shiftKey));
+    if (opensNewWindow) {
+      event.preventDefault();
+    }
+  }
+
   function showOnFirstPaint(callback: () => void): () => void {
     if (document.visibilityState === 'hidden') {
       if (document.readyState === 'complete') {
@@ -171,9 +185,13 @@
     };
 
     window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('click', preventNewWindowNavigation, true);
+    window.addEventListener('auxclick', preventNewWindowNavigation, true);
     return () => {
       disposed = true;
       window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('click', preventNewWindowNavigation, true);
+      window.removeEventListener('auxclick', preventNewWindowNavigation, true);
       cancelShow?.();
       unlistenResize?.();
       unlistenFocus?.();
