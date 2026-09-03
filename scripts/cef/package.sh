@@ -95,6 +95,14 @@ cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
 export LD_LIBRARY_PATH="$HERE/usr/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# AppImages cannot install a path-based AppArmor userns profile. Fall back only
+# when the host blocks the user namespaces required by Chromium's sandbox.
+if ! command -v unshare >/dev/null 2>&1 || ! unshare --user --map-root-user true >/dev/null 2>&1; then
+  echo "warning: user namespaces unavailable; starting CEF without the Chromium sandbox" >&2
+  set -- --no-sandbox "$@"
+fi
+
 exec "$HERE/usr/bin/querymt-desktop" "$@"
 APPRUN
 chmod 755 "$APPDIR/AppRun" "$APPDIR/usr/bin/querymt-desktop"

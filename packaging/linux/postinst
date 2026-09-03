@@ -1,5 +1,8 @@
 #!/bin/sh
 
 if command -v apparmor_parser >/dev/null 2>&1; then
-  apparmor_parser -r /etc/apparmor.d/querymt-desktop || exit $?
+  if [ -r /etc/apparmor.d/abi/4.0 ]; then
+    apparmor_parser -r /etc/apparmor.d/querymt-desktop || \
+      echo "warning: failed to load the QueryMT AppArmor profile" >&2
+  fi
 fi

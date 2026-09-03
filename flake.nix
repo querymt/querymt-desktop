@@ -204,8 +204,13 @@
               doCheck = false;
 
               postInstall = ''
-                cp -L ${cefFlat}/*.so* $out/bin/ 2>/dev/null || true
-                cp -L ${cefFlat}/*.pak ${cefFlat}/*.dat ${cefFlat}/*.bin ${cefFlat}/*.json $out/bin/ 2>/dev/null || true
+                for asset in \
+                  libcef.so libEGL.so libGLESv2.so libvk_swiftshader.so libvulkan.so.1 \
+                  chrome_100_percent.pak chrome_200_percent.pak resources.pak icudtl.dat \
+                  v8_context_snapshot.bin vk_swiftshader_icd.json; do
+                  test -e "${cefFlat}/$asset"
+                  cp -L "${cefFlat}/$asset" $out/bin/
+                done
                 mkdir -p $out/bin/locales
                 cp -L ${cefFlat}/locales/en-US.pak $out/bin/locales/
                 cp ${cefBinary}/LICENSE.txt $out/bin/CEF-LICENSE.txt

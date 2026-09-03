@@ -245,6 +245,15 @@ pub fn app_ping() -> PingResponse {
 }
 
 #[tauri::command]
+pub fn app_runtime() -> &'static str {
+    if cfg!(all(feature = "cef", target_os = "linux")) {
+        "cef"
+    } else {
+        "wry"
+    }
+}
+
+#[tauri::command]
 pub fn querymt_profile_templates(app: AppHandle) -> Result<Vec<ProfileTemplateInfo>, String> {
     ensure_profile_template_dirs(&app)?;
     BUILTIN_PROFILE_TEMPLATES

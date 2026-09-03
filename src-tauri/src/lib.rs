@@ -53,6 +53,7 @@ pub fn run() {
         .manage(session_load_telemetry)
         .invoke_handler(tauri::generate_handler![
             commands::app_ping,
+            commands::app_runtime,
             commands::querymt_profile_templates,
             commands::querymt_profiles_list,
             commands::querymt_profile_enable_template,
@@ -80,7 +81,7 @@ pub fn run() {
                     let Some(window) = handle.get_webview_window("main") else {
                         return;
                     };
-                    if window.is_visible().unwrap_or(true) {
+                    if window.is_visible().unwrap_or(false) {
                         return;
                     }
 

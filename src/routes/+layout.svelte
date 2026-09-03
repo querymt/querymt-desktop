@@ -102,10 +102,21 @@
     let cancelShow: (() => void) | undefined;
     let unlistenResize: (() => void) | undefined;
     let unlistenFocus: (() => void) | undefined;
-    if ('__TAURI_INTERNALS__' in window) {
+    const cleanupDesktopWindow = () => {
+      cancelShow?.();
+      unlistenResize?.();
+      unlistenFocus?.();
+      cancelShow = undefined;
+      unlistenResize = undefined;
+      unlistenFocus = undefined;
+    };
+    const isDesktopRuntime = '__TAURI_INTERNALS__' in window;
+    if (isDesktopRuntime) {
       void (async () => {
         await windowDecorationsStore.initialize();
         const appWindow = await currentWindow();
+        const { invoke } = await import('@tauri-apps/api/core');
+        const appRuntime = await invoke<string>('app_runtime');
         if (disposed) {
           return;
         }
@@ -114,17 +125,45 @@
           windowMaximized = await appWindow.isMaximized();
         };
         await updateMaximized();
+        if (disposed) {
+          return;
+        }
+
         unlistenResize = await appWindow.onResized(updateMaximized);
+        if (disposed) {
+          cleanupDesktopWindow();
+          return;
+        }
+
         unlistenFocus = await appWindow.onFocusChanged(updateMaximized);
-        if (!(await appWindow.isVisible())) {
+        if (disposed) {
+          cleanupDesktopWindow();
+          return;
+        }
+
+        const windowIsVisible = await appWindow.isVisible();
+        if (disposed) {
+          cleanupDesktopWindow();
+          return;
+        }
+
+        if (!windowIsVisible) {
           cancelShow = showOnFirstPaint(() => {
             void appWindow.show().then(() => appWindow.setFocus()).catch((error) => {
               console.error('Failed to show the desktop window.', error);
             });
           });
         }
+
+        if (appRuntime === 'cef') {
+          window.addEventListener('click', preventNewWindowNavigation, true);
+          window.addEventListener('auxclick', preventNewWindowNavigation, true);
+        }
       })().catch((error) => {
-        console.error('Failed to initialize the desktop window.', error);
+        cleanupDesktopWindow();
+        if (!disposed) {
+          console.error('Failed to initialize the desktop window.', error);
+        }
       });
     } else {
       void windowDecorationsStore.initialize();
@@ -185,16 +224,14 @@
     };
 
     window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('click', preventNewWindowNavigation, true);
-    window.addEventListener('auxclick', preventNewWindowNavigation, true);
     return () => {
       disposed = true;
       window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('click', preventNewWindowNavigation, true);
-      window.removeEventListener('auxclick', preventNewWindowNavigation, true);
-      cancelShow?.();
-      unlistenResize?.();
-      unlistenFocus?.();
+      if (isDesktopRuntime) {
+        window.removeEventListener('click', preventNewWindowNavigation, true);
+        window.removeEventListener('auxclick', preventNewWindowNavigation, true);
+      }
+      cleanupDesktopWindow();
     };
   });
 
