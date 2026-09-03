@@ -12,7 +12,10 @@
     "test:session-load": "vitest run src/lib/perf/*.test.ts",
     "bench:session-load": "vitest bench src/lib/perf/*.bench.ts --run",
     "bench:session-load:ci": "vitest bench src/lib/perf/*.bench.ts --run --outputJson=.session-load-benchmark.json && node scripts/check-session-load-benchmark.mjs",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:wry": "node scripts/tauri-runtime.mjs wry",
+    "tauri:cef": "node scripts/tauri-runtime.mjs cef",
+    "package:cef": "bash scripts/cef/package.sh"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "latest",

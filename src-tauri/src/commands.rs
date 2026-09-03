@@ -7,7 +7,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use tauri::{ipc::Channel, AppHandle, Manager, State};
+use tauri::{ipc::Channel, Manager, State};
+
+use crate::BrowserEngine;
+type AppHandle = tauri::AppHandle<BrowserEngine>;
 
 #[derive(Serialize)]
 pub struct PingResponse {
@@ -238,6 +241,15 @@ command = "${QUERYMT_MCP_FETCH}"
 pub fn app_ping() -> PingResponse {
     PingResponse {
         message: "querymt-desktop-tauri-ready",
+    }
+}
+
+#[tauri::command]
+pub fn app_runtime() -> &'static str {
+    if cfg!(all(feature = "cef", target_os = "linux")) {
+        "cef"
+    } else {
+        "wry"
     }
 }
 

@@ -61,26 +61,112 @@
     return routeToSection[pathname] ?? 'Today';
   });
 
+  function preventNewWindowNavigation(event: MouseEvent) {
+    const target = event.target instanceof Element ? event.target.closest('a[href]') : null;
+    if (!target) {
+      return;
+    }
+
+    const opensNewWindow = target.getAttribute('target') === '_blank'
+      || event.button === 1
+      || (event.button === 0 && (event.ctrlKey || event.metaKey || event.shiftKey));
+    if (opensNewWindow) {
+      event.preventDefault();
+    }
+  }
+
+  function showOnFirstPaint(callback: () => void): () => void {
+    if (document.visibilityState === 'hidden') {
+      if (document.readyState === 'complete') {
+        callback();
+        return () => {};
+      }
+
+      window.addEventListener('load', callback, { once: true });
+      return () => window.removeEventListener('load', callback);
+    }
+
+    const frame = requestAnimationFrame(callback);
+    return () => cancelAnimationFrame(frame);
+  }
+
   onMount(() => {
     appearanceStore.initialize();
     chatPreferencesStore.initialize();
     sidebarStore.initialize();
     void agentsStore.initialize();
-    void windowDecorationsStore.initialize();
 
     isMacPlatform = detectMacPlatform();
 
+    let disposed = false;
+    let cancelShow: (() => void) | undefined;
     let unlistenResize: (() => void) | undefined;
     let unlistenFocus: (() => void) | undefined;
-    if ('__TAURI_INTERNALS__' in window) {
-      void currentWindow().then(async (appWindow) => {
+    const cleanupDesktopWindow = () => {
+      cancelShow?.();
+      unlistenResize?.();
+      unlistenFocus?.();
+      cancelShow = undefined;
+      unlistenResize = undefined;
+      unlistenFocus = undefined;
+    };
+    const isDesktopRuntime = '__TAURI_INTERNALS__' in window;
+    if (isDesktopRuntime) {
+      void (async () => {
+        await windowDecorationsStore.initialize();
+        const appWindow = await currentWindow();
+        const { invoke } = await import('@tauri-apps/api/core');
+        const appRuntime = await invoke<string>('app_runtime');
+        if (disposed) {
+          return;
+        }
+
         const updateMaximized = async () => {
           windowMaximized = await appWindow.isMaximized();
         };
         await updateMaximized();
+        if (disposed) {
+          return;
+        }
+
         unlistenResize = await appWindow.onResized(updateMaximized);
+        if (disposed) {
+          cleanupDesktopWindow();
+          return;
+        }
+
         unlistenFocus = await appWindow.onFocusChanged(updateMaximized);
+        if (disposed) {
+          cleanupDesktopWindow();
+          return;
+        }
+
+        const windowIsVisible = await appWindow.isVisible();
+        if (disposed) {
+          cleanupDesktopWindow();
+          return;
+        }
+
+        if (!windowIsVisible) {
+          cancelShow = showOnFirstPaint(() => {
+            void appWindow.show().then(() => appWindow.setFocus()).catch((error) => {
+              console.error('Failed to show the desktop window.', error);
+            });
+          });
+        }
+
+        if (appRuntime === 'cef') {
+          window.addEventListener('click', preventNewWindowNavigation, true);
+          window.addEventListener('auxclick', preventNewWindowNavigation, true);
+        }
+      })().catch((error) => {
+        cleanupDesktopWindow();
+        if (!disposed) {
+          console.error('Failed to initialize the desktop window.', error);
+        }
       });
+    } else {
+      void windowDecorationsStore.initialize();
     }
 
     const onKeyDown = async (event: KeyboardEvent) => {
@@ -139,9 +225,13 @@
 
     window.addEventListener('keydown', onKeyDown);
     return () => {
+      disposed = true;
       window.removeEventListener('keydown', onKeyDown);
-      unlistenResize?.();
-      unlistenFocus?.();
+      if (isDesktopRuntime) {
+        window.removeEventListener('click', preventNewWindowNavigation, true);
+        window.removeEventListener('auxclick', preventNewWindowNavigation, true);
+      }
+      cleanupDesktopWindow();
     };
   });
 

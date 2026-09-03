@@ -1,0 +1,59 @@
+name: querymt-desktop
+arch: ${PKG_ARCH}
+platform: linux
+version: ${PKG_VERSION}
+release: "1"
+section: devel
+maintainer: QueryMT
+vendor: QueryMT
+description: Native desktop control center for QueryMT
+homepage: https://github.com/querymt/querymt-desktop
+license: Proprietary
+
+contents:
+  - src: ${PKGROOT}/opt/querymt-desktop/
+    dst: /opt/querymt-desktop
+    type: tree
+    expand: true
+  - src: ${PKGROOT}/usr/
+    dst: /usr
+    type: tree
+    expand: true
+  - src: packaging/linux/apparmor/querymt-desktop
+    dst: /etc/apparmor.d/querymt-desktop
+    type: config
+    packager: deb
+
+overrides:
+  deb:
+    scripts:
+      postinstall: packaging/linux/postinst
+      preremove: packaging/linux/prerm
+    depends:
+      - apparmor
+      - libasound2
+      - libatk-bridge2.0-0
+      - libatk1.0-0
+      - libcairo2
+      - libcups2
+      - libdbus-1-3
+      - libexpat1
+      - libgbm1
+      - libgl1
+      - libglib2.0-0
+      - libgtk-3-0
+      - libnspr4
+      - libnss3
+      - libpango-1.0-0
+      - libudev1
+      - libx11-6
+      - libxcb-xkb1
+      - libxcb1
+      - libxcomposite1
+      - libxdamage1
+      - libxext6
+      - libxfixes3
+      - libxkbcommon0
+      - libxrandr2
+      - xdg-utils
+      - xwayland

@@ -12,7 +12,7 @@ tauri-build = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 shlex = "2"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", default-features = false, features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 toml = "1.0"
@@ -25,8 +25,23 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tonic = { version = "0.14", default-features = false, features = ["tls-webpki-roots"] }
 tokio = { version = "1", features = ["time"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Tauri's CEF runtime is not published yet; Sable ports the experimental runtime to released Tauri crates.
+tauri-runtime-cef = { git = "https://github.com/SableClient/tauri-runtime-cef", rev = "eace83edf055acc17e811b2bc75d4b6eadf39670", optional = true }
+cef = { version = "=150.2.1", optional = true }
+
 [features]
+default = ["wry"]
 custom-protocol = ["tauri/custom-protocol"]
+wry = [
+    "tauri/wry",
+    "tauri/compression",
+    "tauri/common-controls-v6",
+    "tauri/dynamic-acl",
+    "tauri/x11",
+    "tauri/dbus",
+]
+cef = ["dep:tauri-runtime-cef", "dep:cef"]
 
 [lib]
 name = "querymt_desktop_lib"

@@ -9,6 +9,12 @@ use session_load_telemetry::SessionLoadTelemetry;
 use sidecar::AcpAgentManager;
 use tauri::Manager;
 
+#[cfg(all(feature = "cef", target_os = "linux"))]
+pub type BrowserEngine = tauri_runtime_cef::CefRuntime<tauri::EventLoopMessage>;
+
+#[cfg(not(all(feature = "cef", target_os = "linux")))]
+pub type BrowserEngine = tauri::Wry;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Tonic's lazy OTLP channel starts background tasks while it is constructed.
@@ -22,13 +28,32 @@ pub fn run() {
             heartbeat_telemetry.report_still_running().await;
         }
     });
-    tauri::Builder::default()
+
+    let context = tauri::generate_context!();
+    #[cfg(all(feature = "cef", target_os = "linux"))]
+    let context = {
+        let mut context = context;
+        if let Some(window) = context
+            .config_mut()
+            .app
+            .windows
+            .iter_mut()
+            .find(|window| window.label == "main")
+        {
+            window.visible = false;
+            window.transparent = false;
+        }
+        context
+    };
+
+    tauri::Builder::<BrowserEngine>::new()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(AcpAgentManager::default())
         .manage(session_load_telemetry)
         .invoke_handler(tauri::generate_handler![
             commands::app_ping,
+            commands::app_runtime,
             commands::querymt_profile_templates,
             commands::querymt_profiles_list,
             commands::querymt_profile_enable_template,
@@ -47,7 +72,29 @@ pub fn run() {
             commands::querymt_workspace_suggest_paths,
             commands::querymt_workspace_validate_directory
         ])
-        .build(tauri::generate_context!())
+        .setup(|_app| {
+            #[cfg(all(feature = "cef", target_os = "linux"))]
+            {
+                let handle = _app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let Some(window) = handle.get_webview_window("main") else {
+                        return;
+                    };
+                    if window.is_visible().unwrap_or(false) {
+                        return;
+                    }
+
+                    eprintln!(
+                        "Frontend did not show the main window within 5 seconds; force-showing it."
+                    );
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                });
+            }
+            Ok(())
+        })
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             if matches!(
