@@ -224,6 +224,8 @@
                   --set GDK_BACKEND x11 \
                   --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath cefLibs}:$out/bin"
               '';
+
+              meta.mainProgram = "querymt-desktop";
             };
 
         querymt-desktop =
