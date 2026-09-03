@@ -228,27 +228,33 @@
               meta.mainProgram = "querymt-desktop";
             };
 
-        querymt-desktop =
-          if querymt-desktop-cef != null
-          then querymt-desktop-cef
-          else querymt-desktop-wry;
       in {
         packages =
           {
-            default = querymt-desktop;
-            querymt-desktop = querymt-desktop;
-            querymt-desktop-wry = querymt-desktop-wry;
+            default = querymt-desktop-wry;
+            wry = querymt-desktop-wry;
           }
           // pkgs.lib.optionalAttrs (querymt-desktop-cef != null) {
-            querymt-desktop-cef = querymt-desktop-cef;
+            cef = querymt-desktop-cef;
           };
 
-        apps = {
-          default = {
-            type = "app";
-            program = "${self'.packages.querymt-desktop}/bin/querymt-desktop";
+        apps =
+          {
+            default = {
+              type = "app";
+              program = "${querymt-desktop-wry}/bin/querymt-desktop";
+            };
+            wry = {
+              type = "app";
+              program = "${querymt-desktop-wry}/bin/querymt-desktop";
+            };
+          }
+          // pkgs.lib.optionalAttrs (querymt-desktop-cef != null) {
+            cef = {
+              type = "app";
+              program = "${querymt-desktop-cef}/bin/querymt-desktop";
+            };
           };
-        };
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
