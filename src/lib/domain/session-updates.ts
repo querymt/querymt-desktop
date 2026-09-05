@@ -522,7 +522,7 @@ function summarizeUpdate(notification: SessionNotification): string {
   }
 }
 
-function mapTranscriptRole(kind: SessionTranscriptItem['kind']): SessionTranscriptGroup['role'] {
+export function mapTranscriptRole(kind: SessionTranscriptItem['kind']): SessionTranscriptGroup['role'] {
   switch (kind) {
     case 'user_message_chunk':
       return 'user';
