@@ -226,6 +226,7 @@ export class AgentsStore {
   activeSessionId = $state<string | null>(null);
   activeSession = $state<ActiveSessionViewModel>(createEmptyActiveSession());
   forkPending = $state(false);
+  sessionHistoryLoading = $state(false);
   lastCreatedSession = $state<NewSessionResponse | null>(null);
   lastLoadedSession = $state<LoadSessionResponse | null>(null);
   lastPromptResponse = $state<PromptResponse | null>(null);
@@ -1347,6 +1348,9 @@ export class AgentsStore {
         this.resetActiveSession(agentId, sessionId);
       }
       this.activeSession.undo.pendingOperation = pendingOperation;
+      // Distinguish "history is loading" from a live prompt run: both set
+      // runState to 'thinking', but only a real run should expose Stop.
+      this.sessionHistoryLoading = true;
       this.activeSession.runState = 'thinking';
       this.activeSession.activityLabel = 'Loading session history...';
       this.activeSession.lastError = null;
@@ -1455,6 +1459,7 @@ export class AgentsStore {
       this.activeSession.activityLabel = message;
       this.error = message;
     } finally {
+      this.sessionHistoryLoading = false;
       if (heartbeat) clearInterval(heartbeat);
       await telemetryQueue;
       await finishSessionLoadTelemetry(telemetryOperationId, telemetryStatus, telemetryCounters());

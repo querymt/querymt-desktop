@@ -4642,7 +4642,7 @@ summary:focus-visible {
 }
 
 .session-header-status-dot-warning {
-  background: var(--status-warning);
+  background: var(--status-warn);
 }
 
 .session-header-status-dot-success {
@@ -7154,7 +7154,7 @@ summary:focus-visible {
 }
 
 .session-workspace-signal-waiting {
-  color: var(--status-warning);
+  color: var(--status-warn);
 }
 
 .session-workspace-count-pending {

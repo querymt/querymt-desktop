@@ -116,16 +116,18 @@
       {/if}
       <span aria-hidden="true">·</span>
       <span>{updatedAt}</span>
-      <span aria-hidden="true">·</span>
-      <button
-        class="session-header-session-id"
-        type="button"
-        title="Copy session ID"
-        aria-label="Copy session ID"
-        onclick={copySessionId}
-      >
-        {#if copiedSessionId}<Check size={11} aria-hidden="true" />{:else}{shortSessionId}{/if}
-      </button>
+      {#if session.sessionId}
+        <span aria-hidden="true">·</span>
+        <button
+          class="session-header-session-id"
+          type="button"
+          title="Copy session ID"
+          aria-label="Copy session ID"
+          onclick={copySessionId}
+        >
+          {#if copiedSessionId}<Check size={11} aria-hidden="true" />{:else}{shortSessionId}{/if}
+        </button>
+      {/if}
     </div>
   </div>
 

@@ -68,6 +68,17 @@ describe('SessionHeader', () => {
     expect(writeText).toHaveBeenCalledWith('01a072b3-a266-4c5d-8e9f-102030405060');
   });
 
+  it('hides the session id chip while no session is loaded', () => {
+    render(SessionHeader, {
+      session: session({ sessionId: null }),
+      title: 'Unloaded test',
+      workspace: 'querymt-desktop',
+      updatedAt: 'Just now'
+    });
+
+    expect(screen.queryByRole('button', { name: 'Copy session ID' })).not.toBeInTheDocument();
+  });
+
   it('moves usage into session details and exposes header actions', async () => {
     const onBack = vi.fn();
     const onRefresh = vi.fn();

@@ -60,7 +60,8 @@
   });
   const composerCollapsed = $derived(chatPresentationState === 'fixed-free-compact');
   const agentRunActive = $derived(
-    ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession?.runState ?? 'idle')
+    !agentsStore.sessionHistoryLoading &&
+      ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession?.runState ?? 'idle')
   );
   // The agent name in the header only disambiguates between sessions when more
   // than one agent is actively connected.
@@ -283,6 +284,13 @@
     setupScrollTracking();
     syncDockAlign();
     scrollToEnd('instant');
+    // If the instant scroll kept the same scrollTop (already anchored at the
+    // bottom) no scroll event fires and the flag would stay set; release it
+    // after pending scroll events have been dispatched (they run before rAF
+    // callbacks within the same frame).
+    requestAnimationFrame(() => {
+      programmaticScroll = false;
+    });
   }
 
   function setupScrollTracking() {
