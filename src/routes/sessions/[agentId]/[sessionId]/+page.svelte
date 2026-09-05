@@ -22,6 +22,7 @@
   import { getForkTarget, getLatestForkTarget, type SessionForkTarget } from '$lib/domain/session-fork';
   import { getCurrentUndoTarget, getUndoAffectedTurnCount, getUndoableSessionTurns, isTurnReverted } from '$lib/domain/session-undo';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { sidebarStore } from '$lib/stores/sidebar.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
 
@@ -38,6 +39,7 @@
   let dockAlignWidth = $state<number | null>(null);
   let debugEventsOpen = $state(false);
   let contentResizeObserver: ResizeObserver | null = null;
+  let pageResizeObserver: ResizeObserver | null = null;
   let scrollViewport: HTMLElement | null = null;
   let viewportEventTarget: HTMLElement | Window | null = null;
   let followFrame: number | null = null;
@@ -121,6 +123,18 @@
     });
   });
 
+  // Sidebar expansion/collapse changes the content column without resizing the
+  // window, and the grid column can animate: re-measure on the toggle itself
+  // and across the next frames so the dock never sits on a stale measurement
+  // even if the box ResizeObserver misses the churn.
+  $effect(() => {
+    void sidebarStore.effectiveCollapsed;
+    void sidebarStore.viewportConstrained;
+    syncDockAlign();
+    requestAnimationFrame(() => syncDockAlign());
+    requestAnimationFrame(() => requestAnimationFrame(syncDockAlign));
+  });
+
   $effect(() => {
     latestContentSignature;
     if (scrollMode !== 'following') return;
@@ -173,9 +187,19 @@
     window.addEventListener('resize', onLayoutChange);
     window.addEventListener('keydown', onKeyDown);
 
+    if (typeof ResizeObserver === 'function' && sessionPage) {
+      // The dock alignment is measured in pixels, so it must track shell layout
+      // changes that do not resize the window, like collapsing or expanding the
+      // sidebar panel.
+      pageResizeObserver = new ResizeObserver(() => syncDockAlign());
+      pageResizeObserver.observe(sessionPage);
+    }
+
     return () => {
       sessionLoadToken += 1;
       disconnectScrollTracking();
+      pageResizeObserver?.disconnect();
+      pageResizeObserver = null;
       window.removeEventListener('resize', onLayoutChange);
       window.removeEventListener('keydown', onKeyDown);
     };
