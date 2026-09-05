@@ -12,6 +12,7 @@
     updatedAt,
     summaryStatus = 'idle',
     debugLabel = 'Debug events',
+    showDebug = false,
     canUndo = false,
     canRedo = false,
     canFork = false,
@@ -32,6 +33,7 @@
     updatedAt: string;
     summaryStatus?: SessionStatus;
     debugLabel?: string;
+    showDebug?: boolean;
     canUndo?: boolean;
     canRedo?: boolean;
     canFork?: boolean;
@@ -148,9 +150,11 @@
           <SessionUsageBar usage={session.usage} />
         </div>
       </details>
-      <button class="icon-btn" type="button" aria-label={debugLabel} title={debugLabel} onclick={onDebug}>
-        <Bug size={16} />
-      </button>
+      {#if showDebug}
+        <button class="icon-btn" type="button" aria-label={debugLabel} title={debugLabel} onclick={onDebug}>
+          <Bug size={16} />
+        </button>
+      {/if}
       <button class="icon-btn" type="button" aria-label="Refresh session" title="Refresh session" onclick={onRefresh}>
         <RefreshCw size={16} />
       </button>

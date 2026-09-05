@@ -5,6 +5,7 @@ export type SendShortcut = 'enter' | 'shift-enter' | 'ctrl-enter' | 'cmd-enter';
 
 const storageKey = 'querymt.sendShortcut';
 const imageModeStorageKey = 'querymt.imageAttachmentMode';
+const developerModeStorageKey = 'querymt.developerMode';
 
 function isSendShortcut(value: string | null): value is SendShortcut {
   return value === 'enter' || value === 'shift-enter' || value === 'ctrl-enter' || value === 'cmd-enter';
@@ -17,6 +18,7 @@ function isImageSendMode(value: string | null): value is ImageSendMode {
 export class ChatPreferencesStore {
   sendShortcut = $state<SendShortcut>('enter');
   imageSendMode = $state<ImageSendMode>('image');
+  developerMode = $state(false);
   initialized = $state(false);
 
   initialize() {
@@ -34,6 +36,8 @@ export class ChatPreferencesStore {
       this.imageSendMode = savedImageMode;
     }
 
+    this.developerMode = window.localStorage.getItem(developerModeStorageKey) === 'true';
+
     this.initialized = true;
   }
 
@@ -50,6 +54,14 @@ export class ChatPreferencesStore {
 
     if (browser) {
       window.localStorage.setItem(imageModeStorageKey, mode);
+    }
+  }
+
+  setDeveloperMode(enabled: boolean) {
+    this.developerMode = enabled;
+
+    if (browser) {
+      window.localStorage.setItem(developerModeStorageKey, enabled ? 'true' : 'false');
     }
   }
 }

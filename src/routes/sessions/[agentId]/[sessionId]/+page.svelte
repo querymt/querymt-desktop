@@ -438,6 +438,7 @@
     updatedAt={selectedSession ? formatSessionTimestamp(selectedSession.updatedAt) : 'Not loaded'}
     summaryStatus={selectedSession?.status ?? 'idle'}
     debugLabel={debugEventsTooltip}
+    showDebug={chatPreferencesStore.developerMode}
     {undoSupported}
     {forkSupported}
     forkPending={agentsStore.forkPending}

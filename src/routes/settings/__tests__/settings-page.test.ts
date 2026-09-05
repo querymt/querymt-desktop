@@ -7,10 +7,12 @@ import SettingsPage from '../+page.svelte';
 const chatPreferencesStore = vi.hoisted(() => ({
   sendShortcut: 'enter',
   imageSendMode: 'image',
+  developerMode: false,
   initialized: true,
   initialize: vi.fn(),
   setSendShortcut: vi.fn(),
-  setImageSendMode: vi.fn()
+  setImageSendMode: vi.fn(),
+  setDeveloperMode: vi.fn()
 }));
 
 const agentsStore = vi.hoisted(() => ({
@@ -218,6 +220,8 @@ describe('Settings controls', () => {
   it('updates the default image attachment encoding', async () => {
     render(SettingsPage);
 
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+
     const encodingSelect = screen.getByRole('button', { name: 'Image attachment encoding' });
     expect(encodingSelect).toHaveTextContent('Native image');
 
@@ -227,6 +231,18 @@ describe('Settings controls', () => {
     await fireEvent.pointerUp(resourceOption, { button: 0, pointerType: 'mouse' });
 
     expect(chatPreferencesStore.setImageSendMode).toHaveBeenCalledWith('resource');
+  });
+
+  it('toggles developer mode from the advanced section', async () => {
+    render(SettingsPage);
+
+    await fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+
+    const developerSwitch = screen.getByRole('switch', { name: 'Developer mode' });
+    expect(developerSwitch).not.toBeChecked();
+
+    await fireEvent.click(developerSwitch);
+    expect(chatPreferencesStore.setDeveloperMode).toHaveBeenCalledWith(true);
   });
 
   it('offers Cmd+Enter on macOS', async () => {

@@ -76,27 +76,39 @@
       </div>
       <AppSelect value={chatPreferencesStore.sendShortcut} options={sendShortcutOptions} pill ariaLabel="Send messages with" onValueChange={handleSendShortcutChange} />
     </div>
-
-    <div class="settings-simple-row">
-      <div class="settings-simple-main">
-        <h3>Image attachment encoding</h3>
-        <p>Send images as native ACP image blocks or embedded resources.</p>
-      </div>
-      <AppSelect value={chatPreferencesStore.imageSendMode} options={imageModeOptions} pill ariaLabel="Image attachment encoding" onValueChange={handleImageModeChange} />
-    </div>
   </div>
 
   <div class="settings-advanced">
     <button class="settings-advanced-trigger" type="button" aria-expanded={advancedOpen} onclick={() => (advancedOpen = !advancedOpen)}>
       <span>
         <strong>Advanced</strong>
-        <small>Experimental window behavior</small>
+        <small>Experimental window behavior and developer tools</small>
       </span>
       <ChevronDown size={16} class={advancedOpen ? 'settings-advanced-chevron-open' : ''} />
     </button>
 
     {#if advancedOpen}
       <div class="settings-advanced-content">
+        <div class="settings-simple-row">
+          <div class="settings-simple-main">
+            <h3>Image attachment encoding</h3>
+            <p>Send images as native ACP image blocks or embedded resources.</p>
+          </div>
+          <AppSelect value={chatPreferencesStore.imageSendMode} options={imageModeOptions} pill ariaLabel="Image attachment encoding" onValueChange={handleImageModeChange} />
+        </div>
+
+        <div class="settings-simple-row">
+          <div class="settings-simple-main">
+            <h3>Developer mode</h3>
+            <p>Show developer-only tools.</p>
+          </div>
+          <AppSwitch
+            checked={chatPreferencesStore.developerMode}
+            ariaLabel="Developer mode"
+            onCheckedChange={(checked) => chatPreferencesStore.setDeveloperMode(checked)}
+          />
+        </div>
+
         <div class="settings-simple-row">
           <div class="settings-simple-main">
             <h3>Custom titlebar <span class="badge">Beta</span></h3>
