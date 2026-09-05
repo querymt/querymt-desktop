@@ -80,7 +80,7 @@
   --app-sidebar-expanded-width: 252px;
   --app-sidebar-collapsed-width: 48px;
   --app-sticky-top: var(--app-shell-inset);
-  --session-composer-bottom-offset: 0.25rem;
+  --session-composer-bottom-offset: 0.75rem;
   --session-composer-expanded-clearance: 13rem;
   --session-composer-compact-clearance: 4.75rem;
   --session-chat-max: 52rem;
@@ -8433,32 +8433,25 @@ summary:focus-visible {
 .session-scroll-bottom-pill-host {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--session-composer-bottom-offset) + 3.35rem + 0.55rem);
+  bottom: calc(var(--session-composer-bottom-offset) + 0.45rem);
   width: min(var(--session-chat-max), calc(100vw - 2rem));
-  z-index: 35;
-  display: flex;
-  justify-content: center;
+  z-index: 40;
   pointer-events: none;
-  max-width: calc(100vw - 2rem);
   transform: translateX(-50%);
 }
 
-.session-scroll-bottom-pill {
+.session-scroll-bottom-slot {
+  position: absolute;
+  right: 0.55rem;
+  bottom: calc(var(--control-height-standard) + 0.85rem);
+  display: inline-flex;
+  opacity: 0.8;
+  transition: opacity 0.15s ease;
   pointer-events: auto;
-  cursor: pointer;
-  color: var(--text);
-  padding: 0.45rem 0.95rem 0.45rem 1rem;
-  font-size: 0.8rem;
-  font-weight: 600;
-  opacity: 0.5;
-  transition: opacity 0.2s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-.session-scroll-bottom-pill:hover,
-.session-scroll-bottom-pill:focus-visible {
+.session-scroll-bottom-slot:hover {
   opacity: 1;
-  border-color: var(--border-strong);
-  outline: none;
 }
 
 .session-composer-dock {
