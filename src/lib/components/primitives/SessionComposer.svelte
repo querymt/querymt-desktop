@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Brain, ChevronDown, FilePlus2, Monitor, Paperclip, Plus, SendHorizontal, Settings2, SlidersHorizontal, UserRound, X } from '@lucide/svelte';
+  import { Brain, ChevronDown, FilePlus2, Monitor, Paperclip, Plus, SendHorizontal, Settings2, SlidersHorizontal, Square, UserRound, X } from '@lucide/svelte';
   import { tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import type { TransitionConfig } from 'svelte/transition';
@@ -74,6 +74,8 @@
     onSessionConfigChange = null,
     onCreateSession = null,
     onDismissError = null,
+    agentRunning = false,
+    onStopPrompt = null,
     onSendPrompt
   }: {
     cwd?: string;
@@ -123,6 +125,8 @@
     onSessionConfigChange?: ((configId: string, value: string) => void | Promise<void>) | null;
     onCreateSession?: (() => void) | null;
     onDismissError?: (() => void) | null;
+    agentRunning?: boolean;
+    onStopPrompt?: (() => void) | null;
     onSendPrompt: () => void;
   } = $props();
 
@@ -148,6 +152,18 @@
         return `opacity:${t * opacity};transform:translateY(${translateY}px);clip-path:inset(${clipTop}% 0 0 0 round ${radius}px);overflow:clip;`;
       }
     };
+  }
+
+  function composerOut(node: HTMLElement, params: { compact: boolean }): TransitionConfig {
+    // Pull the leaving shell out of flow so the dock adopts the incoming
+    // shell's height immediately — the measured clearance and the activity
+    // bar (anchored to --session-composer-live-top) then move in sync with
+    // the morph instead of lagging until the transition ends.
+    node.style.position = 'absolute';
+    node.style.left = '0';
+    node.style.right = '0';
+    node.style.bottom = '0';
+    return composerMorph(node, params);
   }
 
   const unifiedShell = $derived(launch || sessionOnly);
@@ -183,6 +199,10 @@
         '--session-composer-measured-clearance',
         `calc(${Math.ceil(height)}px + var(--session-composer-bottom-offset) + 0.75rem)`
       );
+      document.documentElement.style.setProperty(
+        '--session-composer-live-top',
+        `calc(${Math.ceil(height)}px + var(--session-composer-bottom-offset))`
+      );
     };
 
     syncClearance();
@@ -191,6 +211,7 @@
     return () => {
       observer.disconnect();
       document.documentElement.style.removeProperty('--session-composer-measured-clearance');
+      document.documentElement.style.removeProperty('--session-composer-live-top');
     };
   });
 
@@ -627,13 +648,24 @@
           {/if}
         </button>
       {/if}
-      <button
-        class={`${launch ? 'action-btn action-btn-primary min-w-[9rem] justify-center px-5 py-3' : minimal ? 'action-btn action-btn-primary px-4' : 'icon-btn icon-btn-primary'}`}
-        disabled={loading}
-        type="button"
-        aria-label={activeSessionId ? 'Send reply' : creatingBlankSession ? 'Start blank session' : 'Start session'}
-        onclick={onSendPrompt}
-      >
+      {#if agentRunning && onStopPrompt}
+        <button
+          class="icon-btn icon-btn-primary"
+          type="button"
+          aria-label="Stop agent"
+          title="Stop agent"
+          onclick={onStopPrompt}
+        >
+          <Square size={16} />
+        </button>
+      {:else}
+        <button
+          class={`${launch ? 'action-btn action-btn-primary min-w-[9rem] justify-center px-5 py-3' : minimal ? 'action-btn action-btn-primary px-4' : 'icon-btn icon-btn-primary'}`}
+          disabled={loading}
+          type="button"
+          aria-label={activeSessionId ? 'Send reply' : creatingBlankSession ? 'Start blank session' : 'Start session'}
+          onclick={onSendPrompt}
+        >
         {#if activeSessionId}
           <span class="inline-flex items-center gap-2">
             <SendHorizontal size={16} />
@@ -658,19 +690,21 @@
           </span>
         {/if}
       </button>
+      {/if}
     </div>
   </div>
 {/snippet}
 
 <div
   bind:this={dockElement}
-  class={docked ? 'session-composer-dock' : ''}
+  class={docked ? 'session-composer-dock' : 'session-composer-morph-host'}
   style={dockPositionStyle}
 >
   {#if collapsed}
     <div
       class="session-composer-morph-shell session-composer-dock-compact session-composer-dock-collapsed"
-      transition:composerMorph={{ compact: true }}
+      in:composerMorph={{ compact: true }}
+      out:composerOut={{ compact: true }}
     >
       <input
         bind:this={fileInputElement}
@@ -699,7 +733,11 @@
       />
       {#if attachments.length > 0}<span class="session-composer-attachment-count" aria-label={`${attachments.length} pending attachments`}>{attachments.length}</span>{/if}
       <IconTooltipButton label="Attach files" icon={Paperclip} size={16} onclick={handleAttachClick} />
-      <IconTooltipButton label="Send reply" icon={SendHorizontal} tone="primary" size={16} disabled={loading} onclick={onSendPrompt} />
+      {#if agentRunning && onStopPrompt}
+        <IconTooltipButton label="Stop agent" icon={Square} tone="primary" size={16} onclick={onStopPrompt} />
+      {:else}
+        <IconTooltipButton label="Send reply" icon={SendHorizontal} tone="primary" size={16} disabled={loading} onclick={onSendPrompt} />
+      {/if}
 
       {#if attachmentErrors.length > 0}
         <div class="composer-attachment-errors session-composer-dock-errors" role="alert" aria-live="polite">
@@ -710,7 +748,8 @@
   {:else}
     <div
       class={`session-composer-morph-shell session-composer-dock-expanded panel-strong ${unifiedShell ? 'p-4 md:p-6' : minimal ? 'p-4 md:p-5' : 'p-3 md:p-4'}`}
-      transition:composerMorph={{ compact: false }}
+      in:composerMorph={{ compact: false }}
+      out:composerOut={{ compact: false }}
     >
       <div
         class={`flex flex-col ${unifiedShell ? 'gap-4 rounded-[24px] bg-inherit' : 'gap-3 rounded-[18px] border border-[var(--border)] bg-inherit'} ${unifiedShell ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}

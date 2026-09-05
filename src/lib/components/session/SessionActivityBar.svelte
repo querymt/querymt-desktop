@@ -1,16 +1,14 @@
 <script lang="ts">
-  import { AlertTriangle, LoaderCircle, MessageCircleQuestion, X } from '@lucide/svelte';
+  import { AlertTriangle, LoaderCircle, MessageCircleQuestion } from '@lucide/svelte';
   import { getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
 
   let {
     session,
-    forkPending = false,
-    onCancel
+    forkPending = false
   }: {
     session: ActiveSessionViewModel;
     forkPending?: boolean;
-    onCancel?: () => void | Promise<void>;
   } = $props();
 
   const agentBusy = $derived(
@@ -63,11 +61,6 @@
       <span class="session-activity-meta">Respond below to continue.</span>
     {:else if !session.undo.pendingOperation && !forkPending}
       <span class="session-activity-meta">Double Esc to cancel</span>
-    {/if}
-    {#if agentBusy && onCancel}
-      <button class="session-activity-cancel" type="button" aria-label="Cancel active session" title="Cancel active session" onclick={onCancel}>
-        <X size={14} />
-      </button>
     {/if}
   </section>
 {/if}

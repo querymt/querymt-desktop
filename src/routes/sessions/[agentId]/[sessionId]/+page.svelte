@@ -6,6 +6,7 @@
   import InboxRequestCard from '$lib/components/primitives/InboxRequestCard.svelte';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import SessionScrollToBottomPill from '$lib/components/session/SessionScrollToBottomPill.svelte';
+  import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelte';
   import SessionForkDialog from '$lib/components/session/SessionForkDialog.svelte';
   import SessionHeader from '$lib/components/session/SessionHeader.svelte';
   import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
@@ -58,6 +59,9 @@
     return count === 0 ? 'Debug events' : `Debug events (${count})`;
   });
   const composerCollapsed = $derived(chatPresentationState === 'fixed-free-compact');
+  const agentRunActive = $derived(
+    ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession?.runState ?? 'idle')
+  );
   // The agent name in the header only disambiguates between sessions when more
   // than one agent is actively connected.
   const activeAgentCount = $derived(
@@ -506,7 +510,6 @@
       promptRetryPending={agentsStore.promptRetryPending}
       onRetryPrompt={() => agentsStore.retryPromptFailure()}
       onDismissPromptFailure={() => agentsStore.dismissPromptFailure()}
-      onCancel={() => agentsStore.cancelActiveSession()}
       onUndo={openUndoDialog}
       onRedo={() => void agentsStore.redoActiveSession()}
       onFork={openForkDialog}
@@ -549,6 +552,13 @@
         />
       {/if}
 
+      <div
+        class="session-activity-bar-dock"
+        style={dockAlignLeft != null && dockAlignWidth != null ? `left:${dockAlignLeft}px;width:${dockAlignWidth}px;transform:none;` : ''}
+      >
+        <SessionActivityBar session={agentsStore.activeSession} forkPending={agentsStore.forkPending} />
+      </div>
+
       <SessionComposer
         docked={true}
         collapsed={composerCollapsed}
@@ -557,6 +567,8 @@
         compact={true}
         sessionOnly={true}
         chatView={true}
+        agentRunning={agentRunActive}
+        onStopPrompt={() => agentsStore.cancelActiveSession()}
         sendShortcut={chatPreferencesStore.sendShortcut}
         prompt={agentsStore.composerPrompt}
         loading={agentsStore.loading}

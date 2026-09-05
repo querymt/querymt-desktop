@@ -4780,26 +4780,44 @@ summary:focus-visible {
 }
 
 .session-activity-bar {
-  display: flex;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
   min-width: 0;
   align-items: center;
   gap: 0.55rem;
-  border-left: 2px solid var(--status-warning);
-  padding: 0.35rem 0.45rem 0.35rem 0.7rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: var(--body-bg-base);
   color: var(--muted);
+  pointer-events: auto;
+  box-shadow:
+    0 0 0 4px var(--body-bg-base),
+    0 0 12px 4px color-mix(in srgb, var(--body-bg-base) 85%, transparent),
+    0 0 28px 9px color-mix(in srgb, var(--body-bg-base) 50%, transparent);
 }
 
-.session-activity-bar-busy {
-  border-left-color: var(--status-running);
+.session-activity-bar-dock {
+  position: fixed;
+  left: 50%;
+  bottom: calc(
+    var(
+      --session-composer-live-top,
+      calc(var(--session-composer-bottom-offset) + var(--control-height-standard))
+    ) + 0.4rem
+  );
+  z-index: 34;
+  display: flex;
+  justify-content: flex-start;
+  width: min(var(--session-chat-max), calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+  transform: translateX(-50%);
+  pointer-events: none;
+  transition: bottom 180ms ease;
 }
 
 .session-activity-bar-failed {
-  border-left-color: var(--status-danger);
   color: var(--status-danger);
-}
-
-.session-activity-bar-attention {
-  border-left-color: var(--status-warning);
 }
 
 .session-activity-indicator {
@@ -4829,25 +4847,6 @@ summary:focus-visible {
   color: var(--text-dim);
   font-size: 0.7rem;
   white-space: nowrap;
-}
-
-.session-activity-cancel {
-  display: inline-flex;
-  width: var(--control-height-compact);
-  height: var(--control-height-compact);
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  margin-left: auto;
-  border: 0;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--muted);
-}
-
-.session-activity-cancel:hover {
-  background: var(--bg-card-hover);
-  color: var(--text);
 }
 
 .session-usage-bar {
@@ -8474,6 +8473,10 @@ summary:focus-visible {
   will-change: transform, opacity;
 }
 
+.session-composer-morph-host {
+  position: relative;
+}
+
 .session-composer-dock-collapsed {
   display: flex;
   align-items: center;
@@ -8509,6 +8512,10 @@ summary:focus-visible {
 
   .session-composer-morph-shell {
     will-change: auto;
+  }
+
+  .session-activity-bar-dock {
+    transition: none;
   }
 }
 
