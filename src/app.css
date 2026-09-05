@@ -80,7 +80,7 @@
   --app-sidebar-expanded-width: 252px;
   --app-sidebar-collapsed-width: 48px;
   --app-sticky-top: var(--app-shell-inset);
-  --session-composer-bottom-offset: 0.25rem;
+  --session-composer-bottom-offset: 0.75rem;
   --session-composer-expanded-clearance: 13rem;
   --session-composer-compact-clearance: 4.75rem;
   --session-chat-max: 52rem;
@@ -4614,50 +4614,43 @@ summary:focus-visible {
   padding-left: 0.45rem;
 }
 
-.session-header-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-height: 1.8rem;
-  border: 1px solid var(--status-muted-border);
+.session-header-session-id {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.session-header-session-id:hover {
+  color: var(--text);
+}
+
+.session-header-status-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  flex: 0 0 auto;
   border-radius: 999px;
-  background: var(--status-muted-bg);
-  color: var(--status-muted);
-  padding: 0.25rem 0.6rem;
-  font-size: 0.72rem;
-  font-weight: 650;
-  white-space: nowrap;
+  background: var(--status-muted);
 }
 
-.session-header-status i {
-  width: 0.4rem;
-  height: 0.4rem;
-  border-radius: 999px;
-  background: currentColor;
+.session-header-status-dot-running {
+  background: var(--status-running);
 }
 
-.session-header-status-running {
-  border-color: var(--status-running-border);
-  background: var(--status-running-bg);
-  color: var(--status-running);
+.session-header-status-dot-warning {
+  background: var(--status-warn);
 }
 
-.session-header-status-warning {
-  border-color: var(--status-warning-border);
-  background: var(--status-warning-bg);
-  color: var(--status-warning);
+.session-header-status-dot-success {
+  background: var(--status-success);
 }
 
-.session-header-status-success {
-  border-color: var(--status-success-border);
-  background: var(--status-success-bg);
-  color: var(--status-success);
-}
-
-.session-header-status-danger {
-  border-color: var(--status-danger-border);
-  background: var(--status-danger-bg);
-  color: var(--status-danger);
+.session-header-status-dot-danger {
+  background: var(--status-danger);
 }
 
 .session-header-details {
@@ -4780,26 +4773,44 @@ summary:focus-visible {
 }
 
 .session-activity-bar {
-  display: flex;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
   min-width: 0;
   align-items: center;
   gap: 0.55rem;
-  border-left: 2px solid var(--status-warning);
-  padding: 0.35rem 0.45rem 0.35rem 0.7rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: var(--body-bg-base);
   color: var(--muted);
+  pointer-events: auto;
+  box-shadow:
+    0 0 0 4px var(--body-bg-base),
+    0 0 12px 4px color-mix(in srgb, var(--body-bg-base) 85%, transparent),
+    0 0 28px 9px color-mix(in srgb, var(--body-bg-base) 50%, transparent);
 }
 
-.session-activity-bar-busy {
-  border-left-color: var(--status-running);
+.session-activity-bar-dock {
+  position: fixed;
+  left: 50%;
+  bottom: calc(
+    var(
+      --session-composer-live-top,
+      calc(var(--session-composer-bottom-offset) + var(--control-height-standard))
+    ) + 0.4rem
+  );
+  z-index: 34;
+  display: flex;
+  justify-content: flex-start;
+  width: min(var(--session-chat-max), calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+  transform: translateX(-50%);
+  pointer-events: none;
+  transition: bottom 180ms ease;
 }
 
 .session-activity-bar-failed {
-  border-left-color: var(--status-danger);
   color: var(--status-danger);
-}
-
-.session-activity-bar-attention {
-  border-left-color: var(--status-warning);
 }
 
 .session-activity-indicator {
@@ -4829,25 +4840,6 @@ summary:focus-visible {
   color: var(--text-dim);
   font-size: 0.7rem;
   white-space: nowrap;
-}
-
-.session-activity-cancel {
-  display: inline-flex;
-  width: var(--control-height-compact);
-  height: var(--control-height-compact);
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  margin-left: auto;
-  border: 0;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--muted);
-}
-
-.session-activity-cancel:hover {
-  background: var(--bg-card-hover);
-  color: var(--text);
 }
 
 .session-usage-bar {
@@ -4991,14 +4983,6 @@ summary:focus-visible {
   }
 
   .session-header-action-group[aria-label='Session actions'] > button:not(:last-child) {
-    display: none;
-  }
-
-  .session-header-status {
-    padding-inline: 0.45rem;
-  }
-
-  .session-header-status span {
     display: none;
   }
 
@@ -5402,7 +5386,6 @@ summary:focus-visible {
 .session-image-lightbox-close {
   position: absolute;
   z-index: 1;
-  border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(24, 24, 27, 0.7);
   color: #fff;
   box-shadow: 0 1px 5px rgba(0, 0, 0, 0.24);
@@ -5644,8 +5627,10 @@ summary:focus-visible {
 .session-message-user {
   max-width: min(44rem, 86%);
   margin-left: auto;
+  padding: 0.55rem 0.9rem;
   background: var(--accent-dim);
-  border-color: var(--rail);
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .session-reasoning {
@@ -6907,13 +6892,6 @@ summary:focus-visible {
 }
 
 @media (min-width: 1024px) {
-  .app-sidebar {
-    top: 1.5rem;
-    left: 0.75rem;
-    height: calc(100dvh - 3rem);
-    max-height: calc(100dvh - 3rem);
-  }
-
   .app-shell-custom-titlebar .app-sidebar {
     top: calc(12px + 3.5rem);
     left: calc(12px + 0.75rem);
@@ -7176,7 +7154,7 @@ summary:focus-visible {
 }
 
 .session-workspace-signal-waiting {
-  color: var(--status-warning);
+  color: var(--status-warn);
 }
 
 .session-workspace-count-pending {
@@ -7406,41 +7384,58 @@ summary:focus-visible {
   background: var(--status-muted-bg);
 }
 
-.session-row-status {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: var(--status-muted-bg);
-  color: var(--status-muted);
-  padding: 0.1rem 0.38rem;
-  font-size: 0.62rem;
-  font-weight: 650;
-}
-
-.session-row-status-thinking,
-.session-row-status-cancelling {
-  background: var(--status-running-bg);
-  color: var(--status-running);
-}
-
-.session-row-status-waiting {
-  background: var(--status-warning-bg);
-  color: var(--status-warning);
-}
-
-.session-row-status-completed {
-  background: var(--status-success-bg);
-  color: var(--status-success);
-}
-
 .session-row-meta {
   display: flex;
   min-width: 0;
+  align-items: center;
   gap: 0.45rem;
   color: var(--muted);
   font-size: 0.72rem;
   line-height: 1.35;
+}
+
+.session-row-status-line {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.35rem;
+  pointer-events: none;
+}
+
+.session-row-status-line .session-header-status-dot {
+  pointer-events: auto;
+  cursor: default;
+}
+
+.session-row-status-tooltip {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 90;
+  display: none;
+  padding: 0.28rem 0.55rem;
+  border-radius: var(--radius-sm);
+  background: rgba(13, 11, 8, 0.94);
+  color: #f6f5f4;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+.session-row-status-line:hover .session-row-status-tooltip,
+.session-header-status-wrap:hover .session-row-status-tooltip {
+  display: block;
+}
+
+.session-header-status-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
 }
 
 .session-row-meta span {
@@ -8433,32 +8428,31 @@ summary:focus-visible {
 .session-scroll-bottom-pill-host {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--session-composer-bottom-offset) + 3.35rem + 0.55rem);
+  bottom: calc(
+    var(
+      --session-composer-live-top,
+      calc(var(--session-composer-bottom-offset) + var(--control-height-standard))
+    ) + 0.4rem
+  );
   width: min(var(--session-chat-max), calc(100vw - 2rem));
-  z-index: 35;
-  display: flex;
-  justify-content: center;
+  z-index: 40;
   pointer-events: none;
-  max-width: calc(100vw - 2rem);
   transform: translateX(-50%);
+  transition: bottom 180ms ease;
 }
 
-.session-scroll-bottom-pill {
+.session-scroll-bottom-slot {
+  position: absolute;
+  right: 0.55rem;
+  bottom: 0;
+  display: inline-flex;
+  opacity: 0.8;
+  transition: opacity 0.15s ease;
   pointer-events: auto;
-  cursor: pointer;
-  color: var(--text);
-  padding: 0.45rem 0.95rem 0.45rem 1rem;
-  font-size: 0.8rem;
-  font-weight: 600;
-  opacity: 0.5;
-  transition: opacity 0.2s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-.session-scroll-bottom-pill:hover,
-.session-scroll-bottom-pill:focus-visible {
+.session-scroll-bottom-slot:hover {
   opacity: 1;
-  border-color: var(--border-strong);
-  outline: none;
 }
 
 .session-composer-dock {
@@ -8486,6 +8480,10 @@ summary:focus-visible {
   width: 100%;
   transform-origin: bottom center;
   will-change: transform, opacity;
+}
+
+.session-composer-morph-host {
+  position: relative;
 }
 
 .session-composer-dock-collapsed {
@@ -8523,6 +8521,11 @@ summary:focus-visible {
 
   .session-composer-morph-shell {
     will-change: auto;
+  }
+
+  .session-activity-bar-dock,
+  .session-scroll-bottom-pill-host {
+    transition: none;
   }
 }
 

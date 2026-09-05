@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeft, Bug, GitFork, Info, LoaderCircle, Redo2, RefreshCw, Undo2 } from '@lucide/svelte';
+  import { ArrowLeft, Bug, Check, GitFork, Info, LoaderCircle, Redo2, RefreshCw, Undo2 } from '@lucide/svelte';
   import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
   import { formatShortcut } from '$lib/design/platform';
   import type { ActiveSessionViewModel, SessionStatus } from '$lib/domain/types';
@@ -12,6 +12,7 @@
     updatedAt,
     summaryStatus = 'idle',
     debugLabel = 'Debug events',
+    showDebug = false,
     canUndo = false,
     canRedo = false,
     canFork = false,
@@ -28,10 +29,11 @@
     session: ActiveSessionViewModel;
     title: string;
     workspace: string;
-    agentName: string;
+    agentName?: string;
     updatedAt: string;
     summaryStatus?: SessionStatus;
     debugLabel?: string;
+    showDebug?: boolean;
     canUndo?: boolean;
     canRedo?: boolean;
     canFork?: boolean;
@@ -46,11 +48,30 @@
     onFork?: () => void;
   } = $props();
 
+  let copiedSessionId = $state(false);
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+
   const busy = $derived(
     forkPending ||
       session.undo.pendingOperation !== null ||
       ['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState)
   );
+
+  const shortSessionId = $derived(session.sessionId ? session.sessionId.slice(0, 13) : '');
+
+  async function copySessionId() {
+    if (!session.sessionId) return;
+    try {
+      await navigator.clipboard.writeText(session.sessionId);
+      copiedSessionId = true;
+      clearTimeout(copiedTimer);
+      copiedTimer = setTimeout(() => {
+        copiedSessionId = false;
+      }, 1200);
+    } catch (error) {
+      console.error('Failed to copy session ID', error);
+    }
+  }
 
   const status = $derived.by((): { label: string; tone: string; busy: boolean } => {
     if (forkPending) return { label: 'Creating fork', tone: 'running', busy: true };
@@ -81,20 +102,36 @@
   <div class="session-header-identity">
     <h1>{title}</h1>
     <div class="session-header-meta">
+      <span class="session-header-status-wrap">
+        <span
+          class={`session-header-status-dot session-header-status-dot-${status.tone}`}
+          aria-label={`Status: ${status.label}`}
+        ></span>
+        <span class="session-row-status-tooltip" role="tooltip">{status.label}</span>
+      </span>
       <span>{workspace}</span>
-      <span aria-hidden="true">·</span>
-      <span>{agentName}</span>
+      {#if agentName}
+        <span aria-hidden="true">·</span>
+        <span>{agentName}</span>
+      {/if}
       <span aria-hidden="true">·</span>
       <span>{updatedAt}</span>
+      {#if session.sessionId}
+        <span aria-hidden="true">·</span>
+        <button
+          class="session-header-session-id"
+          type="button"
+          title="Copy session ID"
+          aria-label="Copy session ID"
+          onclick={copySessionId}
+        >
+          {#if copiedSessionId}<Check size={11} aria-hidden="true" />{:else}{shortSessionId}{/if}
+        </button>
+      {/if}
     </div>
   </div>
 
   <div class="session-header-controls">
-    <span class={`session-header-status session-header-status-${status.tone}`}>
-      {#if status.busy}<LoaderCircle size={13} class="animate-spin" />{:else}<i aria-hidden="true"></i>{/if}
-      <span>{status.label}</span>
-    </span>
-
     <div class="session-header-action-group" aria-label="Session history actions">
       {#if forkSupported}
         <button
@@ -148,9 +185,11 @@
           <SessionUsageBar usage={session.usage} />
         </div>
       </details>
-      <button class="icon-btn" type="button" aria-label={debugLabel} title={debugLabel} onclick={onDebug}>
-        <Bug size={16} />
-      </button>
+      {#if showDebug}
+        <button class="icon-btn" type="button" aria-label={debugLabel} title={debugLabel} onclick={onDebug}>
+          <Bug size={16} />
+        </button>
+      {/if}
       <button class="icon-btn" type="button" aria-label="Refresh session" title="Refresh session" onclick={onRefresh}>
         <RefreshCw size={16} />
       </button>

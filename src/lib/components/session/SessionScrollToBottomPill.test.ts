@@ -13,7 +13,6 @@ describe('SessionScrollToBottomPill', () => {
     const button = screen.getByRole('button', {
       name: 'Scroll to latest message and follow new content'
     });
-    expect(button).toHaveTextContent('Latest');
 
     await fireEvent.click(button);
     expect(onScrollToBottom).toHaveBeenCalledOnce();

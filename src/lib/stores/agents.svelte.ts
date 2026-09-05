@@ -226,6 +226,7 @@ export class AgentsStore {
   activeSessionId = $state<string | null>(null);
   activeSession = $state<ActiveSessionViewModel>(createEmptyActiveSession());
   forkPending = $state(false);
+  sessionHistoryLoading = $state(false);
   lastCreatedSession = $state<NewSessionResponse | null>(null);
   lastLoadedSession = $state<LoadSessionResponse | null>(null);
   lastPromptResponse = $state<PromptResponse | null>(null);
@@ -1330,8 +1331,26 @@ export class AgentsStore {
     }
     let telemetryStatus = 'success';
     try {
-      this.resetActiveSession(agentId, sessionId);
+      // Stale-while-revalidate: when reloading the session that is already on
+      // screen and still has content, keep the transcript rendered while the
+      // fresh history loads. Resetting here collapses the scrollable content,
+      // which un-pins the sticky header and makes the top panel jump vertically.
+      const keepStaleContent =
+        this.isSelectedSession(agentId, sessionId) &&
+        (this.activeSession.transcript.length > 0 ||
+          this.activeSession.toolCalls.length > 0 ||
+          this.activeSession.events.length > 0);
+      if (keepStaleContent) {
+        this.promptFailure = null;
+        const staleRecord = this.ensureClientRecord(agentId);
+        staleRecord.recentSessionUpdateKeys = [];
+      } else {
+        this.resetActiveSession(agentId, sessionId);
+      }
       this.activeSession.undo.pendingOperation = pendingOperation;
+      // Distinguish "history is loading" from a live prompt run: both set
+      // runState to 'thinking', but only a real run should expose Stop.
+      this.sessionHistoryLoading = true;
       this.activeSession.runState = 'thinking';
       this.activeSession.activityLabel = 'Loading session history...';
       this.activeSession.lastError = null;
@@ -1440,6 +1459,7 @@ export class AgentsStore {
       this.activeSession.activityLabel = message;
       this.error = message;
     } finally {
+      this.sessionHistoryLoading = false;
       if (heartbeat) clearInterval(heartbeat);
       await telemetryQueue;
       await finishSessionLoadTelemetry(telemetryOperationId, telemetryStatus, telemetryCounters());

@@ -6,6 +6,7 @@
   import InboxRequestCard from '$lib/components/primitives/InboxRequestCard.svelte';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import SessionScrollToBottomPill from '$lib/components/session/SessionScrollToBottomPill.svelte';
+  import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelte';
   import SessionForkDialog from '$lib/components/session/SessionForkDialog.svelte';
   import SessionHeader from '$lib/components/session/SessionHeader.svelte';
   import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
@@ -22,6 +23,7 @@
   import { getForkTarget, getLatestForkTarget, type SessionForkTarget } from '$lib/domain/session-fork';
   import { getCurrentUndoTarget, getUndoAffectedTurnCount, getUndoableSessionTurns, isTurnReverted } from '$lib/domain/session-undo';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { sidebarStore } from '$lib/stores/sidebar.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
 
@@ -38,6 +40,7 @@
   let dockAlignWidth = $state<number | null>(null);
   let debugEventsOpen = $state(false);
   let contentResizeObserver: ResizeObserver | null = null;
+  let pageResizeObserver: ResizeObserver | null = null;
   let scrollViewport: HTMLElement | null = null;
   let viewportEventTarget: HTMLElement | Window | null = null;
   let followFrame: number | null = null;
@@ -56,6 +59,19 @@
     return count === 0 ? 'Debug events' : `Debug events (${count})`;
   });
   const composerCollapsed = $derived(chatPresentationState === 'fixed-free-compact');
+  const agentRunActive = $derived(
+    !agentsStore.sessionHistoryLoading &&
+      ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession?.runState ?? 'idle')
+  );
+  // The agent name in the header only disambiguates between sessions when more
+  // than one agent is actively connected.
+  const activeAgentCount = $derived(
+    agentsStore.configs.filter((agent) =>
+      ['connecting', 'reconnecting', 'initialized', 'loading-sessions'].includes(
+        agentsStore.connectionStates[agent.id] ?? 'idle'
+      )
+    ).length
+  );
   const undoSupported = $derived(agentId ? agentsStore.canUseSessionUndo(agentId) : false);
   const forkSupported = $derived(agentId ? agentsStore.canForkSession(agentId) : false);
   const undoTarget = $derived(
@@ -112,6 +128,18 @@
     });
   });
 
+  // Sidebar expansion/collapse changes the content column without resizing the
+  // window, and the grid column can animate: re-measure on the toggle itself
+  // and across the next frames so the dock never sits on a stale measurement
+  // even if the box ResizeObserver misses the churn.
+  $effect(() => {
+    void sidebarStore.effectiveCollapsed;
+    void sidebarStore.viewportConstrained;
+    syncDockAlign();
+    requestAnimationFrame(() => syncDockAlign());
+    requestAnimationFrame(() => requestAnimationFrame(syncDockAlign));
+  });
+
   $effect(() => {
     latestContentSignature;
     if (scrollMode !== 'following') return;
@@ -164,9 +192,19 @@
     window.addEventListener('resize', onLayoutChange);
     window.addEventListener('keydown', onKeyDown);
 
+    if (typeof ResizeObserver === 'function' && sessionPage) {
+      // The dock alignment is measured in pixels, so it must track shell layout
+      // changes that do not resize the window, like collapsing or expanding the
+      // sidebar panel.
+      pageResizeObserver = new ResizeObserver(() => syncDockAlign());
+      pageResizeObserver.observe(sessionPage);
+    }
+
     return () => {
       sessionLoadToken += 1;
       disconnectScrollTracking();
+      pageResizeObserver?.disconnect();
+      pageResizeObserver = null;
       window.removeEventListener('resize', onLayoutChange);
       window.removeEventListener('keydown', onKeyDown);
     };
@@ -219,10 +257,18 @@
     }
 
     const token = ++sessionLoadToken;
-    dockAlignLeft = null;
-    dockAlignWidth = null;
+    // Keep the dock locked to the content column across the reload: re-measure
+    // immediately instead of clearing the alignment. Clearing falls back to
+    // viewport centering, which visually shifts the composer left of the chat
+    // column for the whole "loading session history" phase.
+    syncDockAlign();
     setScrollMode('following');
-    programmaticScroll = false;
+    // Transcript replacement churns scroll position (content shrinks, the
+    // browser clamps scrollTop, then grows back). Treat the whole load as
+    // programmatic so that churn cannot flip the scroll mode to free and
+    // collapse the composer; the flag self-clears once re-anchored at the
+    // bottom, and user wheel/pointer input cancels it immediately.
+    programmaticScroll = true;
 
     await ensureSessionLoaded(agentIdToLoad, sessionIdToLoad);
     if (token !== sessionLoadToken || agentId !== agentIdToLoad || sessionId !== sessionIdToLoad) {
@@ -238,6 +284,13 @@
     setupScrollTracking();
     syncDockAlign();
     scrollToEnd('instant');
+    // If the instant scroll kept the same scrollTop (already anchored at the
+    // bottom) no scroll event fires and the flag would stay set; release it
+    // after pending scroll events have been dispatched (they run before rAF
+    // callbacks within the same frame).
+    requestAnimationFrame(() => {
+      programmaticScroll = false;
+    });
   }
 
   function setupScrollTracking() {
@@ -434,10 +487,11 @@
     session={agentsStore.activeSession}
     title={selectedSession?.title ?? 'Session'}
     workspace={selectedSession ? getSessionWorkspaceName(selectedSession.cwd) : 'Unknown workspace'}
-    agentName={selectedSession?.agentName ?? 'Unknown agent'}
+    agentName={activeAgentCount > 1 ? (selectedSession?.agentName ?? 'Unknown agent') : undefined}
     updatedAt={selectedSession ? formatSessionTimestamp(selectedSession.updatedAt) : 'Not loaded'}
     summaryStatus={selectedSession?.status ?? 'idle'}
     debugLabel={debugEventsTooltip}
+    showDebug={chatPreferencesStore.developerMode}
     {undoSupported}
     {forkSupported}
     forkPending={agentsStore.forkPending}
@@ -464,7 +518,6 @@
       promptRetryPending={agentsStore.promptRetryPending}
       onRetryPrompt={() => agentsStore.retryPromptFailure()}
       onDismissPromptFailure={() => agentsStore.dismissPromptFailure()}
-      onCancel={() => agentsStore.cancelActiveSession()}
       onUndo={openUndoDialog}
       onRedo={() => void agentsStore.redoActiveSession()}
       onFork={openForkDialog}
@@ -507,6 +560,13 @@
         />
       {/if}
 
+      <div
+        class="session-activity-bar-dock"
+        style={dockAlignLeft != null && dockAlignWidth != null ? `left:${dockAlignLeft}px;width:${dockAlignWidth}px;transform:none;` : ''}
+      >
+        <SessionActivityBar session={agentsStore.activeSession} forkPending={agentsStore.forkPending} />
+      </div>
+
       <SessionComposer
         docked={true}
         collapsed={composerCollapsed}
@@ -515,6 +575,8 @@
         compact={true}
         sessionOnly={true}
         chatView={true}
+        agentRunning={agentRunActive}
+        onStopPrompt={() => agentsStore.cancelActiveSession()}
         sendShortcut={chatPreferencesStore.sendShortcut}
         prompt={agentsStore.composerPrompt}
         loading={agentsStore.loading}

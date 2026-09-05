@@ -2,6 +2,7 @@
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { ChevronDown } from '@lucide/svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
 
   let {
     visible = false,
@@ -37,14 +38,13 @@
 
 {#if visible}
   <div class="session-scroll-bottom-pill-host" style={positionStyle} in:fly={pillIntro} out:fly={pillOutro}>
-    <button
-      class="session-composer-dock-collapsed session-scroll-bottom-pill"
-      type="button"
-      aria-label="Scroll to latest message and follow new content"
-      onclick={onScrollToBottom}
-    >
-      <span>Latest</span>
-      <ChevronDown size={16} strokeWidth={2} aria-hidden="true" />
-    </button>
+    <span class="session-scroll-bottom-slot">
+      <IconTooltipButton
+        label="Scroll to latest message and follow new content"
+        icon={ChevronDown}
+        size={16}
+        onclick={onScrollToBottom}
+      />
+    </span>
   </div>
 {/if}

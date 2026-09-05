@@ -3,6 +3,7 @@ import { ChatPreferencesStore } from './chat-preferences.svelte';
 
 const storageKey = 'querymt.sendShortcut';
 const imageModeStorageKey = 'querymt.imageAttachmentMode';
+const developerModeStorageKey = 'querymt.developerMode';
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -44,6 +45,25 @@ describe('ChatPreferencesStore', () => {
 
     store.setImageSendMode('image');
     expect(window.localStorage.getItem(imageModeStorageKey)).toBe('image');
+  });
+
+  it('disables developer mode by default', () => {
+    const store = new ChatPreferencesStore();
+
+    store.initialize();
+
+    expect(store.developerMode).toBe(false);
+  });
+
+  it('restores and persists developer mode', () => {
+    window.localStorage.setItem(developerModeStorageKey, 'true');
+    const store = new ChatPreferencesStore();
+    store.initialize();
+    expect(store.developerMode).toBe(true);
+
+    store.setDeveloperMode(false);
+    expect(store.developerMode).toBe(false);
+    expect(window.localStorage.getItem(developerModeStorageKey)).toBe('false');
   });
 
   it('persists shortcut changes', () => {

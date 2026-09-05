@@ -44,8 +44,39 @@ describe('SessionHeader', () => {
     expect(screen.getByRole('heading', { name: 'Refine session hierarchy' })).toBeInTheDocument();
     expect(screen.getByText('querymt-desktop')).toBeInTheDocument();
     expect(screen.getByText('QMTCODE')).toBeInTheDocument();
-    expect(screen.getByText('Ready')).toBeInTheDocument();
+    expect(screen.getByLabelText('Status: Ready')).toBeInTheDocument();
     expect(screen.getByText('Context')).toBeInTheDocument();
+  });
+
+  it('shows a short session id chip that copies the full id', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true
+    });
+    render(SessionHeader, {
+      session: session({ sessionId: '01a072b3-a266-4c5d-8e9f-102030405060' }),
+      title: 'Chip test',
+      workspace: 'querymt-desktop',
+      updatedAt: 'Just now'
+    });
+
+    const chip = screen.getByRole('button', { name: 'Copy session ID' });
+    expect(chip).toHaveTextContent('01a072b3-a266');
+    await fireEvent.click(chip);
+
+    expect(writeText).toHaveBeenCalledWith('01a072b3-a266-4c5d-8e9f-102030405060');
+  });
+
+  it('hides the session id chip while no session is loaded', () => {
+    render(SessionHeader, {
+      session: session({ sessionId: null }),
+      title: 'Unloaded test',
+      workspace: 'querymt-desktop',
+      updatedAt: 'Just now'
+    });
+
+    expect(screen.queryByRole('button', { name: 'Copy session ID' })).not.toBeInTheDocument();
   });
 
   it('moves usage into session details and exposes header actions', async () => {
@@ -61,7 +92,7 @@ describe('SessionHeader', () => {
       onRefresh
     });
 
-    expect(screen.getByText('Working')).toBeInTheDocument();
+    expect(screen.getByLabelText('Status: Working')).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Refresh session' }));
     await fireEvent.click(screen.getByLabelText('Session details'));

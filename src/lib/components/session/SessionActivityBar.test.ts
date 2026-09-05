@@ -40,6 +40,12 @@ describe('SessionActivityBar', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Double Esc to cancel');
   });
 
+  it('leaves stopping to the composer stop button instead of an inline cancel control', () => {
+    render(SessionActivityBar, { session: session({ runState: 'streaming' }) });
+
+    expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
+  });
+
   it('shows the active semantic tool and preview without duplicate shimmer content', () => {
     render(SessionActivityBar, {
       session: session({

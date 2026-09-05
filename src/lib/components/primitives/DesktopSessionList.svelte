@@ -174,6 +174,20 @@
     }
   }
 
+  function getStatusTone(status: SessionStatus): string {
+    switch (status) {
+      case 'thinking':
+      case 'cancelling':
+        return 'running';
+      case 'waiting':
+        return 'warning';
+      case 'completed':
+        return 'success';
+      default:
+        return 'muted';
+    }
+  }
+
   async function copySessionId(event: MouseEvent, sessionId: string) {
     event.stopPropagation();
     (event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open');
@@ -371,7 +385,6 @@
                     <span class="session-row-main">
                        <span class="session-row-title-line">
                           <span class="session-row-title">{session.title}</span>
-                          <span class={`session-row-status session-row-status-${session.status}`}>{getStatusLabel(session.status)}</span>
                           {#if group.location === 'mixed' && session.location === 'remote'}
                             <span class="session-relationship-badge session-relationship-badge-remote">Remote</span>
                           {/if}
@@ -392,7 +405,14 @@
                       </span>
                       <span class="session-row-meta">
                         {#if showAgentNames}<span>{session.agentName}</span>{/if}
-                        <span>{formatSessionTimestamp(session.updatedAt)}</span>
+                        <span class="session-row-status-line">
+                          <span
+                            class={`session-header-status-dot session-header-status-dot-${getStatusTone(session.status)}`}
+                            aria-label={`Status: ${getStatusLabel(session.status)}`}
+                          ></span>
+                          <span class="session-row-status-tooltip" role="tooltip">{getStatusLabel(session.status)}</span>
+                          <span>{formatSessionTimestamp(session.updatedAt)}</span>
+                        </span>
                       </span>
                     </span>
                      <span class="session-row-side">

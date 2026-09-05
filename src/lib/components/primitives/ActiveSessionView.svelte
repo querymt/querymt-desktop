@@ -1,7 +1,6 @@
 <script lang="ts">
   import Conversation from '$lib/components/ai-elements/conversation.svelte';
-  import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelte';
-  import SessionTurn from '$lib/components/session/SessionTurn.svelte';
+    import SessionTurn from '$lib/components/session/SessionTurn.svelte';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { getForkTarget } from '$lib/domain/session-fork';
   import { canUndoToMessage, isTurnReverted } from '$lib/domain/session-undo';
@@ -17,7 +16,6 @@
     promptRetryPending = false,
     onRetryPrompt,
     onDismissPromptFailure,
-    onCancel,
     onUndo,
     onRedo,
     onFork,
@@ -31,7 +29,6 @@
     promptRetryPending?: boolean;
     onRetryPrompt?: (() => void | Promise<void>) | null;
     onDismissPromptFailure?: (() => void) | null;
-    onCancel?: () => void | Promise<void>;
     onUndo?: (messageId: string) => void;
     onRedo?: () => void | Promise<void>;
     onFork?: (messageId: string) => void;
@@ -96,8 +93,6 @@
 </script>
 
 <div class="session-detail-shell">
-  <SessionActivityBar {session} {forkPending} {onCancel} />
-
   <section class="session-conversation-column">
     <Conversation
       class="session-conversation"
