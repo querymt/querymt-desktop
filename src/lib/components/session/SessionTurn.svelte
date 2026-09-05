@@ -1,13 +1,19 @@
 <script lang="ts">
   import { Check, Copy, GitFork, LoaderCircle, Undo2 } from '@lucide/svelte';
   import SessionPromptError from '$lib/components/session/SessionPromptError.svelte';
+  import SessionAttachmentPreview from '$lib/components/session/SessionAttachmentPreview.svelte';
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
   import { buildTurnPresentation, type SessionAssistantContent, type SessionConversationTurn } from '$lib/domain/session-conversation';
+  import { renderMarkdownToHtml } from '$lib/domain/markdown';
+  import type { SessionContentBlock, SessionImageGalleryItem } from '$lib/domain/types';
   import type { PromptFailure } from '$lib/domain/prompt-errors';
 
   let {
     turn,
+    imageGallery,
+    failedImageKeys,
+    onImageFailure,
     undoAvailable = false,
     forkAvailable = false,
     reverted = false,
@@ -22,6 +28,9 @@
     onDisclosureChange
   }: {
     turn: SessionConversationTurn;
+    imageGallery?: SessionImageGalleryItem[];
+    failedImageKeys?: ReadonlySet<string>;
+    onImageFailure?: ((key: string) => void) | null;
     undoAvailable?: boolean;
     forkAvailable?: boolean;
     reverted?: boolean;
@@ -39,6 +48,24 @@
   let copiedAssistantId = $state<string | null>(null);
   let copiedUserId = $state<string | null>(null);
   const presentation = $derived(turn.presentation ?? buildTurnPresentation(turn.content, turn.settled ?? true));
+
+  function contentSegments(blocks: SessionContentBlock[] | undefined, text: string) {
+    const source = blocks?.length ? blocks : text ? [{ type: 'text' as const, text }] : [];
+    const segments: Array<
+      | { type: 'text'; block: Extract<SessionContentBlock, { type: 'text' }> }
+      | { type: 'attachments'; blocks: Exclude<SessionContentBlock, { type: 'text' }>[] }
+    > = [];
+    for (const block of source) {
+      if (block.type === 'text') {
+        segments.push({ type: 'text', block });
+        continue;
+      }
+      const previous = segments.at(-1);
+      if (previous?.type === 'attachments') previous.blocks.push(block);
+      else segments.push({ type: 'attachments', blocks: [block] });
+    }
+    return segments;
+  }
 
   async function copyUserMessage() {
     if (!turn.user?.text) return;
@@ -77,11 +104,17 @@
   {#if turn.user}
     <section class="session-user-message-shell">
       <div class="session-message session-message-user">
-        <div class="session-message-body markdown-body" use:enhanceCodeBlocks>{@html turn.user.html}</div>
+        {#each contentSegments(turn.user.blocks, turn.user.text) as segment}
+          {#if segment.type === 'text'}
+            <div class="session-message-body markdown-body" use:enhanceCodeBlocks>{@html renderMarkdownToHtml(segment.block.text)}</div>
+          {:else}
+            <SessionAttachmentPreview blocks={segment.blocks} gallery={imageGallery} {failedImageKeys} {onImageFailure} />
+          {/if}
+        {/each}
       </div>
 
       <div class="session-message-actions session-user-message-actions" aria-label="User message actions">
-        <button
+        {#if turn.user.text}<button
           class="session-message-action-btn"
           type="button"
           aria-label={copiedUserId === turn.user.id ? 'Prompt copied' : 'Copy prompt'}
@@ -93,7 +126,7 @@
           {:else}
             <Copy size={15} />
           {/if}
-        </button>
+        </button>{/if}
       </div>
     </section>
   {/if}
@@ -112,10 +145,16 @@
         <SessionWorkGroup group={item} {onDisclosureChange} />
       {:else}
         <section class="session-agent-block session-assistant-message-shell">
-          <div class="session-agent-body markdown-body" use:enhanceCodeBlocks>{@html item.html}</div>
+          {#each contentSegments(item.blocks, item.text) as segment}
+            {#if segment.type === 'text'}
+              <div class="session-agent-body markdown-body" use:enhanceCodeBlocks>{@html renderMarkdownToHtml(segment.block.text)}</div>
+            {:else}
+              <SessionAttachmentPreview blocks={segment.blocks} gallery={imageGallery} {failedImageKeys} {onImageFailure} />
+            {/if}
+          {/each}
 
           <div class="session-message-actions session-assistant-message-actions" aria-label="Message actions">
-            <button
+            {#if item.text}<button
               class="session-message-action-btn"
               type="button"
               aria-label={copiedAssistantId === item.id ? 'Response copied' : 'Copy response'}
@@ -127,7 +166,7 @@
               {:else}
                 <Copy size={15} />
               {/if}
-            </button>
+            </button>{/if}
             {#if forkAvailable}
               <button
                 class="session-message-action-btn"

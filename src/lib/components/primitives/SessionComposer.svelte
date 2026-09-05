@@ -7,18 +7,24 @@
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import ModelQuickPicker from '$lib/components/primitives/ModelQuickPicker.svelte';
   import WorkspacePathInput from '$lib/components/primitives/WorkspacePathInput.svelte';
+  import SessionAttachmentPreview from '$lib/components/session/SessionAttachmentPreview.svelte';
   import {
     findModeConfigOption,
     findReasoningConfigOption,
     getConfigOptionChoices
   } from '$lib/querymt/config-options';
-  import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment } from '$lib/domain/types';
+  import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment, SessionContentBlock } from '$lib/domain/types';
   import type { SendShortcut } from '$lib/stores/chat-preferences.svelte';
   import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 
   let modelPickerRef: { openPicker: () => Promise<void> } | null = null;
   let fileInputElement = $state<HTMLInputElement | null>(null);
   let isDragging = $state(false);
+  let attachmentErrors = $state<string[]>([]);
+
+  const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+  const MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+  const MAX_IMAGES = 8;
 
   let {
     cwd = '',
@@ -122,6 +128,7 @@
 
   let promptElement: HTMLTextAreaElement | null = null;
   let errorTimeout: ReturnType<typeof setTimeout> | null = null;
+  let dockElement = $state<HTMLElement | null>(null);
 
   const prefersReducedMotion = () =>
     typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -144,7 +151,12 @@
   }
 
   const unifiedShell = $derived(launch || sessionOnly);
-  const creatingBlankSession = $derived(!activeSessionId && prompt.trim().length === 0);
+  const creatingBlankSession = $derived(!activeSessionId && prompt.trim().length === 0 && attachments.length === 0);
+  const attachmentBlocks = $derived(attachments.map((attachment): SessionContentBlock =>
+    attachment.mimeType.startsWith('image/')
+      ? { type: 'image', data: attachment.data, mimeType: attachment.mimeType, id: attachment.id, name: attachment.name, size: attachment.size }
+      : { type: 'resource', uri: `attachment:///${encodeURIComponent(attachment.id)}/${encodeURIComponent(attachment.name)}`, data: attachment.data, mimeType: attachment.mimeType, id: attachment.id, name: attachment.name, size: attachment.size }
+  ));
   const sessionPlaceholder = 'Write a reply for this session...';
   const promptMinHeightClass = $derived.by(() => {
     if (chatView && sessionOnly) return 'min-h-[76px]';
@@ -158,6 +170,28 @@
   const dockPositionStyle = $derived.by(() => {
     if (!docked || dockAlignLeft == null || dockAlignWidth == null) return '';
     return `left:${dockAlignLeft}px;width:${dockAlignWidth}px;transform:none;`;
+  });
+
+  $effect(() => {
+    const dock = docked ? dockElement : null;
+    if (!dock || typeof ResizeObserver !== 'function') return;
+
+    const syncClearance = () => {
+      const height = dock.getBoundingClientRect().height;
+      if (height <= 0) return;
+      document.documentElement.style.setProperty(
+        '--session-composer-measured-clearance',
+        `calc(${Math.ceil(height)}px + var(--session-composer-bottom-offset) + 0.75rem)`
+      );
+    };
+
+    syncClearance();
+    const observer = new ResizeObserver(syncClearance);
+    observer.observe(dock);
+    return () => {
+      observer.disconnect();
+      document.documentElement.style.removeProperty('--session-composer-measured-clearance');
+    };
   });
 
   const modeOption = $derived(activeSessionId ? findModeConfigOption(sessionConfigOptions) : undefined);
@@ -259,17 +293,76 @@
     }
   }
 
-  async function readDroppedFiles(files: FileList | File[]) {
-    const next = await Promise.all(
-      Array.from(files).map(async (file) => ({
-        id: `${file.name}-${file.size}-${file.lastModified}`,
-        name: file.name,
-        mimeType: file.type || 'application/octet-stream',
-        size: file.size,
-        data: await fileToBase64(file)
-      }))
+  let normalizeQueue: Promise<void> = Promise.resolve();
+  let pendingQuotaAttachments: PromptAttachment[] = [];
+
+  function effectiveQuotaAttachments(): PromptAttachment[] {
+    if (pendingQuotaAttachments.length === 0) return attachments;
+    const knownIds = new Set(attachments.map((attachment) => attachment.id));
+    return [...attachments, ...pendingQuotaAttachments.filter((attachment) => !knownIds.has(attachment.id))];
+  }
+
+  function normalizeAndAddFiles(files: FileList | File[]): Promise<void> {
+    // Snapshot synchronously: callers reset the picker input right after this
+    // call, and browsers empty a live FileList when the input value is cleared.
+    const snapshot = Array.from(files);
+    const result = normalizeQueue.then(() => normalizeAttachmentBatch(snapshot));
+    normalizeQueue = result.then(
+      () => undefined,
+      () => undefined
     );
-    onAddAttachments?.(next);
+    return result;
+  }
+
+  async function normalizeAttachmentBatch(files: FileList | File[]) {
+    const next: PromptAttachment[] = [];
+    const errors: string[] = [];
+    const quotaBaseline = effectiveQuotaAttachments();
+    let totalBytes = quotaBaseline.reduce((total, attachment) => total + attachment.size, 0);
+    let imageCount = quotaBaseline.filter((attachment) => attachment.mimeType.startsWith('image/')).length;
+
+    for (const file of Array.from(files)) {
+      const mimeType = file.type || 'application/octet-stream';
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        errors.push(`${file.name}: attachments must be 10 MiB or smaller.`);
+        continue;
+      }
+      if (mimeType.startsWith('image/') && imageCount >= MAX_IMAGES) {
+        errors.push(`${file.name}: no more than 8 images can be attached.`);
+        continue;
+      }
+      if (totalBytes + file.size > MAX_TOTAL_ATTACHMENT_BYTES) {
+        errors.push(`${file.name}: attachments cannot exceed 20 MiB total.`);
+        continue;
+      }
+      try {
+        const data = await fileToBase64(file);
+        if (!data && file.size > 0) throw new Error('The file could not be read.');
+        next.push({ id: createAttachmentId(file), name: file.name || 'pasted-file', mimeType, size: file.size, data });
+        totalBytes += file.size;
+        if (mimeType.startsWith('image/')) imageCount += 1;
+      } catch (error) {
+        errors.push(`${file.name}: ${error instanceof Error ? error.message : 'Failed to read attachment.'}`);
+      }
+    }
+    attachmentErrors = errors;
+    if (next.length > 0) {
+      onAddAttachments?.(next);
+      pendingQuotaAttachments.push(...next);
+    }
+  }
+
+  $effect(() => {
+    if (pendingQuotaAttachments.length === 0) return;
+    const knownIds = new Set(attachments.map((attachment) => attachment.id));
+    pendingQuotaAttachments = pendingQuotaAttachments.filter((attachment) => !knownIds.has(attachment.id));
+  });
+
+  function createAttachmentId(file: File): string {
+    const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+    return `${file.name}-${file.size}-${file.lastModified}-${suffix}`;
   }
 
   function fileToBase64(file: File): Promise<string> {
@@ -279,12 +372,6 @@
       reader.onerror = () => reject(reader.error ?? new Error('Failed to read attachment.'));
       reader.readAsDataURL(file);
     });
-  }
-
-  function formatFileSize(size: number): string {
-    if (size < 1024) return `${size} B`;
-    if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   function handleAttachClick() {
@@ -378,7 +465,7 @@
       event.preventDefault();
       isDragging = false;
       if (event.dataTransfer?.files.length) {
-        void readDroppedFiles(event.dataTransfer.files);
+        void normalizeAndAddFiles(event.dataTransfer.files);
       }
     }}
   >
@@ -389,21 +476,20 @@
       value={prompt}
       oninput={(event) => onPromptInput((event.currentTarget as HTMLTextAreaElement).value)}
       onkeydown={handlePromptKeydown}
+      onpaste={(event) => {
+        if (event.clipboardData?.files.length) void normalizeAndAddFiles(event.clipboardData.files);
+      }}
     ></textarea>
   </div>
 
-  {#if attachments.length > 0}
-    <div class="flex flex-wrap gap-2 px-1">
-      {#each attachments as attachment}
-        <span class="badge max-w-full gap-2">
-          <span class="truncate">{attachment.name}</span>
-          <span class="muted">{formatFileSize(attachment.size)}</span>
-          <button class="text-[var(--muted)] hover:text-[var(--text)]" type="button" aria-label={`Remove ${attachment.name}`} onclick={() => onRemoveAttachment?.(attachment.id)}>
-            <X size={13} />
-          </button>
-        </span>
-      {/each}
+  {#if attachmentErrors.length > 0}
+    <div class="composer-attachment-errors" role="alert" aria-live="polite">
+      {#each attachmentErrors as message}<p>{message}</p>{/each}
     </div>
+  {/if}
+
+  {#if attachments.length > 0}
+    <SessionAttachmentPreview blocks={attachmentBlocks} removable={true} {compact} onRemove={onRemoveAttachment} />
   {/if}
 
   <div class={`flex flex-wrap items-center justify-between gap-3 ${unifiedShell ? 'border-t border-[var(--border)] px-1 pt-3' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
@@ -527,7 +613,7 @@
         onchange={(event) => {
           const files = (event.currentTarget as HTMLInputElement).files;
           if (files?.length) {
-            void readDroppedFiles(files);
+            void normalizeAndAddFiles(files);
           }
           (event.currentTarget as HTMLInputElement).value = '';
         }}
@@ -577,6 +663,7 @@
 {/snippet}
 
 <div
+  bind:this={dockElement}
   class={docked ? 'session-composer-dock' : ''}
   style={dockPositionStyle}
 >
@@ -593,7 +680,7 @@
         onchange={(event) => {
           const files = (event.currentTarget as HTMLInputElement).files;
           if (files?.length) {
-            void readDroppedFiles(files);
+            void normalizeAndAddFiles(files);
           }
           (event.currentTarget as HTMLInputElement).value = '';
         }}
@@ -606,9 +693,19 @@
         placeholder={sessionPlaceholder}
         oninput={(event) => onPromptInput((event.currentTarget as HTMLInputElement).value)}
         onkeydown={handlePromptKeydown}
+        onpaste={(event) => {
+          if (event.clipboardData?.files.length) void normalizeAndAddFiles(event.clipboardData.files);
+        }}
       />
+      {#if attachments.length > 0}<span class="session-composer-attachment-count" aria-label={`${attachments.length} pending attachments`}>{attachments.length}</span>{/if}
       <IconTooltipButton label="Attach files" icon={Paperclip} size={16} onclick={handleAttachClick} />
       <IconTooltipButton label="Send reply" icon={SendHorizontal} tone="primary" size={16} disabled={loading} onclick={onSendPrompt} />
+
+      {#if attachmentErrors.length > 0}
+        <div class="composer-attachment-errors session-composer-dock-errors" role="alert" aria-live="polite">
+          {#each attachmentErrors as message}<p>{message}</p>{/each}
+        </div>
+      {/if}
     </div>
   {:else}
     <div

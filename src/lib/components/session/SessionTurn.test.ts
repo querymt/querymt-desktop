@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionConversationTurn } from '$lib/domain/session-conversation';
 import SessionTurn from './SessionTurn.svelte';
@@ -62,6 +62,138 @@ const turn: SessionConversationTurn = {
 afterEach(cleanup);
 
 describe('SessionTurn', () => {
+  it('renders shared image triggers, file cards, and unavailable image fallbacks without captions', () => {
+    const attachmentTurn: SessionConversationTurn = {
+      id: 'attachments',
+      forkMessageId: null,
+      user: {
+        id: 'user-attachments',
+        messageId: 'u-attachments',
+        text: '',
+        html: '',
+        blocks: [
+          { type: 'image', data: 'aW1n', mimeType: 'image/png', name: 'photo.png' },
+          { type: 'resource', uri: 'attachment:///f/notes.txt', mimeType: 'text/plain', name: 'notes.txt', size: 4 },
+          { type: 'image', data: null, mimeType: 'image/jpeg', name: 'broken.jpg', unavailable: true }
+        ]
+      },
+      content: []
+    };
+    const { container, getByRole, getByText, queryByRole } = render(SessionTurn, { turn: attachmentTurn });
+
+    const trigger = getByRole('button', { name: 'Open photo.png' });
+    expect(trigger).toHaveAttribute('title', 'photo.png');
+    expect(within(trigger).getByRole('img', { name: 'photo.png' })).toHaveAttribute('src', 'data:image/png;base64,aW1n');
+    expect(within(trigger).getByRole('img', { name: 'photo.png' })).toHaveClass('session-image-thumbnail');
+    expect(container.querySelector('figcaption')).toBeNull();
+    expect(getByText('notes.txt')).toBeInTheDocument();
+    expect(getByRole('status')).toHaveTextContent('broken.jpg');
+    expect(queryByRole('button', { name: 'Open broken.jpg' })).not.toBeInTheDocument();
+    expect(queryByRole('button', { name: 'Copy prompt' })).not.toBeInTheDocument();
+  });
+
+  it('replaces a malformed image with the accessible fallback', async () => {
+    const malformedTurn: SessionConversationTurn = {
+      id: 'malformed-image',
+      forkMessageId: null,
+      user: {
+        id: 'user-malformed-image',
+        messageId: 'u-malformed-image',
+        text: '',
+        html: '',
+        blocks: [{ type: 'image', data: 'invalid', mimeType: 'image/png', name: 'broken.png' }]
+      },
+      content: []
+    };
+    const { getByRole, queryByRole } = render(SessionTurn, { turn: malformedTurn });
+
+    await fireEvent.error(getByRole('img', { name: 'broken.png' }));
+
+    expect(getByRole('status')).toHaveTextContent('broken.png');
+    expect(queryByRole('button', { name: 'Open broken.png' })).not.toBeInTheDocument();
+  });
+
+  it('opens the clicked chat image, zooms only with Ctrl+wheel, and wraps valid-image navigation', async () => {
+    const attachmentTurn: SessionConversationTurn = {
+      id: 'multiple-images',
+      forkMessageId: null,
+      user: {
+        id: 'user-images',
+        messageId: 'u-images',
+        text: '',
+        html: '',
+        blocks: [
+          { type: 'image', data: 'Zmlyc3Q=', mimeType: 'image/png', name: 'first.png' },
+          { type: 'image', data: null, mimeType: 'image/gif', name: 'unavailable.gif', unavailable: true },
+          { type: 'resource', uri: 'attachment:///notes.txt', mimeType: 'text/plain', name: 'notes.txt' },
+          { type: 'image', data: 'ZmFpbGVk', mimeType: 'image/png', name: 'failed.png' },
+          { type: 'image', data: 'c2Vjb25k', mimeType: 'image/jpeg', name: 'second.jpg' }
+        ]
+      },
+      content: []
+    };
+    const { getByRole } = render(SessionTurn, { turn: attachmentTurn });
+    await fireEvent.error(getByRole('img', { name: 'failed.png' }));
+
+    await fireEvent.click(getByRole('button', { name: 'Open second.jpg' }));
+    const dialog = getByRole('dialog', { name: 'second.jpg' });
+    const zoomLevel = within(dialog).getByLabelText('Zoom level');
+
+    expect(within(dialog).getByRole('img', { name: 'second.jpg' })).toHaveAttribute('src', 'data:image/jpeg;base64,c2Vjb25k');
+    expect(zoomLevel).toHaveTextContent('100%');
+    expect(within(dialog).queryByRole('button', { name: /Zoom|Reset/i })).not.toBeInTheDocument();
+
+    await fireEvent.wheel(dialog, { deltaY: -80 });
+    expect(zoomLevel).toHaveTextContent('100%');
+    for (let step = 0; step < 25; step += 1) await fireEvent.wheel(dialog, { ctrlKey: true, deltaY: -80 });
+    expect(zoomLevel).toHaveTextContent('300%');
+    await fireEvent.wheel(dialog, { ctrlKey: true, deltaY: -80 });
+    expect(zoomLevel).toHaveTextContent('300%');
+    for (let step = 0; step < 25; step += 1) await fireEvent.wheel(dialog, { ctrlKey: true, deltaY: 80 });
+    expect(zoomLevel).toHaveTextContent('50%');
+
+    await fireEvent.keyDown(dialog, { key: 'ArrowRight' });
+    expect(getByRole('dialog', { name: 'first.png' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('img', { name: 'first.png' })).toHaveAttribute('src', 'data:image/png;base64,Zmlyc3Q=');
+    expect(zoomLevel).toHaveTextContent('100%');
+    await fireEvent.keyDown(dialog, { key: 'ArrowRight' });
+    expect(getByRole('dialog', { name: 'second.jpg' })).toBeInTheDocument();
+    await fireEvent.keyDown(dialog, { key: 'ArrowLeft' });
+    expect(getByRole('dialog', { name: 'first.png' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('img', { name: /unavailable\.gif|failed\.png/ })).not.toBeInTheDocument();
+  });
+
+  it('closes the image dialog with Escape and restores focus to its thumbnail', async () => {
+    const attachmentTurn: SessionConversationTurn = {
+      id: 'focus-image',
+      forkMessageId: null,
+      user: {
+        id: 'user-focus-image',
+        messageId: 'u-focus-image',
+        text: '',
+        html: '',
+        blocks: [{ type: 'image', data: 'aW1n', mimeType: 'image/png', name: 'photo.png' }]
+      },
+      content: []
+    };
+    const { getByRole, queryByRole } = render(SessionTurn, { turn: attachmentTurn });
+    const trigger = getByRole('button', { name: 'Open photo.png' });
+
+    await fireEvent.click(trigger);
+    await fireEvent.keyDown(getByRole('dialog', { name: 'photo.png' }), { key: 'Escape' });
+
+    expect(queryByRole('dialog', { name: 'photo.png' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    await fireEvent.click(trigger);
+    const backdrop = document.querySelector('.session-image-lightbox-backdrop');
+    expect(backdrop).not.toBeNull();
+    await fireEvent.click(backdrop!);
+
+    expect(queryByRole('dialog', { name: 'photo.png' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it('calls the fork action for the completed response boundary', async () => {
     const onFork = vi.fn();
     const { getByRole } = render(SessionTurn, { turn, forkAvailable: true, onFork });

@@ -1,6 +1,8 @@
 import { renderMarkdownToHtml } from '$lib/domain/markdown';
+import { getTranscriptBlocks } from '$lib/domain/session-updates';
 import type {
   ActiveSessionViewModel,
+  SessionContentBlock,
   SessionToolCallItem,
   SessionTranscriptGroup,
   SessionTranscriptItem
@@ -19,6 +21,7 @@ export type SessionAssistantContent = {
   messageId: string | null;
   html: string;
   text: string;
+  blocks?: SessionContentBlock[];
   relatedEvents: Array<{ kind: string; text: string }>;
 };
 
@@ -50,6 +53,7 @@ export type SessionConversationTurn = {
     messageId: string | null;
     html: string;
     text: string;
+    blocks?: SessionContentBlock[];
     eventIndex?: number;
   };
   content: SessionConversationContent[];
@@ -81,6 +85,7 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
           messageId: item.group.messageId,
           html: renderMarkdownToHtml(item.group.text),
           text: item.group.text,
+          blocks: item.group.blocks ?? [],
           eventIndex: item.group.eventIndex
         },
         content: [],
@@ -119,6 +124,7 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
       messageId: item.group.messageId,
       html: renderMarkdownToHtml(item.group.text),
       text: item.group.text,
+      blocks: item.group.blocks ?? [],
       relatedEvents: session.events
         .filter((event) => item.group.eventIds.includes(event.id) || event.messageId === item.group.messageId)
         .map((event) => ({ kind: event.kind, text: event.text }))
@@ -204,6 +210,7 @@ function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionTo
       previous.group.messageId === item.transcript.messageId
     ) {
       previous.group.text += item.transcript.text;
+      previous.group.blocks = [...(previous.group.blocks ?? []), ...getTranscriptBlocks(item.transcript)];
       previous.group.eventIds.push(item.transcript.id);
       continue;
     }
@@ -214,7 +221,9 @@ function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionTo
         id: item.transcript.id,
         role,
         text: item.transcript.text,
+        blocks: getTranscriptBlocks(item.transcript),
         messageId: item.transcript.messageId,
+        clientPromptId: item.transcript.clientPromptId,
         eventIds: [item.transcript.id],
         eventIndex: item.transcript.eventIndex
       }

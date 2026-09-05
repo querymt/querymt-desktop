@@ -154,6 +154,10 @@ describe('SessionComposer', () => {
       'Claude Sonnet 4 · anthropic',
       'Mode'
     ]);
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Image attachment encoding' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Native images')).not.toBeInTheDocument();
+    expect(screen.queryByText('Image resources')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Session options')).toBeInTheDocument();
     expect(screen.getByLabelText('Session options').closest('.composer-options')).not.toBeNull();
   });
@@ -412,6 +416,179 @@ describe('SessionComposer', () => {
     const transforms = keyframes.flat().map((frame) => String(frame.transform ?? ''));
     expect(transforms.some((transform) => transform.includes('translateY'))).toBe(true);
     expect(transforms.every((transform) => !transform.includes('scale'))).toBe(true);
+  });
+
+  it('renders compact pending image triggers without captions and keeps removal independent', async () => {
+    const onRemoveAttachment = vi.fn();
+    const { container } = renderComposer({
+      launch: true,
+      compact: true,
+      attachments: [
+        { id: 'img-1', name: 'photo.png', mimeType: 'image/png', size: 3, data: 'aW1n' },
+        { id: 'file-1', name: 'notes.txt', mimeType: 'text/plain', size: 4, data: 'dGV4dA==' }
+      ],
+      onRemoveAttachment
+    });
+
+    const trigger = screen.getByRole('button', { name: 'Open photo.png' });
+    expect(trigger).toHaveAttribute('title', 'photo.png');
+    expect(within(trigger).getByRole('img', { name: 'photo.png' })).toHaveAttribute('src', 'data:image/png;base64,aW1n');
+    expect(within(trigger).getByRole('img', { name: 'photo.png' })).toHaveClass('session-image-thumbnail');
+    expect(container.querySelector('.session-attachments')).toHaveClass('session-attachments-compact');
+    expect(container.querySelector('figcaption')).toBeNull();
+    expect(screen.getByText('notes.txt')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove photo.png' }));
+
+    expect(onRemoveAttachment).toHaveBeenCalledWith('img-1');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('opens the selected pending image in the minimal shared lightbox and navigates the gallery', async () => {
+    renderComposer({
+      attachments: [
+        { id: 'img-1', name: 'first.png', mimeType: 'image/png', size: 3, data: 'Zmlyc3Q=' },
+        { id: 'img-2', name: 'second.jpg', mimeType: 'image/jpeg', size: 4, data: 'c2Vjb25k' }
+      ]
+    });
+
+    const trigger = screen.getByRole('button', { name: 'Open second.jpg' });
+    await fireEvent.click(trigger);
+
+    const dialog = screen.getByRole('dialog', { name: 'second.jpg' });
+    const zoomLevel = within(dialog).getByLabelText('Zoom level');
+    expect(dialog).toHaveClass('session-image-lightbox');
+    expect(within(dialog).getByRole('heading', { name: 'second.jpg' })).toHaveClass('session-image-lightbox-filename');
+    expect(within(dialog).getByRole('img', { name: 'second.jpg' })).toHaveAttribute('src', 'data:image/jpeg;base64,c2Vjb25k');
+    expect(within(dialog).getByRole('img', { name: 'second.jpg' })).toHaveClass('session-image-lightbox-image-fit');
+    expect(within(dialog).getByRole('button', { name: 'Close image preview' })).toHaveClass('session-image-lightbox-close');
+    expect(zoomLevel).toHaveClass('session-image-lightbox-zoom');
+    expect(zoomLevel).toHaveTextContent('100%');
+    expect(within(dialog).queryByRole('button', { name: /Zoom|Reset/i })).not.toBeInTheDocument();
+    expect(document.querySelector('.session-image-viewport')).toBeNull();
+    expect(document.querySelector('.app-dialog-body')).toBeNull();
+
+    await fireEvent.wheel(dialog, { ctrlKey: false, deltaY: -100 });
+    expect(zoomLevel).toHaveTextContent('100%');
+    const ctrlWheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100 });
+    dialog.dispatchEvent(ctrlWheel);
+    expect(ctrlWheel.defaultPrevented).toBe(true);
+    await vi.waitFor(() => expect(zoomLevel).toHaveTextContent('110%'));
+
+    await fireEvent.keyDown(dialog, { key: 'ArrowRight' });
+    expect(screen.getByRole('dialog', { name: 'first.png' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('img', { name: 'first.png' })).toHaveAttribute('src', 'data:image/png;base64,Zmlyc3Q=');
+    expect(zoomLevel).toHaveTextContent('100%');
+    await fireEvent.keyDown(dialog, { key: 'ArrowLeft' });
+    expect(screen.getByRole('dialog', { name: 'second.jpg' })).toBeInTheDocument();
+
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Close image preview' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('shows pending attachment count in the collapsed composer', () => {
+    renderComposer({
+      collapsed: true,
+      docked: true,
+      sessionOnly: true,
+      attachments: [{ id: 'img-1', name: 'photo.png', mimeType: 'image/png', size: 3, data: 'aW1n' }]
+    });
+    expect(screen.getByLabelText('1 pending attachments')).toHaveTextContent('1');
+  });
+
+  it('rejects an oversized resource while keeping valid mixed files', async () => {
+    const onAddAttachments = vi.fn();
+    renderComposer({ onAddAttachments });
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const text = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+    const image = new File(['image'], 'photo.png', { type: 'image/png' });
+    const oversized = new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'huge.pdf', { type: 'application/pdf' });
+
+    await fireEvent.change(picker, { target: { files: [text, oversized, image] } });
+    await vi.waitFor(() => expect(onAddAttachments).toHaveBeenCalledOnce());
+    expect(onAddAttachments.mock.calls[0][0]).toEqual([
+      expect.objectContaining({ name: 'notes.txt', mimeType: 'text/plain', size: 5 }),
+      expect.objectContaining({ name: 'photo.png', mimeType: 'image/png', size: 5 })
+    ]);
+    expect(screen.getByRole('alert')).toHaveTextContent('huge.pdf: attachments must be 10 MiB or smaller.');
+  });
+
+  it('normalizes dropped files through the shared attachment path', async () => {
+    const onAddAttachments = vi.fn();
+    renderComposer({ onAddAttachments });
+    const file = new File(['drop'], 'dropped.txt', { type: 'text/plain' });
+
+    await fireEvent.drop(screen.getByRole('region', { name: 'Prompt and attachment drop zone' }), {
+      dataTransfer: { files: [file] }
+    });
+    await vi.waitFor(() => expect(onAddAttachments).toHaveBeenCalledOnce());
+    expect(onAddAttachments.mock.calls[0][0][0]).toMatchObject({ name: 'dropped.txt', mimeType: 'text/plain', size: 4 });
+  });
+
+  it('normalizes clipboard files through the shared attachment path', async () => {
+    const onAddAttachments = vi.fn();
+    renderComposer({ onAddAttachments });
+    const prompt = screen.getAllByPlaceholderText(/Ask QueryMT/i)[0];
+    const image = new File(['img'], 'pasted.png', { type: 'image/png' });
+
+    await fireEvent.paste(prompt, { clipboardData: { files: [image] } });
+    await vi.waitFor(() => expect(onAddAttachments).toHaveBeenCalledOnce());
+    expect(onAddAttachments.mock.calls[0][0][0]).toMatchObject({ name: 'pasted.png', mimeType: 'image/png', size: 3 });
+  });
+
+  it('snapshots picked files before the picker reset empties its live FileList', async () => {
+    const onAddAttachments = vi.fn();
+    renderComposer({ onAddAttachments });
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+    const liveFiles: File[] = [file];
+
+    // Emulate browser behavior: clearing the input value empties the live FileList.
+    Object.defineProperty(picker, 'files', { get: () => liveFiles as unknown as FileList, configurable: true });
+    Object.defineProperty(picker, 'value', {
+      configurable: true,
+      get: () => '',
+      set: () => {
+        liveFiles.length = 0;
+      }
+    });
+
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(onAddAttachments).toHaveBeenCalledOnce());
+    expect(onAddAttachments.mock.calls[0][0][0]).toMatchObject({ name: 'notes.txt' });
+  });
+
+  it('surfaces attachment quota errors in the collapsed composer', async () => {
+    renderComposer({ collapsed: true, docked: true, sessionOnly: true, onAddAttachments: vi.fn() });
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const oversized = new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'huge.pdf', { type: 'application/pdf' });
+
+    await fireEvent.change(picker, { target: { files: [oversized] } });
+    await vi.waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('huge.pdf: attachments must be 10 MiB or smaller.')
+    );
+  });
+
+  it('serializes overlapping attachment batches so total quota is enforced', async () => {
+    const onAddAttachments = vi.fn();
+    renderComposer({ onAddAttachments });
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const big = (name: string, megabytes: number) =>
+      new File([new Uint8Array(megabytes * 1024 * 1024)], name, { type: 'application/pdf' });
+
+    await fireEvent.change(picker, { target: { files: [big('first.pdf', 8), big('second.pdf', 4)] } });
+    await fireEvent.change(picker, { target: { files: [big('third.pdf', 9)] } });
+
+    await vi.waitFor(() => expect(onAddAttachments).toHaveBeenCalledOnce());
+    expect(onAddAttachments.mock.calls[0][0]).toEqual([
+      expect.objectContaining({ name: 'first.pdf' }),
+      expect.objectContaining({ name: 'second.pdf' })
+    ]);
+    await vi.waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('third.pdf: attachments cannot exceed 20 MiB total.')
+    );
   });
 
   it('dismisses composer errors', async () => {

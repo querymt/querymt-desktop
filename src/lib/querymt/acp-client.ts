@@ -19,7 +19,7 @@ import {
   type SessionNotification,
   type SetSessionConfigOptionRequest
 } from '@agentclientprotocol/sdk';
-import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment } from '$lib/domain/types';
+import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import type {
   AttachRemoteSessionRequest,
   AuthMethod,
@@ -522,29 +522,76 @@ export class DesktopAcpClient {
     return response.configOptions ?? [];
   }
 
-  async sendPrompt(sessionId: string, prompt: string, attachments: PromptAttachment[] = []): Promise<PromptResponse> {
+  supportsImagePrompts(): boolean {
+    return this.initializeResponse?.agentCapabilities?.promptCapabilities?.image === true;
+  }
+
+  supportsEmbeddedContext(): boolean {
+    return this.initializeResponse?.agentCapabilities?.promptCapabilities?.embeddedContext === true;
+  }
+
+  async sendPrompt(
+    sessionId: string,
+    prompt: string,
+    attachments: PromptAttachment[] = [],
+    options: PromptSendOptions = {}
+  ): Promise<PromptResponse> {
     if (!this.connection) {
       await this.connect();
     }
 
-    const content: ContentBlock[] = [
-      {
-        type: 'text',
-        text: prompt
-      },
-      ...attachments.map((attachment) => ({
-        type: 'resource' as const,
-        resource: {
-          uri: `file://${attachment.name}`,
-          blob: attachment.data,
-          mimeType: attachment.mimeType
+    const imageMode = options.imageMode ?? 'image';
+    const hasImages = attachments.some((attachment) => attachment.mimeType.startsWith('image/'));
+    const hasResources = attachments.some(
+      (attachment) => imageMode === 'resource' || !attachment.mimeType.startsWith('image/')
+    );
+    if (hasImages && imageMode === 'image' && !this.supportsImagePrompts()) {
+      throw new Error('This agent does not support native image prompts. Switch image attachments to Resources and try again.');
+    }
+    if (hasResources && !this.supportsEmbeddedContext()) {
+      throw new Error('This agent does not support embedded resources. Remove file attachments or use an agent with embedded context support.');
+    }
+
+    const content: ContentBlock[] = [];
+    if (prompt.length > 0) {
+      content.push({ type: 'text', text: prompt });
+    }
+    for (const attachment of attachments) {
+      const metadata = {
+        querymt: {
+          attachment_id: attachment.id,
+          filename: attachment.name,
+          size: attachment.size
         }
-      }))
-    ];
+      };
+      if (imageMode === 'image' && attachment.mimeType.startsWith('image/')) {
+        content.push({
+          type: 'image',
+          data: attachment.data,
+          mimeType: attachment.mimeType,
+          _meta: metadata
+        });
+        continue;
+      }
+
+      content.push({
+        type: 'resource',
+        _meta: metadata,
+        resource: {
+          uri: buildAttachmentUri(attachment),
+          blob: attachment.data,
+          mimeType: attachment.mimeType,
+          _meta: metadata
+        }
+      });
+    }
 
     return this.connection!.prompt({
       sessionId,
-      prompt: content
+      prompt: content,
+      _meta: options.clientPromptId
+        ? { querymt: { client_prompt_id: options.clientPromptId } }
+        : undefined
     });
   }
 
@@ -627,6 +674,10 @@ export class DesktopAcpClient {
       throw new Error(`Agent is missing required feature ${feature}.`);
     }
   }
+}
+
+function buildAttachmentUri(attachment: PromptAttachment): string {
+  return `attachment:///${encodeURIComponent(attachment.id)}/${encodeURIComponent(attachment.name)}`;
 }
 
 function requireWebSocketUrl(config: AgentConfig): string {

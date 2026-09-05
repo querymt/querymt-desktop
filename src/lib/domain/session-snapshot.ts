@@ -1,4 +1,4 @@
-import { createEmptyActiveSession, stringifyOptional } from '$lib/domain/session-updates';
+import { createEmptyActiveSession, normalizeContentBlocks, stringifyOptional, summarizeContentBlocks } from '$lib/domain/session-updates';
 import type { ActiveSessionViewModel, SessionToolCallItem } from '$lib/domain/types';
 
 type SnapshotEvent = {
@@ -10,10 +10,40 @@ type SnapshotEvent = {
   };
 };
 
+type StructuredPromptRecord = {
+  messageId?: string;
+  message_id?: string;
+  messageOrder?: number;
+  message_order?: number;
+  timestamp?: number;
+  eventIndex?: number;
+  event_index?: number;
+  seq?: number;
+  content?: unknown[];
+  blocks?: unknown[];
+  contentBlocks?: unknown[];
+  content_blocks?: unknown[];
+  prompt?: unknown[];
+  clientPromptId?: string;
+  client_prompt_id?: string;
+};
+
+type IndexedStructuredPrompt = {
+  record: StructuredPromptRecord;
+  sourceIndex: number;
+};
+
 type SessionLoadSnapshot = {
   audit?: {
     events?: SnapshotEvent[];
   };
+  userPrompts?: StructuredPromptRecord[];
+  user_prompts?: StructuredPromptRecord[];
+  prompts?: StructuredPromptRecord[];
+  userPromptRecords?: StructuredPromptRecord[];
+  user_prompt_records?: StructuredPromptRecord[];
+  structuredUserPrompts?: StructuredPromptRecord[];
+  structured_user_prompts?: StructuredPromptRecord[];
 };
 
 export interface SnapshotProviderChange {
@@ -34,6 +64,8 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
   }
 
   const toolCallsById = new Map<string, SessionToolCallItem>();
+  const structuredPrompts = indexStructuredPrompts(snapshot);
+  const restoredStructuredPrompts = new Set<string>();
   let lastAssistantMessageId: string | null = null;
   let activeWorkStartedAt: number | null = null;
 
@@ -66,16 +98,28 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
     }
 
     if (kind === 'prompt_received') {
-      const messageId = readString(data.message_id) ?? eventId;
-      const text = readString(data.content) ?? '';
-      session.transcript.push({
-        id: eventId,
-        kind: 'user_message_chunk',
-        text,
-        messageId,
-        eventIndex: event.seq
-      });
-      session.events.push({ id: eventId, kind, text, messageId });
+      const messageId = readString(data.message_id) ?? readString(data.messageId) ?? eventId;
+      if (restoredStructuredPrompts.has(messageId)) continue;
+
+      const structured = structuredPrompts.get(messageId);
+      if (structured && appendStructuredPrompt(session, structured.record, messageId, eventId, event.seq)) {
+        restoredStructuredPrompts.add(messageId);
+      } else {
+        const legacyBlocks = normalizeContentBlocks(Array.isArray(data.content) ? data.content : []);
+        const text = legacyBlocks.length > 0
+          ? legacyBlocks.filter((block) => block.type === 'text').map((block) => block.text).join('')
+          : readString(data.content) ?? '';
+        const blocks = legacyBlocks.length > 0 ? legacyBlocks : text ? [{ type: 'text' as const, text }] : [];
+        session.transcript.push({
+          id: eventId,
+          kind: 'user_message_chunk',
+          text,
+          blocks,
+          messageId,
+          eventIndex: event.seq
+        });
+        session.events.push({ id: eventId, kind, text: summarizeContentBlocks(blocks), messageId });
+      }
       continue;
     }
 
@@ -87,6 +131,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
         id: eventId,
         kind: 'agent_message_chunk',
         text,
+        blocks: text ? [{ type: 'text', text }] : [],
         messageId,
         eventIndex: event.seq
       });
@@ -103,6 +148,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
           id: eventId,
           kind: 'agent_thought_chunk',
           text,
+          blocks: [{ type: 'text', text }],
           messageId,
           eventIndex: event.seq
         });
@@ -157,6 +203,23 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
       });
       session.events.push({ id: eventId, kind, text: stringifyOptional(data.result ?? data.output ?? data.content) ?? '', messageId });
     }
+  }
+
+  const unmatchedPrompts = [...structuredPrompts.values()]
+    .filter(({ record }) => {
+      const messageId = readString(record.messageId) ?? readString(record.message_id);
+      return !messageId || !restoredStructuredPrompts.has(messageId);
+    })
+    .sort(compareStructuredPromptFallback);
+  for (const { record, sourceIndex } of unmatchedPrompts) {
+    const messageId = readString(record.messageId) ?? readString(record.message_id) ?? `structured-prompt-${sourceIndex + 1}`;
+    appendStructuredPrompt(
+      session,
+      record,
+      messageId,
+      `snapshot-structured-${messageId}`,
+      readNonNegativeNumber(record.eventIndex ?? record.event_index ?? record.seq) ?? undefined
+    );
   }
 
   session.toolCalls = finalizeHistoricalToolCalls(Array.from(toolCallsById.values()), snapshot.audit?.events ?? []);
@@ -217,6 +280,74 @@ export function normalizeHistoricalSession(
   }
 
   return session;
+}
+
+function indexStructuredPrompts(snapshot: SessionLoadSnapshot): Map<string, IndexedStructuredPrompt> {
+  const records = snapshot.userPrompts
+    ?? snapshot.user_prompts
+    ?? snapshot.userPromptRecords
+    ?? snapshot.user_prompt_records
+    ?? snapshot.structuredUserPrompts
+    ?? snapshot.structured_user_prompts
+    ?? snapshot.prompts
+    ?? [];
+  const indexed = new Map<string, IndexedStructuredPrompt>();
+  for (const [sourceIndex, record] of records.entries()) {
+    if (!record || typeof record !== 'object') continue;
+    const messageId = readString(record.messageId) ?? readString(record.message_id) ?? `structured-prompt-${sourceIndex + 1}`;
+    if (!indexed.has(messageId)) indexed.set(messageId, { record, sourceIndex });
+  }
+  return indexed;
+}
+
+function appendStructuredPrompt(
+  session: ActiveSessionViewModel,
+  record: StructuredPromptRecord,
+  messageId: string,
+  eventId: string,
+  eventIndex?: number
+) {
+  const blocks = normalizeContentBlocks(
+    record.blocks ?? record.content ?? record.contentBlocks ?? record.content_blocks ?? record.prompt ?? []
+  );
+  if (blocks.length === 0) return false;
+  const text = blocks.filter((block) => block.type === 'text').map((block) => block.text).join('');
+  session.transcript.push({
+    id: eventId,
+    kind: 'user_message_chunk',
+    text,
+    blocks,
+    messageId,
+    clientPromptId: readString(record.clientPromptId) ?? readString(record.client_prompt_id) ?? null,
+    eventIndex
+  });
+  session.events.push({
+    id: `${eventId}-event`,
+    kind: 'prompt_received',
+    text: summarizeContentBlocks(blocks),
+    messageId
+  });
+  return true;
+}
+
+function compareStructuredPromptFallback(a: IndexedStructuredPrompt, b: IndexedStructuredPrompt): number {
+  const orderDifference = compareOptionalNumbers(
+    readNonNegativeNumber(a.record.messageOrder ?? a.record.message_order),
+    readNonNegativeNumber(b.record.messageOrder ?? b.record.message_order)
+  );
+  if (orderDifference !== 0) return orderDifference;
+  const timestampDifference = compareOptionalNumbers(
+    readNonNegativeNumber(a.record.timestamp),
+    readNonNegativeNumber(b.record.timestamp)
+  );
+  return timestampDifference || a.sourceIndex - b.sourceIndex;
+}
+
+function compareOptionalNumbers(a: number | null, b: number | null): number {
+  if (a !== null && b !== null) return a - b;
+  if (a !== null) return -1;
+  if (b !== null) return 1;
+  return 0;
 }
 
 function readNonNegativeNumber(value: unknown): number | null {
@@ -331,6 +462,7 @@ function replaceTranscriptForMessage(
   const existing = session.transcript.find((item) => item.kind === 'agent_message_chunk' && item.messageId === messageId);
   if (existing) {
     existing.text = text || existing.text;
+    existing.blocks = text ? [{ type: 'text', text }] : existing.blocks;
     existing.id = eventId;
     existing.eventIndex = eventIndex ?? existing.eventIndex;
     return;
@@ -340,6 +472,7 @@ function replaceTranscriptForMessage(
     id: eventId,
     kind: 'agent_message_chunk',
     text,
+    blocks: text ? [{ type: 'text', text }] : [],
     messageId,
     eventIndex
   });
@@ -355,6 +488,7 @@ function replaceThinkingTranscriptForMessage(
   const existing = session.transcript.find((item) => item.kind === 'agent_thought_chunk' && item.messageId === messageId);
   if (existing) {
     existing.text = text || existing.text;
+    existing.blocks = text ? [{ type: 'text', text }] : existing.blocks;
     existing.id = eventId;
     existing.eventIndex = eventIndex ?? existing.eventIndex;
     return;
@@ -365,6 +499,7 @@ function replaceThinkingTranscriptForMessage(
     id: eventId,
     kind: 'agent_thought_chunk' as const,
     text,
+    blocks: [{ type: 'text' as const, text }],
     messageId,
     eventIndex
   };

@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PromptAttachment } from '$lib/domain/types';
 import LandingPage from '../+page.svelte';
 
 function createAgentsStore() {
@@ -45,7 +46,7 @@ function createAgentsStore() {
     composerModeId: 'build',
     composerReasoningId: 'auto',
     composerTargetId: 'local',
-    promptAttachments: [],
+    promptAttachments: [] as PromptAttachment[],
     promptFocusToken: 0,
     loading: false,
     error: null as string | null,
@@ -148,6 +149,18 @@ describe('Landing page session start', () => {
     await waitFor(() => {
       expect(goto).toHaveBeenCalledWith('/sessions/agent-1/session-1');
     });
+  });
+
+  it('starts an attachment-only landing session without clearing wiring prematurely', async () => {
+    agentsStore.promptAttachments = [{ id: 'img-1', name: 'photo.png', mimeType: 'image/png', size: 3, data: 'aW1n' }];
+    render(LandingPage);
+
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+
+    expect(agentsStore.startSessionWithPrompt).toHaveBeenCalledWith('agent-1');
+    expect(agentsStore.promptAttachments).toHaveLength(1);
+    await waitFor(() => expect(goto).toHaveBeenCalledWith('/sessions/agent-1/session-1'));
   });
 
   it('hides the agent suffix when stopped or disabled agents are also configured', () => {

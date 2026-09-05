@@ -26,6 +26,7 @@ export interface PromptFailure extends PromptError {
   turnEventIndex: number;
   prompt: string;
   attachments: PromptAttachment[];
+  clientPromptId?: string;
 }
 
 interface ProviderErrorData {

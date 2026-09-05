@@ -19,7 +19,10 @@ import {
   reduceSessionReplay,
   beginSessionWork,
   endSessionWork,
-  getNextConversationEventIndex
+  getNextConversationEventIndex,
+  getTranscriptBlocks,
+  normalizeContentBlock,
+  readClientPromptId
 } from '$lib/domain/session-updates';
 import {
   buildSessionKey,
@@ -45,6 +48,7 @@ import type {
   ModelEntry,
   ModelInfo,
   PromptAttachment,
+  SessionContentBlock,
   SessionRunState,
   SessionStatus
 } from '$lib/domain/types';
@@ -105,6 +109,7 @@ import {
 import { listManagedProfiles } from '$lib/querymt/profile-templates';
 import { getAgentLogs, getAgentStatus, restartAgent, startAgent, stopAgent, validateWorkspaceDirectory, type AgentLogEntry } from '$lib/querymt/sidecar';
 import { inboxStore } from '$lib/stores/inbox.svelte';
+import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 
 const AGENTS_STORAGE_KEY = 'querymt-desktop.agents';
 const RECENT_MODELS_STORAGE_KEY = 'querymt-desktop.recent-models';
@@ -1128,20 +1133,21 @@ export class AgentsStore {
     }
   }
 
-  async startSessionWithPrompt(agentId: string): Promise<string | null> {
+    async startSessionWithPrompt(agentId: string): Promise<string | null> {
     const sessionId = await this.createSession(agentId);
-    if (sessionId && this.composerPrompt.trim()) {
+    if (sessionId && (this.composerPrompt.trim() || this.promptAttachments.length > 0)) {
       void this.sendPromptToActiveSession();
     }
     return sessionId;
   }
 
-        async sendPromptToActiveSession(retryFailure: PromptFailure | null = null) {
+          async sendPromptToActiveSession(retryFailure: PromptFailure | null = null) {
     this.error = null;
     this.promptFailure = null;
     const prompt = (retryFailure?.prompt ?? this.composerPrompt).trim();
-    if (!prompt) {
-      this.error = 'Prompt text is required to send a session prompt.';
+    const attachments = (retryFailure?.attachments ?? this.promptAttachments).map((attachment) => ({ ...attachment }));
+    if (!prompt && attachments.length === 0) {
+      this.error = 'Enter a message or attach at least one file.';
       return;
     }
 
@@ -1150,12 +1156,27 @@ export class AgentsStore {
       return;
     }
 
-    const record = this.ensureClientRecord(this.activeAgentId);
-    const attachments = (retryFailure?.attachments ?? this.promptAttachments).map((attachment) => ({ ...attachment }));
+    const agentId = this.activeAgentId;
     const sessionId = this.activeSessionId;
-    const turnEventIndex = retryFailure?.turnEventIndex ?? this.addOptimisticUserPrompt(sessionId, prompt);
+    const record = this.ensureClientRecord(agentId);
+    const imageMode = chatPreferencesStore.imageSendMode;
+    const clientPromptId = retryFailure?.clientPromptId ?? createClientPromptId();
+    let turnEventIndex = retryFailure?.turnEventIndex;
 
     try {
+      await this.connectAgent(agentId);
+      const hasImages = attachments.some((attachment) => attachment.mimeType.startsWith('image/'));
+      const hasResources = attachments.some(
+        (attachment) => imageMode === 'resource' || !attachment.mimeType.startsWith('image/')
+      );
+      if (hasImages && imageMode === 'image' && !record.client.supportsImagePrompts()) {
+        throw new Error('This agent does not support native image prompts. Switch image attachments to Resources and try again.');
+      }
+      if (hasResources && !record.client.supportsEmbeddedContext()) {
+        throw new Error('This agent does not support embedded resources. Remove file attachments or use an agent with embedded context support.');
+      }
+
+      turnEventIndex ??= this.addOptimisticUserPrompt(sessionId, prompt, attachments, clientPromptId);
       this.activeSession.undo.stack = [];
       this.activeSession.undo.lastRevertedFiles = [];
       this.activeSession.undo.lastMessage = null;
@@ -1167,21 +1188,35 @@ export class AgentsStore {
         this.composerPrompt = '';
         this.clearPromptAttachments();
       }
-      await this.connectAgent(this.activeAgentId);
-      this.lastPromptResponse = await record.client.sendPrompt(sessionId, prompt, attachments);
+      this.lastPromptResponse = await record.client.sendPrompt(sessionId, prompt, attachments, {
+        imageMode,
+        clientPromptId
+      });
+      if (retryFailure && this.composerPrompt.trim() === prompt && attachmentsMatch(this.promptAttachments, attachments)) {
+        this.composerPrompt = '';
+        this.clearPromptAttachments();
+      }
       this.activeSession.lastStopReason = this.lastPromptResponse.stopReason ?? null;
       endSessionWork(this.activeSession);
-      await this.drainQueuedSessionUpdates(this.activeAgentId, sessionId);
+      await this.drainQueuedSessionUpdates(agentId, sessionId);
       if (PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState)) {
         this.activeSession.runState = 'completed';
         this.activeSession.activeToolCallId = null;
         this.activeSession.activityLabel =
           this.lastPromptResponse.stopReason === 'cancelled' ? 'Turn cancelled.' : 'Turn completed.';
       }
-      await this.refreshSessionsForAgent(this.activeAgentId);
+      await this.refreshSessionsForAgent(agentId);
     } catch (error) {
       endSessionWork(this.activeSession);
       const normalizedError = normalizePromptError(error);
+      if (turnEventIndex === undefined) {
+        this.error = normalizedError.message;
+        return;
+      }
+      if (!retryFailure && !this.composerPrompt.trim() && this.promptAttachments.length === 0) {
+        this.composerPrompt = prompt;
+        this.promptAttachments = attachments.map((attachment) => ({ ...attachment }));
+      }
       this.activeSession.runState = 'failed';
       this.promptFailure = {
         ...normalizedError,
@@ -1189,7 +1224,8 @@ export class AgentsStore {
         sessionId,
         turnEventIndex,
         prompt,
-        attachments
+        attachments,
+        clientPromptId
       };
       this.activeSession.lastError = normalizedError.message;
       this.activeSession.activityLabel = normalizedError.title;
@@ -2385,45 +2421,107 @@ export class AgentsStore {
     return this.activeAgentId === agentId && this.activeSessionId === sessionId;
   }
 
-    private addOptimisticUserPrompt(sessionId: string, prompt: string): number {
+      private addOptimisticUserPrompt(
+    sessionId: string,
+    prompt: string,
+    attachments: PromptAttachment[],
+    clientPromptId: string
+  ): number {
     const eventIndex = getNextConversationEventIndex(this.activeSession);
     const id = `${sessionId}-optimistic-user-${eventIndex + 1}`;
+    const blocks: SessionContentBlock[] = [
+      ...(prompt ? [{ type: 'text' as const, text: prompt }] : []),
+      ...attachments.map((attachment): SessionContentBlock => attachment.mimeType.startsWith('image/')
+        ? {
+            type: 'image',
+            data: attachment.data,
+            mimeType: attachment.mimeType,
+            id: attachment.id,
+            name: attachment.name,
+            size: attachment.size
+          }
+        : {
+            type: 'resource',
+            uri: attachmentUri(attachment),
+            mimeType: attachment.mimeType,
+            data: attachment.data,
+            id: attachment.id,
+            name: attachment.name,
+            size: attachment.size
+          })
+    ];
     this.activeSession.transcript.push({
       id,
       kind: 'user_message_chunk',
       text: prompt,
+      blocks,
       messageId: id,
+      clientPromptId,
       eventIndex
     });
     this.activeSession.events.push({
       id: `${id}-event`,
       kind: 'user_message_chunk',
-      text: prompt,
+      text: prompt || `${attachments.length} attachment(s)`,
       messageId: id
     });
     return eventIndex;
   }
 
-  private removeMatchingOptimisticUserPrompt(notification: SessionNotification): number | undefined {
+  private reconcileOptimisticUserPrompt(notification: SessionNotification): number | undefined {
     const update = notification.update;
-    if (update.sessionUpdate !== 'user_message_chunk' || update.content.type !== 'text') {
-      return undefined;
-    }
+    if (update.sessionUpdate !== 'user_message_chunk') return undefined;
 
-    const contentText = update.content.text;
-    const optimistic = this.activeSession.transcript.find(
-      (item) =>
-        item.kind === 'user_message_chunk' &&
-        item.id.includes('-optimistic-user-') &&
-        'text' in item &&
-        item.text === contentText
+    const clientPromptId = readClientPromptId(update) ?? readClientPromptId(notification);
+    const canonical = this.activeSession.transcript.find((item) =>
+      item.kind === 'user_message_chunk' &&
+      !item.id.includes('-optimistic-user-') &&
+      ((update.messageId && item.messageId === update.messageId) ||
+        (clientPromptId && item.clientPromptId === clientPromptId))
     );
+    if (canonical) return canonical.eventIndex;
+
+    const optimisticItems = this.activeSession.transcript.filter((item) =>
+      item.kind === 'user_message_chunk' && item.id.includes('-optimistic-user-')
+    );
+    let optimistic = clientPromptId
+      ? optimisticItems.find((item) => item.clientPromptId === clientPromptId)
+      : undefined;
+    optimistic ??= update.messageId
+      ? optimisticItems.find((item) => item.messageId === update.messageId)
+      : undefined;
+
     if (!optimistic) {
+      const incoming = normalizeContentBlock(update.content);
+      if (incoming) {
+        const contentMatches = optimisticItems.filter((item) =>
+          getTranscriptBlocks(item).some((block) => contentBlocksMatch(block, incoming))
+        );
+        if (contentMatches.length === 1) optimistic = contentMatches[0];
+      }
+    }
+    if (!optimistic) {
+      // The echo may be a shape normalizeContentBlock drops (e.g. resource_link)
+      // or nest attachment identity deeper than the normalized block carries.
+      const echoIdentity = readRawAttachmentIdentity(update.content);
+      if (echoIdentity) {
+        const identityMatches = optimisticItems.filter((item) =>
+          getTranscriptBlocks(item).some((block) => attachmentIdentityKey(block) === echoIdentity)
+        );
+        if (identityMatches.length === 1) optimistic = identityMatches[0];
+      }
+    }
+    if (!optimistic) {
+      console.debug('querymt session/update optimistic prompt unmatched', {
+        sessionId: this.activeSession.sessionId,
+        content: update.content
+      });
       return undefined;
     }
 
+    const optimisticMessageId = optimistic.messageId;
     this.activeSession.transcript = this.activeSession.transcript.filter((item) => item.id !== optimistic.id);
-    this.activeSession.events = this.activeSession.events.filter((event) => event.messageId !== optimistic.messageId);
+    this.activeSession.events = this.activeSession.events.filter((event) => event.messageId !== optimisticMessageId);
     return optimistic.eventIndex;
   }
 
@@ -2498,7 +2596,7 @@ export class AgentsStore {
       this.activeSession.sessionId = notification.sessionId;
     }
 
-    const optimisticEventIndex = this.removeMatchingOptimisticUserPrompt(notification);
+    const optimisticEventIndex = this.reconcileOptimisticUserPrompt(notification);
     const beforeEvents = this.activeSession.events.length;
     this.activeSession = applySessionNotification(this.activeSession, notification, optimisticEventIndex);
     this.activeLoadMeasurement?.increment('appliedNotifications');
@@ -2626,11 +2724,29 @@ function getSessionNotificationKey(notification: SessionNotification): string {
     update.sessionUpdate === 'agent_message_chunk' ||
     update.sessionUpdate === 'agent_thought_chunk'
   ) {
-    const content = update.content.type === 'text' ? update.content.text : JSON.stringify(update.content);
-    return `${prefix}:${update.messageId ?? ''}:${content}`;
+    return `${prefix}:${update.messageId ?? ''}:${readClientPromptId(notification) ?? ''}:${contentBlockKey(update.content)}`;
   }
 
   return `${prefix}:${JSON.stringify(update)}`;
+}
+
+function contentBlockKey(content: unknown): string {
+  const block = normalizeContentBlock(content);
+  if (!block) return 'unsupported';
+  if (block.type === 'text') return `text:${block.text}`;
+  if (block.type === 'image') {
+    return `image:${block.id ?? block.name ?? ''}:${block.mimeType}:${block.data?.length ?? 0}:${hashString(block.data ?? '')}`;
+  }
+  return `resource:${block.id ?? block.name ?? block.uri}:${block.mimeType ?? ''}:${block.data?.length ?? block.text?.length ?? 0}:${hashString(block.data ?? block.text ?? '')}`;
+}
+
+function hashString(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function inferSessionStatusFromNotification(update: SessionNotification['update']): SessionStatus | null {
@@ -2827,6 +2943,79 @@ function maxTimestamp(values: Array<string | null>): string | null {
     if (!value) return latest;
     return !latest || value > latest ? value : latest;
   }, null);
+}
+
+function createClientPromptId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return `prompt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function attachmentUri(attachment: PromptAttachment): string {
+  return `attachment:///${encodeURIComponent(attachment.id)}/${encodeURIComponent(attachment.name)}`;
+}
+
+function attachmentsMatch(left: PromptAttachment[], right: PromptAttachment[]): boolean {
+  return left.length === right.length && left.every((attachment, index) => {
+    const candidate = right[index];
+    return candidate?.id === attachment.id && candidate.data === attachment.data;
+  });
+}
+
+function attachmentIdentityKey(block: SessionContentBlock): string | null {
+  if (block.type === 'text') return null;
+  if (block.id) return block.id;
+  if (block.uri?.startsWith('attachment:///')) {
+    const identity = decodeURIComponent(block.uri.slice('attachment:///'.length).split('/')[0] ?? '');
+    return identity || null;
+  }
+  return null;
+}
+
+function attachmentIdentitiesMatch(left: SessionContentBlock, right: SessionContentBlock): boolean {
+  const leftKey = attachmentIdentityKey(left);
+  return leftKey !== null && leftKey === attachmentIdentityKey(right);
+}
+
+function readRawAttachmentIdentity(value: unknown, depth = 0): string | null {
+  if (!value || typeof value !== 'object' || depth > 6) return null;
+  const root = value as Record<string, unknown>;
+
+  const meta = root._meta;
+  if (meta && typeof meta === 'object') {
+    const querymt = (meta as Record<string, unknown>).querymt;
+    const source = (querymt && typeof querymt === 'object' ? querymt : meta) as Record<string, unknown>;
+    const attachmentId =
+      typeof source.attachment_id === 'string' ? source.attachment_id : typeof source.attachmentId === 'string' ? source.attachmentId : null;
+    if (attachmentId) return attachmentId;
+  }
+
+  const uri = typeof root.uri === 'string' ? root.uri : null;
+  if (uri?.startsWith('attachment:///')) {
+    const identity = decodeURIComponent(uri.slice('attachment:///'.length).split('/')[0] ?? '');
+    if (identity) return identity;
+  }
+
+  for (const nested of Object.values(root)) {
+    if (!nested || typeof nested !== 'object') continue;
+    const found = readRawAttachmentIdentity(nested, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+function contentBlocksMatch(left: SessionContentBlock, right: SessionContentBlock): boolean {
+  if (left.type !== right.type) return attachmentIdentitiesMatch(left, right);
+  if (left.type === 'text' && right.type === 'text') return left.text === right.text;
+  if (left.type === 'image' && right.type === 'image') {
+    return (left.mimeType === right.mimeType && left.data === right.data) || attachmentIdentitiesMatch(left, right);
+  }
+  if (left.type === 'resource' && right.type === 'resource') {
+    return (
+      (left.mimeType === right.mimeType && left.data === right.data && left.text === right.text) ||
+      attachmentIdentitiesMatch(left, right)
+    );
+  }
+  return false;
 }
 
 function delay(ms: number): Promise<void> {
