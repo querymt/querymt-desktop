@@ -7384,41 +7384,58 @@ summary:focus-visible {
   background: var(--status-muted-bg);
 }
 
-.session-row-status {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: var(--status-muted-bg);
-  color: var(--status-muted);
-  padding: 0.1rem 0.38rem;
-  font-size: 0.62rem;
-  font-weight: 650;
-}
-
-.session-row-status-thinking,
-.session-row-status-cancelling {
-  background: var(--status-running-bg);
-  color: var(--status-running);
-}
-
-.session-row-status-waiting {
-  background: var(--status-warning-bg);
-  color: var(--status-warning);
-}
-
-.session-row-status-completed {
-  background: var(--status-success-bg);
-  color: var(--status-success);
-}
-
 .session-row-meta {
   display: flex;
   min-width: 0;
+  align-items: center;
   gap: 0.45rem;
   color: var(--muted);
   font-size: 0.72rem;
   line-height: 1.35;
+}
+
+.session-row-status-line {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.35rem;
+  pointer-events: none;
+}
+
+.session-row-status-line .session-header-status-dot {
+  pointer-events: auto;
+  cursor: default;
+}
+
+.session-row-status-tooltip {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 0;
+  z-index: 90;
+  display: none;
+  padding: 0.28rem 0.55rem;
+  border-radius: var(--radius-sm);
+  background: rgba(13, 11, 8, 0.94);
+  color: #f6f5f4;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+.session-row-status-line:hover .session-row-status-tooltip,
+.session-header-status-wrap:hover .session-row-status-tooltip {
+  display: block;
+}
+
+.session-header-status-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
 }
 
 .session-row-meta span {

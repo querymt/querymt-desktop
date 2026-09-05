@@ -102,11 +102,13 @@
   <div class="session-header-identity">
     <h1>{title}</h1>
     <div class="session-header-meta">
-      <span
-        class={`session-header-status-dot session-header-status-dot-${status.tone}`}
-        title={status.label}
-        aria-label={`Status: ${status.label}`}
-      ></span>
+      <span class="session-header-status-wrap">
+        <span
+          class={`session-header-status-dot session-header-status-dot-${status.tone}`}
+          aria-label={`Status: ${status.label}`}
+        ></span>
+        <span class="session-row-status-tooltip" role="tooltip">{status.label}</span>
+      </span>
       <span>{workspace}</span>
       {#if agentName}
         <span aria-hidden="true">·</span>
