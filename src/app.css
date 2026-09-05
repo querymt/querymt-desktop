@@ -8425,17 +8425,23 @@ summary:focus-visible {
 .session-scroll-bottom-pill-host {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--session-composer-bottom-offset) + 0.45rem);
+  bottom: calc(
+    var(
+      --session-composer-live-top,
+      calc(var(--session-composer-bottom-offset) + var(--control-height-standard))
+    ) + 0.4rem
+  );
   width: min(var(--session-chat-max), calc(100vw - 2rem));
   z-index: 40;
   pointer-events: none;
   transform: translateX(-50%);
+  transition: bottom 180ms ease;
 }
 
 .session-scroll-bottom-slot {
   position: absolute;
   right: 0.55rem;
-  bottom: calc(var(--control-height-standard) + 0.85rem);
+  bottom: 0;
   display: inline-flex;
   opacity: 0.8;
   transition: opacity 0.15s ease;
@@ -8514,7 +8520,8 @@ summary:focus-visible {
     will-change: auto;
   }
 
-  .session-activity-bar-dock {
+  .session-activity-bar-dock,
+  .session-scroll-bottom-pill-host {
     transition: none;
   }
 }
