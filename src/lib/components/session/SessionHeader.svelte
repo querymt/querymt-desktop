@@ -29,7 +29,7 @@
     session: ActiveSessionViewModel;
     title: string;
     workspace: string;
-    agentName: string;
+    agentName?: string;
     updatedAt: string;
     summaryStatus?: SessionStatus;
     debugLabel?: string;
@@ -84,8 +84,10 @@
     <h1>{title}</h1>
     <div class="session-header-meta">
       <span>{workspace}</span>
-      <span aria-hidden="true">·</span>
-      <span>{agentName}</span>
+      {#if agentName}
+        <span aria-hidden="true">·</span>
+        <span>{agentName}</span>
+      {/if}
       <span aria-hidden="true">·</span>
       <span>{updatedAt}</span>
     </div>

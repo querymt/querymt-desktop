@@ -56,6 +56,15 @@
     return count === 0 ? 'Debug events' : `Debug events (${count})`;
   });
   const composerCollapsed = $derived(chatPresentationState === 'fixed-free-compact');
+  // The agent name in the header only disambiguates between sessions when more
+  // than one agent is actively connected.
+  const activeAgentCount = $derived(
+    agentsStore.configs.filter((agent) =>
+      ['connecting', 'reconnecting', 'initialized', 'loading-sessions'].includes(
+        agentsStore.connectionStates[agent.id] ?? 'idle'
+      )
+    ).length
+  );
   const undoSupported = $derived(agentId ? agentsStore.canUseSessionUndo(agentId) : false);
   const forkSupported = $derived(agentId ? agentsStore.canForkSession(agentId) : false);
   const undoTarget = $derived(
@@ -442,7 +451,7 @@
     session={agentsStore.activeSession}
     title={selectedSession?.title ?? 'Session'}
     workspace={selectedSession ? getSessionWorkspaceName(selectedSession.cwd) : 'Unknown workspace'}
-    agentName={selectedSession?.agentName ?? 'Unknown agent'}
+    agentName={activeAgentCount > 1 ? (selectedSession?.agentName ?? 'Unknown agent') : undefined}
     updatedAt={selectedSession ? formatSessionTimestamp(selectedSession.updatedAt) : 'Not loaded'}
     summaryStatus={selectedSession?.status ?? 'idle'}
     debugLabel={debugEventsTooltip}
