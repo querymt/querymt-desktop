@@ -5643,8 +5643,10 @@ summary:focus-visible {
 .session-message-user {
   max-width: min(44rem, 86%);
   margin-left: auto;
+  padding: 0.55rem 0.9rem;
   background: var(--accent-dim);
-  border-color: var(--rail);
+  border-color: transparent;
+  box-shadow: none;
 }
 
 .session-reasoning {
