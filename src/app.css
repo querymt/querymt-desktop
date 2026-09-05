@@ -4731,7 +4731,10 @@ summary:focus-visible {
 .session-page-content {
   display: grid;
   gap: 0.75rem;
-  padding-bottom: var(--session-composer-clearance, var(--session-composer-expanded-clearance));
+  padding-bottom: var(
+    --session-composer-measured-clearance,
+    var(--session-composer-clearance, var(--session-composer-expanded-clearance))
+  );
   transition: padding-bottom 180ms ease;
 }
 
@@ -4745,7 +4748,10 @@ summary:focus-visible {
 
 .session-chat-end-anchor {
   height: 1px;
-  scroll-margin-block-end: var(--session-composer-clearance, var(--session-composer-expanded-clearance));
+  scroll-margin-block-end: var(
+    --session-composer-measured-clearance,
+    var(--session-composer-clearance, var(--session-composer-expanded-clearance))
+  );
 }
 
 .session-detail-shell {

@@ -128,6 +128,7 @@
 
   let promptElement: HTMLTextAreaElement | null = null;
   let errorTimeout: ReturnType<typeof setTimeout> | null = null;
+  let dockElement = $state<HTMLElement | null>(null);
 
   const prefersReducedMotion = () =>
     typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -169,6 +170,28 @@
   const dockPositionStyle = $derived.by(() => {
     if (!docked || dockAlignLeft == null || dockAlignWidth == null) return '';
     return `left:${dockAlignLeft}px;width:${dockAlignWidth}px;transform:none;`;
+  });
+
+  $effect(() => {
+    const dock = docked ? dockElement : null;
+    if (!dock || typeof ResizeObserver !== 'function') return;
+
+    const syncClearance = () => {
+      const height = dock.getBoundingClientRect().height;
+      if (height <= 0) return;
+      document.documentElement.style.setProperty(
+        '--session-composer-measured-clearance',
+        `calc(${Math.ceil(height)}px + var(--session-composer-bottom-offset) + 0.75rem)`
+      );
+    };
+
+    syncClearance();
+    const observer = new ResizeObserver(syncClearance);
+    observer.observe(dock);
+    return () => {
+      observer.disconnect();
+      document.documentElement.style.removeProperty('--session-composer-measured-clearance');
+    };
   });
 
   const modeOption = $derived(activeSessionId ? findModeConfigOption(sessionConfigOptions) : undefined);
@@ -609,6 +632,7 @@
 {/snippet}
 
 <div
+  bind:this={dockElement}
   class={docked ? 'session-composer-dock' : ''}
   style={dockPositionStyle}
 >
