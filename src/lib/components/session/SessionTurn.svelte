@@ -57,7 +57,15 @@
     > = [];
     for (const block of source) {
       if (block.type === 'text') {
-        segments.push({ type: 'text', block });
+        const previous = segments.at(-1);
+        // Streamed responses arrive as one text block per chunk; coalesce
+        // consecutive ones so the markdown renders as a single flow instead
+        // of one paragraph per chunk.
+        if (previous?.type === 'text') {
+          previous.block = { type: 'text', text: previous.block.text + block.text };
+          continue;
+        }
+        segments.push({ type: 'text', block: { type: 'text', text: block.text } });
         continue;
       }
       const previous = segments.at(-1);

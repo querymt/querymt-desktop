@@ -62,6 +62,34 @@ const turn: SessionConversationTurn = {
 afterEach(cleanup);
 
 describe('SessionTurn', () => {
+  it('renders consecutive streamed text blocks as a single markdown flow', () => {
+    const streamedTurn: SessionConversationTurn = {
+      id: 'turn-streamed',
+      forkMessageId: null,
+      content: [
+        {
+          type: 'assistant',
+          id: 'assistant-streamed',
+          messageId: 'assistant-streamed',
+          html: '<p>Hello world</p>',
+          text: 'Hello world',
+          blocks: [
+            { type: 'text', text: 'Hel' },
+            { type: 'text', text: 'lo wo' },
+            { type: 'text', text: 'rld' }
+          ],
+          relatedEvents: []
+        }
+      ],
+      settled: true
+    };
+
+    render(SessionTurn, { turn: streamedTurn });
+    const bodies = document.querySelectorAll('.session-agent-body.markdown-body');
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toHaveTextContent('Hello world');
+  });
+
   it('renders shared image triggers, file cards, and unavailable image fallbacks without captions', () => {
     const attachmentTurn: SessionConversationTurn = {
       id: 'attachments',

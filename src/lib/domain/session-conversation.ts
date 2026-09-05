@@ -1,5 +1,5 @@
 import { renderMarkdownToHtml } from '$lib/domain/markdown';
-import { getTranscriptBlocks } from '$lib/domain/session-updates';
+import { getTranscriptBlocks, mapTranscriptRole } from '$lib/domain/session-updates';
 import type {
   ActiveSessionViewModel,
   SessionContentBlock,
@@ -196,38 +196,61 @@ function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionTo
   ].sort(compareRawItems);
 
   const orderedItems: OrderedConversationItem[] = [];
+  let openAssistantGroup: SessionTranscriptGroup | null = null;
+  let openThoughtGroup: SessionTranscriptGroup | null = null;
   for (const item of rawItems) {
     if (item.type === 'tool') {
+      // A tool call ends both the current assistant text segment and the
+      // current reasoning trace: what streams after it starts fresh.
+      openAssistantGroup = null;
+      openThoughtGroup = null;
       orderedItems.push({ type: 'tool', tool: item.tool });
       continue;
     }
 
     const role = mapTranscriptRole(item.transcript.kind);
     const previous = orderedItems[orderedItems.length - 1];
-    if (
-      previous?.type === 'group' &&
-      previous.group.role === role &&
-      previous.group.messageId === item.transcript.messageId
-    ) {
-      previous.group.text += item.transcript.text;
-      previous.group.blocks = [...(previous.group.blocks ?? []), ...getTranscriptBlocks(item.transcript)];
-      previous.group.eventIds.push(item.transcript.id);
+    // Agent chunks stream a single response and may arrive with per-chunk (or
+    // missing) message ids, and reasoning notifications can interleave
+    // mid-sentence (or trail after the answer): keep appending to the open
+    // assistant / thought groups so each renders as one markdown run instead
+    // of orphaned fragments. Tool calls and user prompts close both segments.
+    // User chunks stay strict: distinct message ids mean distinct prompts.
+    const sameRole = previous?.type === 'group' && previous.group.role === role;
+    const sameMessage = previous?.type === 'group' && previous.group.messageId === item.transcript.messageId;
+    const mergeTarget =
+      role === 'assistant' && openAssistantGroup
+        ? openAssistantGroup
+        : role === 'thought' && openThoughtGroup
+          ? openThoughtGroup
+          : sameRole && (role !== 'user' || sameMessage)
+            ? previous.group
+            : null;
+    if (mergeTarget) {
+      mergeTarget.text += item.transcript.text;
+      mergeTarget.messageId = item.transcript.messageId ?? mergeTarget.messageId;
+      mergeTarget.blocks = [...(mergeTarget.blocks ?? []), ...getTranscriptBlocks(item.transcript)];
+      mergeTarget.eventIds.push(item.transcript.id);
       continue;
     }
 
-    orderedItems.push({
-      type: 'group',
-      group: {
-        id: item.transcript.id,
-        role,
-        text: item.transcript.text,
-        blocks: getTranscriptBlocks(item.transcript),
-        messageId: item.transcript.messageId,
-        clientPromptId: item.transcript.clientPromptId,
-        eventIds: [item.transcript.id],
-        eventIndex: item.transcript.eventIndex
-      }
-    });
+    const group: SessionTranscriptGroup = {
+      id: item.transcript.id,
+      role,
+      text: item.transcript.text,
+      blocks: getTranscriptBlocks(item.transcript),
+      messageId: item.transcript.messageId,
+      clientPromptId: item.transcript.clientPromptId,
+      eventIds: [item.transcript.id],
+      eventIndex: item.transcript.eventIndex
+    };
+    if (role === 'assistant') openAssistantGroup = group;
+    else if (role === 'thought') openThoughtGroup = group;
+    else {
+      openAssistantGroup = null;
+      openThoughtGroup = null;
+    }
+    orderedItems.push({ type: 'group', group });
   }
   return orderedItems;
 }
@@ -243,17 +266,6 @@ function compareRawItems(a: RawConversationItem, b: RawConversationItem): number
     return aHasIndex ? -1 : 1;
   }
   return a.sourceOrder - b.sourceOrder;
-}
-
-function mapTranscriptRole(kind: SessionTranscriptItem['kind']): SessionTranscriptGroup['role'] {
-  switch (kind) {
-    case 'user_message_chunk':
-      return 'user';
-    case 'agent_thought_chunk':
-      return 'thought';
-    default:
-      return 'assistant';
-  }
 }
 
 function canonicalizeTools(tools: SessionToolCallItem[]): SessionToolCallItem[] {

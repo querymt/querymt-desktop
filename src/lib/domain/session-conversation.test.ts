@@ -1,34 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { buildSessionConversation } from './session-conversation';
+import { createEmptyActiveSession } from './session-updates';
 import type { ActiveSessionViewModel } from '$lib/domain/types';
 
 function baseSession(): ActiveSessionViewModel {
-  return {
-    sessionId: 's1',
-    transcript: [],
-    toolCalls: [],
-    plans: [],
-    events: [],
-    configOptions: [],
-    runState: 'completed',
-    activityLabel: null,
-    activeToolCallId: null,
-    lastStopReason: null,
-    lastError: null,
-    usage: {
-      contextUsed: null,
-      contextLimit: null,
-      cumulativeCostUsd: null,
-      activeWorkMs: 0,
-      activeWorkStartedAt: null
-    },
-    undo: {
-      stack: [],
-      pendingOperation: null,
-      lastRevertedFiles: [],
-      lastMessage: null
-    }
-  };
+  return { ...createEmptyActiveSession(), sessionId: 's1', runState: 'completed' };
 }
 
 describe('buildSessionConversation', () => {
@@ -61,6 +37,110 @@ describe('buildSessionConversation', () => {
     ]);
     expect(turns[0].content.map((item) => item.id)).toEqual(['r1', 't1', 't2', 'r2', 't3', 't4', 'a1']);
     expect(turns[0].forkMessageId).toBe('m-final');
+  });
+
+  it('merges streamed assistant chunks with per-chunk message ids into one assistant block', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'go', messageId: 'm-user', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Hel', messageId: 'chunk-1', eventIndex: 1 },
+      { id: 'a2', kind: 'agent_message_chunk', text: 'lo wo', messageId: 'chunk-2', eventIndex: 2 },
+      { id: 'a3', kind: 'agent_message_chunk', text: 'rld', messageId: null, eventIndex: 3 }
+    ];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns).toHaveLength(1);
+    const assistantItems = turns[0].content.filter((item) => item.type === 'assistant');
+    expect(assistantItems).toHaveLength(1);
+    expect(assistantItems[0]).toMatchObject({ id: 'a1', text: 'Hello world', messageId: 'chunk-2' });
+    expect(turns[0].forkMessageId).toBe('chunk-2');
+  });
+
+  it('keeps user prompts with distinct message ids as separate turns', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'first', messageId: 'm-1', eventIndex: 0 },
+      { id: 'u2', kind: 'user_message_chunk', text: 'second', messageId: 'm-2', eventIndex: 1 }
+    ];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns).toHaveLength(2);
+    expect(turns[0].user?.text).toBe('first');
+    expect(turns[1].user?.text).toBe('second');
+  });
+
+  it('joins assistant fragments that reasoning steps interrupted mid-sentence', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'go', messageId: 'm-user', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Empty workspace', messageId: 'chunk-1', eventIndex: 1 },
+      { id: 't1', kind: 'agent_thought_chunk', text: 'checking the workspace', messageId: null, eventIndex: 2 },
+      { id: 'a2', kind: 'agent_message_chunk', text: " — I'll create a standalone Rust example", messageId: 'chunk-2', eventIndex: 3 },
+      { id: 't2', kind: 'agent_thought_chunk', text: 'planning the test run', messageId: null, eventIndex: 4 },
+      { id: 'a3', kind: 'agent_message_chunk', text: ' and verify it compiles.', messageId: null, eventIndex: 5 }
+    ];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns).toHaveLength(1);
+    const assistantItems = turns[0].content.filter((item) => item.type === 'assistant');
+    expect(assistantItems).toHaveLength(1);
+    expect(assistantItems[0]).toMatchObject({
+      id: 'a1',
+      text: "Empty workspace — I'll create a standalone Rust example and verify it compiles.",
+      messageId: 'chunk-2'
+    });
+    expect(turns[0].content.filter((item) => item.type === 'reasoning')).toHaveLength(1);
+    expect(turns[0].forkMessageId).toBe('chunk-2');
+  });
+
+  it('keeps assistant fragments on opposite sides of a tool call as separate segments', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'go', messageId: 'm-user', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Creating the file.', messageId: 'chunk-1', eventIndex: 1 },
+      { id: 't0', kind: 'agent_thought_chunk', text: 'writing', messageId: null, eventIndex: 2 },
+      { id: 'a2', kind: 'agent_message_chunk', text: 'Running the tests.', messageId: 'chunk-2', eventIndex: 4 }
+    ];
+    session.toolCalls = [{ id: 'tool-1', title: 'write_tool', status: 'completed', kind: 'write_tool', eventIndex: 3 }];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns).toHaveLength(1);
+    const assistantItems = turns[0].content.filter((item) => item.type === 'assistant');
+    expect(assistantItems).toHaveLength(2);
+    expect(assistantItems[0]).toMatchObject({ text: 'Creating the file.', messageId: 'chunk-1' });
+    expect(assistantItems[1]).toMatchObject({ text: 'Running the tests.', messageId: 'chunk-2' });
+    expect(turns[0].content.filter((item) => item.type === 'reasoning')).toHaveLength(1);
+  });
+
+  it('merges trailing reasoning fragments into the reasoning trace that preceded the answer', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'go', messageId: 'm-user', eventIndex: 0 },
+      {
+        id: 't1',
+        kind: 'agent_thought_chunk',
+        text: 'Tone: playful but professional',
+        messageId: 'm-thought',
+        eventIndex: 1
+      },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Ah, the programmer socks heuristic.', messageId: 'chunk-1', eventIndex: 2 },
+      { id: 't2', kind: 'agent_thought_chunk', text: ', concise.', messageId: 'm-thought', eventIndex: 3 }
+    ];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns).toHaveLength(1);
+    const reasoningItems = turns[0].content.filter((item) => item.type === 'reasoning');
+    expect(reasoningItems).toHaveLength(1);
+    expect(reasoningItems[0]).toMatchObject({ id: 't1' });
+    expect(reasoningItems[0]).toHaveProperty('html', expect.stringContaining('Tone: playful but professional, concise.'));
+    const assistantItems = turns[0].content.filter((item) => item.type === 'assistant');
+    expect(assistantItems).toHaveLength(1);
+    expect(assistantItems[0]).toMatchObject({ text: 'Ah, the programmer socks heuristic.' });
   });
 
   it('keeps reasoning traces separate when a tool appears between chunks with the same message id', () => {
