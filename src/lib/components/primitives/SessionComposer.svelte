@@ -293,11 +293,33 @@
     }
   }
 
-  async function normalizeAndAddFiles(files: FileList | File[]) {
+  let normalizeQueue: Promise<void> = Promise.resolve();
+  let pendingQuotaAttachments: PromptAttachment[] = [];
+
+  function effectiveQuotaAttachments(): PromptAttachment[] {
+    if (pendingQuotaAttachments.length === 0) return attachments;
+    const knownIds = new Set(attachments.map((attachment) => attachment.id));
+    return [...attachments, ...pendingQuotaAttachments.filter((attachment) => !knownIds.has(attachment.id))];
+  }
+
+  function normalizeAndAddFiles(files: FileList | File[]): Promise<void> {
+    // Snapshot synchronously: callers reset the picker input right after this
+    // call, and browsers empty a live FileList when the input value is cleared.
+    const snapshot = Array.from(files);
+    const result = normalizeQueue.then(() => normalizeAttachmentBatch(snapshot));
+    normalizeQueue = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  async function normalizeAttachmentBatch(files: FileList | File[]) {
     const next: PromptAttachment[] = [];
     const errors: string[] = [];
-    let totalBytes = attachments.reduce((total, attachment) => total + attachment.size, 0);
-    let imageCount = attachments.filter((attachment) => attachment.mimeType.startsWith('image/')).length;
+    const quotaBaseline = effectiveQuotaAttachments();
+    let totalBytes = quotaBaseline.reduce((total, attachment) => total + attachment.size, 0);
+    let imageCount = quotaBaseline.filter((attachment) => attachment.mimeType.startsWith('image/')).length;
 
     for (const file of Array.from(files)) {
       const mimeType = file.type || 'application/octet-stream';
@@ -324,8 +346,17 @@
       }
     }
     attachmentErrors = errors;
-    if (next.length > 0) onAddAttachments?.(next);
+    if (next.length > 0) {
+      onAddAttachments?.(next);
+      pendingQuotaAttachments.push(...next);
+    }
   }
+
+  $effect(() => {
+    if (pendingQuotaAttachments.length === 0) return;
+    const knownIds = new Set(attachments.map((attachment) => attachment.id));
+    pendingQuotaAttachments = pendingQuotaAttachments.filter((attachment) => !knownIds.has(attachment.id));
+  });
 
   function createAttachmentId(file: File): string {
     const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -669,6 +700,12 @@
       {#if attachments.length > 0}<span class="session-composer-attachment-count" aria-label={`${attachments.length} pending attachments`}>{attachments.length}</span>{/if}
       <IconTooltipButton label="Attach files" icon={Paperclip} size={16} onclick={handleAttachClick} />
       <IconTooltipButton label="Send reply" icon={SendHorizontal} tone="primary" size={16} disabled={loading} onclick={onSendPrompt} />
+
+      {#if attachmentErrors.length > 0}
+        <div class="composer-attachment-errors session-composer-dock-errors" role="alert" aria-live="polite">
+          {#each attachmentErrors as message}<p>{message}</p>{/each}
+        </div>
+      {/if}
     </div>
   {:else}
     <div

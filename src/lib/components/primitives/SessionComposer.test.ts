@@ -538,6 +538,59 @@ describe('SessionComposer', () => {
     expect(onAddAttachments.mock.calls[0][0][0]).toMatchObject({ name: 'pasted.png', mimeType: 'image/png', size: 3 });
   });
 
+  it('snapshots picked files before the picker reset empties its live FileList', async () => {
+    const onAddAttachments = vi.fn();
+    renderComposer({ onAddAttachments });
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+    const liveFiles: File[] = [file];
+
+    // Emulate browser behavior: clearing the input value empties the live FileList.
+    Object.defineProperty(picker, 'files', { get: () => liveFiles as unknown as FileList, configurable: true });
+    Object.defineProperty(picker, 'value', {
+      configurable: true,
+      get: () => '',
+      set: () => {
+        liveFiles.length = 0;
+      }
+    });
+
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(onAddAttachments).toHaveBeenCalledOnce());
+    expect(onAddAttachments.mock.calls[0][0][0]).toMatchObject({ name: 'notes.txt' });
+  });
+
+  it('surfaces attachment quota errors in the collapsed composer', async () => {
+    renderComposer({ collapsed: true, docked: true, sessionOnly: true, onAddAttachments: vi.fn() });
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const oversized = new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'huge.pdf', { type: 'application/pdf' });
+
+    await fireEvent.change(picker, { target: { files: [oversized] } });
+    await vi.waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('huge.pdf: attachments must be 10 MiB or smaller.')
+    );
+  });
+
+  it('serializes overlapping attachment batches so total quota is enforced', async () => {
+    const onAddAttachments = vi.fn();
+    renderComposer({ onAddAttachments });
+    const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const big = (name: string, megabytes: number) =>
+      new File([new Uint8Array(megabytes * 1024 * 1024)], name, { type: 'application/pdf' });
+
+    await fireEvent.change(picker, { target: { files: [big('first.pdf', 8), big('second.pdf', 4)] } });
+    await fireEvent.change(picker, { target: { files: [big('third.pdf', 9)] } });
+
+    await vi.waitFor(() => expect(onAddAttachments).toHaveBeenCalledOnce());
+    expect(onAddAttachments.mock.calls[0][0]).toEqual([
+      expect.objectContaining({ name: 'first.pdf' }),
+      expect.objectContaining({ name: 'second.pdf' })
+    ]);
+    await vi.waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('third.pdf: attachments cannot exceed 20 MiB total.')
+    );
+  });
+
   it('dismisses composer errors', async () => {
     const onDismissError = vi.fn();
     renderComposer({ error: 'Prompt failed', onDismissError });

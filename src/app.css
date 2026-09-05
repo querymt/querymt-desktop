@@ -5470,6 +5470,21 @@ summary:focus-visible {
   margin: 0;
 }
 
+.session-composer-dock-errors {
+  position: absolute;
+  bottom: calc(100% + 0.45rem);
+  left: 0.35rem;
+  right: 0.35rem;
+  z-index: 1;
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel-strong);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+
 .session-composer-attachment-count {
   display: inline-grid;
   min-width: 1.5rem;

@@ -1200,6 +1200,115 @@ describe('AgentsStore prompt session start', () => {
     expect(store.activeSession.transcript.find((item) => item.messageId === 'uncorrelated-server-message')).toMatchObject({ eventIndex: 2 });
   });
 
+  it('reconciles an image-only prompt when the agent echoes the attachment id without data', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.transcript = [
+      {
+        id: 'session-1-optimistic-user-1',
+        kind: 'user_message_chunk',
+        text: '',
+        blocks: [{ type: 'image', data: 'aW1n', mimeType: 'image/png', id: 'att-1', name: 'photo.png' }],
+        messageId: 'session-1-optimistic-user-1',
+        clientPromptId: 'client-1',
+        eventIndex: 0
+      }
+    ];
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: {
+          type: 'image',
+          data: '',
+          mimeType: 'image/png',
+          _meta: { querymt: { attachment_id: 'att-1', filename: 'photo.png' } }
+        },
+        messageId: 'authoritative-1'
+      }
+    });
+
+    expect(store.activeSession.transcript.filter((item) => item.id.includes('-optimistic-user-'))).toHaveLength(0);
+    expect(store.activeSession.transcript.find((item) => item.messageId === 'authoritative-1')).toMatchObject({ eventIndex: 0 });
+  });
+
+  it('reconciles an image-only prompt when the agent echoes the resource uri without data', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.transcript = [
+      {
+        id: 'session-1-optimistic-user-1',
+        kind: 'user_message_chunk',
+        text: '',
+        blocks: [{ type: 'image', data: 'Y2hhcnQ=', mimeType: 'image/png', id: 'att-2', name: 'chart.png' }],
+        messageId: 'session-1-optimistic-user-1',
+        clientPromptId: 'client-1',
+        eventIndex: 0
+      }
+    ];
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: {
+          type: 'resource',
+          resource: {
+            uri: `attachment:///${encodeURIComponent('att-2')}/${encodeURIComponent('chart.png')}`,
+            mimeType: 'image/png'
+          }
+        },
+        messageId: 'authoritative-2'
+      }
+    });
+
+    expect(store.activeSession.transcript.filter((item) => item.id.includes('-optimistic-user-'))).toHaveLength(0);
+    expect(store.activeSession.transcript.find((item) => item.messageId === 'authoritative-2')).toMatchObject({ eventIndex: 0 });
+  });
+
+  it('reconciles an image-only prompt when the agent echoes a bare resource link', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.transcript = [
+      {
+        id: 'session-1-optimistic-user-1',
+        kind: 'user_message_chunk',
+        text: '',
+        blocks: [{ type: 'image', data: 'Y2hhcnQ=', mimeType: 'image/png', id: 'att-3', name: 'chart.png' }],
+        messageId: 'session-1-optimistic-user-1',
+        clientPromptId: 'client-1',
+        eventIndex: 0
+      }
+    ];
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: {
+          type: 'resource_link',
+          uri: `attachment:///${encodeURIComponent('att-3')}/${encodeURIComponent('chart.png')}`,
+          name: 'chart.png',
+          mimeType: 'image/png'
+        },
+        messageId: 'authoritative-3'
+      }
+    });
+
+    expect(store.activeSession.transcript.filter((item) => item.id.includes('-optimistic-user-'))).toHaveLength(0);
+    expect(store.activeSession.transcript.find((item) => item.messageId === 'authoritative-3')).toMatchObject({ eventIndex: 0 });
+  });
+
   it('marks a streaming prompt completed when the prompt response returns a stop reason', async () => {
     let resolvePrompt!: () => void;
     mockClient.sendPrompt.mockImplementationOnce(

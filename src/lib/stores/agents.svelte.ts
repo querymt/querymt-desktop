@@ -2500,7 +2500,24 @@ export class AgentsStore {
         if (contentMatches.length === 1) optimistic = contentMatches[0];
       }
     }
-    if (!optimistic) return undefined;
+    if (!optimistic) {
+      // The echo may be a shape normalizeContentBlock drops (e.g. resource_link)
+      // or nest attachment identity deeper than the normalized block carries.
+      const echoIdentity = readRawAttachmentIdentity(update.content);
+      if (echoIdentity) {
+        const identityMatches = optimisticItems.filter((item) =>
+          getTranscriptBlocks(item).some((block) => attachmentIdentityKey(block) === echoIdentity)
+        );
+        if (identityMatches.length === 1) optimistic = identityMatches[0];
+      }
+    }
+    if (!optimistic) {
+      console.debug('querymt session/update optimistic prompt unmatched', {
+        sessionId: this.activeSession.sessionId,
+        content: update.content
+      });
+      return undefined;
+    }
 
     const optimisticMessageId = optimistic.messageId;
     this.activeSession.transcript = this.activeSession.transcript.filter((item) => item.id !== optimistic.id);
@@ -2944,14 +2961,59 @@ function attachmentsMatch(left: PromptAttachment[], right: PromptAttachment[]): 
   });
 }
 
+function attachmentIdentityKey(block: SessionContentBlock): string | null {
+  if (block.type === 'text') return null;
+  if (block.id) return block.id;
+  if (block.uri?.startsWith('attachment:///')) {
+    const identity = decodeURIComponent(block.uri.slice('attachment:///'.length).split('/')[0] ?? '');
+    return identity || null;
+  }
+  return null;
+}
+
+function attachmentIdentitiesMatch(left: SessionContentBlock, right: SessionContentBlock): boolean {
+  const leftKey = attachmentIdentityKey(left);
+  return leftKey !== null && leftKey === attachmentIdentityKey(right);
+}
+
+function readRawAttachmentIdentity(value: unknown, depth = 0): string | null {
+  if (!value || typeof value !== 'object' || depth > 6) return null;
+  const root = value as Record<string, unknown>;
+
+  const meta = root._meta;
+  if (meta && typeof meta === 'object') {
+    const querymt = (meta as Record<string, unknown>).querymt;
+    const source = (querymt && typeof querymt === 'object' ? querymt : meta) as Record<string, unknown>;
+    const attachmentId =
+      typeof source.attachment_id === 'string' ? source.attachment_id : typeof source.attachmentId === 'string' ? source.attachmentId : null;
+    if (attachmentId) return attachmentId;
+  }
+
+  const uri = typeof root.uri === 'string' ? root.uri : null;
+  if (uri?.startsWith('attachment:///')) {
+    const identity = decodeURIComponent(uri.slice('attachment:///'.length).split('/')[0] ?? '');
+    if (identity) return identity;
+  }
+
+  for (const nested of Object.values(root)) {
+    if (!nested || typeof nested !== 'object') continue;
+    const found = readRawAttachmentIdentity(nested, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
 function contentBlocksMatch(left: SessionContentBlock, right: SessionContentBlock): boolean {
-  if (left.type !== right.type) return false;
+  if (left.type !== right.type) return attachmentIdentitiesMatch(left, right);
   if (left.type === 'text' && right.type === 'text') return left.text === right.text;
   if (left.type === 'image' && right.type === 'image') {
-    return left.mimeType === right.mimeType && left.data === right.data;
+    return (left.mimeType === right.mimeType && left.data === right.data) || attachmentIdentitiesMatch(left, right);
   }
   if (left.type === 'resource' && right.type === 'resource') {
-    return left.mimeType === right.mimeType && left.data === right.data && left.text === right.text;
+    return (
+      (left.mimeType === right.mimeType && left.data === right.data && left.text === right.text) ||
+      attachmentIdentitiesMatch(left, right)
+    );
   }
   return false;
 }
