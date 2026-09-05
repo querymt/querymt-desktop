@@ -6907,13 +6907,6 @@ summary:focus-visible {
 }
 
 @media (min-width: 1024px) {
-  .app-sidebar {
-    top: 1.5rem;
-    left: 0.75rem;
-    height: calc(100dvh - 3rem);
-    max-height: calc(100dvh - 3rem);
-  }
-
   .app-shell-custom-titlebar .app-sidebar {
     top: calc(12px + 3.5rem);
     left: calc(12px + 0.75rem);

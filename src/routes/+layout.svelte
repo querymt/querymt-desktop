@@ -329,7 +329,7 @@
 {/if}
 
 <Tooltip.Provider>
-  <div class={`app-shell min-h-screen p-4 lg:p-6 ${windowDecorationsStore.usesCustomTitlebar ? `app-shell-custom-titlebar ${windowMaximized ? 'app-shell-maximized' : ''}` : ''}`}>
+  <div class={`app-shell min-h-screen p-4 ${windowDecorationsStore.usesCustomTitlebar ? `app-shell-custom-titlebar ${windowMaximized ? 'app-shell-maximized' : ''}` : ''}`}>
     <RecentSessionRail
       current={section}
       sessions={agentsStore.sessions}
