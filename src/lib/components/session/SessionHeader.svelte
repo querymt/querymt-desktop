@@ -83,6 +83,11 @@
   <div class="session-header-identity">
     <h1>{title}</h1>
     <div class="session-header-meta">
+      <span
+        class={`session-header-status-dot session-header-status-dot-${status.tone}`}
+        title={status.label}
+        aria-label={`Status: ${status.label}`}
+      ></span>
       <span>{workspace}</span>
       {#if agentName}
         <span aria-hidden="true">·</span>
@@ -94,11 +99,6 @@
   </div>
 
   <div class="session-header-controls">
-    <span class={`session-header-status session-header-status-${status.tone}`}>
-      {#if status.busy}<LoaderCircle size={13} class="animate-spin" />{:else}<i aria-hidden="true"></i>{/if}
-      <span>{status.label}</span>
-    </span>
-
     <div class="session-header-action-group" aria-label="Session history actions">
       {#if forkSupported}
         <button

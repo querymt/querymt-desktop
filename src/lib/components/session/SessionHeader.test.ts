@@ -44,7 +44,7 @@ describe('SessionHeader', () => {
     expect(screen.getByRole('heading', { name: 'Refine session hierarchy' })).toBeInTheDocument();
     expect(screen.getByText('querymt-desktop')).toBeInTheDocument();
     expect(screen.getByText('QMTCODE')).toBeInTheDocument();
-    expect(screen.getByText('Ready')).toBeInTheDocument();
+    expect(screen.getByLabelText('Status: Ready')).toBeInTheDocument();
     expect(screen.getByText('Context')).toBeInTheDocument();
   });
 
@@ -61,7 +61,7 @@ describe('SessionHeader', () => {
       onRefresh
     });
 
-    expect(screen.getByText('Working')).toBeInTheDocument();
+    expect(screen.getByLabelText('Status: Working')).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Refresh session' }));
     await fireEvent.click(screen.getByLabelText('Session details'));

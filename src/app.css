@@ -4614,50 +4614,28 @@ summary:focus-visible {
   padding-left: 0.45rem;
 }
 
-.session-header-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-height: 1.8rem;
-  border: 1px solid var(--status-muted-border);
+.session-header-status-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  flex: 0 0 auto;
   border-radius: 999px;
-  background: var(--status-muted-bg);
-  color: var(--status-muted);
-  padding: 0.25rem 0.6rem;
-  font-size: 0.72rem;
-  font-weight: 650;
-  white-space: nowrap;
+  background: var(--status-muted);
 }
 
-.session-header-status i {
-  width: 0.4rem;
-  height: 0.4rem;
-  border-radius: 999px;
-  background: currentColor;
+.session-header-status-dot-running {
+  background: var(--status-running);
 }
 
-.session-header-status-running {
-  border-color: var(--status-running-border);
-  background: var(--status-running-bg);
-  color: var(--status-running);
+.session-header-status-dot-warning {
+  background: var(--status-warning);
 }
 
-.session-header-status-warning {
-  border-color: var(--status-warning-border);
-  background: var(--status-warning-bg);
-  color: var(--status-warning);
+.session-header-status-dot-success {
+  background: var(--status-success);
 }
 
-.session-header-status-success {
-  border-color: var(--status-success-border);
-  background: var(--status-success-bg);
-  color: var(--status-success);
-}
-
-.session-header-status-danger {
-  border-color: var(--status-danger-border);
-  background: var(--status-danger-bg);
-  color: var(--status-danger);
+.session-header-status-dot-danger {
+  background: var(--status-danger);
 }
 
 .session-header-details {
@@ -4990,14 +4968,6 @@ summary:focus-visible {
   }
 
   .session-header-action-group[aria-label='Session actions'] > button:not(:last-child) {
-    display: none;
-  }
-
-  .session-header-status {
-    padding-inline: 0.45rem;
-  }
-
-  .session-header-status span {
     display: none;
   }
 
