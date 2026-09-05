@@ -48,6 +48,26 @@ describe('SessionHeader', () => {
     expect(screen.getByText('Context')).toBeInTheDocument();
   });
 
+  it('shows a short session id chip that copies the full id', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true
+    });
+    render(SessionHeader, {
+      session: session({ sessionId: '01a072b3-a266-4c5d-8e9f-102030405060' }),
+      title: 'Chip test',
+      workspace: 'querymt-desktop',
+      updatedAt: 'Just now'
+    });
+
+    const chip = screen.getByRole('button', { name: 'Copy session ID' });
+    expect(chip).toHaveTextContent('01a072b3-a266');
+    await fireEvent.click(chip);
+
+    expect(writeText).toHaveBeenCalledWith('01a072b3-a266-4c5d-8e9f-102030405060');
+  });
+
   it('moves usage into session details and exposes header actions', async () => {
     const onBack = vi.fn();
     const onRefresh = vi.fn();

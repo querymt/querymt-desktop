@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeft, Bug, GitFork, Info, LoaderCircle, Redo2, RefreshCw, Undo2 } from '@lucide/svelte';
+  import { ArrowLeft, Bug, Check, GitFork, Info, LoaderCircle, Redo2, RefreshCw, Undo2 } from '@lucide/svelte';
   import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
   import { formatShortcut } from '$lib/design/platform';
   import type { ActiveSessionViewModel, SessionStatus } from '$lib/domain/types';
@@ -48,11 +48,30 @@
     onFork?: () => void;
   } = $props();
 
+  let copiedSessionId = $state(false);
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+
   const busy = $derived(
     forkPending ||
       session.undo.pendingOperation !== null ||
       ['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState)
   );
+
+  const shortSessionId = $derived(session.sessionId ? session.sessionId.slice(0, 13) : '');
+
+  async function copySessionId() {
+    if (!session.sessionId) return;
+    try {
+      await navigator.clipboard.writeText(session.sessionId);
+      copiedSessionId = true;
+      clearTimeout(copiedTimer);
+      copiedTimer = setTimeout(() => {
+        copiedSessionId = false;
+      }, 1200);
+    } catch (error) {
+      console.error('Failed to copy session ID', error);
+    }
+  }
 
   const status = $derived.by((): { label: string; tone: string; busy: boolean } => {
     if (forkPending) return { label: 'Creating fork', tone: 'running', busy: true };
@@ -95,6 +114,16 @@
       {/if}
       <span aria-hidden="true">·</span>
       <span>{updatedAt}</span>
+      <span aria-hidden="true">·</span>
+      <button
+        class="session-header-session-id"
+        type="button"
+        title="Copy session ID"
+        aria-label="Copy session ID"
+        onclick={copySessionId}
+      >
+        {#if copiedSessionId}<Check size={11} aria-hidden="true" />{:else}{shortSessionId}{/if}
+      </button>
     </div>
   </div>
 

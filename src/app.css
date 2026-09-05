@@ -4614,6 +4614,21 @@ summary:focus-visible {
   padding-left: 0.45rem;
 }
 
+.session-header-session-id {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.session-header-session-id:hover {
+  color: var(--text);
+}
+
 .session-header-status-dot {
   width: 0.45rem;
   height: 0.45rem;
