@@ -219,8 +219,11 @@
     }
 
     const token = ++sessionLoadToken;
-    dockAlignLeft = null;
-    dockAlignWidth = null;
+    // Keep the dock locked to the content column across the reload: re-measure
+    // immediately instead of clearing the alignment. Clearing falls back to
+    // viewport centering, which visually shifts the composer left of the chat
+    // column for the whole "loading session history" phase.
+    syncDockAlign();
     setScrollMode('following');
     // Transcript replacement churns scroll position (content shrinks, the
     // browser clamps scrollTop, then grows back). Treat the whole load as
