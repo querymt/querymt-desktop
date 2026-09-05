@@ -5234,7 +5234,7 @@ summary:focus-visible {
   display: block;
   width: auto;
   max-width: 100%;
-  height: 7rem;
+  height: 4rem;
   object-fit: contain;
   background: var(--bg-surface);
 }
@@ -5267,7 +5267,7 @@ summary:focus-visible {
 
 .session-attachment-fallback {
   width: min(12rem, 100%);
-  min-height: 7rem;
+  min-height: 4rem;
   flex-direction: column;
   justify-content: center;
   text-align: center;
@@ -5307,9 +5307,19 @@ summary:focus-visible {
 
 .session-image-preview > .session-attachment-remove {
   position: absolute;
-  top: 0.4rem;
-  right: 0.4rem;
+  top: 1px;
+  right: 1px;
   z-index: 1;
+  width: 1rem;
+  height: 1rem;
+  border: 0;
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.session-image-preview > .session-attachment-remove svg {
+  width: 0.7rem;
+  height: 0.7rem;
 }
 
 .session-attachment-remove:hover {
@@ -5471,12 +5481,12 @@ summary:focus-visible {
 }
 
 .session-attachments-compact .session-image-thumbnail {
-  height: 6rem;
+  height: 3.5rem;
 }
 
 @media (max-width: 560px) {
   .session-image-thumbnail {
-    height: 6rem;
+    height: 3.5rem;
   }
 
   .session-file-card {
