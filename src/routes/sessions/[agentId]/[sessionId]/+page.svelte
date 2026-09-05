@@ -222,7 +222,12 @@
     dockAlignLeft = null;
     dockAlignWidth = null;
     setScrollMode('following');
-    programmaticScroll = false;
+    // Transcript replacement churns scroll position (content shrinks, the
+    // browser clamps scrollTop, then grows back). Treat the whole load as
+    // programmatic so that churn cannot flip the scroll mode to free and
+    // collapse the composer; the flag self-clears once re-anchored at the
+    // bottom, and user wheel/pointer input cancels it immediately.
+    programmaticScroll = true;
 
     await ensureSessionLoaded(agentIdToLoad, sessionIdToLoad);
     if (token !== sessionLoadToken || agentId !== agentIdToLoad || sessionId !== sessionIdToLoad) {
