@@ -8,15 +8,21 @@ This repository currently contains the initial app scaffold plus a static produc
 
 ## Development
 
+Development needs a Rust toolchain, Node.js, and the WebKit/CEF system
+libraries. If you're on NixOS or using the nix package manager, enter the
+devshell first (`nix develop`, or direnv via the shipped `.envrc`); for any
+other setup, make sure those dependencies are present on your system:
+
 ```bash
+nix develop
 npm install
-npm run dev
+npm run dev                # web UI only (vite)
 ```
 
 Run the desktop app:
 
 ```bash
-nix develop
+npm run tauri -- dev       # default runtime
 npm run tauri:wry -- dev   # System webview
 npm run tauri:cef -- dev   # CEF, Linux only
 ```
@@ -24,6 +30,7 @@ npm run tauri:cef -- dev   # CEF, Linux only
 Build a runtime variant:
 
 ```bash
+npm run tauri -- build
 npm run tauri:wry -- build
 npm run tauri:cef -- build
 ```
