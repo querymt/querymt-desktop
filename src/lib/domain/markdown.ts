@@ -49,6 +49,14 @@ marked.use({
   }
 });
 
+const MARKDOWN_CACHE_LIMIT = 256;
+const markdownHtmlCache = new Map<string, string>();
+
+export type StreamingMarkdownParts = {
+  frozenHtml: string;
+  tailText: string;
+};
+
 const MARKDOWN_PURIFY_CONFIG = {
   ADD_ATTR: ['target', 'rel', 'class', 'type', 'data-code-copy', 'aria-label'],
   ALLOWED_TAGS: [
@@ -85,6 +93,57 @@ const MARKDOWN_PURIFY_CONFIG = {
 
 export function renderMarkdownToHtml(markdown: string): string {
   const source = markdown.replace(/\r\n/g, '\n');
+  const cached = markdownHtmlCache.get(source);
+  if (cached !== undefined) return cached;
+
   const raw = marked.parse(source, { async: false }) as string;
-  return DOMPurify.sanitize(raw, MARKDOWN_PURIFY_CONFIG);
+  const html = DOMPurify.sanitize(raw, MARKDOWN_PURIFY_CONFIG);
+  markdownHtmlCache.set(source, html);
+  if (markdownHtmlCache.size > MARKDOWN_CACHE_LIMIT) {
+    const oldest = markdownHtmlCache.keys().next().value;
+    if (oldest !== undefined) markdownHtmlCache.delete(oldest);
+  }
+  return html;
+}
+
+function findUnclosedFenceIndex(source: string): number {
+  let fenceStart = -1;
+  let offset = 0;
+  while (offset <= source.length) {
+    const lineEnd = source.indexOf('\n', offset);
+    const end = lineEnd === -1 ? source.length : lineEnd;
+    const line = source.slice(offset, end);
+    if (/^ {0,3}```/.test(line)) {
+      fenceStart = fenceStart === -1 ? offset : -1;
+    }
+    if (lineEnd === -1) break;
+    offset = lineEnd + 1;
+  }
+  return fenceStart;
+}
+
+export function splitStreamingMarkdown(markdown: string): StreamingMarkdownParts {
+  const source = markdown.replace(/\r\n/g, '\n');
+  const fenceStart = findUnclosedFenceIndex(source);
+  let frozenMarkdown = '';
+  let tailText = source;
+
+  if (fenceStart >= 0) {
+    frozenMarkdown = source.slice(0, fenceStart).replace(/\n+$/, '');
+    tailText = source.slice(fenceStart);
+  } else {
+    const splitAt = source.lastIndexOf('\n\n');
+    if (splitAt === -1) {
+      frozenMarkdown = '';
+      tailText = source;
+    } else {
+      frozenMarkdown = source.slice(0, splitAt);
+      tailText = source.slice(splitAt + 2);
+    }
+  }
+
+  return {
+    frozenHtml: frozenMarkdown.trim() ? renderMarkdownToHtml(frozenMarkdown) : '',
+    tailText
+  };
 }

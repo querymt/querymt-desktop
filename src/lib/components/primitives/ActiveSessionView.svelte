@@ -100,7 +100,7 @@
       emptyTitle="No conversation yet"
       emptyDescription="Send a prompt below to start streaming messages, reasoning, and activities into this view."
     >
-      {#each turns as turn}
+      {#each turns as turn (turn.id)}
         {@const forkTarget = getForkTarget(turn)}
         {@const reverted = turn.user?.messageId ? isTurnReverted(session, turn.user.messageId) : false}
         <SessionTurn

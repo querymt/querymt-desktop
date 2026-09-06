@@ -1,8 +1,9 @@
 <script lang="ts">
   import { ChevronDown, Sparkles } from '@lucide/svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
+  import { splitStreamingMarkdown } from '$lib/domain/markdown';
 
-  let { reasoning }: { reasoning: Array<{ id: string; html: string; isLive: boolean }> } = $props();
+  let { reasoning }: { reasoning: Array<{ id: string; html: string; text?: string; isLive: boolean }> } = $props();
 
   const previewMaxLength = 122;
 
@@ -23,8 +24,18 @@
     return text.length > previewMaxLength ? `${text.slice(0, previewMaxLength - 3)}...` : text;
   }
 
+  function reasoningParts(entry: { html: string; text?: string; isLive: boolean }) {
+    if (entry.isLive && entry.text) return splitStreamingMarkdown(entry.text);
+    return { frozenHtml: entry.html, tailText: '' };
+  }
+
   const previewTitle = $derived.by(() => {
-    const first = reasoning.map((entry) => stripHtml(entry.html)).find(Boolean);
+    const first = reasoning
+      .map((entry) => {
+        const parts = reasoningParts(entry);
+        return stripHtml(parts.frozenHtml) || parts.tailText.trim();
+      })
+      .find(Boolean);
     return first ? truncatePreview(first) : 'Thinking';
   });
   const live = $derived(reasoning.some((entry) => entry.isLive));
@@ -39,7 +50,11 @@
     </summary>
     <div class="session-reasoning-body">
       {#each reasoning as entry}
-        <div class="session-reasoning-entry markdown-body" use:enhanceCodeBlocks>{@html entry.html}</div>
+        {@const parts = reasoningParts(entry)}
+        <div class="session-reasoning-entry markdown-body" use:enhanceCodeBlocks>
+          {#if parts.frozenHtml}<div class="session-reasoning-frozen">{@html parts.frozenHtml}</div>{/if}
+          {#if parts.tailText}<div class="session-reasoning-tail">{parts.tailText}</div>{/if}
+        </div>
       {/each}
     </div>
   </details>
