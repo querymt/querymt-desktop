@@ -203,6 +203,9 @@
       turnActionsSettled = false;
       return;
     }
+    // New activity while unlocked restarts the hold: keep fork and undo
+    // unavailable until this hold settles too.
+    turnActionsSettled = false;
     turnActionsSettleTimer = setTimeout(() => {
       turnActionsSettleTimer = null;
       turnActionsSettled = true;
