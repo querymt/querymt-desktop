@@ -7163,6 +7163,31 @@ summary:focus-visible {
   color: var(--status-running);
 }
 
+.keybinding-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.keybinding-keys kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.keybinding-plus {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
 .session-workspace-signal-waiting {
   color: var(--status-warn);
 }
