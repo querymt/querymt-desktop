@@ -3,6 +3,7 @@
   import { Accordion } from 'bits-ui';
   import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, FolderSync, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, Plus, RefreshCw, Search, SearchX, Trash2 } from '@lucide/svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
+  import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import { compactRemoteNodeId, formatSessionTimestamp, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
@@ -411,6 +412,8 @@
                             aria-label={`Status: ${getStatusLabel(session.status)}`}
                           ></span>
                           <span class="session-row-status-tooltip" role="tooltip">{getStatusLabel(session.status)}</span>
+                          <SessionIdChip sessionId={session.sessionId} />
+                          <span aria-hidden="true">·</span>
                           <span>{formatSessionTimestamp(session.updatedAt)}</span>
                         </span>
                       </span>

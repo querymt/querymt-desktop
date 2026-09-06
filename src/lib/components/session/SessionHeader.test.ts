@@ -49,6 +49,9 @@ describe('SessionHeader', () => {
     await fireEvent.click(chip);
 
     expect(writeText).toHaveBeenCalledWith('01a072b3-a266-4c5d-8e9f-102030405060');
+    // The copied confirmation overlays the id instead of replacing it, so the chip keeps its width.
+    expect(screen.getByText('01a072b3-a266')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('copied');
   });
 
   it('hides the session id chip while no session is loaded', () => {

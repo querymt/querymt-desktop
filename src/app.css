@@ -4614,19 +4614,52 @@ summary:focus-visible {
   padding-left: 0.45rem;
 }
 
-.session-header-session-id {
+.session-id-chip {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 13ch;
+  overflow: hidden;
   border: 0;
-  padding: 0;
+  border-radius: var(--radius-sm);
+  padding: 0.05rem 0.3rem;
   background: transparent;
-  color: var(--muted);
+  color: var(--text-dim);
   font-family: var(--font-mono);
   font-size: 0.68rem;
+  line-height: 1.45;
   cursor: pointer;
-  transition: color 0.15s ease;
+  transition: color 0.15s ease, background-color 0.15s ease;
 }
 
-.session-header-session-id:hover {
+.session-id-chip:hover {
   color: var(--text);
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+}
+
+.session-id-chip-value {
+  white-space: nowrap;
+}
+
+/* The copied overlay sits on top of the id so the chip never changes width.
+   Only the check icon takes the accent; the label stays plain. */
+.session-id-chip-copied {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.22rem;
+  background: var(--bg-panel);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.session-id-chip-copied svg {
+  color: var(--accent);
 }
 
 .session-header-status-dot {
@@ -7623,6 +7656,14 @@ summary:focus-visible {
 .session-row-status-line .session-header-status-dot {
   pointer-events: auto;
   cursor: default;
+}
+
+.session-row-status-line .session-id-chip {
+  pointer-events: auto;
+  /* Match the row meta text metrics so id and date share one baseline. */
+  padding: 0;
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .session-row-status-tooltip {

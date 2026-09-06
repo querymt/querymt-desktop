@@ -136,6 +136,27 @@ describe('DesktopSessionList', () => {
     expect(screen.getByText('· on 2 machines')).toHaveAttribute('title', 'Remote workspace on alpha, beta');
   });
 
+  it('shows a copyable session id chip after the row status dot', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true
+    });
+    render(DesktopSessionList, { sessions, onOpenSession: vi.fn() });
+
+    const chips = await screen.findAllByRole('button', { name: 'Copy session ID' });
+    expect(chips).toHaveLength(2);
+    expect(chips[0]).toHaveTextContent('8f2a91bc-1234');
+    expect(chips[1]).toHaveTextContent('session-2');
+    expect(chips[0].closest('.session-row-status-line')).not.toBeNull();
+
+    await fireEvent.click(chips[0]);
+    expect(writeText).toHaveBeenCalledWith('8f2a91bc-1234-5678-9012-abcdefabcdef');
+    expect(screen.getByRole('status')).toHaveTextContent('copied');
+    // The id stays underneath the overlay, so the chip keeps its width.
+    expect(screen.getByText('8f2a91bc-1234')).toBeInTheDocument();
+  });
+
   it('labels only remote sessions inside mixed workspaces', () => {
     const { container } = render(DesktopSessionList, {
       sessions: [
