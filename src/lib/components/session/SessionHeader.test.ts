@@ -2,32 +2,15 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SessionHeader from './SessionHeader.svelte';
-import type { ActiveSessionViewModel } from '$lib/domain/types';
+import { session } from './session-fixture';
 
-function session(overrides: Partial<ActiveSessionViewModel> = {}): ActiveSessionViewModel {
-  return {
-    sessionId: 'session-1',
-    transcript: [],
-    toolCalls: [],
-    plans: [],
-    events: [],
-    configOptions: [],
-    runState: 'idle',
-    activityLabel: null,
-    activeToolCallId: null,
-    lastStopReason: null,
-    lastError: null,
-    usage: {
-      contextUsed: 24_000,
-      contextLimit: 100_000,
-      cumulativeCostUsd: 0.05,
-      activeWorkMs: 12_000,
-      activeWorkStartedAt: null
-    },
-    undo: { stack: [], pendingOperation: null, lastRevertedFiles: [], lastMessage: null },
-    ...overrides
-  };
-}
+const usageFixture = {
+  contextUsed: 24_000,
+  contextLimit: 100_000,
+  cumulativeCostUsd: 0.05,
+  activeWorkMs: 12_000,
+  activeWorkStartedAt: null
+};
 
 afterEach(cleanup);
 
@@ -79,11 +62,40 @@ describe('SessionHeader', () => {
     expect(screen.queryByRole('button', { name: 'Copy session ID' })).not.toBeInTheDocument();
   });
 
+  it('collapses session details on outside clicks but keeps the trigger toggle', async () => {
+    render(SessionHeader, {
+      session: session(),
+      title: 'Outside click test',
+      workspace: 'querymt-desktop',
+      updatedAt: 'Just now'
+    });
+
+    const summary = screen.getByLabelText('Session details');
+    const details = summary.closest('details');
+    expect(details).not.toHaveAttribute('open');
+
+    await fireEvent.click(summary);
+    expect(details).toHaveAttribute('open');
+
+    // Pointer downs inside the panel keep it open.
+    await fireEvent.mouseDown(screen.getByText('Session details'));
+    expect(details).toHaveAttribute('open');
+
+    await fireEvent.mouseDown(document.body);
+    expect(details).not.toHaveAttribute('open');
+
+    // The trigger still toggles the popover natively.
+    await fireEvent.click(summary);
+    expect(details).toHaveAttribute('open');
+    await fireEvent.click(summary);
+    expect(details).not.toHaveAttribute('open');
+  });
+
   it('moves usage into session details and exposes header actions', async () => {
     const onBack = vi.fn();
     const onRefresh = vi.fn();
     render(SessionHeader, {
-      session: session({ runState: 'thinking' }),
+      session: session({ runState: 'thinking', usage: usageFixture }),
       title: 'Active task',
       workspace: 'querymt-desktop',
       agentName: 'QMTCODE',

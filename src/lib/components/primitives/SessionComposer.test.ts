@@ -139,6 +139,35 @@ describe('SessionComposer', () => {
     expect(reasoningSelect).toHaveTextContent('Auto');
   });
 
+  it('collapses session options on outside clicks but keeps the trigger toggle', async () => {
+    renderComposer({
+      launch: true,
+      launchModeOptions: [{ id: 'build', label: 'Build' }],
+      launchReasoningOptions: [{ id: 'auto', label: 'Auto' }],
+      selectedLaunchReasoningId: 'auto'
+    });
+
+    const summary = screen.getByLabelText('Session options');
+    const details = summary.closest('details');
+    expect(details).not.toHaveAttribute('open');
+
+    await fireEvent.click(summary);
+    expect(details).toHaveAttribute('open');
+
+    // Pointer downs inside the panel (including its selects) keep it open.
+    await fireEvent.mouseDown(screen.getByRole('button', { name: 'Reasoning effort' }));
+    expect(details).toHaveAttribute('open');
+
+    await fireEvent.mouseDown(document.body);
+    expect(details).not.toHaveAttribute('open');
+
+    // The trigger still toggles the popover natively.
+    await fireEvent.click(summary);
+    expect(details).toHaveAttribute('open');
+    await fireEvent.click(summary);
+    expect(details).not.toHaveAttribute('open');
+  });
+
   it('keeps the primary row focused on model, mode, and session options', () => {
     renderComposer({
       launch: true,

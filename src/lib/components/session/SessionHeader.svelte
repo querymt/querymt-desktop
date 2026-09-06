@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ArrowLeft, Bug, Check, GitFork, Info, LoaderCircle, Redo2, RefreshCw, Undo2 } from '@lucide/svelte';
   import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
+  import { autoCollapsePopover } from '$lib/design/details-popover';
   import { formatShortcut } from '$lib/design/platform';
   import type { ActiveSessionViewModel, SessionStatus } from '$lib/domain/types';
 
@@ -170,7 +171,7 @@
     </div>
 
     <div class="session-header-action-group" aria-label="Session actions">
-      <details class="session-header-details">
+      <details class="session-header-details" use:autoCollapsePopover>
         <summary class="icon-btn" aria-label="Session details" title="Session details"><Info size={16} /></summary>
         <div class="session-header-details-panel">
           <div class="session-header-details-heading">
