@@ -40,34 +40,34 @@
 </script>
 
 <div class="session-usage-bar" aria-label="Session usage">
+  <div class="session-usage-meta">
+    {#if usage.cumulativeCostUsd !== null}
+      <div class="session-usage-stat" title="Cumulative session cost">
+        <CircleDollarSign size={14} aria-hidden="true" />
+        <span>Cost</span>
+        <strong>{formatCostUsd(usage.cumulativeCostUsd)}</strong>
+      </div>
+    {/if}
+
+    <div class="session-usage-stat session-usage-active" title="Time spent actively processing prompts">
+      <Activity size={14} aria-hidden="true" />
+      <span>Active</span>
+      <strong>{activeWorkLabel}</strong>
+      {#if usage.activeWorkStartedAt !== null}
+        <i class="session-usage-live-dot" aria-label="Active now"></i>
+      {/if}
+    </div>
+  </div>
+
   <div class="session-usage-context">
     <div class="session-usage-icon" aria-hidden="true"><Gauge size={14} /></div>
-    <div class="session-usage-copy">
-      <span class="session-usage-label">Context</span>
-      <strong>{contextLabel}</strong>
-    </div>
+    <span class="session-usage-label">Context</span>
+    <strong>{contextLabel}</strong>
     {#if contextPercent !== null}
       <div class="session-usage-meter" aria-label={`Context window ${Math.round(contextPercent)}% used`}>
         <span style={`--session-context-percent: ${contextPercent}%`}></span>
       </div>
       <span class="session-usage-percent">{Math.round(contextPercent)}%</span>
-    {/if}
-  </div>
-
-  {#if usage.cumulativeCostUsd !== null}
-    <div class="session-usage-stat" title="Cumulative session cost">
-      <CircleDollarSign size={14} aria-hidden="true" />
-      <span>Cost</span>
-      <strong>{formatCostUsd(usage.cumulativeCostUsd)}</strong>
-    </div>
-  {/if}
-
-  <div class="session-usage-stat" title="Time spent actively processing prompts">
-    <Activity size={14} aria-hidden="true" />
-    <span>Active</span>
-    <strong>{activeWorkLabel}</strong>
-    {#if usage.activeWorkStartedAt !== null}
-      <i class="session-usage-live-dot" aria-label="Active now"></i>
     {/if}
   </div>
 </div>
