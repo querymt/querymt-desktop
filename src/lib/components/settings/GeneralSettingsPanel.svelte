@@ -3,17 +3,10 @@
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import AppSwitch from '$lib/components/primitives/AppSwitch.svelte';
   import type { ImageSendMode } from '$lib/domain/types';
-  import { appearanceStore, type AppearanceThemeMode } from '$lib/stores/appearance.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
 
   let advancedOpen = $state(false);
-
-  const themeOptions: Array<{ value: AppearanceThemeMode; label: string }> = [
-    { value: 'system', label: 'System' },
-    { value: 'light', label: 'Light' },
-    { value: 'dark', label: 'Dark' }
-  ];
 
   const imageModeOptions: Array<{ value: ImageSendMode; label: string }> = [
     { value: 'image', label: 'Native image' },
@@ -21,14 +14,9 @@
   ];
 
   $effect(() => {
-    appearanceStore.initialize();
     chatPreferencesStore.initialize();
     void windowDecorationsStore.initialize();
   });
-
-  function handleThemeChange(value: string) {
-    if (value === 'system' || value === 'light' || value === 'dark') appearanceStore.setThemeMode(value);
-  }
 
   function handleImageModeChange(value: string) {
     if (value === 'image' || value === 'resource') chatPreferencesStore.setImageSendMode(value);
@@ -39,16 +27,6 @@
   <div class="settings-panel-header">
     <h2 id="general-settings-title">General</h2>
     <p>Everyday preferences for how QueryMT looks and behaves.</p>
-  </div>
-
-  <div class="settings-simple-list">
-    <div class="settings-simple-row">
-      <div class="settings-simple-main">
-        <h3>Theme</h3>
-        <p>Choose light, dark, or system appearance.</p>
-      </div>
-      <AppSelect value={appearanceStore.themeMode} options={themeOptions} pill ariaLabel="Theme" onValueChange={handleThemeChange} />
-    </div>
   </div>
 
   <div class="settings-advanced">
