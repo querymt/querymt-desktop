@@ -175,13 +175,12 @@
         <div class="session-header-details-panel">
           <div class="session-header-details-heading">
             <strong>Session details</strong>
-            <span>{session.sessionId ?? 'Not loaded'}</span>
           </div>
-          <dl class="session-header-details-list">
-            <div><dt>State</dt><dd>{session.runState.replace('-', ' ')}</dd></div>
-            {#if session.lastStopReason}<div><dt>Stopped</dt><dd>{session.lastStopReason}</dd></div>{/if}
-            {#if session.lastError}<div><dt>Error</dt><dd>{session.lastError}</dd></div>{/if}
-          </dl>
+          {#if session.lastError}
+            <dl class="session-header-details-list">
+              <div><dt>Error</dt><dd>{session.lastError}</dd></div>
+            </dl>
+          {/if}
           <SessionUsageBar usage={session.usage} />
         </div>
       </details>

@@ -91,7 +91,7 @@ type DraftTurn = {
 };
 
 type ConversationCache = {
-  sessionId: string;
+  sessionId: string | null;
   revision: string;
   turns: SessionConversationTurn[];
 };
