@@ -4,7 +4,7 @@
   import SessionAttachmentPreview from '$lib/components/session/SessionAttachmentPreview.svelte';
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
-  import { buildTurnPresentation, type SessionAssistantContent, type SessionConversationTurn } from '$lib/domain/session-conversation';
+  import { buildTurnPresentation, formatTurnDuration, type SessionAssistantContent, type SessionConversationTurn } from '$lib/domain/session-conversation';
   import { renderMarkdownToHtml } from '$lib/domain/markdown';
   import type { SessionContentBlock, SessionImageGalleryItem } from '$lib/domain/types';
   import type { PromptFailure } from '$lib/domain/prompt-errors';
@@ -48,6 +48,7 @@
   let copiedAssistantId = $state<string | null>(null);
   let copiedUserId = $state<string | null>(null);
   const presentation = $derived(turn.presentation ?? buildTurnPresentation(turn.content, turn.settled ?? true));
+  const lastPresentationId = $derived(presentation.at(-1)?.id ?? null);
 
   function contentSegments(blocks: SessionContentBlock[] | undefined, text: string) {
     const source = blocks?.length ? blocks : text ? [{ type: 'text' as const, text }] : [];
@@ -198,6 +199,9 @@
               >
                 <Undo2 size={15} />
               </button>
+            {/if}
+            {#if item.id === lastPresentationId && turn.durationMs !== undefined}
+              <span class="session-turn-duration">Worked for {formatTurnDuration(turn.durationMs)}</span>
             {/if}
           </div>
         </section>

@@ -205,6 +205,7 @@ export interface SessionTranscriptItem {
   messageId: string | null;
   clientPromptId?: string | null;
   eventIndex?: number;
+  timestampMs?: number;
 }
 
 export interface SessionTranscriptGroup {
@@ -216,6 +217,8 @@ export interface SessionTranscriptGroup {
   clientPromptId?: string | null;
   eventIds: string[];
   eventIndex?: number;
+  startedAtMs?: number;
+  endedAtMs?: number;
 }
 
 export interface SessionToolCallItem {

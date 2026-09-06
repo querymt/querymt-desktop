@@ -48,6 +48,7 @@ export type SessionConversationPresentationItem = SessionAssistantContent | Sess
 export type SessionConversationTurn = {
   id: string;
   forkMessageId: string | null;
+  durationMs?: number;
   user?: {
     id: string;
     messageId: string | null;
@@ -73,6 +74,8 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
   const orderedItems = buildOrderedItems(session.transcript, canonicalizeTools(session.toolCalls));
 
   const turns: SessionConversationTurn[] = [];
+  // Index-aligned with `turns`: wall-clock window of each turn, in ms.
+  const turnTimings: Array<{ started?: number; ended?: number }> = [];
   let current: SessionConversationTurn | null = null;
 
   for (const item of orderedItems) {
@@ -93,6 +96,7 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
         settled: false
       };
       turns.push(current);
+      turnTimings.push({ started: item.group.startedAtMs, ended: item.group.endedAtMs });
       continue;
     }
 
@@ -100,6 +104,12 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
       const id = item.type === 'group' ? item.group.id : item.tool.id;
       current = { id: `turn-${id}`, forkMessageId: null, content: [], presentation: [], settled: false };
       turns.push(current);
+      turnTimings.push({});
+    }
+
+    if (item.type === 'group' && item.group.endedAtMs !== undefined) {
+      const timing = turnTimings[turnTimings.length - 1];
+      if (timing) timing.ended = item.group.endedAtMs;
     }
 
     if (item.type === 'tool') {
@@ -131,6 +141,15 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
     });
   }
 
+  turns.forEach((turn, index) => {
+    const timing = turnTimings[index];
+    if (timing?.started !== undefined && timing?.ended !== undefined && timing.ended >= timing.started) {
+      const delta = timing.ended - timing.started;
+      // Instant answers don't need a "Worked for 0s" badge.
+      if (delta >= 1000) turn.durationMs = delta;
+    }
+  });
+
   const visibleTurns = turns.filter((turn) => turn.user || turn.content.length > 0);
   const busy = ['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState);
   const activeTurnIndex = busy ? visibleTurns.length - 1 : -1;
@@ -140,9 +159,24 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
     return {
       ...turn,
       settled,
+      // Durations are only meaningful for finished turns; the active one is
+      // still accumulating.
+      durationMs: settled ? turn.durationMs : undefined,
       presentation: buildTurnPresentation(turn.content, settled)
     };
   });
+}
+
+export function formatTurnDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+  return parts.join(' ');
 }
 
 export function buildTurnPresentation(
@@ -231,6 +265,7 @@ function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionTo
       mergeTarget.messageId = item.transcript.messageId ?? mergeTarget.messageId;
       mergeTarget.blocks = [...(mergeTarget.blocks ?? []), ...getTranscriptBlocks(item.transcript)];
       mergeTarget.eventIds.push(item.transcript.id);
+      if (item.transcript.timestampMs !== undefined) mergeTarget.endedAtMs = item.transcript.timestampMs;
       continue;
     }
 
@@ -242,7 +277,9 @@ function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionTo
       messageId: item.transcript.messageId,
       clientPromptId: item.transcript.clientPromptId,
       eventIds: [item.transcript.id],
-      eventIndex: item.transcript.eventIndex
+      eventIndex: item.transcript.eventIndex,
+      startedAtMs: item.transcript.timestampMs,
+      endedAtMs: item.transcript.timestampMs
     };
     if (role === 'assistant') openAssistantGroup = group;
     else if (role === 'thought') openThoughtGroup = group;
