@@ -40,3 +40,38 @@ export function nextSessionScrollMode(
 
   return direction === 'down' && distanceFromBottom <= rejoinThreshold ? 'following' : 'free';
 }
+
+export function sessionFollowPinClass(mode: SessionScrollMode): string {
+  return mode === 'following' ? 'session-page-following' : '';
+}
+
+export type FollowScrollScheduler = {
+  schedule: () => void;
+  cancel: () => void;
+};
+
+export function createFollowScrollScheduler(
+  pin: () => void,
+  isFollowing: () => boolean,
+  requestFrame: typeof requestAnimationFrame = requestAnimationFrame,
+  cancelFrame: typeof cancelAnimationFrame = cancelAnimationFrame
+): FollowScrollScheduler {
+  let frame: number | null = null;
+
+  function cancel() {
+    if (frame === null) return;
+    cancelFrame(frame);
+    frame = null;
+  }
+
+  function schedule() {
+    if (frame !== null) return;
+    frame = requestFrame(() => {
+      frame = null;
+      if (!isFollowing()) return;
+      pin();
+    });
+  }
+
+  return { schedule, cancel };
+}

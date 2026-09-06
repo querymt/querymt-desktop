@@ -12,9 +12,11 @@
   import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
   import SessionUndoDialog from '$lib/components/session/SessionUndoDialog.svelte';
   import {
+    createFollowScrollScheduler,
     getDistanceFromBottom,
     nextSessionChatPresentationState,
     nextSessionScrollMode,
+    sessionFollowPinClass,
     type SessionChatPresentationState,
     type SessionScrollMode
   } from '$lib/domain/session-scroll';
@@ -43,8 +45,6 @@
   let pageResizeObserver: ResizeObserver | null = null;
   let scrollViewport: HTMLElement | null = null;
   let viewportEventTarget: HTMLElement | Window | null = null;
-  let followFrame: number | null = null;
-  let followScrollVersion = 0;
   let programmaticScroll = false;
   let lastViewportScrollTop = 0;
   let sessionLoadToken = 0;
@@ -59,6 +59,7 @@
     return count === 0 ? 'Debug events' : `Debug events (${count})`;
   });
   const composerCollapsed = $derived(chatPresentationState === 'fixed-free-compact');
+  const followPinClass = $derived(sessionFollowPinClass(scrollMode));
   const agentRunActive = $derived(
     !agentsStore.sessionHistoryLoading &&
       ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession?.runState ?? 'idle')
@@ -326,11 +327,7 @@
     contentResizeObserver = null;
     scrollViewport = null;
     viewportEventTarget = null;
-    if (followFrame !== null) {
-      cancelAnimationFrame(followFrame);
-      followFrame = null;
-    }
-    followScrollVersion += 1;
+    followScroll.cancel();
   }
 
   function resolveScrollViewport(): { element: HTMLElement; eventTarget: HTMLElement | Window } {
@@ -393,29 +390,13 @@
     );
   }
 
+  const followScroll = createFollowScrollScheduler(
+    () => scrollToEnd('instant'),
+    () => scrollMode === 'following'
+  );
+
   function scheduleFollowScroll() {
-    followScrollVersion += 1;
-    if (followFrame !== null) return;
-    requestFollowScrollFrame();
-  }
-
-  function requestFollowScrollFrame() {
-    followFrame = requestAnimationFrame(() => {
-      const requestedVersion = followScrollVersion;
-      if (scrollMode !== 'following') {
-        followFrame = null;
-        return;
-      }
-
-      scrollToEnd('instant');
-      followFrame = requestAnimationFrame(() => {
-        if (scrollMode === 'following') scrollToEnd('instant');
-        followFrame = null;
-        if (scrollMode === 'following' && followScrollVersion !== requestedVersion) {
-          requestFollowScrollFrame();
-        }
-      });
-    });
+    followScroll.schedule();
   }
 
   function scrollToEnd(behavior: ScrollBehavior | 'instant') {
@@ -481,7 +462,7 @@
 
 <div
   bind:this={sessionPage}
-  class={`session-page session-page-chat ${composerCollapsed ? 'session-page-composer-compact' : 'session-page-composer-expanded'}`}
+  class={`session-page session-page-chat ${followPinClass} ${composerCollapsed ? 'session-page-composer-compact' : 'session-page-composer-expanded'}`}
 >
   <SessionHeader
     session={agentsStore.activeSession}
