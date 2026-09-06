@@ -84,4 +84,24 @@ describe('splitStreamingMarkdown', () => {
     expect(parts.tailText).toContain('```ts');
     expect(parts.tailText).toContain('const value = 1');
   });
+
+  it('does not close a longer fence on a nested shorter delimiter', () => {
+    const parts = splitStreamingMarkdown('See this:\n\n````md\n```\ninner\n\nafter inner');
+
+    expect(parts.frozenHtml).toContain('See this:');
+    expect(parts.frozenHtml).not.toContain('code-block-shell');
+    expect(parts.frozenHtml).not.toContain('after inner');
+    expect(parts.tailText).toContain('````md');
+    expect(parts.tailText).toContain('after inner');
+  });
+
+  it('keeps an unclosed tilde fence in the tail even when it contains a blank line', () => {
+    const parts = splitStreamingMarkdown('See this:\n\n~~~ts\nconst value = 1\n\nstill streaming');
+
+    expect(parts.frozenHtml).toContain('See this:');
+    expect(parts.frozenHtml).not.toContain('code-block-shell');
+    expect(parts.frozenHtml).not.toContain('still streaming');
+    expect(parts.tailText).toContain('~~~ts');
+    expect(parts.tailText).toContain('still streaming');
+  });
 });

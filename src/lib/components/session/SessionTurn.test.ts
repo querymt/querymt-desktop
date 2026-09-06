@@ -123,6 +123,36 @@ describe('SessionTurn', () => {
     spy.mockRestore();
   });
 
+  it('renders each settled text segment from its own markdown, not the parent html', () => {
+    const mixedTurn: SessionConversationTurn = {
+      id: 'turn-mixed-segments',
+      forkMessageId: null,
+      user: {
+        id: 'user-mixed',
+        messageId: 'user-mixed',
+        html: '<p>Before After</p>',
+        text: 'Before After',
+        blocks: [
+          { type: 'text', text: 'Before' },
+          { type: 'image', data: 'aW1n', mimeType: 'image/png', name: 'photo.png' },
+          { type: 'text', text: 'After' }
+        ]
+      },
+      content: [],
+      settled: true
+    };
+
+    const { getByRole } = render(SessionTurn, { turn: mixedTurn });
+    const bodies = [...document.querySelectorAll('.session-message-body')];
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toHaveTextContent('Before');
+    expect(bodies[0]).not.toHaveTextContent('After');
+    expect(bodies[1]).toHaveTextContent('After');
+    expect(bodies[1]).not.toHaveTextContent('Before');
+    expect(getByRole('button', { name: 'Open photo.png' })).toBeInTheDocument();
+  });
+
   it('freezes completed markdown and only streams the open tail', () => {
     const liveTurn: SessionConversationTurn = {
       id: 'turn-live-split',

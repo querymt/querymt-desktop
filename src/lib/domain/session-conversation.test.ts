@@ -453,4 +453,67 @@ describe('buildSessionConversation', () => {
 
     expect(second).toBe(first);
   });
+
+  it('rebuilds after in-place session mutations without an explicit previous snapshot', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'first', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'First done', messageId: 'a1', eventIndex: 1 }
+    ];
+
+    const first = buildSessionConversation(session);
+    session.runState = 'thinking';
+    session.transcript = [
+      ...session.transcript,
+      { id: 'u2', kind: 'user_message_chunk', text: 'second', messageId: 'u2', eventIndex: 2 },
+      { id: 'r2', kind: 'agent_thought_chunk', text: 'Working', messageId: 'r2', eventIndex: 3 }
+    ];
+    const second = buildSessionConversation(session);
+
+    expect(second).not.toBe(first);
+    expect(second).toHaveLength(2);
+    expect(second[1].content.find((item) => item.type === 'reasoning')).toMatchObject({
+      text: 'Working',
+      isLive: true
+    });
+  });
+
+  it('does not reuse a settled turn when reasoning text changes', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'inspect', messageId: 'u1', eventIndex: 0 },
+      { id: 'r1', kind: 'agent_thought_chunk', text: 'First thought', messageId: 'r1', eventIndex: 1 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Done', messageId: 'a1', eventIndex: 2 }
+    ];
+    const first = buildSessionConversation(session);
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'inspect', messageId: 'u1', eventIndex: 0 },
+      { id: 'r1', kind: 'agent_thought_chunk', text: 'Updated thought', messageId: 'r1', eventIndex: 1 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Done', messageId: 'a1', eventIndex: 2 }
+    ];
+    const second = buildSessionConversation(session, first);
+
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].content.find((item) => item.type === 'reasoning')).toMatchObject({
+      text: 'Updated thought'
+    });
+  });
+
+  it('does not reuse a settled turn when tool metadata changes', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'inspect', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Done', messageId: 'a1', eventIndex: 2 }
+    ];
+    session.toolCalls = [{ id: 't1', title: 'read_tool', status: 'completed', kind: 'read_tool', eventIndex: 1 }];
+    const first = buildSessionConversation(session);
+    session.toolCalls = [{ id: 't1', title: 'Read file', status: 'completed', kind: 'read', eventIndex: 1 }];
+    const second = buildSessionConversation(session, first);
+
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].content.find((item) => item.type === 'tool')?.tool).toMatchObject({
+      title: 'Read file',
+      kind: 'read'
+    });
+  });
 });

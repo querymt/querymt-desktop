@@ -106,15 +106,30 @@ export function renderMarkdownToHtml(markdown: string): string {
   return html;
 }
 
+function parseFenceMarker(line: string): { char: '`' | '~'; length: number } | null {
+  const match = /^( {0,3})(`{3,}|~{3,})/.exec(line);
+  if (!match) return null;
+  const marker = match[2];
+  return { char: marker[0] as '`' | '~', length: marker.length };
+}
+
 function findUnclosedFenceIndex(source: string): number {
   let fenceStart = -1;
+  let open: { char: '`' | '~'; length: number } | null = null;
   let offset = 0;
   while (offset <= source.length) {
     const lineEnd = source.indexOf('\n', offset);
     const end = lineEnd === -1 ? source.length : lineEnd;
     const line = source.slice(offset, end);
-    if (/^ {0,3}```/.test(line)) {
-      fenceStart = fenceStart === -1 ? offset : -1;
+    const marker = parseFenceMarker(line);
+    if (marker) {
+      if (!open) {
+        open = marker;
+        fenceStart = offset;
+      } else if (marker.char === open.char && marker.length >= open.length) {
+        open = null;
+        fenceStart = -1;
+      }
     }
     if (lineEnd === -1) break;
     offset = lineEnd + 1;

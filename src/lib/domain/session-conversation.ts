@@ -91,19 +91,43 @@ type DraftTurn = {
 };
 
 type ConversationCache = {
-  session: ActiveSessionViewModel;
   sessionId: string;
+  revision: string;
   turns: SessionConversationTurn[];
 };
 
 const BUSY_RUN_STATES = new Set(['submitting', 'thinking', 'streaming', 'tool-running']);
 let conversationCache: ConversationCache | null = null;
 
+function conversationRevision(session: ActiveSessionViewModel): string {
+  const lastTranscript = session.transcript.at(-1);
+  const lastTool = session.toolCalls.at(-1);
+  return [
+    session.sessionId ?? '',
+    session.runState,
+    String(session.transcript.length),
+    lastTranscript?.id ?? '',
+    lastTranscript?.kind ?? '',
+    lastTranscript?.text ?? '',
+    String(session.toolCalls.length),
+    lastTool?.id ?? '',
+    lastTool?.status ?? '',
+    lastTool?.title ?? '',
+    lastTool?.kind ?? '',
+    lastTool?.result ?? ''
+  ].join('\0');
+}
+
 export function buildSessionConversation(
   session: ActiveSessionViewModel,
   previousTurns?: SessionConversationTurn[]
 ): SessionConversationTurn[] {
-  if (previousTurns === undefined && conversationCache?.session === session) {
+  const revision = conversationRevision(session);
+  if (
+    previousTurns === undefined &&
+    conversationCache?.sessionId === session.sessionId &&
+    conversationCache.revision === revision
+  ) {
     return conversationCache.turns;
   }
 
@@ -111,7 +135,7 @@ export function buildSessionConversation(
     previousTurns ??
     (conversationCache?.sessionId === session.sessionId ? conversationCache.turns : undefined);
   const turns = materializeConversation(session, previous);
-  conversationCache = { session, sessionId: session.sessionId, turns };
+  conversationCache = { sessionId: session.sessionId, revision, turns };
   return turns;
 }
 
@@ -154,19 +178,43 @@ function materializeConversation(
   });
 }
 
+function sameBlocks(left?: SessionContentBlock[], right?: SessionContentBlock[]): boolean {
+  if ((left?.length ?? 0) !== (right?.length ?? 0)) return false;
+  return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+}
+
 function canReuseSettledTurn(previous: SessionConversationTurn, draft: DraftTurn, settled: boolean): boolean {
   if (!settled || !previous.settled) return false;
   if (previous.id !== draft.id) return false;
+  if (previous.forkMessageId !== draft.forkMessageId) return false;
+  if ((previous.durationMs ?? undefined) !== (draft.durationMs ?? undefined)) return false;
+  if ((previous.user?.id ?? null) !== (draft.user?.id ?? null)) return false;
+  if ((previous.user?.messageId ?? null) !== (draft.user?.messageId ?? null)) return false;
   if ((previous.user?.text ?? '') !== (draft.user?.text ?? '')) return false;
+  if ((previous.user?.eventIndex ?? undefined) !== (draft.user?.eventIndex ?? undefined)) return false;
+  if (!sameBlocks(previous.user?.blocks, draft.user?.blocks)) return false;
   if (previous.content.length !== draft.content.length) return false;
   return previous.content.every((item, index) => {
     const next = draft.content[index];
     if (item.type !== next.type || item.id !== next.id) return false;
-    if (item.type === 'assistant' && next.type === 'assistant') return item.text === next.text;
-    if (item.type === 'tool' && next.type === 'tool') {
-      return item.tool.status === next.tool.status && item.tool.result === next.tool.result;
+    if (item.type === 'assistant' && next.type === 'assistant') {
+      return item.text === next.text && item.messageId === next.messageId && sameBlocks(item.blocks, next.blocks);
     }
-    return true;
+    if (item.type === 'reasoning' && next.type === 'reasoning') {
+      return (item.text ?? '') === next.text;
+    }
+    if (item.type === 'tool' && next.type === 'tool') {
+      return (
+        item.tool.status === next.tool.status &&
+        item.tool.result === next.tool.result &&
+        item.tool.title === next.tool.title &&
+        item.tool.kind === next.tool.kind &&
+        item.tool.arguments === next.tool.arguments &&
+        item.tool.messageId === next.tool.messageId &&
+        item.tool.isError === next.tool.isError
+      );
+    }
+    return false;
   });
 }
 
