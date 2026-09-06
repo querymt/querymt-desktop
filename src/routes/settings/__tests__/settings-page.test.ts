@@ -214,11 +214,13 @@ describe('Settings controls', () => {
   });
 
   it('defaults to Enter and updates the send shortcut preference', async () => {
+    chatPreferencesStore.sendShortcut = 'enter';
     render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Keybindings/ }));
 
     const shortcutSelect = screen.getByRole('button', { name: 'Send messages with' });
     expect(shortcutSelect).toHaveTextContent('Enter');
-    expect(screen.getByText('Choose the shortcut that submits a message.')).toBeInTheDocument();
+    expect(screen.getByText('Send prompt').closest('.settings-simple-row')).toHaveTextContent('Enter');
 
     await fireEvent.pointerDown(shortcutSelect, { button: 0, pointerType: 'mouse' });
     const shiftEnterOption = await screen.findByRole('option', { name: 'Shift+Enter' });
@@ -226,6 +228,17 @@ describe('Settings controls', () => {
     await fireEvent.pointerUp(shiftEnterOption, { button: 0, pointerType: 'mouse' });
 
     expect(chatPreferencesStore.setSendShortcut).toHaveBeenCalledWith('shift-enter');
+  });
+
+  it('reflects the configured send shortcut in the shortcut list', async () => {
+    chatPreferencesStore.sendShortcut = 'shift-enter';
+    render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Keybindings/ }));
+
+    const sendRow = screen.getByText('Send prompt').closest('.settings-simple-row');
+    expect(sendRow?.textContent?.replace(/\s+/g, '')).toContain('Shift+Enter');
+    const newLineRow = screen.getByText('New line in prompt').closest('.settings-simple-row');
+    expect(newLineRow?.textContent?.replace(/\s+/g, '')).toBe('NewlineinpromptEnter');
   });
 
   it('updates the default image attachment encoding', async () => {
@@ -259,6 +272,7 @@ describe('Settings controls', () => {
   it('offers Cmd+Enter on macOS', async () => {
     vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
     render(SettingsPage);
+    await fireEvent.click(screen.getByRole('button', { name: /Keybindings/ }));
 
     await fireEvent.pointerDown(screen.getByRole('button', { name: 'Send messages with' }), {
       button: 0,

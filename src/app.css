@@ -7188,13 +7188,6 @@ summary:focus-visible {
   font-size: 0.72rem;
 }
 
-.keybinding-note {
-  margin: 0;
-  padding-inline: 0.25rem;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
 .session-workspace-signal-waiting {
   color: var(--status-warn);
 }
