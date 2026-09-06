@@ -36,6 +36,20 @@ describe('getSessionToolPresentation', () => {
     ).toBe('"ToolCall" in *.ts');
   });
 
+  it('treats execute tool calls as shell commands with terminal icon and command preview', () => {
+    expect(
+      getSessionToolPresentation(tool({ title: 'Execute', kind: 'execute', arguments: '{"command":"git status"}' }))
+    ).toMatchObject({
+      name: 'execute',
+      label: 'Run command',
+      preview: 'git status',
+      icon: 'terminal'
+    });
+    expect(
+      getSessionToolPresentation(tool({ title: 'Execute', kind: 'execute', arguments: '{"command":"bun","args":["run","check"]}' })).preview
+    ).toBe('bun run check');
+  });
+
   it('describes structured task and question tools without exposing their full input', () => {
     expect(
       getSessionToolPresentation(
