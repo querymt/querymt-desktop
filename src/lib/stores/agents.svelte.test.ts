@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionNotification } from '@agentclientprotocol/sdk';
 import type { ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
@@ -125,8 +125,11 @@ vi.mock('$lib/querymt/sidecar', () => ({
   validateWorkspaceDirectory: vi.fn(async () => true)
 }));
 
+const createdStores: AgentsStore[] = [];
+
 function createStore() {
   const store = new AgentsStore();
+  createdStores.push(store);
   store.configs = [
     {
       id: 'agent-1',
@@ -162,6 +165,14 @@ beforeEach(() => {
   mockClient.refreshAndListModels.mockResolvedValue([]);
   mockClient.getModelInfo.mockResolvedValue({});
   mockDrainAgentSessionUpdates.mockResolvedValue([]);
+});
+
+afterEach(() => {
+  while (createdStores.length > 0) {
+    createdStores.pop()?.dispose();
+  }
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe('AgentsStore connections', () => {
@@ -1346,6 +1357,129 @@ describe('AgentsStore prompt session start', () => {
     });
     expect(store.activeSession.activityLabel).toBe('Turn completed.');
     expect(store.activeSession.lastStopReason).toBe('end_turn');
+  });
+
+  it('applies the first stream chunk immediately and coalesces later chunks on the next animation frame', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'Hel' },
+        messageId: 'thought-1'
+      }
+    });
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'lo' },
+        messageId: 'thought-1'
+      }
+    });
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: ' world' },
+        messageId: 'thought-1'
+      }
+    });
+
+    expect(store.activeSession.transcript).toHaveLength(1);
+    expect(store.activeSession.transcript[0].text).toBe('Hel');
+    expect(frames).toHaveLength(1);
+
+    frames[0](0);
+
+    expect(store.activeSession.transcript).toHaveLength(1);
+    expect(store.activeSession.transcript[0]).toMatchObject({ text: 'Hello world', messageId: 'thought-1' });
+    expect(store.activeSession.events).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
+
+  it('flushes queued stream chunks before applying a tool call in the same turn', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    vi.stubGlobal('cancelAnimationFrame', () => {
+      frames.length = 0;
+    });
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'Hel' },
+        messageId: 'thought-1'
+      }
+    });
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'lo' },
+        messageId: 'thought-1'
+      }
+    });
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tool-1',
+        title: 'Read file',
+        status: 'in_progress',
+        content: []
+      }
+    });
+
+    expect(store.activeSession.transcript[0]).toMatchObject({ text: 'Hello' });
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ id: 'tool-1', title: 'Read file' });
+    expect(store.activeSession.events.map((event) => event.kind)).toEqual(['agent_thought_chunk', 'tool_call']);
+    vi.unstubAllGlobals();
+  });
+
+  it('cancels pending session refresh timers on dispose', async () => {
+    vi.useFakeTimers();
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'Hel' },
+        messageId: 'thought-1'
+      }
+    });
+
+    const listSessionsCalls = mockClient.listSessions.mock.calls.length;
+    store.dispose();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(listSessionsCalls);
   });
 
   it('marks an active prompt cancelled when the prompt response is cancelled', async () => {

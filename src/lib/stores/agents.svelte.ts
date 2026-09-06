@@ -180,6 +180,12 @@ export class AgentsStore {
   private modelInfoRequests = new Map<string, Promise<void>>();
   private activeLoadMeasurement: SessionLoadMeasurement | null = null;
   private applyingDrainedUpdates = false;
+  private pendingSessionNotifications: Array<{
+    agentId: string;
+    notification: SessionNotification;
+    record: AgentClientRecord;
+  }> = [];
+  private pendingSessionNotificationFrame: number | null = null;
 
   configs = $state<AgentConfig[]>(loadInitialAgents());
   statuses = $state<Record<string, AgentRuntimeStatus>>({});
@@ -337,6 +343,16 @@ export class AgentsStore {
   acknowledgeSession(agentId: string, sessionId: string) {
     const key = buildSessionKey(agentId, sessionId);
     this.attentionSessionKeys = this.attentionSessionKeys.filter((candidate) => candidate !== key);
+  }
+
+  dispose() {
+    this.cancelPendingSessionNotifications();
+    for (const agentId of [...this.sessionRefreshTimers.keys()]) {
+      this.clearScheduledSessionRefresh(agentId);
+    }
+    for (const agentId of [...this.reconnectTimers.keys()]) {
+      this.cancelReconnect(agentId);
+    }
   }
 
   async initialize() {
@@ -2580,6 +2596,55 @@ export class AgentsStore {
   }
 
   private handleSessionNotification(
+    agentId: string,
+    notification: SessionNotification,
+    record: AgentClientRecord
+  ) {
+    if (this.applyingDrainedUpdates) {
+      this.applySessionNotificationNow(agentId, notification, record);
+      return;
+    }
+
+    const kind = notification.update.sessionUpdate;
+    const canBatch = kind === 'agent_message_chunk' || kind === 'agent_thought_chunk';
+    if (canBatch && this.pendingSessionNotificationFrame !== null) {
+      this.pendingSessionNotifications.push({ agentId, notification, record });
+      return;
+    }
+
+    if (!canBatch) this.flushPendingSessionNotifications();
+    this.applySessionNotificationNow(agentId, notification, record);
+    if (canBatch) this.schedulePendingSessionNotifications();
+  }
+
+  private schedulePendingSessionNotifications() {
+    if (this.pendingSessionNotificationFrame !== null) return;
+    this.pendingSessionNotificationFrame = requestAnimationFrame(() => {
+      this.flushPendingSessionNotifications();
+    });
+  }
+
+  private cancelPendingSessionNotifications() {
+    if (this.pendingSessionNotificationFrame !== null) {
+      cancelAnimationFrame(this.pendingSessionNotificationFrame);
+      this.pendingSessionNotificationFrame = null;
+    }
+    this.pendingSessionNotifications = [];
+  }
+
+  private flushPendingSessionNotifications() {
+    if (this.pendingSessionNotificationFrame !== null) {
+      cancelAnimationFrame(this.pendingSessionNotificationFrame);
+      this.pendingSessionNotificationFrame = null;
+    }
+    const queued = this.pendingSessionNotifications;
+    this.pendingSessionNotifications = [];
+    for (const item of queued) {
+      this.applySessionNotificationNow(item.agentId, item.notification, item.record);
+    }
+  }
+
+  private applySessionNotificationNow(
     agentId: string,
     notification: SessionNotification,
     record: AgentClientRecord
