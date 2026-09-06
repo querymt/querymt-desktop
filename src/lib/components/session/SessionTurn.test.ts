@@ -90,6 +90,123 @@ describe('SessionTurn', () => {
     expect(bodies[0]).toHaveTextContent('Hello world');
   });
 
+  it('renders precomputed html without re-parsing markdown', async () => {
+    const markdown = await import('$lib/domain/markdown');
+    const spy = vi.spyOn(markdown, 'renderMarkdownToHtml');
+    const settledTurn: SessionConversationTurn = {
+      id: 'turn-cached-html',
+      forkMessageId: 'assistant-cached',
+      user: {
+        id: 'user-cached',
+        messageId: 'user-cached',
+        html: '<p>Cached prompt</p>',
+        text: 'Cached prompt'
+      },
+      content: [
+        {
+          type: 'assistant',
+          id: 'assistant-cached',
+          messageId: 'assistant-cached',
+          html: '<p>Cached answer</p>',
+          text: 'Cached answer',
+          relatedEvents: []
+        }
+      ],
+      settled: true
+    };
+
+    render(SessionTurn, { turn: settledTurn });
+
+    expect(document.querySelector('.session-message-body')).toHaveTextContent('Cached prompt');
+    expect(document.querySelector('.session-agent-body')).toHaveTextContent('Cached answer');
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('renders each settled text segment from its own markdown, not the parent html', () => {
+    const mixedTurn: SessionConversationTurn = {
+      id: 'turn-mixed-segments',
+      forkMessageId: null,
+      user: {
+        id: 'user-mixed',
+        messageId: 'user-mixed',
+        html: '<p>Before After</p>',
+        text: 'Before After',
+        blocks: [
+          { type: 'text', text: 'Before' },
+          { type: 'image', data: 'aW1n', mimeType: 'image/png', name: 'photo.png' },
+          { type: 'text', text: 'After' }
+        ]
+      },
+      content: [],
+      settled: true
+    };
+
+    const { getByRole } = render(SessionTurn, { turn: mixedTurn });
+    const bodies = [...document.querySelectorAll('.session-message-body')];
+
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toHaveTextContent('Before');
+    expect(bodies[0]).not.toHaveTextContent('After');
+    expect(bodies[1]).toHaveTextContent('After');
+    expect(bodies[1]).not.toHaveTextContent('Before');
+    expect(getByRole('button', { name: 'Open photo.png' })).toBeInTheDocument();
+  });
+
+  it('freezes completed markdown and only streams the open tail', () => {
+    const liveTurn: SessionConversationTurn = {
+      id: 'turn-live-split',
+      forkMessageId: null,
+      content: [
+        {
+          type: 'assistant',
+          id: 'assistant-live',
+          messageId: 'assistant-live',
+          html: '<p>Ignored live html</p>',
+          text: '# Title\n\nHello wo',
+          relatedEvents: []
+        }
+      ],
+      settled: false
+    };
+
+    render(SessionTurn, { turn: liveTurn });
+    const frozen = document.querySelector('.session-agent-body-frozen');
+    const tail = document.querySelector('.session-agent-body-tail');
+
+    expect(frozen).toHaveTextContent('Title');
+    expect(frozen).not.toHaveTextContent('Hello wo');
+    expect(tail).toHaveTextContent('Hello wo');
+    expect(document.querySelectorAll('.session-agent-body.markdown-body')).toHaveLength(1);
+  });
+
+  it('streams live reasoning as frozen markdown plus an open tail', () => {
+    const liveReasoningTurn: SessionConversationTurn = {
+      id: 'turn-live-reasoning',
+      forkMessageId: null,
+      content: [
+        {
+          type: 'reasoning',
+          id: 'reasoning-live',
+          html: '',
+          text: '# Title\n\nHello wo',
+          isLive: true
+        }
+      ],
+      settled: false
+    };
+
+    const { getByRole } = render(SessionTurn, { turn: liveReasoningTurn });
+    const work = getByRole('region', { name: 'Agent work' });
+    const frozen = work.querySelector('.session-reasoning-frozen');
+    const tail = work.querySelector('.session-reasoning-tail');
+
+    expect(work.querySelector('.session-reasoning-preview')).toHaveTextContent('Title');
+    expect(frozen).toHaveTextContent('Title');
+    expect(frozen).not.toHaveTextContent('Hello wo');
+    expect(tail).toHaveTextContent('Hello wo');
+  });
+
   it('renders shared image triggers, file cards, and unavailable image fallbacks without captions', () => {
     const attachmentTurn: SessionConversationTurn = {
       id: 'attachments',

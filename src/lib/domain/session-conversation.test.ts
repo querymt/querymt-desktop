@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildSessionConversation, formatTurnDuration } from './session-conversation';
 import { createEmptyActiveSession } from './session-updates';
 import type { ActiveSessionViewModel } from '$lib/domain/types';
+import * as markdown from './markdown';
 
 function baseSession(): ActiveSessionViewModel {
   return { ...createEmptyActiveSession(), sessionId: 's1', runState: 'completed' };
@@ -336,6 +337,25 @@ describe('buildSessionConversation', () => {
     expect(turns[1].presentation?.[0]).toMatchObject({ type: 'work-group', settled: false });
   });
 
+  it('keeps live reasoning text so the thinking stream can render', () => {
+    const session = baseSession();
+    session.runState = 'thinking';
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'plan', messageId: 'u1', eventIndex: 0 },
+      { id: 'r1', kind: 'agent_thought_chunk', text: '# Title\n\nHello wo', messageId: 'r1', eventIndex: 1 }
+    ];
+
+    const turns = buildSessionConversation(session);
+    const reasoning = turns[0].content.find((item) => item.type === 'reasoning');
+
+    expect(reasoning).toMatchObject({
+      type: 'reasoning',
+      id: 'r1',
+      text: '# Title\n\nHello wo',
+      isLive: true
+    });
+  });
+
   it('keeps image-only and generic-file turns with ordered structured blocks', () => {
     const session = baseSession();
     session.transcript = [
@@ -374,5 +394,158 @@ describe('buildSessionConversation', () => {
     expect(turns).toHaveLength(2);
     expect(turns[0].content.map((item) => item.type)).toEqual(['reasoning', 'tool']);
     expect(turns[1].content.map((item) => item.type)).toEqual(['assistant']);
+  });
+
+  it('reuses settled turns and only re-renders the live turn while streaming', () => {
+    const session = baseSession();
+    session.runState = 'streaming';
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'first', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'First done', messageId: 'a1', eventIndex: 1 },
+      { id: 'u2', kind: 'user_message_chunk', text: 'second', messageId: 'u2', eventIndex: 2 },
+      { id: 'a2', kind: 'agent_message_chunk', text: 'Hel', messageId: 'a2', eventIndex: 3 }
+    ];
+
+    const first = buildSessionConversation(session);
+    session.transcript = [
+      ...session.transcript,
+      { id: 'a3', kind: 'agent_message_chunk', text: 'lo', messageId: 'a2', eventIndex: 4 }
+    ];
+    const second = buildSessionConversation(session, first);
+
+    expect(second).toHaveLength(2);
+    expect(second[0]).toBe(first[0]);
+    expect(second[1]).not.toBe(first[1]);
+    expect(second[1].content.find((item) => item.type === 'assistant')).toMatchObject({ text: 'Hello' });
+  });
+
+  it('does not parse markdown for settled turns on a later stream chunk', () => {
+    const session = baseSession();
+    session.runState = 'streaming';
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'first', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'First done', messageId: 'a1', eventIndex: 1 },
+      { id: 'u2', kind: 'user_message_chunk', text: 'second', messageId: 'u2', eventIndex: 2 },
+      { id: 'a2', kind: 'agent_message_chunk', text: 'Hel', messageId: 'a2', eventIndex: 3 }
+    ];
+    const previous = buildSessionConversation(session);
+
+    const spy = vi.spyOn(markdown, 'renderMarkdownToHtml');
+    session.transcript = [
+      ...session.transcript,
+      { id: 'a3', kind: 'agent_message_chunk', text: 'lo', messageId: 'a2', eventIndex: 4 }
+    ];
+    buildSessionConversation(session, previous);
+
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('returns the same turns instance when called twice with the same session object', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'first', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'First done', messageId: 'a1', eventIndex: 1 }
+    ];
+
+    const first = buildSessionConversation(session);
+    const second = buildSessionConversation(session);
+
+    expect(second).toBe(first);
+  });
+
+  it('rebuilds after in-place session mutations without an explicit previous snapshot', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'first', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'First done', messageId: 'a1', eventIndex: 1 }
+    ];
+
+    const first = buildSessionConversation(session);
+    session.runState = 'thinking';
+    session.transcript = [
+      ...session.transcript,
+      { id: 'u2', kind: 'user_message_chunk', text: 'second', messageId: 'u2', eventIndex: 2 },
+      { id: 'r2', kind: 'agent_thought_chunk', text: 'Working', messageId: 'r2', eventIndex: 3 }
+    ];
+    const second = buildSessionConversation(session);
+
+    expect(second).not.toBe(first);
+    expect(second).toHaveLength(2);
+    expect(second[1].content.find((item) => item.type === 'reasoning')).toMatchObject({
+      text: 'Working',
+      isLive: true
+    });
+  });
+
+  it('does not reuse a settled turn when reasoning text changes', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'inspect', messageId: 'u1', eventIndex: 0 },
+      { id: 'r1', kind: 'agent_thought_chunk', text: 'First thought', messageId: 'r1', eventIndex: 1 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Done', messageId: 'a1', eventIndex: 2 }
+    ];
+    const first = buildSessionConversation(session);
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'inspect', messageId: 'u1', eventIndex: 0 },
+      { id: 'r1', kind: 'agent_thought_chunk', text: 'Updated thought', messageId: 'r1', eventIndex: 1 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Done', messageId: 'a1', eventIndex: 2 }
+    ];
+    const second = buildSessionConversation(session, first);
+
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].content.find((item) => item.type === 'reasoning')).toMatchObject({
+      text: 'Updated thought'
+    });
+  });
+
+  it('does not reuse a settled turn when tool metadata changes', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'inspect', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Done', messageId: 'a1', eventIndex: 2 }
+    ];
+    session.toolCalls = [{ id: 't1', title: 'read_tool', status: 'completed', kind: 'read_tool', eventIndex: 1 }];
+    const first = buildSessionConversation(session);
+    session.toolCalls = [{ id: 't1', title: 'Read file', status: 'completed', kind: 'read', eventIndex: 1 }];
+    const second = buildSessionConversation(session, first);
+
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].content.find((item) => item.type === 'tool')?.tool).toMatchObject({
+      title: 'Read file',
+      kind: 'read'
+    });
+  });
+
+  it('rebuilds without previousTurns after an in-place last-tool metadata change', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'inspect', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Done', messageId: 'a1', eventIndex: 2 }
+    ];
+    session.toolCalls = [
+      {
+        id: 't1',
+        title: 'read_tool',
+        status: 'completed',
+        kind: 'read_tool',
+        eventIndex: 1,
+        arguments: '{}',
+        messageId: null,
+        isError: false
+      }
+    ];
+    const first = buildSessionConversation(session);
+    session.toolCalls[0].arguments = '{"path":"src/app.ts"}';
+    session.toolCalls[0].messageId = 'tool-msg';
+    session.toolCalls[0].isError = true;
+    const second = buildSessionConversation(session);
+
+    expect(second).not.toBe(first);
+    expect(second[0].content.find((item) => item.type === 'tool')?.tool).toMatchObject({
+      arguments: '{"path":"src/app.ts"}',
+      messageId: 'tool-msg',
+      isError: true
+    });
   });
 });

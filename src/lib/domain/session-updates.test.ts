@@ -244,3 +244,119 @@ describe('applySessionNotification tool calls', () => {
     expect(next.toolCalls[0]).toMatchObject({ status: 'completed', arguments: '{}', result: 'Option B' });
   });
 });
+
+describe('applySessionNotification stream coalescing', () => {
+  it('appends consecutive agent thought chunks onto the last transcript item', () => {
+    let session = applySessionNotification(
+      createEmptyActiveSession(),
+      notification({
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'Hel' },
+        messageId: 'thought-1'
+      })
+    );
+    const firstItem = session.transcript[0];
+    session = applySessionNotification(
+      session,
+      notification({
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'lo' },
+        messageId: 'thought-1'
+      })
+    );
+
+    expect(session.transcript).toHaveLength(1);
+    expect(session.transcript[0]).toBe(session.transcript[0]);
+    expect(session.transcript[0].id).toBe(firstItem.id);
+    expect(session.transcript[0]).toMatchObject({
+      kind: 'agent_thought_chunk',
+      text: 'Hello',
+      messageId: 'thought-1'
+    });
+    expect(session.events).toHaveLength(1);
+    expect(session.events[0].kind).toBe('agent_thought_chunk');
+  });
+
+  it('appends consecutive agent message chunks onto the last transcript item', () => {
+    let session = applySessionNotification(
+      createEmptyActiveSession(),
+      notification({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Hel' },
+        messageId: 'assistant-1'
+      })
+    );
+    session = applySessionNotification(
+      session,
+      notification({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'lo' },
+        messageId: 'assistant-1'
+      })
+    );
+
+    expect(session.transcript).toHaveLength(1);
+    expect(session.transcript[0]).toMatchObject({
+      kind: 'agent_message_chunk',
+      text: 'Hello',
+      messageId: 'assistant-1'
+    });
+    expect(session.events).toHaveLength(1);
+  });
+
+  it('does not merge chunks across different message ids or kinds', () => {
+    let session = applySessionNotification(
+      createEmptyActiveSession(),
+      notification({
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'Think' },
+        messageId: 'thought-1'
+      })
+    );
+    session = applySessionNotification(
+      session,
+      notification({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Answer' },
+        messageId: 'assistant-1'
+      })
+    );
+    session = applySessionNotification(
+      session,
+      notification({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: ' more' },
+        messageId: 'assistant-2'
+      })
+    );
+
+    expect(session.transcript.map((item) => item.text)).toEqual(['Think', 'Answer', ' more']);
+    expect(session.events).toHaveLength(3);
+  });
+
+  it('structurally shares unchanged arrays when only the last stream item grows', () => {
+    const session = applySessionNotification(
+      createEmptyActiveSession(),
+      notification({
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'Hel' },
+        messageId: 'thought-1'
+      })
+    );
+    const next = applySessionNotification(
+      session,
+      notification({
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'lo' },
+        messageId: 'thought-1'
+      })
+    );
+
+    expect(next.toolCalls).toBe(session.toolCalls);
+    expect(next.plans).toBe(session.plans);
+    expect(next.configOptions).toBe(session.configOptions);
+    expect(next.events).toBe(session.events);
+    expect(next.transcript).not.toBe(session.transcript);
+    expect(next.transcript[0]).not.toBe(session.transcript[0]);
+  });
+});

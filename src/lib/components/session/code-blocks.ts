@@ -137,7 +137,7 @@ function languageFromCodeElement(code: HTMLElement) {
   return '';
 }
 
-async function highlightCodeBlock(code: HTMLElement) {
+async function highlightCodeBlock(code: HTMLElement, observer?: MutationObserver, root?: HTMLElement) {
   if (code.dataset.shikiState === 'highlighted' || code.dataset.shikiState === 'loading') return;
 
   const language = normalizeLanguage(languageFromCodeElement(code));
@@ -177,7 +177,9 @@ async function highlightCodeBlock(code: HTMLElement) {
     if (highlightedCode) {
       highlightedCode.dataset.shikiState = 'highlighted';
     }
+    observer?.disconnect();
     currentPre.replaceWith(highlightedPre);
+    if (observer && root) observer.observe(root, { childList: true, subtree: true });
   } catch (error) {
     console.warn('Failed to highlight code block with Shiki', error);
     code.innerHTML = escapeHtml(source);
@@ -185,11 +187,11 @@ async function highlightCodeBlock(code: HTMLElement) {
   }
 }
 
-function highlightCodeBlocks(node: HTMLElement) {
+function highlightCodeBlocks(node: HTMLElement, observer?: MutationObserver) {
   if (!browser) return;
 
   for (const code of node.querySelectorAll<HTMLElement>('.code-block-shell pre code')) {
-    void highlightCodeBlock(code);
+    void highlightCodeBlock(code, observer, node);
   }
 }
 
@@ -213,10 +215,10 @@ export function enhanceCodeBlocks(node: HTMLElement) {
     }, 1200);
   }
 
-  const observer = new MutationObserver(() => highlightCodeBlocks(node));
+  const observer = new MutationObserver(() => highlightCodeBlocks(node, observer));
 
   node.addEventListener('click', handleClick);
-  highlightCodeBlocks(node);
+  highlightCodeBlocks(node, observer);
   observer.observe(node, { childList: true, subtree: true });
 
   return {

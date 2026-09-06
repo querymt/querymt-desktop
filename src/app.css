@@ -4741,10 +4741,15 @@ summary:focus-visible {
 
 .session-chat-end-anchor {
   height: 1px;
+  overflow-anchor: auto;
   scroll-margin-block-end: var(
     --session-composer-measured-clearance,
     var(--session-composer-clearance, var(--session-composer-expanded-clearance))
   );
+}
+
+.session-page-following .session-page-content {
+  overflow-anchor: none;
 }
 
 .session-detail-shell {
@@ -4770,6 +4775,15 @@ summary:focus-visible {
 .session-conversation-content {
   display: grid;
   gap: 0.9rem;
+}
+
+.session-conversation-window {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.session-turn-spacer {
+  pointer-events: none;
 }
 
 .session-activity-bar {

@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  createFollowScrollScheduler,
   getDistanceFromBottom,
   nextSessionChatPresentationState,
   nextSessionScrollMode,
+  sessionFollowPinClass,
   SESSION_COMPOSER_COLLAPSE_THRESHOLD,
   SESSION_SCROLL_LEAVE_THRESHOLD,
   SESSION_SCROLL_REJOIN_THRESHOLD
@@ -52,5 +54,97 @@ describe('session scroll state', () => {
     expect(nextSessionScrollMode('free', SESSION_SCROLL_REJOIN_THRESHOLD + 1, 'down')).toBe('free');
     expect(nextSessionScrollMode('free', SESSION_SCROLL_REJOIN_THRESHOLD, 'none')).toBe('free');
     expect(nextSessionScrollMode('free', 0, 'down')).toBe('following');
+  });
+});
+
+describe('session follow pin', () => {
+  it('enables the CSS pin class only while following', () => {
+    expect(sessionFollowPinClass('following')).toBe('session-page-following');
+    expect(sessionFollowPinClass('free')).toBe('');
+  });
+
+  it('coalesces multiple follow requests into one pin per frame', () => {
+    const frames: FrameRequestCallback[] = [];
+    const pin = vi.fn();
+    const scheduler = createFollowScrollScheduler(
+      pin,
+      () => true,
+      (cb) => {
+        frames.push(cb);
+        return frames.length;
+      },
+      (id) => {
+        if (id === frames.length) frames.pop();
+      }
+    );
+
+    scheduler.schedule();
+    scheduler.schedule();
+    scheduler.schedule();
+
+    expect(frames).toHaveLength(1);
+    expect(pin).not.toHaveBeenCalled();
+    frames[0](0);
+    expect(pin).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not pin when follow mode is inactive', () => {
+    const frames: FrameRequestCallback[] = [];
+    const pin = vi.fn();
+    const scheduler = createFollowScrollScheduler(
+      pin,
+      () => false,
+      (cb) => {
+        frames.push(cb);
+        return frames.length;
+      },
+      () => undefined
+    );
+
+    scheduler.schedule();
+    frames[0](0);
+    expect(pin).not.toHaveBeenCalled();
+  });
+
+  it('schedules another pin after the current frame runs', () => {
+    const frames: FrameRequestCallback[] = [];
+    const pin = vi.fn();
+    const scheduler = createFollowScrollScheduler(
+      pin,
+      () => true,
+      (cb) => {
+        frames.push(cb);
+        return frames.length;
+      },
+      () => undefined
+    );
+
+    scheduler.schedule();
+    frames.shift()?.(0);
+    scheduler.schedule();
+    frames.shift()?.(0);
+
+    expect(pin).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancel drops the pending pin', () => {
+    const frames: FrameRequestCallback[] = [];
+    const pin = vi.fn();
+    const scheduler = createFollowScrollScheduler(
+      pin,
+      () => true,
+      (cb) => {
+        frames.push(cb);
+        return frames.length;
+      },
+      (id) => {
+        if (id === frames.length) frames.pop();
+      }
+    );
+
+    scheduler.schedule();
+    scheduler.cancel();
+    expect(frames).toHaveLength(0);
+    expect(pin).not.toHaveBeenCalled();
   });
 });

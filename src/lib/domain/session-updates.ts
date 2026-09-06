@@ -61,12 +61,10 @@ export function getNextConversationEventIndex(session: ActiveSessionViewModel): 
   return maxIndex + 1;
 }
 
-export function applySessionNotification(
-  current: ActiveSessionViewModel,
-  notification: SessionNotification,
-  conversationEventIndex = getNextConversationEventIndex(current)
-): ActiveSessionViewModel {
-  const next: ActiveSessionViewModel = {
+const STREAM_CHUNK_KINDS = new Set(['agent_message_chunk', 'agent_thought_chunk']);
+
+function cloneSession(current: ActiveSessionViewModel): ActiveSessionViewModel {
+  return {
     sessionId: current.sessionId,
     transcript: current.transcript.map((item) => ({ ...item, blocks: item.blocks?.map((block) => ({ ...block })) })),
     toolCalls: current.toolCalls.map((item) => ({ ...item })),
@@ -85,9 +83,87 @@ export function applySessionNotification(
       lastRevertedFiles: current.undo.lastRevertedFiles.slice()
     }
   };
-  next.sessionId = notification.sessionId;
+}
 
+function canMergeStreamChunk(
+  last: SessionTranscriptItem | undefined,
+  kind: SessionTranscriptItem['kind'],
+  messageId: string | null
+): last is SessionTranscriptItem {
+  return Boolean(
+    last &&
+      STREAM_CHUNK_KINDS.has(kind) &&
+      last.kind === kind &&
+      last.messageId === messageId
+  );
+}
+
+function appendTextBlocks(current: SessionContentBlock[] | undefined, incoming: SessionContentBlock[]): SessionContentBlock[] {
+  const blocks = current?.map((block) => ({ ...block })) ?? [];
+  for (const block of incoming) {
+    const previous = blocks.at(-1);
+    if (block.type === 'text' && previous?.type === 'text') {
+      previous.text += block.text;
+      continue;
+    }
+    blocks.push({ ...block });
+  }
+  return blocks;
+}
+
+function mergeStreamChunk(
+  current: ActiveSessionViewModel,
+  notification: SessionNotification,
+  kind: 'agent_message_chunk' | 'agent_thought_chunk',
+  text: string,
+  blocks: SessionContentBlock[],
+  messageId: string | null
+): ActiveSessionViewModel {
+  const lastIndex = current.transcript.length - 1;
+  const last = current.transcript[lastIndex];
+  const merged: SessionTranscriptItem = {
+    ...last,
+    text: `${last.text}${text}`,
+    blocks: appendTextBlocks(last.blocks, blocks),
+    timestampMs: Date.now()
+  };
+  const transcript = current.transcript.slice();
+  transcript[lastIndex] = merged;
+  return {
+    ...current,
+    sessionId: notification.sessionId,
+    transcript,
+    runState: kind === 'agent_message_chunk' ? 'streaming' : 'thinking',
+    activityLabel: kind === 'agent_message_chunk' ? 'Agent is replying…' : 'Agent is thinking…',
+    lastError: null,
+    usage: { ...current.usage },
+    undo: current.undo
+  };
+}
+
+export function applySessionNotification(
+  current: ActiveSessionViewModel,
+  notification: SessionNotification,
+  conversationEventIndex = getNextConversationEventIndex(current)
+): ActiveSessionViewModel {
   const update = notification.update;
+  if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'agent_thought_chunk') {
+    const messageId = update.messageId ?? null;
+    const last = current.transcript.at(-1);
+    if (canMergeStreamChunk(last, update.sessionUpdate, messageId)) {
+      return mergeStreamChunk(
+        current,
+        notification,
+        update.sessionUpdate,
+        getTextContent(update.content),
+        normalizeContentBlocks([update.content]),
+        messageId
+      );
+    }
+  }
+
+  const next = cloneSession(current);
+  next.sessionId = notification.sessionId;
   next.events.push({
     id: `${notification.sessionId}-event-${next.events.length + 1}`,
     kind: update.sessionUpdate,

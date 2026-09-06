@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { renderMarkdownToHtml } from './markdown';
+import { marked } from 'marked';
+import { describe, expect, it, vi } from 'vitest';
+import { renderMarkdownToHtml, splitStreamingMarkdown } from './markdown';
 
 describe('renderMarkdownToHtml', () => {
   it('wraps fenced code in a constrained code-block shell', () => {
@@ -30,5 +31,87 @@ describe('renderMarkdownToHtml', () => {
     expect(html).toContain('<th>');
     expect(html).toContain('foo');
     expect(html).toContain('bar');
+  });
+
+  it('parses identical sources only once', () => {
+    const source = `**hello** ${Date.now()}`;
+    const spy = vi.spyOn(marked, 'parse');
+    renderMarkdownToHtml(source);
+    const calls = spy.mock.calls.length;
+    const first = renderMarkdownToHtml(source);
+    const second = renderMarkdownToHtml(source);
+
+    expect(spy.mock.calls.length).toBe(calls);
+    expect(second).toBe(first);
+    expect(first).toContain('hello');
+    spy.mockRestore();
+  });
+
+  it('re-parses when the source changes', () => {
+    const first = renderMarkdownToHtml('first');
+    const second = renderMarkdownToHtml('second');
+
+    expect(first).not.toBe(second);
+    expect(first).toContain('first');
+    expect(second).toContain('second');
+  });
+});
+
+describe('splitStreamingMarkdown', () => {
+  it('keeps a single open line as tail text', () => {
+    expect(splitStreamingMarkdown('Hello wo')).toEqual({
+      frozenHtml: '',
+      tailText: 'Hello wo'
+    });
+  });
+
+  it('freezes completed lines and reuses frozen html while the tail grows', () => {
+    const first = splitStreamingMarkdown('# Title\n\nHello wo');
+    const second = splitStreamingMarkdown('# Title\n\nHello world');
+
+    expect(first.frozenHtml).toContain('Title');
+    expect(first.frozenHtml).not.toContain('Hello wo');
+    expect(first.tailText).toBe('Hello wo');
+    expect(second.tailText).toBe('Hello world');
+    expect(second.frozenHtml).toBe(first.frozenHtml);
+  });
+
+  it('does not parse an unclosed fence into a code block', () => {
+    const parts = splitStreamingMarkdown('See this:\n\n```ts\nconst value = 1');
+
+    expect(parts.frozenHtml).toContain('See this:');
+    expect(parts.frozenHtml).not.toContain('code-block-shell');
+    expect(parts.tailText).toContain('```ts');
+    expect(parts.tailText).toContain('const value = 1');
+  });
+
+  it('does not close a longer fence on a nested shorter delimiter', () => {
+    const parts = splitStreamingMarkdown('See this:\n\n````md\n```\ninner\n\nafter inner');
+
+    expect(parts.frozenHtml).toContain('See this:');
+    expect(parts.frozenHtml).not.toContain('code-block-shell');
+    expect(parts.frozenHtml).not.toContain('after inner');
+    expect(parts.tailText).toContain('````md');
+    expect(parts.tailText).toContain('after inner');
+  });
+
+  it('keeps an unclosed tilde fence in the tail even when it contains a blank line', () => {
+    const parts = splitStreamingMarkdown('See this:\n\n~~~ts\nconst value = 1\n\nstill streaming');
+
+    expect(parts.frozenHtml).toContain('See this:');
+    expect(parts.frozenHtml).not.toContain('code-block-shell');
+    expect(parts.frozenHtml).not.toContain('still streaming');
+    expect(parts.tailText).toContain('~~~ts');
+    expect(parts.tailText).toContain('still streaming');
+  });
+
+  it('does not close a fence when a matching marker has trailing text', () => {
+    const parts = splitStreamingMarkdown('See this:\n\n````md\n````md\ninner\n\nafter inner');
+
+    expect(parts.frozenHtml).toContain('See this:');
+    expect(parts.frozenHtml).not.toContain('code-block-shell');
+    expect(parts.frozenHtml).not.toContain('after inner');
+    expect(parts.tailText).toContain('````md');
+    expect(parts.tailText).toContain('after inner');
   });
 });

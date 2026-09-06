@@ -5,7 +5,7 @@
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
   import { buildTurnPresentation, formatTurnDuration, type SessionAssistantContent, type SessionConversationTurn } from '$lib/domain/session-conversation';
-  import { renderMarkdownToHtml } from '$lib/domain/markdown';
+  import { renderMarkdownToHtml, splitStreamingMarkdown } from '$lib/domain/markdown';
   import type { SessionContentBlock, SessionImageGalleryItem } from '$lib/domain/types';
   import type { PromptFailure } from '$lib/domain/prompt-errors';
 
@@ -49,6 +49,12 @@
   let copiedUserId = $state<string | null>(null);
   const presentation = $derived(turn.presentation ?? buildTurnPresentation(turn.content, turn.settled ?? true));
   const lastPresentationId = $derived(presentation.at(-1)?.id ?? null);
+
+  function markdownParts(html: string | undefined, text: string, live: boolean, fullText: string) {
+    if (live) return splitStreamingMarkdown(text);
+    if (html && text === fullText) return { frozenHtml: html, tailText: '' };
+    return { frozenHtml: text ? renderMarkdownToHtml(text) : '', tailText: '' };
+  }
 
   function contentSegments(blocks: SessionContentBlock[] | undefined, text: string) {
     const source = blocks?.length ? blocks : text ? [{ type: 'text' as const, text }] : [];
@@ -109,13 +115,17 @@
   }
 </script>
 
-<article class:session-turn-reverted={reverted} class="session-turn">
+<article class:session-turn-reverted={reverted} class="session-turn" data-turn-id={turn.id}>
   {#if turn.user}
     <section class="session-user-message-shell">
       <div class="session-message session-message-user">
         {#each contentSegments(turn.user.blocks, turn.user.text) as segment}
           {#if segment.type === 'text'}
-            <div class="session-message-body markdown-body" use:enhanceCodeBlocks>{@html renderMarkdownToHtml(segment.block.text)}</div>
+            {@const parts = markdownParts(turn.user.html, segment.block.text, false, turn.user.text)}
+            <div class="session-message-body markdown-body" use:enhanceCodeBlocks>
+              {#if parts.frozenHtml}<div class="session-message-body-frozen">{@html parts.frozenHtml}</div>{/if}
+              {#if parts.tailText}<div class="session-message-body-tail">{parts.tailText}</div>{/if}
+            </div>
           {:else}
             <SessionAttachmentPreview blocks={segment.blocks} gallery={imageGallery} {failedImageKeys} {onImageFailure} />
           {/if}
@@ -156,7 +166,11 @@
         <section class="session-agent-block session-assistant-message-shell">
           {#each contentSegments(item.blocks, item.text) as segment}
             {#if segment.type === 'text'}
-              <div class="session-agent-body markdown-body" use:enhanceCodeBlocks>{@html renderMarkdownToHtml(segment.block.text)}</div>
+              {@const parts = markdownParts(item.html, segment.block.text, turn.settled === false, item.text)}
+              <div class="session-agent-body markdown-body" use:enhanceCodeBlocks>
+                {#if parts.frozenHtml}<div class="session-agent-body-frozen">{@html parts.frozenHtml}</div>{/if}
+                {#if parts.tailText}<div class="session-agent-body-tail">{parts.tailText}</div>{/if}
+              </div>
             {:else}
               <SessionAttachmentPreview blocks={segment.blocks} gallery={imageGallery} {failedImageKeys} {onImageFailure} />
             {/if}

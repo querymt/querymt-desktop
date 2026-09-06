@@ -12,6 +12,7 @@ export type SessionReasoningContent = {
   type: 'reasoning';
   id: string;
   html: string;
+  text?: string;
   isLive: boolean;
 };
 
@@ -70,13 +71,195 @@ type OrderedConversationItem =
   | { type: 'group'; group: SessionTranscriptGroup }
   | { type: 'tool'; tool: SessionToolCallItem };
 
-export function buildSessionConversation(session: ActiveSessionViewModel): SessionConversationTurn[] {
-  const orderedItems = buildOrderedItems(session.transcript, canonicalizeTools(session.toolCalls));
+type DraftContent =
+  | SessionToolContent
+  | { type: 'reasoning'; id: string; text: string }
+  | { type: 'assistant'; id: string; messageId: string | null; text: string; blocks: SessionContentBlock[] };
 
-  const turns: SessionConversationTurn[] = [];
-  // Index-aligned with `turns`: wall-clock window of each turn, in ms.
+type DraftTurn = {
+  id: string;
+  forkMessageId: string | null;
+  user?: {
+    id: string;
+    messageId: string | null;
+    text: string;
+    blocks: SessionContentBlock[];
+    eventIndex?: number;
+  };
+  content: DraftContent[];
+  durationMs?: number;
+};
+
+type ConversationCache = {
+  sessionId: string;
+  revision: string;
+  turns: SessionConversationTurn[];
+};
+
+const BUSY_RUN_STATES = new Set(['submitting', 'thinking', 'streaming', 'tool-running']);
+let conversationCache: ConversationCache | null = null;
+
+function conversationRevision(session: ActiveSessionViewModel): string {
+  const lastTranscript = session.transcript.at(-1);
+  const lastTool = session.toolCalls.at(-1);
+  return [
+    session.sessionId ?? '',
+    session.runState,
+    String(session.transcript.length),
+    lastTranscript?.id ?? '',
+    lastTranscript?.kind ?? '',
+    lastTranscript?.text ?? '',
+    lastTranscript?.messageId ?? '',
+    JSON.stringify(lastTranscript?.blocks ?? []),
+    String(lastTranscript?.eventIndex ?? ''),
+    String(session.toolCalls.length),
+    lastTool?.id ?? '',
+    lastTool?.status ?? '',
+    lastTool?.title ?? '',
+    lastTool?.kind ?? '',
+    lastTool?.result ?? '',
+    lastTool?.arguments ?? '',
+    lastTool?.messageId ?? '',
+    String(lastTool?.isError ?? ''),
+    String(lastTool?.eventIndex ?? '')
+  ].join('\0');
+}
+
+export function buildSessionConversation(
+  session: ActiveSessionViewModel,
+  previousTurns?: SessionConversationTurn[]
+): SessionConversationTurn[] {
+  const revision = conversationRevision(session);
+  if (
+    previousTurns === undefined &&
+    conversationCache?.sessionId === session.sessionId &&
+    conversationCache.revision === revision
+  ) {
+    return conversationCache.turns;
+  }
+
+  const previous =
+    previousTurns ??
+    (conversationCache?.sessionId === session.sessionId ? conversationCache.turns : undefined);
+  const turns = materializeConversation(session, previous);
+  conversationCache = { sessionId: session.sessionId, revision, turns };
+  return turns;
+}
+
+function materializeConversation(
+  session: ActiveSessionViewModel,
+  previousTurns: SessionConversationTurn[] | undefined
+): SessionConversationTurn[] {
+  const drafts = buildConversationDrafts(session);
+  const busy = BUSY_RUN_STATES.has(session.runState);
+  const activeTurnIndex = busy ? drafts.length - 1 : -1;
+  const liveReasoning = session.runState === 'thinking' || session.runState === 'tool-running';
+
+  return drafts.map((draft, index) => {
+    const settled = index !== activeTurnIndex;
+    const previous = previousTurns?.[index];
+    if (previous && canReuseSettledTurn(previous, draft, settled)) {
+      return previous;
+    }
+
+    const content = draft.content.map((item, contentIndex) =>
+      materializeContent(item, settled, liveReasoning, previous?.content[contentIndex])
+    );
+    return {
+      id: draft.id,
+      forkMessageId: draft.forkMessageId,
+      user: draft.user
+        ? {
+            ...draft.user,
+            html:
+              previous?.user && previous.user.text === draft.user.text
+                ? previous.user.html
+                : renderMarkdownToHtml(draft.user.text)
+          }
+        : undefined,
+      content,
+      settled,
+      durationMs: settled ? draft.durationMs : undefined,
+      presentation: buildTurnPresentation(content, settled)
+    };
+  });
+}
+
+function sameBlocks(left?: SessionContentBlock[], right?: SessionContentBlock[]): boolean {
+  if ((left?.length ?? 0) !== (right?.length ?? 0)) return false;
+  return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+}
+
+function canReuseSettledTurn(previous: SessionConversationTurn, draft: DraftTurn, settled: boolean): boolean {
+  if (!settled || !previous.settled) return false;
+  if (previous.id !== draft.id) return false;
+  if (previous.forkMessageId !== draft.forkMessageId) return false;
+  if ((previous.durationMs ?? undefined) !== (draft.durationMs ?? undefined)) return false;
+  if ((previous.user?.id ?? null) !== (draft.user?.id ?? null)) return false;
+  if ((previous.user?.messageId ?? null) !== (draft.user?.messageId ?? null)) return false;
+  if ((previous.user?.text ?? '') !== (draft.user?.text ?? '')) return false;
+  if ((previous.user?.eventIndex ?? undefined) !== (draft.user?.eventIndex ?? undefined)) return false;
+  if (!sameBlocks(previous.user?.blocks, draft.user?.blocks)) return false;
+  if (previous.content.length !== draft.content.length) return false;
+  return previous.content.every((item, index) => {
+    const next = draft.content[index];
+    if (item.type !== next.type || item.id !== next.id) return false;
+    if (item.type === 'assistant' && next.type === 'assistant') {
+      return item.text === next.text && item.messageId === next.messageId && sameBlocks(item.blocks, next.blocks);
+    }
+    if (item.type === 'reasoning' && next.type === 'reasoning') {
+      return (item.text ?? '') === next.text;
+    }
+    if (item.type === 'tool' && next.type === 'tool') {
+      return (
+        item.tool.status === next.tool.status &&
+        item.tool.result === next.tool.result &&
+        item.tool.title === next.tool.title &&
+        item.tool.kind === next.tool.kind &&
+        item.tool.arguments === next.tool.arguments &&
+        item.tool.messageId === next.tool.messageId &&
+        item.tool.isError === next.tool.isError
+      );
+    }
+    return false;
+  });
+}
+
+function materializeContent(
+  item: DraftContent,
+  settled: boolean,
+  liveReasoning: boolean,
+  previous?: SessionConversationContent
+): SessionConversationContent {
+  if (item.type === 'tool') return item;
+  if (item.type === 'reasoning') {
+    const previousHtml = previous?.type === 'reasoning' ? previous.html : '';
+    return {
+      type: 'reasoning',
+      id: item.id,
+      text: item.text,
+      html: settled || !liveReasoning ? renderMarkdownToHtml(item.text) : previousHtml,
+      isLive: !settled && liveReasoning
+    };
+  }
+
+  const previousHtml = previous?.type === 'assistant' && previous.text === item.text ? previous.html : '';
+  return {
+    type: 'assistant',
+    id: item.id,
+    messageId: item.messageId,
+    html: settled ? renderMarkdownToHtml(item.text) : previousHtml,
+    text: item.text,
+    blocks: item.blocks,
+    relatedEvents: []
+  };
+}
+
+function buildConversationDrafts(session: ActiveSessionViewModel): DraftTurn[] {
+  const orderedItems = buildOrderedItems(session.transcript, canonicalizeTools(session.toolCalls));
+  const turns: DraftTurn[] = [];
   const turnTimings: Array<{ started?: number; ended?: number }> = [];
-  let current: SessionConversationTurn | null = null;
+  let current: DraftTurn | null = null;
 
   for (const item of orderedItems) {
     if (item.type === 'group' && item.group.role === 'user') {
@@ -86,14 +269,11 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
         user: {
           id: item.group.id,
           messageId: item.group.messageId,
-          html: renderMarkdownToHtml(item.group.text),
           text: item.group.text,
           blocks: item.group.blocks ?? [],
           eventIndex: item.group.eventIndex
         },
-        content: [],
-        presentation: [],
-        settled: false
+        content: []
       };
       turns.push(current);
       turnTimings.push({ started: item.group.startedAtMs, ended: item.group.endedAtMs });
@@ -102,7 +282,7 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
 
     if (!current) {
       const id = item.type === 'group' ? item.group.id : item.tool.id;
-      current = { id: `turn-${id}`, forkMessageId: null, content: [], presentation: [], settled: false };
+      current = { id: `turn-${id}`, forkMessageId: null, content: [] };
       turns.push(current);
       turnTimings.push({});
     }
@@ -118,12 +298,7 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
     }
 
     if (item.group.role === 'thought') {
-      current.content.push({
-        type: 'reasoning',
-        id: item.group.id,
-        html: renderMarkdownToHtml(item.group.text),
-        isLive: session.runState === 'thinking' || session.runState === 'tool-running'
-      });
+      current.content.push({ type: 'reasoning', id: item.group.id, text: item.group.text });
       continue;
     }
 
@@ -132,12 +307,8 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
       type: 'assistant',
       id: item.group.id,
       messageId: item.group.messageId,
-      html: renderMarkdownToHtml(item.group.text),
       text: item.group.text,
-      blocks: item.group.blocks ?? [],
-      relatedEvents: session.events
-        .filter((event) => item.group.eventIds.includes(event.id) || event.messageId === item.group.messageId)
-        .map((event) => ({ kind: event.kind, text: event.text }))
+      blocks: item.group.blocks ?? []
     });
   }
 
@@ -145,26 +316,11 @@ export function buildSessionConversation(session: ActiveSessionViewModel): Sessi
     const timing = turnTimings[index];
     if (timing?.started !== undefined && timing?.ended !== undefined && timing.ended >= timing.started) {
       const delta = timing.ended - timing.started;
-      // Instant answers don't need a "Worked for 0s" badge.
       if (delta >= 1000) turn.durationMs = delta;
     }
   });
 
-  const visibleTurns = turns.filter((turn) => turn.user || turn.content.length > 0);
-  const busy = ['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState);
-  const activeTurnIndex = busy ? visibleTurns.length - 1 : -1;
-
-  return visibleTurns.map((turn, index) => {
-    const settled = index !== activeTurnIndex;
-    return {
-      ...turn,
-      settled,
-      // Durations are only meaningful for finished turns; the active one is
-      // still accumulating.
-      durationMs: settled ? turn.durationMs : undefined,
-      presentation: buildTurnPresentation(turn.content, settled)
-    };
-  });
+  return turns.filter((turn) => turn.user || turn.content.length > 0);
 }
 
 export function formatTurnDuration(durationMs: number): string {
