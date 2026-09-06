@@ -82,15 +82,23 @@ vi.mock('@tauri-apps/plugin-shell', () => ({
 
 vi.mock('$lib/stores/agents.svelte', () => ({ agentsStore }));
 
-vi.mock('$lib/stores/appearance.svelte', () => ({
-  appearanceStore: {
-    themeMode: 'system',
-    resolvedTheme: 'light',
-    initialized: true,
-    initialize: vi.fn(),
-    setThemeMode: vi.fn()
-  }
+const appearanceStore = vi.hoisted(() => ({
+  accent: 'orange',
+  setAccentColor: vi.fn(),
+  themeMode: 'system',
+  resolvedTheme: 'light',
+  initialized: true,
+  initialize: vi.fn(),
+  setThemeMode: vi.fn()
 }));
+
+vi.mock('$lib/stores/appearance.svelte', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/stores/appearance.svelte')>();
+  return {
+    ...actual,
+    appearanceStore
+  };
+});
 
 vi.mock('$lib/stores/chat-preferences.svelte', () => ({ chatPreferencesStore }));
 
@@ -185,6 +193,21 @@ describe('Settings controls', () => {
     expect(screen.getByText('New session')).toBeInTheDocument();
     expect(screen.getByText('Cancel the running agent')).toBeInTheDocument();
     expect(screen.getAllByText('Ctrl/Cmd').length).toBeGreaterThan(0);
+  });
+
+  it('renders the appearance section with accent color swatches', async () => {
+    window.history.replaceState({}, '', '/settings?section=appearance');
+    render(SettingsPage);
+
+    expect(await screen.findByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Appearance Theme and accent color' })).toHaveAttribute('aria-current', 'page');
+
+    const orange = screen.getByRole('radio', { name: 'Orange accent' });
+    expect(orange).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: 'Blue accent' })).toHaveAttribute('aria-checked', 'false');
+
+    await fireEvent.click(screen.getByRole('radio', { name: 'Blue accent' }));
+    expect(appearanceStore.setAccentColor).toHaveBeenCalledWith('blue');
   });
 
   it('updates the URL without adding history entries when switching destinations', async () => {

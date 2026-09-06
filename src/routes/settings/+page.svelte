@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getContext, onMount } from 'svelte';
   import { LoaderCircle, RefreshCw } from '@lucide/svelte';
+  import AppearanceSettingsPanel from '$lib/components/settings/AppearanceSettingsPanel.svelte';
   import GeneralSettingsPanel from '$lib/components/settings/GeneralSettingsPanel.svelte';
   import KeybindingsSettingsPanel from '$lib/components/settings/KeybindingsSettingsPanel.svelte';
   import ProfilesSettingsPanel from '$lib/components/settings/ProfilesSettingsPanel.svelte';
@@ -95,7 +96,7 @@
 
   onMount(() => {
     const section = new URL(window.location.href).searchParams.get('section');
-    if (section === 'general' || section === 'keybindings' || section === 'profiles' || section === 'providers') selectedSection = section;
+    if (section === 'appearance' || section === 'general' || section === 'keybindings' || section === 'profiles' || section === 'providers') selectedSection = section;
   });
 
   function selectSection(section: SettingsSectionId) {
@@ -561,7 +562,9 @@
     <SettingsSubnav selected={selectedSection} onSelect={selectSection} />
 
     <div class="settings-content">
-      {#if selectedSection === 'general'}
+      {#if selectedSection === 'appearance'}
+        <AppearanceSettingsPanel />
+      {:else if selectedSection === 'general'}
         <GeneralSettingsPanel />
       {:else if selectedSection === 'keybindings'}
         <KeybindingsSettingsPanel />

@@ -7188,6 +7188,40 @@ summary:focus-visible {
   font-size: 0.72rem;
 }
 
+.accent-swatch-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.accent-swatch {
+  width: 1.45rem;
+  height: 1.45rem;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.16);
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.accent-swatch:hover {
+  transform: scale(1.08);
+}
+
+.accent-swatch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.accent-swatch-selected {
+  box-shadow:
+    0 0 0 2px var(--bg-card),
+    0 0 0 4px var(--swatch);
+}
+
 .session-workspace-signal-waiting {
   color: var(--status-warn);
 }
