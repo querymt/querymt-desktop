@@ -176,6 +176,17 @@ describe('Settings controls', () => {
     expect(screen.getByRole('button', { name: /Profiles/ })).toHaveAttribute('aria-current', 'page');
   });
 
+  it('renders the read-only keybindings list from the URL', async () => {
+    window.history.replaceState({}, '', '/settings?section=keybindings');
+    render(SettingsPage);
+
+    expect(await screen.findByRole('heading', { name: 'Keybindings' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Keybindings/ })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByText('New session')).toBeInTheDocument();
+    expect(screen.getByText('Cancel the running agent')).toBeInTheDocument();
+    expect(screen.getAllByText('Ctrl/Cmd').length).toBeGreaterThan(0);
+  });
+
   it('updates the URL without adding history entries when switching destinations', async () => {
     render(SettingsPage);
 

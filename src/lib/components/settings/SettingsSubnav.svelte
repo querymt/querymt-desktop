@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { Bot, SlidersHorizontal, WandSparkles } from '@lucide/svelte';
+  import { Bot, Keyboard, SlidersHorizontal, WandSparkles } from '@lucide/svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
 
-  export type SettingsSectionId = 'general' | 'profiles' | 'providers';
+  export type SettingsSectionId = 'general' | 'keybindings' | 'profiles' | 'providers';
 
   let {
     selected,
@@ -14,6 +14,7 @@
 
   const sections = [
     { id: 'general', label: 'General', description: 'Appearance and chat behavior', icon: SlidersHorizontal },
+    { id: 'keybindings', label: 'Keybindings', description: 'Keyboard shortcuts', icon: Keyboard },
     { id: 'profiles', label: 'Profiles', description: 'Ready-made agent configurations', icon: WandSparkles },
     { id: 'providers', label: 'Providers', description: 'Authentication and maintenance', icon: Bot }
   ] satisfies Array<{ id: SettingsSectionId; label: string; description: string; icon: typeof SlidersHorizontal }>;

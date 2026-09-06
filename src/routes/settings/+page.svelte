@@ -2,6 +2,7 @@
   import { getContext, onMount } from 'svelte';
   import { LoaderCircle, RefreshCw } from '@lucide/svelte';
   import GeneralSettingsPanel from '$lib/components/settings/GeneralSettingsPanel.svelte';
+  import KeybindingsSettingsPanel from '$lib/components/settings/KeybindingsSettingsPanel.svelte';
   import ProfilesSettingsPanel from '$lib/components/settings/ProfilesSettingsPanel.svelte';
   import ProviderApiKeyDialog from '$lib/components/settings/ProviderApiKeyDialog.svelte';
   import ProviderClearKeyDialog from '$lib/components/settings/ProviderClearKeyDialog.svelte';
@@ -94,7 +95,7 @@
 
   onMount(() => {
     const section = new URL(window.location.href).searchParams.get('section');
-    if (section === 'general' || section === 'profiles' || section === 'providers') selectedSection = section;
+    if (section === 'general' || section === 'keybindings' || section === 'profiles' || section === 'providers') selectedSection = section;
   });
 
   function selectSection(section: SettingsSectionId) {
@@ -562,6 +563,8 @@
     <div class="settings-content">
       {#if selectedSection === 'general'}
         <GeneralSettingsPanel />
+      {:else if selectedSection === 'keybindings'}
+        <KeybindingsSettingsPanel />
       {:else if selectedSection === 'profiles'}
         <ProfilesSettingsPanel />
       {:else}
