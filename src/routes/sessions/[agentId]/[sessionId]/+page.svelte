@@ -453,9 +453,30 @@
   }
 
   async function sendPrompt() {
-    setScrollMode('following');
+    // Free scroll stays untouched when sending; only a following session pins
+    // to the newest message and keeps following the reply.
+    if (scrollMode !== 'following') {
+      await agentsStore.sendPromptToActiveSession();
+      return;
+    }
+
     await tick();
+    // Sending collapses a multi-line composer and appends the optimistic
+    // prompt in the same layout pass. When the net height shrinks, the browser
+    // clamps scrollTop downward and the resulting 'up' scroll event would
+    // flip the session out of follow mode right as generation starts, leaving
+    // the new message behind the composer. Treat the transition as
+    // programmatic so clamp events cannot flip the mode; user wheel, pointer,
+    // and touch input still clear the flag immediately, and the flag
+    // self-releases once the view is re-anchored at the bottom.
+    programmaticScroll = true;
     scrollToEnd('instant');
+    void tick().then(() => {
+      if (scrollMode === 'following') scheduleFollowScroll();
+      requestAnimationFrame(() => {
+        programmaticScroll = false;
+      });
+    });
     await agentsStore.sendPromptToActiveSession();
   }
 </script>
