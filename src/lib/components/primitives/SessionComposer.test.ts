@@ -158,6 +158,21 @@ describe('SessionComposer', () => {
     await fireEvent.mouseDown(screen.getByRole('button', { name: 'Reasoning effort' }));
     expect(details).toHaveAttribute('open');
 
+    // Select menus render through a portal outside the <details>; presses in
+    // them must not collapse the popover.
+    const portalMenu = document.createElement('div');
+    portalMenu.className = 'app-select-content';
+    const menuOption = document.createElement('div');
+    menuOption.setAttribute('role', 'option');
+    portalMenu.appendChild(menuOption);
+    document.body.appendChild(portalMenu);
+    try {
+      await fireEvent.mouseDown(menuOption);
+      expect(details).toHaveAttribute('open');
+    } finally {
+      portalMenu.remove();
+    }
+
     await fireEvent.mouseDown(document.body);
     expect(details).not.toHaveAttribute('open');
 
