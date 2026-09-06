@@ -5539,6 +5539,12 @@ summary:focus-visible {
   min-height: 1.9rem;
 }
 
+/* Response actions anchored to a trailing work-group render outside the
+   assistant shell and stay visible like user-message rows. */
+.session-turn-content > .session-assistant-message-actions {
+  min-height: 1.9rem;
+}
+
 .session-turn-duration {
   margin-inline-start: auto;
   font-size: 0.72rem;

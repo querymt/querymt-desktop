@@ -441,4 +441,22 @@ describe('ActiveSessionView turn action settle hold', () => {
     expect(within(finalSection as HTMLElement).getByText(/Workspace contents/)).toBeInTheDocument();
     expect(within(finalSection as HTMLElement).queryByText(/run ls now/)).not.toBeInTheDocument();
   });
+
+  it('renders the response actions row for turns that end with tool work', async () => {
+    const session = settledConversationSession({
+      transcript: [
+        { id: 'u1', kind: 'user_message_chunk', text: 'run ls', messageId: 'user-message-1', eventIndex: 0 },
+        { id: 'r1', kind: 'agent_thought_chunk', text: 'Planning.', messageId: 'assistant-message-0', eventIndex: 1 },
+        { id: 'a1', kind: 'agent_message_chunk', text: "I'll run ls now.", messageId: 'assistant-message-1', eventIndex: 2 }
+      ],
+      toolCalls: [{ id: 't1', title: 'ls', status: 'completed', kind: 'execute', eventIndex: 3 }]
+    });
+    await renderSettledSession(session);
+    await vi.advanceTimersByTimeAsync(1200);
+    await tick();
+
+    expect(screen.getAllByRole('button', { name: 'Copy response' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Fork into new session' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo to this prompt' })).toBeInTheDocument();
+  });
 });

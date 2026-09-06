@@ -166,9 +166,55 @@
         onDismiss={onDismissPromptFailure}
       />
     {/if}
+    {#snippet responseActions()}
+      <div class="session-message-actions session-assistant-message-actions" aria-label="Message actions">
+        {#if turnResponseMarkdown}<button
+          class="session-message-action-btn"
+          type="button"
+          aria-label={copiedResponse ? 'Response copied' : 'Copy response'}
+          title={copiedResponse ? 'Copied' : 'Copy response'}
+          onclick={copyTurnResponse}
+        >
+          {#if copiedResponse}
+            <Check size={15} />
+          {:else}
+            <Copy size={15} />
+          {/if}
+        </button>{/if}
+        {#if forkAvailable}
+          <button
+            class="session-message-action-btn"
+            type="button"
+            aria-label="Fork into new session"
+            title="Fork into a new session from this response"
+            disabled={forkPending}
+            onclick={() => onFork?.()}
+          >
+            {#if forkPending}<LoaderCircle size={15} class="animate-spin" />{:else}<GitFork size={15} />{/if}
+          </button>
+        {/if}
+        {#if undoAvailable && turn.user?.messageId}
+          <button
+            class="session-message-action-btn"
+            type="button"
+            aria-label="Undo to this prompt"
+            title="Undo workspace to this prompt"
+            disabled={undoPending}
+            onclick={() => turn.user?.messageId && onUndo?.(turn.user.messageId)}
+          >
+            <Undo2 size={15} />
+          </button>
+        {/if}
+        {#if turn.durationMs !== undefined}
+          <span class="session-turn-duration">Worked for {formatTurnDuration(turn.durationMs)}</span>
+        {/if}
+      </div>
+    {/snippet}
+
     {#each presentation as item (item.id)}
       {#if item.type === 'work-group'}
         <SessionWorkGroup group={item} {onDisclosureChange} />
+        {#if item.id === lastPresentationId}{@render responseActions()}{/if}
       {:else}
         <section class="session-agent-block session-assistant-message-shell">
           {#each contentSegments(item.blocks, item.text) as segment}
@@ -183,50 +229,7 @@
             {/if}
           {/each}
 
-          {#if item.id === lastPresentationId}
-            <div class="session-message-actions session-assistant-message-actions" aria-label="Message actions">
-              {#if turnResponseMarkdown}<button
-                class="session-message-action-btn"
-                type="button"
-                aria-label={copiedResponse ? 'Response copied' : 'Copy response'}
-                title={copiedResponse ? 'Copied' : 'Copy response'}
-                onclick={copyTurnResponse}
-              >
-                {#if copiedResponse}
-                  <Check size={15} />
-                {:else}
-                  <Copy size={15} />
-                {/if}
-              </button>{/if}
-              {#if forkAvailable}
-                <button
-                  class="session-message-action-btn"
-                  type="button"
-                  aria-label="Fork into new session"
-                  title="Fork into a new session from this response"
-                  disabled={forkPending}
-                  onclick={() => onFork?.()}
-                >
-                  {#if forkPending}<LoaderCircle size={15} class="animate-spin" />{:else}<GitFork size={15} />{/if}
-                </button>
-              {/if}
-              {#if undoAvailable && turn.user?.messageId}
-                <button
-                  class="session-message-action-btn"
-                  type="button"
-                  aria-label="Undo to this prompt"
-                  title="Undo workspace to this prompt"
-                  disabled={undoPending}
-                  onclick={() => turn.user?.messageId && onUndo?.(turn.user.messageId)}
-                >
-                  <Undo2 size={15} />
-                </button>
-              {/if}
-              {#if turn.durationMs !== undefined}
-                <span class="session-turn-duration">Worked for {formatTurnDuration(turn.durationMs)}</span>
-              {/if}
-            </div>
-          {/if}
+          {#if item.id === lastPresentationId}{@render responseActions()}{/if}
         </section>
       {/if}
     {/each}
