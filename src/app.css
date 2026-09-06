@@ -5507,13 +5507,23 @@ summary:focus-visible {
 
 .session-assistant-message-shell .session-assistant-message-actions {
   min-height: 1.9rem;
+}
+
+.session-turn-duration {
+  margin-inline-start: auto;
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.session-assistant-message-shell .session-assistant-message-actions .session-message-action-btn {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.14s ease;
 }
 
-.session-assistant-message-shell:hover .session-assistant-message-actions,
-.session-assistant-message-shell:focus-within .session-assistant-message-actions {
+.session-assistant-message-shell:hover .session-assistant-message-actions .session-message-action-btn,
+.session-assistant-message-shell:focus-within .session-assistant-message-actions .session-message-action-btn {
   opacity: 1;
   pointer-events: auto;
 }
@@ -8515,7 +8525,7 @@ summary:focus-visible {
   .session-work-summary-chevron,
   .session-reasoning-disclosure,
   .session-tool-disclosure,
-  .session-assistant-message-actions {
+  .session-assistant-message-actions .session-message-action-btn {
     transition: none;
   }
 

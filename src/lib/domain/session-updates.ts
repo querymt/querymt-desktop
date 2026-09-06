@@ -104,7 +104,8 @@ export function applySessionNotification(
         blocks: normalizeContentBlocks([update.content]),
         messageId: update.messageId ?? null,
         clientPromptId: readClientPromptId(update) ?? readClientPromptId(notification),
-        eventIndex: conversationEventIndex
+        eventIndex: conversationEventIndex,
+        timestampMs: Date.now()
       });
       next.runState = 'thinking';
       next.activityLabel = 'Waiting for the agent to respond…';
@@ -116,7 +117,8 @@ export function applySessionNotification(
         text: getTextContent(update.content),
         blocks: normalizeContentBlocks([update.content]),
         messageId: update.messageId ?? null,
-        eventIndex: conversationEventIndex
+        eventIndex: conversationEventIndex,
+        timestampMs: Date.now()
       });
       next.runState = 'streaming';
       next.activityLabel = 'Agent is replying…';
@@ -129,7 +131,8 @@ export function applySessionNotification(
         text: getTextContent(update.content),
         blocks: normalizeContentBlocks([update.content]),
         messageId: update.messageId ?? null,
-        eventIndex: conversationEventIndex
+        eventIndex: conversationEventIndex,
+        timestampMs: Date.now()
       });
       next.runState = 'thinking';
       next.activityLabel = 'Agent is thinking…';
@@ -288,6 +291,7 @@ export function groupTranscriptItems(items: SessionTranscriptItem[]): SessionTra
       previous.text = `${previous.text}${item.text}`;
       previous.blocks = [...(previous.blocks ?? []), ...getTranscriptBlocks(item)];
       previous.eventIds = [...previous.eventIds, item.id];
+      if (item.timestampMs !== undefined) previous.endedAtMs = item.timestampMs;
       continue;
     }
 
@@ -299,7 +303,9 @@ export function groupTranscriptItems(items: SessionTranscriptItem[]): SessionTra
         messageId: item.messageId,
         clientPromptId: item.clientPromptId,
         eventIds: [item.id],
-        eventIndex: item.eventIndex
+        eventIndex: item.eventIndex,
+        startedAtMs: item.timestampMs,
+        endedAtMs: item.timestampMs
       });
 
   }

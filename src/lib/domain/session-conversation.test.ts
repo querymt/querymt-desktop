@@ -1,11 +1,75 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionConversation } from './session-conversation';
+import { buildSessionConversation, formatTurnDuration } from './session-conversation';
 import { createEmptyActiveSession } from './session-updates';
 import type { ActiveSessionViewModel } from '$lib/domain/types';
 
 function baseSession(): ActiveSessionViewModel {
   return { ...createEmptyActiveSession(), sessionId: 's1', runState: 'completed' };
 }
+
+describe('formatTurnDuration', () => {
+  it('formats seconds, minutes, and hours', () => {
+    expect(formatTurnDuration(42000)).toBe('42s');
+    expect(formatTurnDuration(242000)).toBe('4m 2s');
+    expect(formatTurnDuration(3723000)).toBe('1h 2m 3s');
+    expect(formatTurnDuration(3600000)).toBe('1h');
+    expect(formatTurnDuration(300)).toBe('0s');
+  });
+});
+
+describe('turn durations', () => {
+  it('derives duration from transcript timestamps for settled turns', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'go', messageId: 'm-user', eventIndex: 0, timestampMs: 1000 },
+      { id: 'r1', kind: 'agent_thought_chunk', text: 'hmm', messageId: 'm-thought', eventIndex: 1, timestampMs: 2000 },
+      { id: 'r2', kind: 'agent_thought_chunk', text: 'checking', messageId: 'm-thought', eventIndex: 2, timestampMs: 4000 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'done', messageId: 'm-final', eventIndex: 3, timestampMs: 44000 }
+    ];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0].durationMs).toBe(43000);
+  });
+
+  it('omits duration while the turn is still running', () => {
+    const session = baseSession();
+    session.runState = 'streaming';
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'go', messageId: 'm-user', eventIndex: 0, timestampMs: 1000 },
+      { id: 'a1', kind: 'agent_message_chunk', text: '…', messageId: 'chunk-1', eventIndex: 1, timestampMs: 2000 }
+    ];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns[0].durationMs).toBeUndefined();
+  });
+
+  it('omits duration when transcript items carry no timestamps', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'go', messageId: 'm-user', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'done', messageId: 'm-final', eventIndex: 1 }
+    ];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns[0].durationMs).toBeUndefined();
+  });
+
+  it('omits duration for sub-second turns', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'go', messageId: 'm-user', eventIndex: 0, timestampMs: 1000 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'done', messageId: 'm-final', eventIndex: 1, timestampMs: 1500 }
+    ];
+
+    const turns = buildSessionConversation(session);
+
+    expect(turns[0].durationMs).toBeUndefined();
+  });
+});
 
 describe('buildSessionConversation', () => {
   it('interleaves reasoning, tools, and assistant output by event order', () => {

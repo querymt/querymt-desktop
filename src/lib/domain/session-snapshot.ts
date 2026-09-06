@@ -102,7 +102,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
       if (restoredStructuredPrompts.has(messageId)) continue;
 
       const structured = structuredPrompts.get(messageId);
-      if (structured && appendStructuredPrompt(session, structured.record, messageId, eventId, event.seq)) {
+      if (structured && appendStructuredPrompt(session, structured.record, messageId, eventId, event.seq, readTimestampMs(event.timestamp) ?? undefined)) {
         restoredStructuredPrompts.add(messageId);
       } else {
         const legacyBlocks = normalizeContentBlocks(Array.isArray(data.content) ? data.content : []);
@@ -116,7 +116,8 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
           text,
           blocks,
           messageId,
-          eventIndex: event.seq
+          eventIndex: event.seq,
+          timestampMs: readTimestampMs(event.timestamp) ?? undefined
         });
         session.events.push({ id: eventId, kind, text: summarizeContentBlocks(blocks), messageId });
       }
@@ -133,7 +134,8 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
         text,
         blocks: text ? [{ type: 'text', text }] : [],
         messageId,
-        eventIndex: event.seq
+        eventIndex: event.seq,
+        timestampMs: readTimestampMs(event.timestamp) ?? undefined
       });
       session.events.push({ id: eventId, kind, text, messageId });
       continue;
@@ -150,7 +152,8 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
           text,
           blocks: [{ type: 'text', text }],
           messageId,
-          eventIndex: event.seq
+          eventIndex: event.seq,
+          timestampMs: readTimestampMs(event.timestamp) ?? undefined
         });
         session.events.push({ id: eventId, kind: 'agent_thought_chunk', text, messageId });
       }
@@ -164,11 +167,11 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
       const thinking = readString(data.thinking) ?? '';
       if (thinking) {
         const thinkingEventId = `${eventId}-thinking`;
-        replaceThinkingTranscriptForMessage(session, messageId, thinking, thinkingEventId, event.seq);
+        replaceThinkingTranscriptForMessage(session, messageId, thinking, thinkingEventId, event.seq, readTimestampMs(event.timestamp) ?? undefined);
         session.events.push({ id: thinkingEventId, kind: 'agent_thought_chunk', text: thinking, messageId });
       }
       if (text) {
-        replaceTranscriptForMessage(session, messageId, text, eventId, event.seq);
+        replaceTranscriptForMessage(session, messageId, text, eventId, event.seq, readTimestampMs(event.timestamp) ?? undefined);
         session.events.push({ id: eventId, kind, text, messageId });
       }
       continue;
@@ -305,7 +308,8 @@ function appendStructuredPrompt(
   record: StructuredPromptRecord,
   messageId: string,
   eventId: string,
-  eventIndex?: number
+  eventIndex?: number,
+  timestampMs?: number
 ) {
   const blocks = normalizeContentBlocks(
     record.blocks ?? record.content ?? record.contentBlocks ?? record.content_blocks ?? record.prompt ?? []
@@ -319,7 +323,8 @@ function appendStructuredPrompt(
     blocks,
     messageId,
     clientPromptId: readString(record.clientPromptId) ?? readString(record.client_prompt_id) ?? null,
-    eventIndex
+    eventIndex,
+    timestampMs
   });
   session.events.push({
     id: `${eventId}-event`,
@@ -457,7 +462,8 @@ function replaceTranscriptForMessage(
   messageId: string,
   text: string,
   eventId: string,
-  eventIndex?: number
+  eventIndex?: number,
+  timestampMs?: number
 ) {
   const existing = session.transcript.find((item) => item.kind === 'agent_message_chunk' && item.messageId === messageId);
   if (existing) {
@@ -465,6 +471,7 @@ function replaceTranscriptForMessage(
     existing.blocks = text ? [{ type: 'text', text }] : existing.blocks;
     existing.id = eventId;
     existing.eventIndex = eventIndex ?? existing.eventIndex;
+    if (timestampMs !== undefined) existing.timestampMs = timestampMs;
     return;
   }
 
@@ -474,7 +481,8 @@ function replaceTranscriptForMessage(
     text,
     blocks: text ? [{ type: 'text', text }] : [],
     messageId,
-    eventIndex
+    eventIndex,
+    timestampMs
   });
 }
 
@@ -483,7 +491,8 @@ function replaceThinkingTranscriptForMessage(
   messageId: string,
   text: string,
   eventId: string,
-  eventIndex?: number
+  eventIndex?: number,
+  timestampMs?: number
 ) {
   const existing = session.transcript.find((item) => item.kind === 'agent_thought_chunk' && item.messageId === messageId);
   if (existing) {
@@ -491,6 +500,7 @@ function replaceThinkingTranscriptForMessage(
     existing.blocks = text ? [{ type: 'text', text }] : existing.blocks;
     existing.id = eventId;
     existing.eventIndex = eventIndex ?? existing.eventIndex;
+    if (timestampMs !== undefined) existing.timestampMs = timestampMs;
     return;
   }
 
@@ -501,7 +511,8 @@ function replaceThinkingTranscriptForMessage(
     text,
     blocks: [{ type: 'text' as const, text }],
     messageId,
-    eventIndex
+    eventIndex,
+    timestampMs
   };
 
   if (assistantIndex >= 0) {
