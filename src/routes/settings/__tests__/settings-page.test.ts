@@ -202,6 +202,10 @@ describe('Settings controls', () => {
     expect(await screen.findByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Appearance Theme and accent color' })).toHaveAttribute('aria-current', 'page');
 
+    expect(screen.getByRole('radio', { name: 'System application theme' })).toHaveAttribute('aria-checked', 'true');
+    await fireEvent.click(screen.getByRole('radio', { name: 'Light application theme' }));
+    expect(appearanceStore.setThemeMode).toHaveBeenCalledWith('light');
+
     const orange = screen.getByRole('radio', { name: 'Orange accent' });
     expect(orange).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('radio', { name: 'Blue accent' })).toHaveAttribute('aria-checked', 'false');
