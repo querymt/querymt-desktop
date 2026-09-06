@@ -104,4 +104,14 @@ describe('splitStreamingMarkdown', () => {
     expect(parts.tailText).toContain('~~~ts');
     expect(parts.tailText).toContain('still streaming');
   });
+
+  it('does not close a fence when a matching marker has trailing text', () => {
+    const parts = splitStreamingMarkdown('See this:\n\n````md\n````md\ninner\n\nafter inner');
+
+    expect(parts.frozenHtml).toContain('See this:');
+    expect(parts.frozenHtml).not.toContain('code-block-shell');
+    expect(parts.frozenHtml).not.toContain('after inner');
+    expect(parts.tailText).toContain('````md');
+    expect(parts.tailText).toContain('after inner');
+  });
 });

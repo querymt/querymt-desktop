@@ -516,4 +516,36 @@ describe('buildSessionConversation', () => {
       kind: 'read'
     });
   });
+
+  it('rebuilds without previousTurns after an in-place last-tool metadata change', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'inspect', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Done', messageId: 'a1', eventIndex: 2 }
+    ];
+    session.toolCalls = [
+      {
+        id: 't1',
+        title: 'read_tool',
+        status: 'completed',
+        kind: 'read_tool',
+        eventIndex: 1,
+        arguments: '{}',
+        messageId: null,
+        isError: false
+      }
+    ];
+    const first = buildSessionConversation(session);
+    session.toolCalls[0].arguments = '{"path":"src/app.ts"}';
+    session.toolCalls[0].messageId = 'tool-msg';
+    session.toolCalls[0].isError = true;
+    const second = buildSessionConversation(session);
+
+    expect(second).not.toBe(first);
+    expect(second[0].content.find((item) => item.type === 'tool')?.tool).toMatchObject({
+      arguments: '{"path":"src/app.ts"}',
+      messageId: 'tool-msg',
+      isError: true
+    });
+  });
 });

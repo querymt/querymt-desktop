@@ -106,11 +106,11 @@ export function renderMarkdownToHtml(markdown: string): string {
   return html;
 }
 
-function parseFenceMarker(line: string): { char: '`' | '~'; length: number } | null {
-  const match = /^( {0,3})(`{3,}|~{3,})/.exec(line);
+function parseFenceMarker(line: string): { char: '`' | '~'; length: number; info: string } | null {
+  const match = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
   if (!match) return null;
   const marker = match[2];
-  return { char: marker[0] as '`' | '~', length: marker.length };
+  return { char: marker[0] as '`' | '~', length: marker.length, info: match[3] };
 }
 
 function findUnclosedFenceIndex(source: string): number {
@@ -126,7 +126,11 @@ function findUnclosedFenceIndex(source: string): number {
       if (!open) {
         open = marker;
         fenceStart = offset;
-      } else if (marker.char === open.char && marker.length >= open.length) {
+      } else if (
+        marker.char === open.char &&
+        marker.length >= open.length &&
+        marker.info.trim() === ''
+      ) {
         open = null;
         fenceStart = -1;
       }

@@ -109,12 +109,19 @@ function conversationRevision(session: ActiveSessionViewModel): string {
     lastTranscript?.id ?? '',
     lastTranscript?.kind ?? '',
     lastTranscript?.text ?? '',
+    lastTranscript?.messageId ?? '',
+    JSON.stringify(lastTranscript?.blocks ?? []),
+    String(lastTranscript?.eventIndex ?? ''),
     String(session.toolCalls.length),
     lastTool?.id ?? '',
     lastTool?.status ?? '',
     lastTool?.title ?? '',
     lastTool?.kind ?? '',
-    lastTool?.result ?? ''
+    lastTool?.result ?? '',
+    lastTool?.arguments ?? '',
+    lastTool?.messageId ?? '',
+    String(lastTool?.isError ?? ''),
+    String(lastTool?.eventIndex ?? '')
   ].join('\0');
 }
 
