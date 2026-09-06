@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/sve
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActiveSessionViewModel } from '$lib/domain/types';
 import { calculateImageFit } from '$lib/components/session/SessionAttachmentPreview.svelte';
+import { createEmptyActiveSession } from '$lib/domain/session-updates';
 import ActiveSessionView from './ActiveSessionView.svelte';
 
 const appCss = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
@@ -255,5 +256,41 @@ describe('ActiveSessionView image gallery', () => {
     const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -100 });
     dialog.dispatchEvent(wheel);
     expect(wheel.defaultPrevented).toBe(false);
+  });
+});
+
+function longStreamingSession(turnCount: number): ActiveSessionViewModel {
+  const session = createEmptyActiveSession();
+  session.sessionId = 'session-long';
+  session.runState = 'streaming';
+  session.transcript = Array.from({ length: turnCount }, (_, index) => [
+    {
+      id: `user-${index}`,
+      kind: 'user_message_chunk' as const,
+      text: `Prompt ${index}`,
+      messageId: `user-message-${index}`,
+      eventIndex: index * 2
+    },
+    {
+      id: `assistant-${index}`,
+      kind: 'agent_message_chunk' as const,
+      text: index === turnCount - 1 ? `Live answer ${index}` : `Answer ${index}`,
+      messageId: `assistant-message-${index}`,
+      eventIndex: index * 2 + 1
+    }
+  ]).flat();
+  return session;
+}
+
+describe('ActiveSessionView turn window', () => {
+  it('keeps the live turn mounted while replacing offscreen settled turns with spacers', async () => {
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 200 });
+    Object.defineProperty(document.documentElement, 'scrollTop', { configurable: true, value: 0 });
+    render(ActiveSessionView, { session: longStreamingSession(12) });
+
+    expect(document.querySelector('[data-turn-id="turn-user-11"]')).toBeInTheDocument();
+    expect(screen.getByText('Live answer 11')).toBeInTheDocument();
+    expect(screen.queryByText('Prompt 10')).not.toBeInTheDocument();
+    expect(document.querySelector('.session-turn-spacer')).toBeInTheDocument();
   });
 });

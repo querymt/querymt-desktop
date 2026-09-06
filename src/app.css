@@ -4777,6 +4777,15 @@ summary:focus-visible {
   gap: 0.9rem;
 }
 
+.session-conversation-window {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.session-turn-spacer {
+  pointer-events: none;
+}
+
 .session-activity-bar {
   display: inline-flex;
   width: fit-content;

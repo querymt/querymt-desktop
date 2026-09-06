@@ -115,7 +115,7 @@
   }
 </script>
 
-<article class:session-turn-reverted={reverted} class="session-turn">
+<article class:session-turn-reverted={reverted} class="session-turn" data-turn-id={turn.id}>
   {#if turn.user}
     <section class="session-user-message-shell">
       <div class="session-message session-message-user">
