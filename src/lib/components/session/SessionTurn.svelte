@@ -4,7 +4,7 @@
   import SessionAttachmentPreview from '$lib/components/session/SessionAttachmentPreview.svelte';
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
-  import { buildTurnPresentation, formatTurnDuration, type SessionAssistantContent, type SessionConversationTurn } from '$lib/domain/session-conversation';
+  import { buildTurnPresentation, formatTurnDuration, type SessionConversationTurn } from '$lib/domain/session-conversation';
   import { renderMarkdownToHtml, splitStreamingMarkdown } from '$lib/domain/markdown';
   import type { SessionContentBlock, SessionImageGalleryItem } from '$lib/domain/types';
   import type { PromptFailure } from '$lib/domain/prompt-errors';
@@ -45,10 +45,19 @@
     onDisclosureChange?: (anchor: HTMLElement, expanded: boolean) => void;
   } = $props();
 
-  let copiedAssistantId = $state<string | null>(null);
+  let copiedResponse = $state(false);
   let copiedUserId = $state<string | null>(null);
   const presentation = $derived(turn.presentation ?? buildTurnPresentation(turn.content, turn.settled ?? true));
   const lastPresentationId = $derived(presentation.at(-1)?.id ?? null);
+  // Everything the response copy button should capture: the turn's assistant
+  // text as markdown, without reasoning traces or tool activity.
+  const turnResponseMarkdown = $derived(
+    turn.content
+      .filter((item) => item.type === 'assistant')
+      .map((item) => item.text.trim())
+      .filter(Boolean)
+      .join('\n\n')
+  );
 
   function markdownParts(html: string | undefined, text: string, live: boolean, fullText: string) {
     if (live) return splitStreamingMarkdown(text);
@@ -98,19 +107,17 @@
     }
   }
 
-  async function copyAssistantMessage(assistant: SessionAssistantContent) {
-    if (!assistant.text) return;
+  async function copyTurnResponse() {
+    if (!turnResponseMarkdown) return;
 
     try {
-      await navigator.clipboard.writeText(assistant.text);
-      copiedAssistantId = assistant.id;
+      await navigator.clipboard.writeText(turnResponseMarkdown);
+      copiedResponse = true;
       window.setTimeout(() => {
-        if (copiedAssistantId === assistant.id) {
-          copiedAssistantId = null;
-        }
+        copiedResponse = false;
       }, 1200);
     } catch (error) {
-      console.error('Failed to copy assistant message', error);
+      console.error('Failed to copy response', error);
     }
   }
 </script>
@@ -176,48 +183,50 @@
             {/if}
           {/each}
 
-          <div class="session-message-actions session-assistant-message-actions" aria-label="Message actions">
-            {#if item.text}<button
-              class="session-message-action-btn"
-              type="button"
-              aria-label={copiedAssistantId === item.id ? 'Response copied' : 'Copy response'}
-              title={copiedAssistantId === item.id ? 'Copied' : 'Copy response'}
-              onclick={() => copyAssistantMessage(item)}
-            >
-              {#if copiedAssistantId === item.id}
-                <Check size={15} />
-              {:else}
-                <Copy size={15} />
+          {#if item.id === lastPresentationId}
+            <div class="session-message-actions session-assistant-message-actions" aria-label="Message actions">
+              {#if turnResponseMarkdown}<button
+                class="session-message-action-btn"
+                type="button"
+                aria-label={copiedResponse ? 'Response copied' : 'Copy response'}
+                title={copiedResponse ? 'Copied' : 'Copy response'}
+                onclick={copyTurnResponse}
+              >
+                {#if copiedResponse}
+                  <Check size={15} />
+                {:else}
+                  <Copy size={15} />
+                {/if}
+              </button>{/if}
+              {#if forkAvailable}
+                <button
+                  class="session-message-action-btn"
+                  type="button"
+                  aria-label="Fork into new session"
+                  title="Fork into a new session from this response"
+                  disabled={forkPending}
+                  onclick={() => onFork?.()}
+                >
+                  {#if forkPending}<LoaderCircle size={15} class="animate-spin" />{:else}<GitFork size={15} />{/if}
+                </button>
               {/if}
-            </button>{/if}
-            {#if forkAvailable}
-              <button
-                class="session-message-action-btn"
-                type="button"
-                aria-label="Fork into new session"
-                title="Fork into a new session from this response"
-                disabled={forkPending}
-                onclick={() => onFork?.()}
-              >
-                {#if forkPending}<LoaderCircle size={15} class="animate-spin" />{:else}<GitFork size={15} />{/if}
-              </button>
-            {/if}
-            {#if undoAvailable && turn.user?.messageId}
-              <button
-                class="session-message-action-btn"
-                type="button"
-                aria-label="Undo to this prompt"
-                title="Undo workspace to this prompt"
-                disabled={undoPending}
-                onclick={() => turn.user?.messageId && onUndo?.(turn.user.messageId)}
-              >
-                <Undo2 size={15} />
-              </button>
-            {/if}
-            {#if item.id === lastPresentationId && turn.durationMs !== undefined}
-              <span class="session-turn-duration">Worked for {formatTurnDuration(turn.durationMs)}</span>
-            {/if}
-          </div>
+              {#if undoAvailable && turn.user?.messageId}
+                <button
+                  class="session-message-action-btn"
+                  type="button"
+                  aria-label="Undo to this prompt"
+                  title="Undo workspace to this prompt"
+                  disabled={undoPending}
+                  onclick={() => turn.user?.messageId && onUndo?.(turn.user.messageId)}
+                >
+                  <Undo2 size={15} />
+                </button>
+              {/if}
+              {#if turn.durationMs !== undefined}
+                <span class="session-turn-duration">Worked for {formatTurnDuration(turn.durationMs)}</span>
+              {/if}
+            </div>
+          {/if}
         </section>
       {/if}
     {/each}

@@ -168,6 +168,52 @@
       session.undo.pendingOperation !== null ||
       forkPending
   );
+
+  // Fork/undo unlock only after the session has stayed quiet for a short
+  // settle window. Agents that resolve the prompt request before their turn
+  // finishes emitting updates flip runState busy → completed while content is
+  // still arriving, and the settled-turn action row would flash back in
+  // between updates. Any new session activity restarts the hold.
+  const SESSION_ACTION_SETTLE_MS = 1200;
+
+  let turnActionsSettled = $state(false);
+  let turnActionsSettleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const sessionActivitySignature = $derived.by(() => {
+    const lastTranscript = session.transcript.at(-1);
+    const lastTool = session.toolCalls.at(-1);
+    return [
+      session.runState,
+      session.transcript.length,
+      lastTranscript?.id ?? '',
+      lastTranscript?.text.length ?? 0,
+      session.toolCalls.length,
+      lastTool?.id ?? '',
+      lastTool?.status ?? ''
+    ].join('|');
+  });
+
+  $effect(() => {
+    void sessionActivitySignature;
+    if (turnActionsSettleTimer !== null) {
+      clearTimeout(turnActionsSettleTimer);
+      turnActionsSettleTimer = null;
+    }
+    if (busy) {
+      turnActionsSettled = false;
+      return;
+    }
+    turnActionsSettleTimer = setTimeout(() => {
+      turnActionsSettleTimer = null;
+      turnActionsSettled = true;
+    }, SESSION_ACTION_SETTLE_MS);
+    return () => {
+      if (turnActionsSettleTimer !== null) {
+        clearTimeout(turnActionsSettleTimer);
+        turnActionsSettleTimer = null;
+      }
+    };
+  });
 </script>
 
 <div class="session-detail-shell">
@@ -196,12 +242,13 @@
               retryPending={promptRetryPending}
               {onRetryPrompt}
               {onDismissPromptFailure}
-              forkAvailable={Boolean(forkSupported && !busy && !reverted && forkTarget)}
+              forkAvailable={Boolean(forkSupported && !busy && turnActionsSettled && !reverted && forkTarget)}
               {forkPending}
               onFork={() => forkTarget && onFork?.(forkTarget.messageId)}
               undoAvailable={Boolean(
                 undoSupported &&
                   !busy &&
+                  turnActionsSettled &&
                   !session.undo.pendingOperation &&
                   turn.user?.messageId &&
                   canUndoToMessage(session, turn.user.messageId)
