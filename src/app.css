@@ -5747,6 +5747,8 @@ summary:focus-visible {
   margin: 0.25rem 0 0.6rem 1.75rem;
   border-left: 1px solid color-mix(in srgb, var(--border), transparent 20%);
   padding: 0.2rem 0 0.1rem 0.85rem;
+  /* Expanded reasoning stays clearly secondary to the actual response text. */
+  opacity: 0.72;
 }
 
 .session-reasoning-entry {
