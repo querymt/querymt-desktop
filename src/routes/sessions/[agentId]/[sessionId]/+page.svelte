@@ -596,14 +596,14 @@
         activeSessionId={agentsStore.activeSessionId}
         promptFocusToken={agentsStore.promptFocusToken}
         modelOptions={agentsStore.modelsByAgent[agentId] ?? []}
-        selectedModelId={agentsStore.composerModelId}
+        selectedModelId={agentsStore.getSessionModelId(agentId, sessionId)}
         modelInfo={agentsStore.modelInfoByAgent[agentId] ?? {}}
         recentModels={agentsStore.getRecentModels(agentId)}
-        modelLoading={!!agentsStore.modelLoadingByAgent[agentId]}
+        modelLoading={agentsStore.sessionHistoryLoading || !!agentsStore.modelLoadingByAgent[agentId]}
         agentLabel={showAgentBadges ? selectedSession.agentName : null}
         attachments={agentsStore.promptAttachments}
         onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
-        onModelChange={(value) => agentsStore.setComposerModel(value)}
+        onModelChange={(value) => agentsStore.setSessionModel(agentId, sessionId, value)}
         onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}
         sessionConfigOptions={agentsStore.activeSession.configOptions}
         sessionConfigPending={agentsStore.sessionConfigPending}

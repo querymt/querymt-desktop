@@ -80,8 +80,6 @@ import {
   getConfigOptionChoices,
   getCurrentModeId,
   getCurrentModelId,
-  getCurrentProfileId,
-  getCurrentReasoningId,
   getModelSelectionKey,
   getProfileChoices,
   setModelConfigOptionRequest,
@@ -178,6 +176,10 @@ export class AgentsStore {
   private agentLogSubscriptionPending = false;
   private modelInfoCache = new Map<string, ModelInfo | null>();
   private modelInfoRequests = new Map<string, Promise<void>>();
+  private sessionConfigRequests = new Map<string, Promise<SessionConfigOption[]>>();
+  private sessionConfigOptions = new Map<string, SessionConfigOption[]>();
+  private sessionModelIds = $state<Record<string, string>>({});
+  private pendingSessionConfigs = $state<Record<string, Record<string, number>>>({});
   private activeLoadMeasurement: SessionLoadMeasurement | null = null;
   private applyingDrainedUpdates = false;
   private pendingSessionNotifications: Array<{
@@ -238,12 +240,17 @@ export class AgentsStore {
   lastPromptResponse = $state<PromptResponse | null>(null);
   composerCwd = $state('');
   composerPrompt = $state('');
-  composerModelId = $state<string>('');
+  launchModelId = $state<string>('');
   composerProfileId = $state<string>('default');
   composerModeId = $state<string>('build');
   composerReasoningId = $state<string>('auto');
   composerTargetId = $state<string>('local');
-  sessionConfigPending = $state<Record<string, boolean>>({});
+  get sessionConfigPending(): Record<string, boolean> {
+    const key = this.activeAgentId && this.activeSessionId
+      ? buildSessionKey(this.activeAgentId, this.activeSessionId)
+      : '';
+    return Object.fromEntries(Object.entries(this.pendingSessionConfigs[key] ?? {}).map(([id, count]) => [id, count > 0]));
+  }
   promptAttachments = $state<PromptAttachment[]>([]);
   managedProfileOptions = $state<ComposerOption[]>([]);
   promptFocusToken = $state(0);
@@ -499,12 +506,23 @@ export class AgentsStore {
     return targets;
   }
 
-    async setComposerModel(modelId: string) {
-    this.composerModelId = modelId;
-    this.promptFailure = null;
+  setLaunchModel(modelId: string) {
+    this.launchModelId = modelId;
+  }
 
-    if (this.activeAgentId && this.activeSessionId) {
-      await this.applySelectedModelToSession(this.activeAgentId, this.activeSessionId, modelId);
+  getSessionModelId(agentId: string, sessionId: string): string {
+    return this.sessionModelIds[buildSessionKey(agentId, sessionId)] ?? '';
+  }
+
+  async setSessionModel(agentId: string, sessionId: string, modelId: string) {
+    if (this.isSelectedSession(agentId, sessionId)) this.error = null;
+    try {
+      await this.applySelectedModelToSession(agentId, sessionId, modelId);
+      if (this.isSelectedSession(agentId, sessionId)) this.promptFailure = null;
+    } catch (error) {
+      if (this.isSelectedSession(agentId, sessionId)) {
+        this.error = error instanceof Error ? error.message : 'Failed to change session model.';
+      }
     }
   }
 
@@ -860,7 +878,7 @@ export class AgentsStore {
           ...this.modelsByAgent,
           [agentId]: models
         };
-        this.selectComposerModelForAgent(agentId, models);
+        this.selectLaunchModelForAgent(agentId, models);
       }
       record.connectionState = 'initialized';
       this.connectionStates = {
@@ -1090,7 +1108,7 @@ export class AgentsStore {
     }
   }
 
-  async createBackgroundSession(agentId: string, cwd: string) {
+  async createBackgroundSession(agentId: string, cwd: string, profileId = this.composerProfileId) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     const normalizedCwd = cwd.trim();
     if (!config || !normalizedCwd) {
@@ -1109,9 +1127,11 @@ export class AgentsStore {
 
     const response = await record.client.createSession(
       normalizedCwd,
-      this.composerProfileId === 'default' ? null : this.composerProfileId
+      profileId === 'default' ? null : profileId
     );
     this.lastCreatedSession = response;
+    this.sessionConfigOptions.set(buildSessionKey(agentId, response.sessionId), response.configOptions ?? []);
+    this.restoreSessionModel(agentId, response.sessionId, response.configOptions ?? [], response);
     this.rememberRecentWorkspace(normalizedCwd);
     await this.refreshSessionsForAgent(agentId);
     return response;
@@ -1126,21 +1146,27 @@ export class AgentsStore {
       return null;
     }
 
+    const launch = {
+      targetId: this.composerTargetId,
+      profileId: this.composerProfileId,
+      modeId: this.composerModeId,
+      reasoningId: this.composerReasoningId,
+      modelId: this.launchModelId
+    };
     try {
-      if (this.composerTargetId !== 'local') {
-        const sessionId = await this.createAttachedRemoteSession(agentId, this.composerTargetId, cwd);
-        await this.applyComposerLaunchConfig(agentId, sessionId);
-        await this.applySelectedModelToSession(agentId, sessionId, this.composerModelId || getDefaultModelId(this.modelsByAgent[agentId] ?? []));
+      if (launch.targetId !== 'local') {
+        const sessionId = await this.createAttachedRemoteSession(agentId, launch.targetId, cwd);
+        await this.applyComposerLaunchConfig(agentId, sessionId, launch);
+        await this.applySelectedModelToSession(agentId, sessionId, launch.modelId);
         return sessionId;
       }
 
-      const response = await this.createBackgroundSession(agentId, cwd);
+      const response = await this.createBackgroundSession(agentId, cwd, launch.profileId);
       const sessionId = response.sessionId;
       this.resetActiveSession(agentId, sessionId);
       this.activeSession.configOptions = response.configOptions ?? [];
-      this.composerProfileId = getCurrentProfileId(this.activeSession.configOptions) ?? this.composerProfileId;
-      await this.applyComposerLaunchConfig(agentId, sessionId);
-      await this.applySelectedModelToSession(agentId, sessionId, this.composerModelId || getDefaultModelId(this.modelsByAgent[agentId] ?? []));
+      await this.applyComposerLaunchConfig(agentId, sessionId, launch);
+      await this.applySelectedModelToSession(agentId, sessionId, launch.modelId);
       await this.drainQueuedSessionUpdates(agentId, sessionId);
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
       return sessionId;
@@ -1152,7 +1178,7 @@ export class AgentsStore {
 
     async startSessionWithPrompt(agentId: string): Promise<string | null> {
     const sessionId = await this.createSession(agentId);
-    if (sessionId && (this.composerPrompt.trim() || this.promptAttachments.length > 0)) {
+    if (sessionId && this.isSelectedSession(agentId, sessionId) && (this.composerPrompt.trim() || this.promptAttachments.length > 0)) {
       void this.sendPromptToActiveSession();
     }
     return sessionId;
@@ -1417,27 +1443,8 @@ export class AgentsStore {
       });
 
       this.activeSession.configOptions = loadedSession.configOptions ?? [];
-      this.composerProfileId = getCurrentProfileId(this.activeSession.configOptions) ?? this.composerProfileId;
-      const configuredModelId = getCurrentModelId(this.activeSession.configOptions);
-      const configuredModel = findModelBySelectionKey(this.modelsByAgent[agentId] ?? [], configuredModelId);
-      const snapshotProviderChange = getSnapshotProviderChange(loadedSession);
-      const snapshotModel = snapshotProviderChange
-        ? findModelByIdentity(this.modelsByAgent[agentId] ?? [], snapshotProviderChange)
-        : undefined;
-      const restoredModel =
-        configuredModel && snapshotModel?.id === configuredModel.id
-          ? snapshotModel
-          : configuredModel ?? snapshotModel;
-      if (restoredModel) {
-        this.composerModelId = getModelSelectionKey(restoredModel);
-      } else if (configuredModelId) {
-        this.composerModelId = configuredModelId;
-      } else if (snapshotProviderChange) {
-        this.composerModelId = getModelSelectionKey({
-          id: `${snapshotProviderChange.provider}/${snapshotProviderChange.model}`,
-          node_id: snapshotProviderChange.providerNodeId
-        });
-      }
+      this.sessionConfigOptions.set(sessionKey, this.activeSession.configOptions);
+      this.restoreSessionModel(agentId, sessionId, this.activeSession.configOptions, loadedSession);
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });
       checkpoint('frontend.normalize');
       this.activeSession.undo.pendingOperation = pendingOperation;
@@ -2089,7 +2096,10 @@ export class AgentsStore {
     });
     snapshot.configOptions = configOptions;
     this.activeSession = normalizeHistoricalSession(snapshot, { loadCompleted: true });
-    this.composerProfileId = getCurrentProfileId(configOptions) ?? this.composerProfileId;
+    this.sessionConfigOptions.set(buildSessionKey(agentId, sessionId), configOptions);
+    this.restoreSessionModel(agentId, sessionId, configOptions, {
+      _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
+    });
 
     const summary: DesktopSessionSummary = {
       agentId,
@@ -2186,7 +2196,7 @@ export class AgentsStore {
         [agentId]: models
       };
       await this.hydrateModelInfo(agentId, models, options.refreshModelInfo);
-      this.selectComposerModelForAgent(agentId, models);
+      this.selectLaunchModelForAgent(agentId, models);
       return models.length;
     } catch (error) {
       this.error = error instanceof Error ? error.message : errorMessage;
@@ -2214,21 +2224,17 @@ export class AgentsStore {
       });
   }
 
-  private selectComposerModelForAgent(agentId: string, models: ModelEntry[]) {
+  private selectLaunchModelForAgent(agentId: string, models: ModelEntry[]) {
     if (models.length === 0) {
       return;
     }
 
-    const currentModel = findModelBySelectionKey(models, this.composerModelId);
-    if (currentModel) {
-      this.composerModelId = getModelSelectionKey(currentModel);
-      return;
-    }
+    if (this.launchModelId) return;
 
     const recentModel = (this.recentModelsByAgent[agentId] ?? [])
       .map((selectionKey) => findModelBySelectionKey(models, selectionKey))
       .find((model): model is ModelEntry => Boolean(model));
-    this.composerModelId = recentModel ? getModelSelectionKey(recentModel) : getDefaultModelId(models);
+    this.launchModelId = recentModel ? getModelSelectionKey(recentModel) : getDefaultModelId(models);
   }
 
   private rememberRecentModel(agentId: string, model: ModelEntry) {
@@ -2255,50 +2261,55 @@ export class AgentsStore {
     persistRecentWorkspaces(this.recentWorkspaces);
   }
 
-  private async applyComposerLaunchConfig(agentId: string, sessionId: string) {
-    const preferences = [
-      {
-        option: findModeConfigOption(this.activeSession.configOptions),
-        value: this.composerModeId,
-        sync: (options: SessionConfigOption[]) => {
-          this.composerModeId = getCurrentModeId(options) ?? this.composerModeId;
-        }
-      },
-      {
-        option: findReasoningConfigOption(this.activeSession.configOptions),
-        value: this.composerReasoningId,
-        sync: (options: SessionConfigOption[]) => {
-          this.composerReasoningId = getCurrentReasoningId(options) ?? this.composerReasoningId;
-        }
-      }
-    ];
-
-    for (const preference of preferences) {
-      const option = preference.option;
+  private async applyComposerLaunchConfig(
+    agentId: string,
+    sessionId: string,
+    launch: { modeId: string; reasoningId: string }
+  ) {
+    for (const kind of ['mode', 'reasoning'] as const) {
+      const configOptions = this.getSessionConfigOptions(agentId, sessionId);
+      const option = kind === 'mode' ? findModeConfigOption(configOptions) : findReasoningConfigOption(configOptions);
+      const value = kind === 'mode' ? launch.modeId : launch.reasoningId;
       if (!option) continue;
-
-      const supported = getConfigOptionChoices(option).some((choice) => choice.value === preference.value);
-      if (!supported) {
-        preference.sync(this.activeSession.configOptions);
+      if (!getConfigOptionChoices(option).some((choice) => choice.value === value)) {
+        if (kind === 'mode' && this.composerModeId === value) this.composerModeId = option.currentValue;
+        if (kind === 'reasoning' && this.composerReasoningId === value) this.composerReasoningId = option.currentValue;
         continue;
       }
-      if (option.currentValue !== preference.value) {
-        await this.updateSessionConfigOption(agentId, sessionId, option.id, preference.value);
+      if (option.currentValue !== value) {
+        await this.updateSessionConfigOption(agentId, sessionId, option.id, value);
       }
     }
   }
 
-  async applySelectedModelToSession(agentId: string, sessionId: string, modelId: string | null | undefined) {
-    if (!modelId) {
-      return;
-    }
+  private getSessionConfigOptions(agentId: string, sessionId: string): SessionConfigOption[] {
+    return this.sessionConfigOptions.get(buildSessionKey(agentId, sessionId)) ??
+      (this.isSelectedSession(agentId, sessionId) ? this.activeSession.configOptions : []);
+  }
 
-    const model = findModelBySelectionKey(this.modelsByAgent[agentId] ?? [], modelId);
-    if (!model) {
-      return;
-    }
+  private restoreSessionModel(agentId: string, sessionId: string, configOptions: SessionConfigOption[], response?: unknown) {
+    const models = this.modelsByAgent[agentId] ?? [];
+    const configuredId = getCurrentModelId(configOptions);
+    const snapshot = getSnapshotProviderChange(response);
+    const snapshotModels = snapshot ? models.filter((model) => (model.node_id ?? null) === snapshot.providerNodeId) : [];
+    const snapshotModel = snapshot ? findModelByIdentity(snapshotModels, snapshot) : undefined;
+    const snapshotId = snapshot
+      ? getModelSelectionKey(snapshotModel ?? { id: `${snapshot.provider}/${snapshot.model}`, node_id: snapshot.providerNodeId })
+      : '';
+    // ACP may omit the model option. Use the session's snapshot, never the launch preference.
+    const modelId = configuredId
+      ? (snapshotModel?.id === configuredId || (snapshot && `${snapshot.provider}/${snapshot.model}` === configuredId)
+        ? snapshotId : configuredId)
+      : snapshotId;
+    this.sessionModelIds = { ...this.sessionModelIds, [buildSessionKey(agentId, sessionId)]: modelId };
+  }
 
-    const configId = findModelConfigOption(this.activeSession.configOptions)?.id ?? 'model';
+  private async applySelectedModelToSession(agentId: string, sessionId: string, modelId: string) {
+    if (!modelId) return;
+    const model = (this.modelsByAgent[agentId] ?? []).find((entry) => getModelSelectionKey(entry) === modelId);
+    if (!model) throw new Error(`Selected model is unavailable: ${modelId}`);
+
+    const configId = findModelConfigOption(this.getSessionConfigOptions(agentId, sessionId))?.id ?? 'model';
     await this.updateSessionConfigOption(agentId, sessionId, configId, model.id, { model });
   }
 
@@ -2316,34 +2327,58 @@ export class AgentsStore {
     configId: string,
     value: string,
     options: { model?: ModelEntry } = {}
-  ) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
-    this.sessionConfigPending = {
-      ...this.sessionConfigPending,
-      [configId]: true
+  ): Promise<SessionConfigOption[]> {
+    const key = buildSessionKey(agentId, sessionId);
+    const pending = this.pendingSessionConfigs[key] ?? {};
+    this.pendingSessionConfigs = {
+      ...this.pendingSessionConfigs,
+      [key]: { ...pending, [configId]: (pending[configId] ?? 0) + 1 }
     };
-
-    try {
-      const request = options.model
+    // Serialize mode/model changes for this session; another session can update independently.
+    const previous = this.sessionConfigRequests.get(key);
+    const request = (async () => {
+      if (previous) await previous.catch(() => undefined);
+      await this.connectAgent(agentId);
+      const record = this.ensureClientRecord(agentId);
+      const oldOptions = this.getSessionConfigOptions(agentId, sessionId);
+      const payload = options.model
         ? setModelConfigOptionRequest(sessionId, options.model, configId)
         : setSessionConfigOptionRequest(sessionId, configId, value);
-      const configOptions = await record.client.setSessionConfigOption(request);
-      this.activeSession.configOptions = configOptions;
-      this.composerProfileId = getCurrentProfileId(configOptions) ?? this.composerProfileId;
-      const activeModelId = getCurrentModelId(configOptions);
-      const selectedModel = options.model ?? findModelBySelectionKey(this.modelsByAgent[agentId] ?? [], activeModelId);
-      if (selectedModel) {
-        this.composerModelId = getModelSelectionKey(selectedModel);
-        this.rememberRecentModel(agentId, selectedModel);
-      } else if (activeModelId) {
-        this.composerModelId = activeModelId;
+      const configOptions = await record.client.setSessionConfigOption(payload);
+      this.sessionConfigOptions.set(key, configOptions);
+      const confirmedId = getCurrentModelId(configOptions);
+      if (confirmedId) {
+        const previousModel = (this.modelsByAgent[agentId] ?? []).find(
+          (model) => getModelSelectionKey(model) === this.getSessionModelId(agentId, sessionId)
+        );
+        const selectedModel = options.model ?? previousModel;
+        this.sessionModelIds = {
+          ...this.sessionModelIds,
+          [key]: selectedModel?.id === confirmedId ? getModelSelectionKey(selectedModel) : confirmedId
+        };
+      } else if (options.model) {
+        // Older servers acknowledge the write without returning a model config option.
+        this.sessionModelIds = { ...this.sessionModelIds, [key]: getModelSelectionKey(options.model) };
+      } else if (configId === findModeConfigOption(oldOptions)?.id || configId === 'mode') {
+        // A mode change can select another model; without metadata its identity is unknown.
+        this.sessionModelIds = { ...this.sessionModelIds, [key]: '' };
       }
+      if (options.model && (!confirmedId || confirmedId === options.model.id)) {
+        this.rememberRecentModel(agentId, options.model);
+      }
+      if (this.isSelectedSession(agentId, sessionId)) this.activeSession.configOptions = configOptions;
+      return configOptions;
+    })();
+    this.sessionConfigRequests.set(key, request);
+    try {
+      return await request;
     } finally {
-      this.sessionConfigPending = {
-        ...this.sessionConfigPending,
-        [configId]: false
+      const pending = this.pendingSessionConfigs[key] ?? {};
+      this.pendingSessionConfigs = {
+        ...this.pendingSessionConfigs,
+        [key]: { ...pending, [configId]: Math.max(0, (pending[configId] ?? 1) - 1) }
       };
+      if (this.sessionConfigRequests.get(key) === request) this.sessionConfigRequests.delete(key);
     }
   }
 
@@ -2683,7 +2718,27 @@ export class AgentsStore {
 
     const optimisticEventIndex = this.reconcileOptimisticUserPrompt(notification);
     const beforeEvents = this.activeSession.events.length;
+    const previousMode = getCurrentModeId(this.activeSession.configOptions);
     this.activeSession = applySessionNotification(this.activeSession, notification, optimisticEventIndex);
+    if (notification.update.sessionUpdate === 'config_option_update') {
+      const key = buildSessionKey(agentId, notification.sessionId);
+      const configOptions = notification.update.configOptions;
+      this.sessionConfigOptions.set(key, configOptions);
+      const modelId = getCurrentModelId(configOptions);
+      const currentModel = (this.modelsByAgent[agentId] ?? []).find(
+        (model) => getModelSelectionKey(model) === this.getSessionModelId(agentId, notification.sessionId)
+      );
+      if (modelId) {
+        this.sessionModelIds = {
+          ...this.sessionModelIds,
+          [key]: currentModel?.id === modelId ? getModelSelectionKey(currentModel) : modelId
+        };
+      } else if (getCurrentModeId(configOptions) !== previousMode) {
+        this.sessionModelIds = { ...this.sessionModelIds, [key]: '' };
+      }
+    } else if (notification.update.sessionUpdate === 'current_mode_update' && notification.update.currentModeId !== previousMode) {
+      this.sessionModelIds = { ...this.sessionModelIds, [buildSessionKey(agentId, notification.sessionId)]: '' };
+    }
     this.activeLoadMeasurement?.increment('appliedNotifications');
     console.debug('querymt session/update applied', {
       agentId,

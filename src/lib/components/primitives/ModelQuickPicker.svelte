@@ -23,6 +23,7 @@
     modelOptions = [],
     recentModels = [],
     selectedModelId = '',
+    emptyLabel = 'Select model',
     modelInfo = {},
     loading = false,
     disabled = false,
@@ -34,6 +35,7 @@
     modelOptions?: ModelEntry[];
     recentModels?: ModelEntry[];
     selectedModelId?: string;
+    emptyLabel?: string;
     modelInfo?: Record<string, ModelInfo | null>;
     loading?: boolean;
     disabled?: boolean;
@@ -55,8 +57,6 @@
   const selectedModel = $derived(
     modelOptions.find((entry) => getModelSelectionKey(entry) === selectedModelId) ??
       modelOptions.find((entry) => entry.id === selectedModelId && !entry.node_id) ??
-      recentModels[0] ??
-      modelOptions[0] ??
       null
   );
 
@@ -289,8 +289,10 @@
         {#if agentLabel}
           <span class="muted">· {agentLabel}</span>
         {/if}
+      {:else if selectedModelId}
+        {selectedModelId}{loading ? '' : ' (unavailable)'}
       {:else}
-        Select model
+        {loading ? 'Loading model...' : emptyLabel}
       {/if}
     </span>
   </button>

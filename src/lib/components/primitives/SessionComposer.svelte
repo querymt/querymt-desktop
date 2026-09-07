@@ -118,7 +118,7 @@
     sessionConfigPending?: Record<string, boolean>;
     onCwdInput?: ((value: string) => void) | null;
     onPromptInput: (value: string) => void;
-    onModelChange?: ((value: string) => void) | null;
+    onModelChange?: ((value: string) => void | Promise<void>) | null;
     onRefreshModels?: (() => void) | null;
     onAddAttachments?: ((attachments: PromptAttachment[]) => void) | null;
     onRemoveAttachment?: ((attachmentId: string) => void) | null;
@@ -529,8 +529,9 @@
         recentModels={recentModels}
         selectedModelId={selectedModelId}
         modelInfo={modelInfo}
-        loading={modelLoading}
-        disabled={false}
+        loading={modelLoading || (sessionOnly && Object.values(sessionConfigPending).some(Boolean))}
+        emptyLabel={sessionOnly ? 'Model unknown' : 'Select model'}
+        disabled={sessionOnly && (modelLoading || Object.values(sessionConfigPending).some(Boolean))}
         agentLabel={agentLabel}
         class="composer-control-pill"
         onSelect={(value) => onModelChange?.(value)}

@@ -41,7 +41,7 @@ function createAgentsStore() {
     activeSession: { runState: 'idle' },
     composerCwd: '/tmp/work',
     composerPrompt: '',
-    composerModelId: 'anthropic/claude-sonnet-4',
+    launchModelId: 'anthropic/claude-sonnet-4',
     composerProfileId: 'default',
     composerModeId: 'build',
     composerReasoningId: 'auto',
@@ -68,8 +68,8 @@ function createAgentsStore() {
     setComposerPrompt: vi.fn((value: string) => {
       agentsStore.composerPrompt = value;
     }),
-    setComposerModel: vi.fn(async (value: string) => {
-      agentsStore.composerModelId = value;
+    setLaunchModel: vi.fn(async (value: string) => {
+      agentsStore.launchModelId = value;
     }),
     refreshModelsForAgent: vi.fn(async () => undefined),
     addPromptAttachments: vi.fn(),
@@ -132,6 +132,21 @@ describe('Landing page session start', () => {
     expect(screen.queryByText('Desktop control center')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Mode' })).toHaveTextContent('Build');
     expect(screen.getByLabelText('Session options')).toHaveTextContent('Auto');
+  });
+
+  it('uses only launch preferences when an existing session is still active in the store', async () => {
+    agentsStore.activeAgentId = 'agent-1';
+    agentsStore.activeSessionId = 'previous-session';
+    render(LandingPage);
+
+    expect(screen.getByRole('button', { name: 'Mode' })).toHaveTextContent('Build');
+    await fireEvent.click(screen.getByRole('button', { name: /Claude Sonnet 4/i }));
+    const modelRow = screen.getAllByRole('button', { name: /Claude Sonnet 4/i })
+      .find((button) => button.classList.contains('app-picker-row'))!;
+    await fireEvent.click(modelRow);
+
+    expect(agentsStore.setLaunchModel).toHaveBeenCalledWith('anthropic/claude-sonnet-4');
+    expect(agentsStore.activeSessionId).toBe('previous-session');
   });
 
   it('opens the new session as soon as session creation resolves', async () => {

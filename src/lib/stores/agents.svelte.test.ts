@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionNotification } from '@agentclientprotocol/sdk';
+import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
 import type { ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
 import { tick } from 'svelte';
@@ -85,7 +85,7 @@ const mockClient = vi.hoisted(() => {
     onExtensionNotification: vi.fn(() => () => undefined),
     onPermissionRequest: vi.fn(() => permissionUnsubscribe),
     onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
-    setSessionConfigOption: vi.fn(async (): Promise<SessionConfigOption[]> => []),
+    setSessionConfigOption: vi.fn(async (_request: SetSessionConfigOptionRequest): Promise<SessionConfigOption[]> => []),
     listRemoteSessions: vi.fn(async (request: { node_id: string }) => ({ node_id: request.node_id, sessions: [], total_count: 0 })),
     attachRemoteSession: vi.fn(async () => ({
       session_id: 'remote-session-1',
@@ -165,6 +165,9 @@ beforeEach(() => {
   mockClient.refreshAndListModels.mockResolvedValue([]);
   mockClient.getModelInfo.mockResolvedValue({});
   mockDrainAgentSessionUpdates.mockResolvedValue([]);
+  mockClient.setSessionConfigOption.mockReset().mockResolvedValue([]);
+  mockClient.loadSession.mockReset().mockResolvedValue({ response: { configOptions: [] }, replay: [] });
+  mockClient.createSession.mockReset().mockResolvedValue({ sessionId: 'session-1', configOptions: [] });
 });
 
 afterEach(() => {
@@ -495,6 +498,7 @@ describe('AgentsStore connections', () => {
       label: 'GPT-5'
     };
     store.modelsByAgent = { 'agent-1': [anthropic, openai] };
+    store.setLaunchModel('launch-only');
     store.sessionsByAgent = {
       'agent-1': [
         {
@@ -529,11 +533,12 @@ describe('AgentsStore connections', () => {
     }));
 
     await store.loadSession('agent-1', 'session-a');
-    expect(store.composerModelId).toBe(anthropic.id);
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(anthropic.id);
     await store.loadSession('agent-1', 'session-b');
-    expect(store.composerModelId).toBe(openai.id);
+    expect(store.getSessionModelId('agent-1', 'session-b')).toBe(openai.id);
     await store.loadSession('agent-1', 'session-a');
-    expect(store.composerModelId).toBe(anthropic.id);
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(anthropic.id);
+    expect(store.launchModelId).toBe('launch-only');
     expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
   });
 
@@ -569,7 +574,7 @@ describe('AgentsStore connections', () => {
 
     await store.loadSession('agent-1', 'session-1');
 
-    expect(store.composerModelId).toBe(getModelSelectionKey(remoteModel));
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(remoteModel));
     expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
   });
 
@@ -584,7 +589,7 @@ describe('AgentsStore connections', () => {
     store.activeSessionId = 'session-1';
     store.activeSession.sessionId = 'session-1';
 
-    await store.setComposerModel(getModelSelectionKey(remoteModel));
+    await store.setSessionModel('agent-1', 'session-1', getModelSelectionKey(remoteModel));
 
     expect(mockClient.setSessionConfigOption).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'session-1',
@@ -592,8 +597,224 @@ describe('AgentsStore connections', () => {
       value: remoteModel.id,
       _meta: { querymt: { modelEntry: remoteModel } }
     }));
-    expect(store.composerModelId).toBe(getModelSelectionKey(remoteModel));
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(remoteModel));
     expect(store.getRecentModels('agent-1')).toEqual([remoteModel]);
+  });
+});
+
+describe('AgentsStore session model isolation', () => {
+  const sol: ModelEntry = { id: 'codex/gpt-5.6-sol', provider: 'codex', model: 'gpt-5.6-sol', label: 'Sol' };
+  const grok: ModelEntry = { id: 'xai/grok-4.6', provider: 'xai', model: 'grok-4.6', label: 'Grok' };
+  const glm: ModelEntry = { id: 'zai/glm-5.3-flash', provider: 'zai', model: 'glm-5.3-flash', label: 'GLM' };
+  const modelOptions = (modelId: string): SessionConfigOption[] => [{
+    id: 'model', name: 'Model', type: 'select', currentValue: modelId,
+    options: [sol, grok, glm].map((model) => ({ value: model.id, name: model.label ?? model.model }))
+  }];
+  const modeOptions = (mode: string): SessionConfigOption[] => [{
+    id: 'mode', name: 'Mode', type: 'select', currentValue: mode,
+    options: [{ value: 'build', name: 'Build' }, { value: 'plan', name: 'Plan' }]
+  }];
+
+  function setup() {
+    const store = createStore();
+    store.modelsByAgent = { 'agent-1': [sol, grok, glm] };
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-a';
+    store.activeSession.sessionId = 'session-a';
+    store.sessionsByAgent = {
+      'agent-1': ['session-a', 'session-b'].map((sessionId) => ({
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId, title: sessionId, cwd: '/tmp/work',
+        updatedAt: '2026-09-07T20:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }))
+    };
+    return store;
+  }
+
+  it('choosing Grok on Today leaves session A on Sol and applies Grok only to new session B', async () => {
+    const store = setup();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: modelOptions(sol.id) }, replay: [] });
+    await store.loadSession('agent-1', 'session-a');
+
+    store.setLaunchModel(grok.id);
+
+    expect(store.activeSessionId).toBe('session-a');
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+    mockClient.createSession.mockResolvedValueOnce({ sessionId: 'session-b', configOptions: modelOptions(sol.id) });
+    await store.createSession('agent-1');
+
+    expect(mockClient.setSessionConfigOption).toHaveBeenCalledTimes(1);
+    expect(mockClient.setSessionConfigOption).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'session-b', value: grok.id }));
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
+    expect(store.getSessionModelId('agent-1', 'session-b')).toBe(grok.id);
+    store.setLaunchModel(glm.id);
+    expect(mockClient.setSessionConfigOption).toHaveBeenCalledTimes(1);
+    expect(store.getSessionModelId('agent-1', 'session-b')).toBe(grok.id);
+  });
+
+  it('snapshots launch settings before creation and configures mode before model and prompt', async () => {
+    const store = setup();
+    store.setLaunchModel(grok.id);
+    store.setComposerProfile('coding');
+    store.setComposerMode('plan');
+    let finishCreation!: (response: { sessionId: string; configOptions: SessionConfigOption[] }) => void;
+    mockClient.createSession.mockImplementationOnce(() => new Promise((resolve) => { finishCreation = resolve; }));
+    const order: string[] = [];
+    mockClient.setSessionConfigOption.mockImplementation(async (request) => {
+      order.push(request.configId);
+      return modeOptions('plan');
+    });
+    mockClient.sendPrompt.mockImplementationOnce(async () => {
+      order.push('prompt');
+      return { stopReason: 'end_turn' };
+    });
+    const creation = store.startSessionWithPrompt('agent-1');
+    store.setLaunchModel(glm.id);
+    store.setComposerProfile('other');
+    store.setComposerMode('build');
+    await vi.waitFor(() => expect(finishCreation).toBeDefined());
+    finishCreation({ sessionId: 'session-b', configOptions: modeOptions('build') });
+    await creation;
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalled());
+
+    expect(mockClient.createSession).toHaveBeenCalledWith('/tmp/work', 'coding');
+    expect(mockClient.setSessionConfigOption).toHaveBeenNthCalledWith(1, expect.objectContaining({ sessionId: 'session-b', configId: 'mode', value: 'plan' }));
+    expect(mockClient.setSessionConfigOption).toHaveBeenNthCalledWith(2, expect.objectContaining({ sessionId: 'session-b', configId: 'model', value: grok.id }));
+    expect(order).toEqual(['mode', 'model', 'prompt']);
+    expect(store.launchModelId).toBe(glm.id);
+    expect(store.getSessionModelId('agent-1', 'session-b')).toBe(grok.id);
+  });
+
+  it('does not send the first prompt when the model write fails', async () => {
+    const store = setup();
+    store.setLaunchModel(grok.id);
+    mockClient.setSessionConfigOption.mockRejectedValueOnce(new Error('Model rejected'));
+
+    expect(await store.startSessionWithPrompt('agent-1')).toBeNull();
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    expect(store.error).toBe('Model rejected');
+  });
+
+  it('does not silently use the default model when the launch selection is unavailable', async () => {
+    const store = setup();
+    store.setLaunchModel('missing/model');
+
+    expect(await store.startSessionWithPrompt('agent-1')).toBeNull();
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+    expect(store.error).toContain('Selected model is unavailable');
+  });
+
+  it('keeps confirmed selection on failure and obeys the server response rather than the requested model', async () => {
+    const store = setup();
+    await store.setSessionModel('agent-1', 'session-a', sol.id);
+    store.setLaunchModel(glm.id);
+    mockClient.setSessionConfigOption.mockRejectedValueOnce(new Error('Denied'));
+    await store.setSessionModel('agent-1', 'session-a', grok.id);
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
+    expect(store.error).toBe('Denied');
+    expect(store.sessionConfigPending.model).toBe(false);
+
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(modelOptions(glm.id));
+    await store.setSessionModel('agent-1', 'session-a', grok.id);
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(glm.id);
+    expect(store.launchModelId).toBe(glm.id);
+    expect(store.error).toBeNull();
+  });
+
+  it.each(['session-b', 'other-agent'])('scopes pending and late model responses when switching to %s', async (target) => {
+    const store = setup();
+    store.configs.push({ ...store.configs[0], id: 'other-agent' });
+    store.modelsByAgent['other-agent'] = [sol, grok, glm];
+    let finishA!: (options: SessionConfigOption[]) => void;
+    let finishB!: (options: SessionConfigOption[]) => void;
+    mockClient.setSessionConfigOption.mockImplementationOnce(() => new Promise((resolve) => { finishA = resolve; }));
+    const changeA = store.setSessionModel('agent-1', 'session-a', grok.id);
+    await vi.waitFor(() => expect(finishA).toBeDefined());
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe('');
+    expect(store.sessionConfigPending.model).toBe(true);
+
+    const agentB = target === 'other-agent' ? target : 'agent-1';
+    const sessionB = target === 'other-agent' ? 'session-a' : target;
+    store.activeAgentId = agentB;
+    store.activeSessionId = sessionB;
+    store.activeSession.sessionId = sessionB;
+    store.activeSession.configOptions = modelOptions(sol.id);
+    expect(store.sessionConfigPending.model).toBeUndefined();
+    mockClient.setSessionConfigOption.mockImplementationOnce(() => new Promise((resolve) => { finishB = resolve; }));
+    const changeB = store.setSessionModel(agentB, sessionB, glm.id);
+    await vi.waitFor(() => expect(finishB).toBeDefined());
+    finishA(modelOptions(grok.id));
+    await changeA;
+
+    expect(store.activeSession.configOptions).toEqual(modelOptions(sol.id));
+    expect(store.getSessionModelId(agentB, sessionB)).toBe('');
+    expect(store.sessionConfigPending.model).toBe(true);
+    finishB(modelOptions(glm.id));
+    await changeB;
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(grok.id);
+    expect(store.getSessionModelId(agentB, sessionB)).toBe(glm.id);
+    expect(store.sessionConfigPending.model).toBe(false);
+  });
+
+  it('serializes rapid model changes within the same session', async () => {
+    const store = setup();
+    let finish!: (options: SessionConfigOption[]) => void;
+    mockClient.setSessionConfigOption.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const first = store.setSessionModel('agent-1', 'session-a', grok.id);
+    const second = store.setSessionModel('agent-1', 'session-a', glm.id);
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    expect(mockClient.setSessionConfigOption).toHaveBeenCalledTimes(1);
+    finish(modelOptions(grok.id));
+    await Promise.all([first, second]);
+    expect(mockClient.setSessionConfigOption).toHaveBeenNthCalledWith(2, expect.objectContaining({ value: glm.id }));
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(glm.id);
+    expect(store.sessionConfigPending.model).toBe(false);
+  });
+
+  it('prefers configured model over conflicting snapshot even when it is absent from the catalog', async () => {
+    const store = setup();
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: {
+        configOptions: modelOptions('unavailable/model'),
+        _meta: { 'querymt/sessionLoadSnapshot.v1': { audit: { events: [{ kind: { type: 'provider_changed', data: { provider: grok.provider, model: grok.model } } }] } } }
+      }, replay: []
+    });
+    await store.loadSession('agent-1', 'session-a');
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe('unavailable/model');
+    mockClient.refreshAndListModels.mockResolvedValueOnce([glm]);
+    await store.refreshModelsForAgent('agent-1');
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe('unavailable/model');
+
+    await store.loadSession('agent-1', 'session-a');
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe('');
+  });
+
+  it('preserves an unavailable mesh identity instead of substituting a local copy', async () => {
+    const store = setup();
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: modelOptions(grok.id), _meta: {
+        'querymt/sessionLoadSnapshot.v1': { audit: { events: [{ kind: { type: 'provider_changed', data: {
+          provider: grok.provider, model: grok.model, provider_node_id: 'offline-node'
+        } } }] } }
+      } }, replay: []
+    });
+    await store.loadSession('agent-1', 'session-a');
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(getModelSelectionKey({ ...grok, node_id: 'offline-node' }));
+  });
+
+  it('uses unknown after a mode change without model metadata and accepts subsequent config updates', async () => {
+    const store = setup();
+    await store.setSessionModel('agent-1', 'session-a', grok.id);
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(modeOptions('plan'));
+    await store.setActiveSessionConfigOption('mode', 'plan');
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe('');
+    store.setLaunchModel(glm.id);
+    mockClient.emitSessionUpdate({ sessionId: 'session-a', update: {
+      sessionUpdate: 'config_option_update', configOptions: modelOptions(sol.id)
+    } });
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
+    expect(store.launchModelId).toBe(glm.id);
   });
 });
 
@@ -1582,7 +1803,7 @@ describe('AgentsStore prompt session start', () => {
       expect.objectContaining({ sessionId: 'session-1', configId: 'mode', value: 'ask' })
     );
     expect(store.activeSession.configOptions).toEqual(configOptions);
-    expect(store.composerModelId).toBe('claude-3-5');
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe('claude-3-5');
     expect(store.sessionConfigPending.mode).toBe(false);
   });
 
