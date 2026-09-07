@@ -5,7 +5,7 @@
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
   import { buildTurnPresentation, formatTurnDuration, type SessionConversationTurn } from '$lib/domain/session-conversation';
-  import { renderMarkdownToHtml, splitStreamingMarkdown } from '$lib/domain/markdown';
+  import { normalizeMarkdownCodeFences, renderMarkdownToHtml, splitStreamingMarkdown } from '$lib/domain/markdown';
   import type { SessionContentBlock, SessionImageGalleryItem } from '$lib/domain/types';
   import type { PromptFailure } from '$lib/domain/prompt-errors';
 
@@ -111,7 +111,7 @@
     if (!turnResponseMarkdown) return;
 
     try {
-      await navigator.clipboard.writeText(turnResponseMarkdown);
+      await navigator.clipboard.writeText(normalizeMarkdownCodeFences(turnResponseMarkdown));
       copiedResponse = true;
       window.setTimeout(() => {
         copiedResponse = false;

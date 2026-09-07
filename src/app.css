@@ -4527,8 +4527,7 @@ summary:focus-visible {
   padding: 0.4rem 0.6rem 0.4rem 0.75rem;
   color: var(--muted);
   font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.02em;
 }
 
 .code-block-language {

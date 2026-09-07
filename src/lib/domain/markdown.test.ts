@@ -1,6 +1,6 @@
 import { marked } from 'marked';
 import { describe, expect, it, vi } from 'vitest';
-import { renderMarkdownToHtml, splitStreamingMarkdown } from './markdown';
+import { normalizeMarkdownCodeFences, renderMarkdownToHtml, splitStreamingMarkdown } from './markdown';
 
 describe('renderMarkdownToHtml', () => {
   it('wraps fenced code in a constrained code-block shell', () => {
@@ -12,6 +12,26 @@ describe('renderMarkdownToHtml', () => {
     expect(html).toContain('language-ts');
     expect(html).toContain('const value =');
     expect(html).not.toContain('tok-keyword');
+  });
+
+  it('reorders lines-first fence meta as path:start-end', () => {
+    const html = renderMarkdownToHtml(
+      '```496:499:crates/agent/src/api/agent.rs\nlet value = 1;\n```'
+    );
+
+    expect(html).toContain('>crates/agent/src/api/agent.rs:496-499</span>');
+  });
+
+  it('reorders single-line fence meta as path:start', () => {
+    const html = renderMarkdownToHtml('```12:src/lib/main.rs\nfn main() {}\n```');
+
+    expect(html).toContain('>src/lib/main.rs:12</span>');
+  });
+
+  it('keeps path-first fence meta unchanged', () => {
+    const html = renderMarkdownToHtml('```src/lib/main.rs:12:14\nfn main() {}\n```');
+
+    expect(html).toContain('>src/lib/main.rs:12:14</span>');
   });
 
   it('escapes raw html outside and inside code blocks', () => {
@@ -113,5 +133,46 @@ describe('splitStreamingMarkdown', () => {
     expect(parts.frozenHtml).not.toContain('after inner');
     expect(parts.tailText).toContain('````md');
     expect(parts.tailText).toContain('after inner');
+  });
+});
+
+describe('normalizeMarkdownCodeFences', () => {
+  it('rewrites lines-first fence info in copied markdown', () => {
+    const source = '```1226:1231:crates/agent/src/acp/shared.rs\nfn main() {}\n```';
+
+    expect(normalizeMarkdownCodeFences(source)).toBe(
+      '```crates/agent/src/acp/shared.rs:1226-1231\nfn main() {}\n```'
+    );
+  });
+
+  it('rewrites single-line lines-first fence info', () => {
+    const source = '```12:src/lib/main.rs\nfn main() {}\n```';
+
+    expect(normalizeMarkdownCodeFences(source)).toBe(
+      '```src/lib/main.rs:12\nfn main() {}\n```'
+    );
+  });
+
+  it('leaves plain language and path-first fences untouched', () => {
+    expect(normalizeMarkdownCodeFences('```rust\nfn main() {}\n```')).toBe(
+      '```rust\nfn main() {}\n```'
+    );
+    expect(normalizeMarkdownCodeFences('```src/lib/main.rs:12:14\nfn main() {}\n```')).toBe(
+      '```src/lib/main.rs:12:14\nfn main() {}\n```'
+    );
+  });
+
+  it('does not treat closing fences or fence interiors as meta', () => {
+    const source = 'text\n\n```496:499:a.rs\n```496:499:not-a-fence\n```\nmore';
+
+    expect(normalizeMarkdownCodeFences(source)).toBe(
+      'text\n\n```a.rs:496-499\n```496:499:not-a-fence\n```\nmore'
+    );
+  });
+
+  it('returns the original string when no lines-first fence exists', () => {
+    const source = 'plain\n```rust\ncode\n```\ntext';
+
+    expect(normalizeMarkdownCodeFences(source)).toBe(source);
   });
 });
