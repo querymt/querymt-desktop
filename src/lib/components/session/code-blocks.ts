@@ -195,6 +195,60 @@ function highlightCodeBlocks(node: HTMLElement, observer?: MutationObserver) {
   }
 }
 
+const TABLE_COPY_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+
+function tableToMarkdown(table: HTMLTableElement): string {
+  const headerCells = Array.from(table.querySelectorAll<HTMLTableCellElement>('thead th, thead td'));
+  const cellText = (cell: HTMLTableCellElement) =>
+    (cell.textContent ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replaceAll('|', '\\|');
+
+  const lines: string[] = [];
+  if (headerCells.length > 0) {
+    lines.push(`| ${headerCells.map(cellText).join(' | ')} |`);
+    lines.push(`| ${headerCells.map(() => '---').join(' | ')} |`);
+  }
+
+  for (const row of table.querySelectorAll<HTMLTableRowElement>('tbody tr')) {
+    const cells = Array.from(row.querySelectorAll<HTMLTableCellElement>('th, td'));
+    if (cells.length === 0) continue;
+    lines.push(`| ${cells.map(cellText).join(' | ')} |`);
+  }
+
+  return lines.join('\n');
+}
+
+// Wrap each table wrapper in a shell that owns the pinned copy button. The
+// shell does not scroll, so the button stays fixed at the visible corner
+// while a wide table scrolls underneath.
+function enhanceTables(root: HTMLElement) {
+  for (const wrap of root.querySelectorAll<HTMLElement>('.markdown-table-wrap')) {
+    if (wrap.dataset.tableShellApplied === 'true') continue;
+    wrap.dataset.tableShellApplied = 'true';
+
+    const shell = document.createElement('div');
+    shell.className = 'markdown-table-shell';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'markdown-table-copy';
+    button.setAttribute('data-table-copy', '');
+    button.setAttribute('aria-label', 'Copy table');
+    button.insertAdjacentHTML('beforeend', TABLE_COPY_ICON);
+
+    const label = document.createElement('span');
+    label.className = 'markdown-table-copy-label';
+    label.textContent = 'Copy';
+    button.appendChild(label);
+
+    wrap.replaceWith(shell);
+    shell.appendChild(button);
+    shell.appendChild(wrap);
+  }
+}
+
 export function enhanceCodeBlocks(node: HTMLElement) {
   if (!browser) {
     return {};
@@ -202,6 +256,22 @@ export function enhanceCodeBlocks(node: HTMLElement) {
 
   async function handleClick(event: MouseEvent) {
     const target = event.target instanceof Element ? event.target : null;
+
+    const tableButton = target?.closest<HTMLButtonElement>('[data-table-copy]');
+    if (tableButton) {
+      const table = tableButton.closest('.markdown-table-shell')?.querySelector('table');
+      const markdown = table instanceof HTMLTableElement ? tableToMarkdown(table) : '';
+      if (!markdown) return;
+
+      await navigator.clipboard.writeText(markdown);
+      const label = tableButton.querySelector('.markdown-table-copy-label');
+      if (label) label.textContent = 'Copied';
+      window.setTimeout(() => {
+        if (label) label.textContent = 'Copy';
+      }, 1200);
+      return;
+    }
+
     const button = target?.closest<HTMLButtonElement>('[data-code-copy]');
     if (!button) return;
 
@@ -215,9 +285,13 @@ export function enhanceCodeBlocks(node: HTMLElement) {
     }, 1200);
   }
 
-  const observer = new MutationObserver(() => highlightCodeBlocks(node, observer));
+  const observer = new MutationObserver(() => {
+    highlightCodeBlocks(node, observer);
+    enhanceTables(node);
+  });
 
   node.addEventListener('click', handleClick);
+  enhanceTables(node);
   highlightCodeBlocks(node, observer);
   observer.observe(node, { childList: true, subtree: true });
 

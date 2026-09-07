@@ -4408,17 +4408,77 @@ summary:focus-visible {
   line-height: 1.45;
 }
 
-.markdown-body .markdown-table-wrap {
+.markdown-table-shell {
+  position: relative;
   max-width: 100%;
   margin: 0.75rem 0;
-  overflow-x: auto;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
 }
 
+.markdown-body .markdown-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: inherit;
+}
+
+/* Style the horizontal scrollbar so it reserves its own strip below the
+   rows instead of floating over the table while scrolling. */
+.markdown-body .markdown-table-wrap::-webkit-scrollbar {
+  height: 8px;
+}
+
+.markdown-body .markdown-table-wrap::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.markdown-body .markdown-table-wrap::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 999px;
+}
+
+.markdown-body .markdown-table-wrap::-webkit-scrollbar-thumb:hover {
+  background: var(--border);
+}
+
+.markdown-table-copy {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--muted);
+  padding: 0.18rem 0.5rem;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease;
+}
+
+.markdown-table-shell:hover .markdown-table-copy,
+.markdown-table-shell:focus-within .markdown-table-copy {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.markdown-table-copy:hover {
+  background: var(--bg-card-hover);
+  color: var(--text);
+}
+
 .markdown-body .markdown-table-wrap table {
   width: 100%;
-  min-width: 12rem;
+  /* Wide tables keep their natural column widths and scroll inside the
+     wrapper instead of crushing cells into the chat column. */
+  min-width: max-content;
   border-collapse: collapse;
   font-size: 0.88rem;
 }
@@ -8780,7 +8840,8 @@ summary:focus-visible {
   .session-work-summary-chevron,
   .session-reasoning-disclosure,
   .session-tool-disclosure,
-  .session-assistant-message-actions .session-message-action-btn {
+  .session-assistant-message-actions .session-message-action-btn,
+  .markdown-table-copy {
     transition: none;
   }
 
