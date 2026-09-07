@@ -3245,6 +3245,16 @@ summary:focus-visible {
   font-weight: 500;
 }
 
+.composer-model-pill-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.composer-model-pill-node svg {
+  flex: 0 0 auto;
+}
+
 .app-select-value {
   min-width: 0;
   overflow: hidden;
