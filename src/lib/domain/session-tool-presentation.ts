@@ -79,7 +79,7 @@ function stripRunPrefix(value: string): string {
 }
 
 function toolLabel(name: string): string {
-  if (name === 'shell') return 'Run command';
+  if (name === 'shell' || name === 'execute') return 'Run command';
   if (name === 'read_tool') return 'Read file';
   if (name === 'get_function') return 'Read function';
   if (name === 'get_symbol') return 'Read symbol';
@@ -108,7 +108,7 @@ function toolLabel(name: string): string {
 }
 
 function toolIcon(name: string): SessionToolIcon {
-  if (name === 'shell') return 'terminal';
+  if (name === 'shell' || name === 'execute') return 'terminal';
   if (READ_TOOLS.has(name)) return 'read';
   if (EDIT_TOOLS.has(name)) return 'edit';
   if (name === 'delete_file') return 'delete';
@@ -131,7 +131,7 @@ function statusLabel(status: SessionToolCallItem['status']): string {
 function toolPreview(name: string, args: Record<string, unknown> | null, rawResult: string | null | undefined): string | null {
   if (!args) return resultPreview(rawResult);
 
-  if (name === 'shell') {
+  if (name === 'shell' || name === 'execute') {
     const command = stringValue(args.command);
     const commandArgs = Array.isArray(args.args) ? args.args.filter((item): item is string => typeof item === 'string') : [];
     return compact([command, ...commandArgs].filter(Boolean).join(' '));

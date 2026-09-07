@@ -62,6 +62,33 @@ const turn: SessionConversationTurn = {
 afterEach(cleanup);
 
 describe('SessionTurn', () => {
+  it('normalizes lines-first fence meta when copying the response', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const fencedTurn: SessionConversationTurn = {
+      id: 'turn-fenced',
+      forkMessageId: 'assistant-fenced',
+      content: [
+        {
+          type: 'assistant',
+          id: 'assistant-fenced',
+          messageId: 'assistant-fenced',
+          html: '<p>Fenced</p>',
+          text: 'Look:\n\n```496:499:crates/agent/src/api/agent.rs\nlet value = 1;\n```',
+          relatedEvents: []
+        }
+      ],
+      settled: true
+    };
+
+    const { getByRole } = render(SessionTurn, { turn: fencedTurn });
+    await fireEvent.click(getByRole('button', { name: 'Copy response' }));
+
+    expect(writeText).toHaveBeenCalledWith(
+      'Look:\n\n```crates/agent/src/api/agent.rs:496-499\nlet value = 1;\n```'
+    );
+  });
+
   it('renders consecutive streamed text blocks as a single markdown flow', () => {
     const streamedTurn: SessionConversationTurn = {
       id: 'turn-streamed',

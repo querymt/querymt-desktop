@@ -356,6 +356,46 @@ describe('buildSessionConversation', () => {
     });
   });
 
+  it('marks only the newest reasoning entry live while a turn is thinking', () => {
+    const session = baseSession();
+    session.runState = 'thinking';
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'ship it', messageId: 'u1', eventIndex: 0 },
+      { id: 'r1', kind: 'agent_thought_chunk', text: 'First thought', messageId: 'r1', eventIndex: 1 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Working.', messageId: 'a1', eventIndex: 2 },
+      { id: 'r2', kind: 'agent_thought_chunk', text: 'Second thought', messageId: 'r2', eventIndex: 4 }
+    ];
+    session.toolCalls = [{ id: 't1', title: 'Execute', status: 'completed', kind: 'execute', eventIndex: 3 }];
+
+    const turns = buildSessionConversation(session);
+    const reasoning = turns[0].content.filter((item) => item.type === 'reasoning');
+
+    expect(reasoning).toHaveLength(2);
+    expect(reasoning[0]).toMatchObject({ id: 'r1', isLive: false });
+    expect(reasoning[0].html).toContain('First thought');
+    expect(reasoning[1]).toMatchObject({ id: 'r2', isLive: true });
+  });
+
+  it('renders reasoning settled while a tool call is running', () => {
+    const session = baseSession();
+    session.runState = 'tool-running';
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'ship it', messageId: 'u1', eventIndex: 0 },
+      { id: 'r1', kind: 'agent_thought_chunk', text: 'First thought', messageId: 'r1', eventIndex: 1 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Working.', messageId: 'a1', eventIndex: 2 },
+      { id: 'r2', kind: 'agent_thought_chunk', text: 'Second thought', messageId: 'r2', eventIndex: 4 }
+    ];
+    session.toolCalls = [
+      { id: 't1', title: 'Execute', status: 'completed', kind: 'execute', eventIndex: 3 },
+      { id: 't2', title: 'Execute', status: 'in_progress', kind: 'execute', eventIndex: 5 }
+    ];
+
+    const turns = buildSessionConversation(session);
+    const reasoning = turns[0].content.filter((item) => item.type === 'reasoning');
+
+    expect(reasoning.map((item) => item.isLive)).toEqual([false, false]);
+  });
+
   it('keeps image-only and generic-file turns with ordered structured blocks', () => {
     const session = baseSession();
     session.transcript = [

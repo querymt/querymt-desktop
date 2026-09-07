@@ -31,6 +31,7 @@ describe('DesktopAcpClient session metadata', () => {
       _meta: { querymt: { session_load_operation_id: 'operation-1' } }
     });
   });
+});
 
 function promptClient(capabilities: { image?: boolean; embeddedContext?: boolean }) {
   const client = new DesktopAcpClient({ id: 'agent-1', name: 'Agent', transport: 'stdio', commandLine: 'agent', enabled: true, autoStart: true });

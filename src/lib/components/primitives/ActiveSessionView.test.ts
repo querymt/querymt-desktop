@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActiveSessionViewModel } from '$lib/domain/types';
 import { calculateImageFit } from '$lib/components/session/SessionAttachmentPreview.svelte';
@@ -292,5 +293,170 @@ describe('ActiveSessionView turn window', () => {
     expect(screen.getByText('Live answer 11')).toBeInTheDocument();
     expect(screen.queryByText('Prompt 10')).not.toBeInTheDocument();
     expect(document.querySelector('.session-turn-spacer')).toBeInTheDocument();
+  });
+});
+
+describe('ActiveSessionView turn action settle hold', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function settledConversationSession(overrides: Partial<ActiveSessionViewModel> = {}): ActiveSessionViewModel {
+    const session = createEmptyActiveSession();
+    session.sessionId = 'session-settle';
+    session.runState = 'completed';
+    session.transcript = [
+      {
+        id: 'user-1',
+        kind: 'user_message_chunk',
+        text: 'Fix the bug',
+        messageId: 'user-message-1',
+        eventIndex: 1
+      },
+      {
+        id: 'assistant-1',
+        kind: 'agent_message_chunk',
+        text: 'Fixed.',
+        messageId: 'assistant-message-1',
+        eventIndex: 2
+      }
+    ];
+    return { ...session, ...overrides };
+  }
+
+  async function renderSettledSession(session: ActiveSessionViewModel) {
+    vi.useFakeTimers();
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(document.documentElement, 'scrollTop', { configurable: true, value: 0 });
+    const result = render(ActiveSessionView, {
+      session,
+      undoSupported: true,
+      forkSupported: true,
+      onUndo: vi.fn(),
+      onFork: vi.fn()
+    });
+    await tick();
+    return result;
+  }
+
+  it('keeps fork and undo hidden until the session settles', async () => {
+    await renderSettledSession(settledConversationSession());
+
+    expect(screen.queryByRole('button', { name: 'Fork into new session' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Undo to this prompt' })).not.toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(1200);
+    await tick();
+
+    expect(screen.getByRole('button', { name: 'Fork into new session' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo to this prompt' })).toBeInTheDocument();
+  });
+
+  it('holds the actions again when the session resumes streaming mid-settle', async () => {
+    const { rerender } = await renderSettledSession(settledConversationSession());
+    await vi.advanceTimersByTimeAsync(600);
+
+    await rerender({ session: settledConversationSession({ runState: 'streaming' }) });
+    await vi.advanceTimersByTimeAsync(5000);
+    await tick();
+    expect(screen.queryByRole('button', { name: 'Fork into new session' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Undo to this prompt' })).not.toBeInTheDocument();
+
+    await rerender({ session: settledConversationSession() });
+    await vi.advanceTimersByTimeAsync(600);
+    await tick();
+    expect(screen.queryByRole('button', { name: 'Fork into new session' })).not.toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(600);
+    await tick();
+    expect(screen.getByRole('button', { name: 'Fork into new session' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo to this prompt' })).toBeInTheDocument();
+  });
+
+  it('renders fork and undo only on the final segment of a multi-segment turn', async () => {
+    const session = settledConversationSession({
+      transcript: [
+        {
+          id: 'user-1',
+          kind: 'user_message_chunk',
+          text: 'run ls for test',
+          messageId: 'user-message-1',
+          eventIndex: 1
+        },
+        {
+          id: 'thought-1',
+          kind: 'agent_thought_chunk',
+          text: 'Planning the command.',
+          messageId: 'assistant-message-0',
+          eventIndex: 2
+        },
+        {
+          id: 'assistant-1',
+          kind: 'agent_message_chunk',
+          text: "I'll run ls now.",
+          messageId: 'assistant-message-1',
+          eventIndex: 3
+        },
+        {
+          id: 'thought-2',
+          kind: 'agent_thought_chunk',
+          text: 'Reading the output.',
+          messageId: 'assistant-message-2',
+          eventIndex: 5
+        },
+        {
+          id: 'assistant-2',
+          kind: 'agent_message_chunk',
+          text: 'ls succeeded. Workspace contents listed.',
+          messageId: 'assistant-message-3',
+          eventIndex: 6
+        }
+      ],
+      toolCalls: [
+        {
+          id: 'tool-1',
+          title: 'ls',
+          status: 'completed',
+          kind: 'execute',
+          eventIndex: 4
+        }
+      ]
+    });
+    await renderSettledSession(session);
+    await vi.advanceTimersByTimeAsync(1200);
+    await tick();
+
+    expect(screen.getAllByRole('button', { name: 'Fork into new session' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Undo to this prompt' })).toHaveLength(1);
+
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    expect(screen.getAllByRole('button', { name: 'Copy response' })).toHaveLength(1);
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy response' }));
+    expect(writeText).toHaveBeenCalledWith("I'll run ls now.\n\nls succeeded. Workspace contents listed.");
+
+    const finalSection = screen.getByRole('button', { name: 'Fork into new session' }).closest('section');
+    expect(finalSection).not.toBeNull();
+    expect(within(finalSection as HTMLElement).getByText(/Workspace contents/)).toBeInTheDocument();
+    expect(within(finalSection as HTMLElement).queryByText(/run ls now/)).not.toBeInTheDocument();
+  });
+
+  it('renders the response actions row for turns that end with tool work', async () => {
+    const session = settledConversationSession({
+      transcript: [
+        { id: 'u1', kind: 'user_message_chunk', text: 'run ls', messageId: 'user-message-1', eventIndex: 0 },
+        { id: 'r1', kind: 'agent_thought_chunk', text: 'Planning.', messageId: 'assistant-message-0', eventIndex: 1 },
+        { id: 'a1', kind: 'agent_message_chunk', text: "I'll run ls now.", messageId: 'assistant-message-1', eventIndex: 2 }
+      ],
+      toolCalls: [{ id: 't1', title: 'ls', status: 'completed', kind: 'execute', eventIndex: 3 }]
+    });
+    await renderSettledSession(session);
+    await vi.advanceTimersByTimeAsync(1200);
+    await tick();
+
+    expect(screen.getAllByRole('button', { name: 'Copy response' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Fork into new session' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo to this prompt' })).toBeInTheDocument();
   });
 });

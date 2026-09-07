@@ -69,4 +69,68 @@ describe('enhanceCodeBlocks', () => {
     expect(codeToHtml).not.toHaveBeenCalled();
     action.destroy?.();
   });
+
+  it('wraps tables in a pinned copy-button shell', async () => {
+    document.body.innerHTML =
+      '<div class="host"><div class="markdown-table-wrap"><table><thead><tr><th>Name</th></tr></thead><tbody><tr><td>alpha</td></tr></tbody></table></div></div>';
+    const host = document.querySelector('.host') as HTMLElement;
+    const action = enhanceCodeBlocks(host);
+
+    const shell = document.querySelector('.markdown-table-shell');
+    expect(shell).not.toBeNull();
+    expect(shell?.querySelector('table')).not.toBeNull();
+
+    const button = shell?.querySelector<HTMLButtonElement>('[data-table-copy]');
+    expect(button).not.toBeNull();
+    expect(button?.querySelector('svg')).not.toBeNull();
+    expect(button?.querySelector('.markdown-table-copy-label')?.textContent).toBe('Copy');
+
+    // Wrappers added later (streaming html swaps) get the same treatment
+    // once; already-enhanced wrappers are not re-wrapped.
+    const late = document.createElement('div');
+    late.className = 'markdown-table-wrap';
+    host.appendChild(late);
+    await vi.waitFor(() => expect(document.querySelectorAll('.markdown-table-shell')).toHaveLength(2));
+    expect(document.querySelectorAll('[data-table-copy]')).toHaveLength(2);
+    action.destroy?.();
+  });
+
+  it('copies tables as markdown from the shell copy button', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    document.body.innerHTML =
+      '<div class="host"><div class="markdown-table-wrap"><table><thead><tr><th>Name | x</th><th>Value</th></tr></thead><tbody><tr><td>alpha</td><td>1</td></tr><tr><td>beta</td><td>2</td></tr></tbody></table></div></div>';
+    const host = document.querySelector('.host') as HTMLElement;
+    const action = enhanceCodeBlocks(host);
+    const button = document.querySelector<HTMLButtonElement>('[data-table-copy]');
+
+    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+
+    expect(writeText).toHaveBeenCalledWith(
+      '| Name \\| x | Value |\n| --- | --- |\n| alpha | 1 |\n| beta | 2 |'
+    );
+    expect(document.querySelector('.markdown-table-copy-label')?.textContent).toBe('Copied');
+    action.destroy?.();
+  });
+
+  it('does not write to the clipboard when the shell has no table', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    document.body.innerHTML =
+      '<div class="host"><div class="markdown-table-wrap"></div></div>';
+    const host = document.querySelector('.host') as HTMLElement;
+    const action = enhanceCodeBlocks(host);
+    const button = document.querySelector<HTMLButtonElement>('[data-table-copy]');
+
+    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(writeText).not.toHaveBeenCalled();
+    expect(document.querySelector('.markdown-table-copy-label')?.textContent).toBe('Copy');
+    action.destroy?.();
+  });
 });

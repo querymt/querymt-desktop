@@ -7,6 +7,7 @@
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import ModelQuickPicker from '$lib/components/primitives/ModelQuickPicker.svelte';
   import WorkspacePathInput from '$lib/components/primitives/WorkspacePathInput.svelte';
+  import { autoCollapsePopover } from '$lib/design/details-popover';
   import SessionAttachmentPreview from '$lib/components/session/SessionAttachmentPreview.svelte';
   import {
     findModeConfigOption,
@@ -553,7 +554,7 @@
         />
       {/if}
        {#if secondaryOptionCount > 0}
-         <details class="composer-options">
+         <details class="composer-options" use:autoCollapsePopover>
            <summary class="composer-options-trigger" aria-label="Session options">
              <Settings2 size={14} />
              <span>Options</span>

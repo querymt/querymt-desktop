@@ -1,27 +1,8 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ActiveSessionViewModel } from '$lib/domain/types';
 import SessionActivityBar from './SessionActivityBar.svelte';
-
-function session(overrides: Partial<ActiveSessionViewModel> = {}): ActiveSessionViewModel {
-  return {
-    sessionId: 'session-1',
-    transcript: [],
-    toolCalls: [],
-    plans: [],
-    events: [],
-    configOptions: [],
-    runState: 'idle',
-    activityLabel: null,
-    activeToolCallId: null,
-    lastStopReason: null,
-    lastError: null,
-    usage: { contextUsed: null, contextLimit: null, cumulativeCostUsd: null, activeWorkMs: 0, activeWorkStartedAt: null },
-    undo: { stack: [], pendingOperation: null, lastRevertedFiles: [], lastMessage: null },
-    ...overrides
-  };
-}
+import { session } from './session-fixture';
 
 afterEach(cleanup);
 

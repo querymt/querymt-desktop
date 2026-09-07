@@ -153,7 +153,10 @@ function materializeConversation(
   const drafts = buildConversationDrafts(session);
   const busy = BUSY_RUN_STATES.has(session.runState);
   const activeTurnIndex = busy ? drafts.length - 1 : -1;
-  const liveReasoning = session.runState === 'thinking' || session.runState === 'tool-running';
+  // Reasoning streams only while the agent is thinking: a streaming thought
+  // always flips the run state back to thinking, so during tool-running no
+  // reasoning entry is growing and none should render as live.
+  const liveReasoning = session.runState === 'thinking';
 
   return drafts.map((draft, index) => {
     const settled = index !== activeTurnIndex;
@@ -165,6 +168,7 @@ function materializeConversation(
     const content = draft.content.map((item, contentIndex) =>
       materializeContent(item, settled, liveReasoning, previous?.content[contentIndex])
     );
+    if (!settled && liveReasoning) settleSupersededReasoning(content);
     return {
       id: draft.id,
       forkMessageId: draft.forkMessageId,
@@ -182,6 +186,23 @@ function materializeConversation(
       durationMs: settled ? draft.durationMs : undefined,
       presentation: buildTurnPresentation(content, settled)
     };
+  });
+}
+
+// Within a working turn only the newest reasoning entry is still streaming;
+// earlier entries keep settled styling even though the turn itself is active.
+// A tool call closes a thought group, so superseded entries never grow again.
+function settleSupersededReasoning(content: SessionConversationContent[]) {
+  let trailingReasoningIndex = -1;
+  for (let index = content.length - 1; index >= 0; index -= 1) {
+    if (content[index].type === 'reasoning') {
+      trailingReasoningIndex = index;
+      break;
+    }
+  }
+  content.forEach((item, index) => {
+    if (item.type !== 'reasoning' || index === trailingReasoningIndex || !item.isLive) return;
+    content[index] = { ...item, isLive: false, html: renderMarkdownToHtml(item.text ?? '') };
   });
 }
 
