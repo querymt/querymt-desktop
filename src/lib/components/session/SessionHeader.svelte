@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ArrowLeft, Bug, GitFork, Info, LoaderCircle, Redo2, RefreshCw, Undo2 } from '@lucide/svelte';
+  import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
   import { autoCollapsePopover } from '$lib/design/details-popover';
@@ -10,6 +11,7 @@
     session,
     title,
     workspace,
+    workspacePath = null,
     agentName,
     updatedAt,
     summaryStatus = 'idle',
@@ -31,6 +33,8 @@
     session: ActiveSessionViewModel;
     title: string;
     workspace: string;
+    /** Full project path; when present the workspace name becomes click-to-copy. */
+    workspacePath?: string | null;
     agentName?: string;
     updatedAt: string;
     summaryStatus?: SessionStatus;
@@ -92,7 +96,7 @@
         ></span>
         <span class="session-row-status-tooltip" role="tooltip">{status.label}</span>
       </span>
-      <span>{workspace}</span>
+      <CopyTextChip value={workspacePath ?? workspace} display={workspace} title="Copy project path" />
       {#if agentName}
         <span aria-hidden="true">·</span>
         <span>{agentName}</span>

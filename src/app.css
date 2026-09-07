@@ -4731,6 +4731,55 @@ summary:focus-visible {
   color: var(--accent);
 }
 
+/* Click-to-copy text chip; mirrors .session-id-chip's copied overlay so the
+   chip keeps its width while showing feedback. */
+.copy-chip {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0.05rem 0.3rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.copy-chip:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+}
+
+.copy-chip-label {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copy-chip-copied {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.22rem;
+  background: var(--bg-panel);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.copy-chip-copied svg {
+  color: var(--accent);
+}
+
 .session-header-status-dot {
   width: 0.45rem;
   height: 0.45rem;

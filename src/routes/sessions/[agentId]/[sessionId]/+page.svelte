@@ -489,6 +489,7 @@
     session={agentsStore.activeSession}
     title={selectedSession?.title ?? 'Session'}
     workspace={selectedSession ? getSessionWorkspaceName(selectedSession.cwd) : 'Unknown workspace'}
+    workspacePath={selectedSession?.cwd ?? null}
     agentName={activeAgentCount > 1 ? (selectedSession?.agentName ?? 'Unknown agent') : undefined}
     updatedAt={selectedSession ? formatSessionTimestamp(selectedSession.updatedAt) : 'Not loaded'}
     summaryStatus={selectedSession?.status ?? 'idle'}

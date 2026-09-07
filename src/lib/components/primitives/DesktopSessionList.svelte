@@ -3,6 +3,7 @@
   import { Accordion } from 'bits-ui';
   import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, FolderSync, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, Plus, RefreshCw, Search, SearchX, Trash2 } from '@lucide/svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
+  import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import { compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
@@ -319,15 +320,15 @@
                       {:else}
                         <span class="session-workspace-icon"><FolderKanban size={16} /></span>
                       {/if}
-                     <span class="session-workspace-copy">
-                       <span class="session-workspace-name">{group.name}</span>
-                        <span class="session-workspace-path">
-                          <span>{group.path}</span>
-                          {#if workspaceMachineText(group)}
-                            <span class="session-workspace-machine" title={workspaceMachineTitle(group)}>· {workspaceMachineText(group)}</span>
-                          {/if}
-                        </span>
-                     </span>
+                      <span class="session-workspace-copy">
+                        <span class="session-workspace-name">{group.name}</span>
+                         <span class="session-workspace-path">
+                           <CopyTextChip value={group.path} title="Copy project path" />
+                           {#if workspaceMachineText(group)}
+                             <span class="session-workspace-machine" title={workspaceMachineTitle(group)}>· {workspaceMachineText(group)}</span>
+                           {/if}
+                         </span>
+                      </span>
                    </span>
                    <span class="session-workspace-meta">
                      {#if group.loading && !group.initialized}
