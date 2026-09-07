@@ -3,6 +3,7 @@
   import { Tooltip } from 'bits-ui';
   import { ChevronLeft, ChevronRight, LoaderCircle } from '@lucide/svelte';
   import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
+  import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import { formatAriaShortcut, formatShortcut } from '$lib/design/platform';
   import { sectionIcons, type SectionName } from '$lib/design/tokens';
   import {
@@ -228,8 +229,8 @@
               <Tooltip.Portal>
                 <Tooltip.Content class="session-icon-tooltip" side="right" sideOffset={10}>
                   <div class="session-icon-tooltip-title">{session.title}</div>
-                  <div class="session-icon-tooltip-meta">{getStatusLabel(session.status, item)} / {session.agentName} / {getSessionWorkspaceName(session.cwd)}</div>
-                  <div class="session-icon-tooltip-meta">{formatSessionTimestamp(session.updatedAt)} / {getSessionShortcutLabel(index)}</div>
+                  <div class="session-icon-tooltip-meta">{getStatusLabel(session.status, item)}{#if onlineAgentCount > 1} / {session.agentName}{/if} / {getSessionWorkspaceName(session.cwd)}</div>
+                  <div class="session-icon-tooltip-meta">{formatSessionTimestamp(session.updatedAt)} / <SessionIdChip sessionId={session.sessionId} /> / {getSessionShortcutLabel(index)}</div>
                   <Tooltip.Arrow class="session-icon-tooltip-arrow" />
                 </Tooltip.Content>
               </Tooltip.Portal>
