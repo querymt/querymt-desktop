@@ -4,7 +4,7 @@
   import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, FolderSync, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, Plus, RefreshCw, Search, SearchX, Trash2 } from '@lucide/svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
-  import { compactRemoteNodeId, formatSessionTimestamp, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
+  import { compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
 
@@ -341,7 +341,7 @@
                      {:else}
                        <span class="session-workspace-count session-workspace-count-pending" aria-label="Sessions not loaded" title="Sessions load when opened">—</span>
                      {/if}
-                     <span class="session-workspace-updated"><Clock3 size={12} /> {formatSessionTimestamp(group.latestActivity)}</span>
+                      <span class="session-workspace-updated" title={formatSessionTimestampAbsolute(group.latestActivity)}><Clock3 size={12} /> {formatSessionTimestamp(group.latestActivity)}</span>
                      <ChevronDown size={15} class="session-workspace-chevron" />
                    </span>
                  </Accordion.Trigger>
@@ -410,11 +410,16 @@
                           <span
                             class={`session-header-status-dot session-header-status-dot-${getStatusTone(session.status)}`}
                             aria-label={`Status: ${getStatusLabel(session.status)}`}
+                            title={`Status: ${getStatusLabel(session.status)}`}
                           ></span>
-                          <span class="session-row-status-tooltip" role="tooltip">{getStatusLabel(session.status)}</span>
                           <SessionIdChip sessionId={session.sessionId} />
                           <span aria-hidden="true">·</span>
-                          <span>{formatSessionTimestamp(session.updatedAt)}</span>
+                          <button
+                            class="session-row-timestamp"
+                            type="button"
+                            title={formatSessionTimestampAbsolute(session.updatedAt)}
+                            onclick={() => onOpenSession?.(session)}
+                          >{formatSessionTimestamp(session.updatedAt)}</button>
                         </span>
                       </span>
                     </span>

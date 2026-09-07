@@ -7731,8 +7731,16 @@ summary:focus-visible {
 }
 
 .session-row-status-line .session-header-status-dot {
+  position: relative;
   pointer-events: auto;
   cursor: default;
+}
+
+/* Invisible halo enlarging the ~7px dot's hover target. */
+.session-row-status-line .session-header-status-dot::before {
+  content: '';
+  position: absolute;
+  inset: -0.3rem;
 }
 
 .session-row-status-line .session-id-chip {
@@ -7741,6 +7749,17 @@ summary:focus-visible {
   padding: 0;
   font-size: inherit;
   line-height: inherit;
+}
+
+/* Opt the timestamp back into hit testing so its absolute-date title shows;
+   the button re-opens the session, matching the row-wide click behavior. */
+.session-row-status-line .session-row-timestamp {
+  pointer-events: auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
 }
 
 .session-row-status-tooltip {
