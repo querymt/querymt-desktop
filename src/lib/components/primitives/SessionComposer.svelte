@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Brain, ChevronDown, FilePlus2, Monitor, Paperclip, Plus, SendHorizontal, Settings2, SlidersHorizontal, Square, UserRound, X } from '@lucide/svelte';
+  import { Brain, ChevronDown, FileCog, FilePlus2, Lock, Monitor, Paperclip, Plus, SendHorizontal, Settings2, SlidersHorizontal, Square, X } from '@lucide/svelte';
   import { tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import type { TransitionConfig } from 'svelte/transition';
@@ -54,6 +54,7 @@
     attachments = [],
     profileOptions = [],
     selectedProfileId = 'default',
+    sessionProfileLabel = null,
     launchModeOptions = [],
     selectedLaunchModeId = 'build',
     launchReasoningOptions = [],
@@ -105,6 +106,8 @@
     attachments?: PromptAttachment[];
     profileOptions?: ComposerOption[];
     selectedProfileId?: string;
+    /** Resolved label of the profile this session was started with; shown read-only in-session. */
+    sessionProfileLabel?: string | null;
     launchModeOptions?: ComposerOption[];
     selectedLaunchModeId?: string;
     launchReasoningOptions?: ComposerOption[];
@@ -230,6 +233,7 @@
   const secondaryOptionCount = $derived(
     (!activeSessionId && launch && launchReasoningOptions.length > 0 ? 1 : reasoningOption ? 1 : 0) +
       (!sessionOnly && profileOptions.length > 0 ? 1 : 0) +
+      (sessionOnly && sessionProfileLabel ? 1 : 0) +
       (!sessionOnly && targetOptions.length > 1 ? 1 : 0)
   );
   const optionsSummary = $derived.by(() => {
@@ -594,19 +598,27 @@
                    />
                  </div>
                {/if}
-               {#if !sessionOnly && profileOptions.length > 0}
-                 <div class="composer-option-row">
-                   <div class="composer-option-copy"><UserRound size={15} /><span><strong>Profile</strong><small>Agent instructions and defaults</small></span></div>
-                   <ComposerSplitPillSelect
-                     value={selectedProfileId}
-                     options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))}
-                     icon={UserRound}
-                     ariaLabel="Profile"
-                     class="composer-control-pill"
-                     onValueChange={(value) => onProfileChange?.(value)}
-                   />
-                 </div>
-               {/if}
+                {#if !sessionOnly && profileOptions.length > 0}
+                  <div class="composer-option-row">
+                    <div class="composer-option-copy"><FileCog size={15} /><span><strong>Profile</strong><small>Agent instructions and defaults</small></span></div>
+                    <ComposerSplitPillSelect
+                      value={selectedProfileId}
+                      options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))}
+                      icon={FileCog}
+                      ariaLabel="Profile"
+                      class="composer-control-pill"
+                      onValueChange={(value) => onProfileChange?.(value)}
+                    />
+                  </div>
+                {:else if sessionOnly && sessionProfileLabel}
+                  <div class="composer-option-row">
+                    <div class="composer-option-copy"><FileCog size={15} /><span><strong>Profile</strong><small>Set when this session started</small></span></div>
+                    <span class="composer-option-value-locked" title="Profiles are locked after session start">
+                      <Lock size={12} aria-hidden="true" />
+                      {sessionProfileLabel}
+                    </span>
+                  </div>
+                {/if}
                {#if !sessionOnly && targetOptions.length > 1}
                  <div class="composer-option-row">
                    <div class="composer-option-copy"><Monitor size={15} /><span><strong>Target</strong><small>Where this session will run</small></span></div>

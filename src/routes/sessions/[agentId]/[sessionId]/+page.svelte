@@ -22,6 +22,7 @@
   } from '$lib/domain/session-scroll';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { formatSessionTimestamp, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
+  import { getCurrentProfileId } from '$lib/querymt/config-options';
   import { getForkTarget, getLatestForkTarget, type SessionForkTarget } from '$lib/domain/session-fork';
   import { getCurrentUndoTarget, getUndoAffectedTurnCount, getUndoableSessionTurns, isTurnReverted } from '$lib/domain/session-undo';
   import { agentsStore } from '$lib/stores/agents.svelte';
@@ -32,6 +33,12 @@
   const agentId = $derived(decodeURIComponent(page.params.agentId ?? ''));
   const sessionId = $derived(decodeURIComponent(page.params.sessionId ?? ''));
   const selectedSession = $derived(getSessionById(agentsStore.sessionsByAgent[agentId] ?? [], sessionId, agentId));
+  const sessionProfileId = $derived(getCurrentProfileId(agentsStore.activeSession.configOptions) ?? null);
+  const sessionProfileLabel = $derived.by(() => {
+    if (!sessionProfileId) return null;
+    const option = agentsStore.getProfileOptions().find((candidate) => candidate.id === sessionProfileId);
+    return option?.label ?? (sessionProfileId === 'default' ? 'Default' : sessionProfileId);
+  });
   const showAgentBadges = $derived(agentsStore.connectedAgents.length > 1);
   const pendingElicitations = $derived(inboxStore.pendingElicitationsForSession(agentId, sessionId));
   let sessionPage = $state<HTMLDivElement | null>(null);
@@ -491,6 +498,7 @@
     workspace={selectedSession ? getSessionWorkspaceName(selectedSession.cwd) : 'Unknown workspace'}
     workspacePath={selectedSession?.cwd ?? null}
     agentName={activeAgentCount > 1 ? (selectedSession?.agentName ?? 'Unknown agent') : undefined}
+    profileLabel={sessionProfileLabel}
     updatedAt={selectedSession ? formatSessionTimestamp(selectedSession.updatedAt) : 'Not loaded'}
     summaryStatus={selectedSession?.status ?? 'idle'}
     debugLabel={debugEventsTooltip}
@@ -577,6 +585,7 @@
         dockAlignWidth={dockAlignWidth}
         compact={true}
         sessionOnly={true}
+        sessionProfileLabel={sessionProfileLabel}
         chatView={true}
         agentRunning={agentRunActive}
         onStopPrompt={() => agentsStore.cancelActiveSession()}

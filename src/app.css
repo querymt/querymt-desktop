@@ -3036,6 +3036,26 @@ summary:focus-visible {
   max-width: 14rem;
 }
 
+/* Read-only session profile value; same metrics as the pill selects but muted,
+   since profiles are locked after session start. */
+.composer-option-value-locked {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--muted);
+  padding: 0.28rem 0.6rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+.composer-option-value-locked svg {
+  color: var(--text-dim);
+}
+
 .composer-model-pill {
   max-width: 22rem;
 }
@@ -4778,6 +4798,16 @@ summary:focus-visible {
 
 .copy-chip-copied svg {
   color: var(--accent);
+}
+
+.session-header-profile {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+}
+
+.session-header-profile svg {
+  color: var(--text-dim);
 }
 
 .session-header-status-dot {
