@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
 import type { ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
+import {
+  DelegateAssignmentSource,
+  type DelegateAssignmentsInfo,
+  type SetDelegateModelRequest,
+  type SetDelegateModelResponse
+} from '$lib/querymt/generated/types';
 import { tick } from 'svelte';
 import { AgentsStore } from './agents.svelte';
 
@@ -12,6 +18,7 @@ const mockDrainAgentSessionUpdates = vi.hoisted(() => vi.fn(async () => [] as Se
 const mockClient = vi.hoisted(() => {
   let sessionUpdateHandler: ((notification: SessionNotification) => void) | null = null;
   let connectionLossHandler: ((reason: string) => void) | null = null;
+  let extensionNotificationHandler: ((notification: { method: string; params: unknown }) => void) | null = null;
   let permissionUnsubscribe = vi.fn();
   let elicitationUnsubscribe = vi.fn();
 
@@ -63,6 +70,24 @@ const mockClient = vi.hoisted(() => {
     listModels: vi.fn(async (): Promise<ModelEntry[]> => []),
     refreshAndListModels: vi.fn(async (): Promise<ModelEntry[]> => []),
     getModelInfo: vi.fn(async () => ({})),
+    getDelegateModels: vi.fn(async (request: { session_id: string }): Promise<DelegateAssignmentsInfo> => ({
+      version: 1,
+      session_id: request.session_id,
+      profile_id: 'quorum',
+      revision: 0,
+      durable: true,
+      editable: true,
+      assignments: [],
+      orphaned_overrides: []
+    })),
+    setDelegateModel: vi.fn(async (request: SetDelegateModelRequest): Promise<SetDelegateModelResponse> => ({
+      version: 1,
+      session_id: request.session_id,
+      agent_id: request.agent_id,
+      model: request.model_id ? { model_id: request.model_id, node_id: request.node_id ?? undefined } : null,
+      revision: (request.expected_revision ?? 0) + 1,
+      durable: true
+    })),
     onConnectionLost: vi.fn((handler: (reason: string) => void) => {
       connectionLossHandler = handler;
       return () => {
@@ -77,12 +102,19 @@ const mockClient = vi.hoisted(() => {
     emitSessionUpdate: (notification: SessionNotification) => sessionUpdateHandler?.(notification),
     resetSessionUpdateHandler: () => {
       sessionUpdateHandler = null;
+      extensionNotificationHandler = null;
       permissionUnsubscribe = vi.fn();
       elicitationUnsubscribe = vi.fn();
     },
     permissionUnsubscribe: () => permissionUnsubscribe,
     elicitationUnsubscribe: () => elicitationUnsubscribe,
-    onExtensionNotification: vi.fn(() => () => undefined),
+    onExtensionNotification: vi.fn((handler: (notification: { method: string; params: unknown }) => void) => {
+      extensionNotificationHandler = handler;
+      return () => {
+        extensionNotificationHandler = null;
+      };
+    }),
+    emitExtensionNotification: (notification: { method: string; params: unknown }) => extensionNotificationHandler?.(notification),
     onPermissionRequest: vi.fn(() => permissionUnsubscribe),
     onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
     setSessionConfigOption: vi.fn(async (_request: SetSessionConfigOptionRequest): Promise<SessionConfigOption[]> => []),
@@ -164,6 +196,24 @@ beforeEach(() => {
   mockClient.listModels.mockResolvedValue([]);
   mockClient.refreshAndListModels.mockResolvedValue([]);
   mockClient.getModelInfo.mockResolvedValue({});
+  mockClient.getDelegateModels.mockReset().mockImplementation(async (request: { session_id: string }) => ({
+    version: 1,
+    session_id: request.session_id,
+    profile_id: 'quorum',
+    revision: 0,
+    durable: true,
+    editable: true,
+    assignments: [],
+    orphaned_overrides: []
+  }));
+  mockClient.setDelegateModel.mockReset().mockImplementation(async (request: SetDelegateModelRequest): Promise<SetDelegateModelResponse> => ({
+    version: 1,
+    session_id: request.session_id,
+    agent_id: request.agent_id,
+    model: request.model_id ? { model_id: request.model_id, node_id: request.node_id ?? undefined } : null,
+    revision: (request.expected_revision ?? 0) + 1,
+    durable: true
+  }));
   mockDrainAgentSessionUpdates.mockResolvedValue([]);
   mockClient.setSessionConfigOption.mockReset().mockResolvedValue([]);
   mockClient.loadSession.mockReset().mockResolvedValue({ response: { configOptions: [] }, replay: [] });
@@ -910,6 +960,246 @@ describe('AgentsStore model info cache', () => {
 
     expect(mockClient.getModelInfo).toHaveBeenCalledTimes(2);
     expect(store.modelInfoByAgent['agent-1'][localModel.id]).toEqual(modelInfo);
+  });
+});
+
+describe('AgentsStore delegate model assignments', () => {
+  const assignmentState: DelegateAssignmentsInfo = {
+    version: 1,
+    session_id: 'session-1',
+    profile_id: 'quorum',
+    revision: 2,
+    durable: true,
+    editable: true,
+    assignments: [{
+      agent_id: 'coder',
+      name: 'Coder',
+      description: 'Writes code',
+      model: null,
+      source: DelegateAssignmentSource.ProfileDefault,
+      configured_default_model_id: 'codex/gpt-5.6-sol'
+    }],
+    orphaned_overrides: []
+  };
+
+  function selectSession(store: AgentsStore) {
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+  }
+
+  it('loads authoritative assignments with session history and writes with the current revision', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Delegates', cwd: '/tmp/work',
+        updatedAt: '2026-09-08T09:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    mockClient.getDelegateModels
+      .mockResolvedValueOnce(assignmentState)
+      .mockResolvedValueOnce({
+        ...assignmentState,
+        revision: 3,
+        assignments: [{
+          ...assignmentState.assignments[0],
+          model: { model_id: 'xai/grok-4.6', node_id: 'node-1' },
+          source: DelegateAssignmentSource.Override
+        }]
+      });
+
+    await store.loadSession('agent-1', 'session-1');
+    await vi.waitFor(() => expect(store.activeDelegateAssignments).toEqual(assignmentState));
+
+    await expect(store.setActiveDelegateModel('coder', { model_id: 'xai/grok-4.6', node_id: 'node-1' })).resolves.toBe(true);
+    expect(mockClient.setDelegateModel).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model_id: 'xai/grok-4.6',
+      node_id: 'node-1',
+      expected_revision: 2
+    });
+    expect(store.activeDelegateAssignments?.revision).toBe(3);
+    expect(store.activeDelegateAssignmentPending.coder).toBeUndefined();
+  });
+
+  it('does not delay session rendering while assignment readback is pending', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Delegates', cwd: '/tmp/work',
+        updatedAt: '2026-09-08T09:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    let resolveAssignments!: (state: DelegateAssignmentsInfo) => void;
+    mockClient.getDelegateModels.mockImplementationOnce(
+      () => new Promise<DelegateAssignmentsInfo>((resolve) => { resolveAssignments = resolve; })
+    );
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(mockClient.getDelegateModels).toHaveBeenCalledWith({ session_id: 'session-1' });
+    expect(store.activeDelegateAssignmentsLoading).toBe(true);
+    resolveAssignments(assignmentState);
+    await vi.waitFor(() => expect(store.activeDelegateAssignments).toEqual(assignmentState));
+  });
+
+  it('omits revision checking for run-only storage by sending a null expected revision', async () => {
+    const store = createStore();
+    selectSession(store);
+    const runOnlyState: DelegateAssignmentsInfo = { ...assignmentState, revision: null, durable: false };
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': runOnlyState };
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1,
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model: { model_id: 'xai/grok-4.6' },
+      revision: null,
+      durable: false
+    });
+    mockClient.getDelegateModels.mockResolvedValueOnce({
+      ...runOnlyState,
+      assignments: [{
+        ...runOnlyState.assignments[0],
+        model: { model_id: 'xai/grok-4.6' },
+        source: DelegateAssignmentSource.Override
+      }]
+    });
+
+    await expect(store.setActiveDelegateModel('coder', { model_id: 'xai/grok-4.6' })).resolves.toBe(true);
+
+    expect(mockClient.setDelegateModel).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model_id: 'xai/grok-4.6',
+      node_id: null,
+      expected_revision: null
+    });
+    expect(store.activeDelegateAssignments?.revision).toBeNull();
+    expect(store.activeDelegateAssignments?.durable).toBe(false);
+  });
+
+  it('serializes rapid writes and keeps role pending until its final write completes', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': assignmentState };
+    let resolveFirst!: (response: SetDelegateModelResponse) => void;
+    let resolveSecond!: (response: SetDelegateModelResponse) => void;
+    mockClient.setDelegateModel
+      .mockImplementationOnce(() => new Promise<SetDelegateModelResponse>((resolve) => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise<SetDelegateModelResponse>((resolve) => { resolveSecond = resolve; }));
+    mockClient.getDelegateModels
+      .mockResolvedValueOnce({
+        ...assignmentState,
+        revision: 3,
+        assignments: [{
+          ...assignmentState.assignments[0],
+          model: { model_id: 'xai/grok-4.6' },
+          source: DelegateAssignmentSource.Override
+        }]
+      })
+      .mockResolvedValueOnce({
+        ...assignmentState,
+        revision: 4,
+        assignments: [{
+          ...assignmentState.assignments[0],
+          model: { model_id: 'codex/gpt-5.6-sol' },
+          source: DelegateAssignmentSource.Override
+        }]
+      });
+
+    const first = store.setActiveDelegateModel('coder', { model_id: 'xai/grok-4.6' });
+    const second = store.setActiveDelegateModel('coder', { model_id: 'codex/gpt-5.6-sol' });
+    await vi.waitFor(() => expect(mockClient.setDelegateModel).toHaveBeenCalledTimes(1));
+    expect(store.activeDelegateAssignmentPending.coder).toBe(true);
+
+    resolveFirst({
+      version: 1,
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model: { model_id: 'xai/grok-4.6' },
+      revision: 3,
+      durable: true
+    });
+    await expect(first).resolves.toBe(true);
+    await vi.waitFor(() => expect(mockClient.setDelegateModel).toHaveBeenCalledTimes(2));
+    expect(mockClient.setDelegateModel).toHaveBeenLastCalledWith({
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model_id: 'codex/gpt-5.6-sol',
+      node_id: null,
+      expected_revision: 3
+    });
+    expect(store.activeDelegateAssignmentPending.coder).toBe(true);
+
+    resolveSecond({
+      version: 1,
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model: { model_id: 'codex/gpt-5.6-sol' },
+      revision: 4,
+      durable: true
+    });
+    await expect(second).resolves.toBe(true);
+    expect(store.activeDelegateAssignmentPending.coder).toBeUndefined();
+    expect(store.activeDelegateAssignments?.revision).toBe(4);
+  });
+
+  it('refreshes after a conflict and requires user review instead of retrying the write', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': assignmentState };
+    mockClient.setDelegateModel.mockRejectedValueOnce(
+      new RequestError(-32602, 'Invalid params', {
+        code: 'delegate_assignment_conflict',
+        expected_revision: 2,
+        actual_revision: 3,
+        message: 'Delegate assignments changed; refresh before retrying'
+      })
+    );
+    mockClient.getDelegateModels.mockResolvedValueOnce({ ...assignmentState, revision: 3 });
+
+    await expect(store.setActiveDelegateModel('coder', { model_id: 'xai/grok-4.6' })).resolves.toBe(false);
+
+    expect(mockClient.setDelegateModel).toHaveBeenCalledTimes(1);
+    expect(mockClient.getDelegateModels).toHaveBeenCalledWith({ session_id: 'session-1' });
+    expect(store.activeDelegateAssignmentConflict).toBe(true);
+    expect(store.activeDelegateAssignments?.revision).toBe(3);
+  });
+
+  it('refreshes the selected session when an assignment invalidation arrives', async () => {
+    const store = createStore();
+    selectSession(store);
+    await store.connectAgent('agent-1');
+    mockClient.getDelegateModels.mockResolvedValueOnce(assignmentState);
+
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/delegateModelsChanged',
+      params: { version: 1, session_id: 'session-1', revision: 2 }
+    });
+
+    await vi.waitFor(() => expect(mockClient.getDelegateModels).toHaveBeenCalledWith({ session_id: 'session-1' }));
+    expect(store.activeDelegateAssignments).toEqual(assignmentState);
+  });
+
+  it('exposes unavailable and orphaned assignments without altering them on read', async () => {
+    const store = createStore();
+    selectSession(store);
+    const state = {
+      ...assignmentState,
+      assignments: [{
+        ...assignmentState.assignments[0],
+        model: { model_id: 'missing/model', node_id: 'offline-node' },
+        source: DelegateAssignmentSource.Override
+      }],
+      orphaned_overrides: [{ agent_id: 'removed-role', model: { model_id: 'legacy/model' } }]
+    };
+    mockClient.getDelegateModels.mockResolvedValueOnce(state);
+
+    await store.refreshDelegateAssignments();
+
+    expect(store.activeDelegateAssignments).toEqual(state);
+    expect(mockClient.setDelegateModel).not.toHaveBeenCalled();
   });
 });
 

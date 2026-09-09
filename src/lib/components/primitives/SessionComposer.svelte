@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Brain, ChevronDown, FileCog, FilePlus2, Lock, Monitor, Paperclip, Plus, SendHorizontal, Settings2, SlidersHorizontal, Square, X } from '@lucide/svelte';
+  import { Brain, ChevronDown, FileCog, FilePlus2, Lock, Monitor, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
   import { tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import type { TransitionConfig } from 'svelte/transition';
@@ -63,6 +63,8 @@
     selectedTargetId = 'local',
     sessionConfigOptions = [],
     sessionConfigPending = {},
+    delegateModelCount = 0,
+    delegateModelsLoading = false,
     onCwdInput = null,
     onPromptInput,
     onModelChange = null,
@@ -74,6 +76,7 @@
     onLaunchReasoningChange = null,
     onTargetChange = null,
     onSessionConfigChange = null,
+    onOpenDelegateModels = null,
     onCreateSession = null,
     onDismissError = null,
     agentRunning = false,
@@ -116,6 +119,8 @@
     selectedTargetId?: string;
     sessionConfigOptions?: SessionConfigOption[];
     sessionConfigPending?: Record<string, boolean>;
+    delegateModelCount?: number;
+    delegateModelsLoading?: boolean;
     onCwdInput?: ((value: string) => void) | null;
     onPromptInput: (value: string) => void;
     onModelChange?: ((value: string) => void | Promise<void>) | null;
@@ -127,6 +132,7 @@
     onLaunchReasoningChange?: ((reasoningId: string) => void) | null;
     onTargetChange?: ((targetId: string) => void) | null;
     onSessionConfigChange?: ((configId: string, value: string) => void | Promise<void>) | null;
+    onOpenDelegateModels?: (() => void) | null;
     onCreateSession?: (() => void) | null;
     onDismissError?: (() => void) | null;
     agentRunning?: boolean;
@@ -234,7 +240,8 @@
     (!activeSessionId && launch && launchReasoningOptions.length > 0 ? 1 : reasoningOption ? 1 : 0) +
       (!sessionOnly && profileOptions.length > 0 ? 1 : 0) +
       (sessionOnly && sessionProfileLabel ? 1 : 0) +
-      (!sessionOnly && targetOptions.length > 1 ? 1 : 0)
+      (!sessionOnly && targetOptions.length > 1 ? 1 : 0) +
+      (sessionOnly && onOpenDelegateModels ? 1 : 0)
   );
   const optionsSummary = $derived.by(() => {
     const labels: string[] = [];
@@ -620,7 +627,22 @@
                     </span>
                   </div>
                 {/if}
-               {#if !sessionOnly && targetOptions.length > 1}
+                {#if sessionOnly && onOpenDelegateModels}
+                  <div class="composer-option-row composer-option-row-action">
+                    <div class="composer-option-copy"><Waypoints size={15} /><span><strong>Delegate routing</strong><small>Choose models for the profile's delegate roles</small></span></div>
+                    <button
+                      class="action-btn composer-option-action"
+                      type="button"
+                      disabled={delegateModelsLoading}
+                      onclick={onOpenDelegateModels}
+                    >
+                      {#if delegateModelsLoading}<RefreshCw size={13} class="animate-spin" />{:else}<Waypoints size={13} />{/if}
+                      Configure{delegateModelCount > 0 ? ` · ${delegateModelCount}` : ''}
+                    </button>
+                  </div>
+                {/if}
+                {#if !sessionOnly && targetOptions.length > 1}
+
                  <div class="composer-option-row">
                    <div class="composer-option-copy"><Monitor size={15} /><span><strong>Target</strong><small>Where this session will run</small></span></div>
                    <ComposerSplitPillSelect

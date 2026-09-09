@@ -7,6 +7,7 @@
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import SessionScrollToBottomPill from '$lib/components/session/SessionScrollToBottomPill.svelte';
   import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelte';
+  import DelegateModelDialog from '$lib/components/session/DelegateModelDialog.svelte';
   import SessionForkDialog from '$lib/components/session/SessionForkDialog.svelte';
   import SessionHeader from '$lib/components/session/SessionHeader.svelte';
   import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
@@ -60,6 +61,7 @@
   let undoTargetMessageId = $state<string | null>(null);
   let forkDialogOpen = $state(false);
   let forkTarget = $state<SessionForkTarget | null>(null);
+  let delegateModelDialogOpen = $state(false);
 
   const debugEventsTooltip = $derived.by(() => {
     const count = agentsStore.activeSession.events.length;
@@ -177,6 +179,14 @@
 
   onMount(() => {
     const onLayoutChange = () => syncDockAlign();
+    const onWindowFocus = () => {
+      if (delegateModelDialogOpen) void agentsStore.refreshDelegateAssignments(agentId, sessionId);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && delegateModelDialogOpen) {
+        void agentsStore.refreshDelegateAssignments(agentId, sessionId);
+      }
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z' || isEditableTarget(event.target)) return;
       if (event.shiftKey) {
@@ -198,7 +208,9 @@
 
     setupScrollTracking();
     window.addEventListener('resize', onLayoutChange);
+    window.addEventListener('focus', onWindowFocus);
     window.addEventListener('keydown', onKeyDown);
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     if (typeof ResizeObserver === 'function' && sessionPage) {
       // The dock alignment is measured in pixels, so it must track shell layout
@@ -214,7 +226,9 @@
       pageResizeObserver?.disconnect();
       pageResizeObserver = null;
       window.removeEventListener('resize', onLayoutChange);
+      window.removeEventListener('focus', onWindowFocus);
       window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   });
 
@@ -607,7 +621,15 @@
         onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}
         sessionConfigOptions={agentsStore.activeSession.configOptions}
         sessionConfigPending={agentsStore.sessionConfigPending}
+        delegateModelCount={agentsStore.activeDelegateAssignments?.assignments.length ?? 0}
+        delegateModelsLoading={agentsStore.activeDelegateAssignmentsLoading}
         onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
+        onOpenDelegateModels={agentsStore.canConfigureDelegateModels(agentId)
+          ? () => {
+              delegateModelDialogOpen = true;
+              void agentsStore.refreshDelegateAssignments(agentId, sessionId);
+            }
+          : null}
         onAddAttachments={(items) => agentsStore.addPromptAttachments(items)}
         onRemoveAttachment={(id) => agentsStore.removePromptAttachment(id)}
         onDismissError={() => agentsStore.clearError()}
@@ -617,6 +639,21 @@
 
     <div class="session-chat-end-anchor" aria-hidden="true"></div>
   </div>
+
+  <DelegateModelDialog
+    bind:open={delegateModelDialogOpen}
+    assignments={agentsStore.activeDelegateAssignments}
+    models={agentsStore.modelsByAgent[agentId] ?? []}
+    loading={agentsStore.activeDelegateAssignmentsLoading}
+    modelLoading={!!agentsStore.modelLoadingByAgent[agentId]}
+    pending={agentsStore.activeDelegateAssignmentPending}
+    error={agentsStore.activeDelegateAssignmentsError}
+    conflict={agentsStore.activeDelegateAssignmentConflict}
+    onRefresh={() => agentsStore.refreshDelegateAssignments(agentId, sessionId)}
+    onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}
+    onAssign={(delegateAgentId, model) => agentsStore.setActiveDelegateModel(delegateAgentId, model)}
+    onDismissConflict={() => agentsStore.dismissActiveDelegateAssignmentConflict()}
+  />
 
   <SessionForkDialog
     bind:open={forkDialogOpen}

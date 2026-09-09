@@ -188,6 +188,10 @@ export type AgentEventKind =
 	| { type: "artifact_recorded", data: {
 	artifact: Artifact;
 }}
+	/** Invalidation hint; clients read the authoritative assignment snapshot after this event. */
+	| { type: "delegate_models_changed", data: {
+	revision?: number;
+}}
 	| { type: "delegation_requested", data: {
 	delegation: Delegation;
 }}
@@ -235,6 +239,10 @@ export type AgentEventKind =
 	fork_point_type: string;
 	fork_point_ref: string;
 	instructions?: string;
+	/** Model confirmed by the child session before its first prompt. */
+	selected_model_id?: string;
+	/** Mesh node confirmed with the selected model, or None for local execution. */
+	selected_provider_node_id?: string;
 }}
 	/** Emitted once at session creation with environment configuration */
 	| { type: "session_configured", data: {
@@ -627,6 +635,51 @@ export interface CreateScheduleControlRequest {
 	max_steps?: number;
 	max_cost_usd?: number;
 	max_runs?: number;
+}
+
+export enum DelegateAssignmentSource {
+	Override = "override",
+	ProfileDefault = "profile_default",
+}
+
+export interface DelegateAssignmentInfo {
+	agent_id: string;
+	name: string;
+	description: string;
+	model: DelegateModelOverride | null;
+	source: DelegateAssignmentSource;
+	configured_default_model_id: string | null;
+}
+
+export interface DelegateModelOverride {
+	model_id: string;
+	node_id?: string;
+}
+
+export interface OrphanedDelegateAssignment {
+	agent_id: string;
+	model: DelegateModelOverride;
+}
+
+export interface DelegateAssignmentsInfo {
+	version: number;
+	session_id: string;
+	profile_id: string;
+	revision: number | null;
+	durable: boolean;
+	editable: boolean;
+	assignments: DelegateAssignmentInfo[];
+	orphaned_overrides: OrphanedDelegateAssignment[];
+}
+
+export interface DelegateModelsChangedNotification {
+	version: number;
+	session_id: string;
+	revision: number | null;
+}
+
+export interface DelegateModelsRequest {
+	session_id: string;
 }
 
 export interface DismissRemoteSessionRequest {
@@ -1034,6 +1087,23 @@ export interface SessionMeta {
 	sessionKind?: string;
 	hasChildren?: boolean;
 	forkCount?: number;
+}
+
+export interface SetDelegateModelRequest {
+	session_id: string;
+	agent_id: string;
+	model_id?: string | null;
+	node_id?: string | null;
+	expected_revision?: number | null;
+}
+
+export interface SetDelegateModelResponse {
+	version: number;
+	session_id: string;
+	agent_id: string;
+	model: DelegateModelOverride | null;
+	revision: number | null;
+	durable: boolean;
 }
 
 /**

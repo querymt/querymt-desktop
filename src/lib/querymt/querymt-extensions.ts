@@ -26,6 +26,11 @@ import type {
   ScheduleInfo,
   ScheduleListInfo,
   ScheduleActionResult,
+  DelegateAssignmentsInfo,
+  DelegateModelsChangedNotification,
+  DelegateModelsRequest,
+  SetDelegateModelRequest,
+  SetDelegateModelResponse,
   ModelsChangedNotification,
   MeshJoinedNotification,
   MeshNodesChangedNotification,
@@ -41,6 +46,7 @@ export type QuerymtLogicalMethod = `querymt/${string}`;
 export type QuerymtWireMethod = QuerymtLogicalMethod | `_${QuerymtLogicalMethod}`;
 export type QuerymtExtensionNotification =
   | { method: 'querymt/models/changed'; params: ModelsChangedNotification }
+  | { method: 'querymt/session/delegateModelsChanged'; params: DelegateModelsChangedNotification }
   | { method: 'querymt/mesh/joined'; params: MeshJoinedNotification }
   | { method: 'querymt/mesh/nodesChanged'; params: MeshNodesChangedNotification }
   | { method: 'querymt/mesh/peerExpired'; params: MeshPeerExpiredNotification }
@@ -81,6 +87,8 @@ export const QMT_METHOD_UPDATE_PLUGINS = 'querymt/updatePlugins';
 export const QMT_METHOD_SESSION_UNDO_STACK = 'querymt/session/undoStack';
 export const QMT_METHOD_SESSION_UNDO = 'querymt/session/undo';
 export const QMT_METHOD_SESSION_REDO = 'querymt/session/redo';
+export const QMT_METHOD_SESSION_DELEGATE_MODELS = 'querymt/session/delegateModels';
+export const QMT_METHOD_SESSION_SET_DELEGATE_MODEL = 'querymt/session/setDelegateModel';
 
 export interface QuerymtModelsResponse {
   models: ModelEntry[];
@@ -369,5 +377,25 @@ export class QuerymtExtensions {
   async redoSession(session_id: string): Promise<QuerymtRedoResponse> {
     const response = await this.call<QuerymtRedoResponse>(QMT_METHOD_SESSION_REDO, { session_id });
     return { ...response, undo_stack: response.undo_stack ?? [] };
+  }
+
+  async delegateModels(request: DelegateModelsRequest): Promise<DelegateAssignmentsInfo> {
+    const response = await this.call<DelegateAssignmentsInfo>(QMT_METHOD_SESSION_DELEGATE_MODELS, request);
+    if (response.version !== 1) {
+      throw new Error(`Unsupported delegate-model contract version ${response.version}.`);
+    }
+    return {
+      ...response,
+      assignments: response.assignments ?? [],
+      orphaned_overrides: response.orphaned_overrides ?? []
+    };
+  }
+
+  async setDelegateModel(request: SetDelegateModelRequest): Promise<SetDelegateModelResponse> {
+    const response = await this.call<SetDelegateModelResponse>(QMT_METHOD_SESSION_SET_DELEGATE_MODEL, request);
+    if (response.version !== 1) {
+      throw new Error(`Unsupported delegate-model contract version ${response.version}.`);
+    }
+    return response;
   }
 }
