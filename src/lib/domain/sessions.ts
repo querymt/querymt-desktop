@@ -283,7 +283,67 @@ function compareNullableTimestamps(a: string | null, b: string | null): number {
   return (a ?? '').localeCompare(b ?? '');
 }
 
+const MINUTE_MS = 60_000;
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+
 export function formatSessionTimestamp(updatedAt: string | null): string {
+  if (!updatedAt) {
+    return 'No recent activity';
+  }
+
+  const value = new Date(updatedAt);
+  if (Number.isNaN(value.getTime())) {
+    return updatedAt;
+  }
+
+  const now = new Date();
+  const elapsed = now.getTime() - value.getTime();
+  if (elapsed < MINUTE_MS) {
+    return 'just now';
+  }
+
+  if (elapsed < HOUR_MS) {
+    const minutes = Math.floor(elapsed / MINUTE_MS);
+    return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  }
+
+  const dayDiff = calendarDayDifference(now, value);
+  if (dayDiff === 0) {
+    const hours = Math.floor(elapsed / HOUR_MS);
+    return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  }
+
+  if (dayDiff === 1) {
+    return `Yesterday, ${formatSessionClock(value)}`;
+  }
+
+  if (dayDiff < 7) {
+    return `${dayDiff} days ago`;
+  }
+
+  return formatSessionDate(value, now);
+}
+
+function calendarDayDifference(a: Date, b: Date): number {
+  const aDay = new Date(a.getFullYear(), a.getMonth(), a.getDate()).getTime();
+  const bDay = new Date(b.getFullYear(), b.getMonth(), b.getDate()).getTime();
+  return Math.round((aDay - bDay) / DAY_MS);
+}
+
+function formatSessionClock(value: Date): string {
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(value);
+}
+
+function formatSessionDate(value: Date, now: Date): string {
+  const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+  if (value.getFullYear() !== now.getFullYear()) {
+    options.year = 'numeric';
+  }
+  return new Intl.DateTimeFormat(undefined, options).format(value);
+}
+
+export function formatSessionTimestampAbsolute(updatedAt: string | null): string {
   if (!updatedAt) {
     return 'No recent activity';
   }
@@ -296,6 +356,7 @@ export function formatSessionTimestamp(updatedAt: string | null): string {
   return new Intl.DateTimeFormat(undefined, {
     month: 'short',
     day: 'numeric',
+    year: 'numeric',
     hour: 'numeric',
     minute: '2-digit'
   }).format(value);

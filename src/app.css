@@ -3036,6 +3036,26 @@ summary:focus-visible {
   max-width: 14rem;
 }
 
+/* Read-only session profile value; same metrics as the pill selects but muted,
+   since profiles are locked after session start. */
+.composer-option-value-locked {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--muted);
+  padding: 0.28rem 0.6rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+.composer-option-value-locked svg {
+  color: var(--text-dim);
+}
+
 .composer-model-pill {
   max-width: 22rem;
 }
@@ -3243,6 +3263,16 @@ summary:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
+}
+
+.composer-model-pill-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.composer-model-pill-node svg {
+  flex: 0 0 auto;
 }
 
 .app-select-value {
@@ -4719,6 +4749,65 @@ summary:focus-visible {
 
 .session-id-chip-copied svg {
   color: var(--accent);
+}
+
+/* Click-to-copy text chip; mirrors .session-id-chip's copied overlay so the
+   chip keeps its width while showing feedback. */
+.copy-chip {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0.05rem 0.3rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.copy-chip:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+}
+
+.copy-chip-label {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copy-chip-copied {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.22rem;
+  background: var(--bg-panel);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.copy-chip-copied svg {
+  color: var(--accent);
+}
+
+.session-header-profile {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+}
+
+.session-header-profile svg {
+  color: var(--text-dim);
 }
 
 .session-header-status-dot {
@@ -7721,8 +7810,16 @@ summary:focus-visible {
 }
 
 .session-row-status-line .session-header-status-dot {
+  position: relative;
   pointer-events: auto;
   cursor: default;
+}
+
+/* Invisible halo enlarging the ~7px dot's hover target. */
+.session-row-status-line .session-header-status-dot::before {
+  content: '';
+  position: absolute;
+  inset: -0.3rem;
 }
 
 .session-row-status-line .session-id-chip {
@@ -7731,6 +7828,17 @@ summary:focus-visible {
   padding: 0;
   font-size: inherit;
   line-height: inherit;
+}
+
+/* Opt the timestamp back into hit testing so its absolute-date title shows;
+   the button re-opens the session, matching the row-wide click behavior. */
+.session-row-status-line .session-row-timestamp {
+  pointer-events: auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
 }
 
 .session-row-status-tooltip {

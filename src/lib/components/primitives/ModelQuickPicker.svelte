@@ -1,7 +1,7 @@
 <script lang="ts">
   import { AudioLines, Bot, FileText, Gauge, Image, Network, Paperclip, RefreshCw, Search, Type, Video, X } from '@lucide/svelte';
   import { getContext, tick } from 'svelte';
-  import { Dialog } from 'bits-ui';
+  import { Dialog, Tooltip } from 'bits-ui';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import type { ModelEntry, ModelInfo } from '$lib/domain/types';
   import { getModelSelectionKey } from '$lib/querymt/config-options';
@@ -23,6 +23,7 @@
     modelOptions = [],
     recentModels = [],
     selectedModelId = '',
+    emptyLabel = 'Select model',
     modelInfo = {},
     loading = false,
     disabled = false,
@@ -34,6 +35,7 @@
     modelOptions?: ModelEntry[];
     recentModels?: ModelEntry[];
     selectedModelId?: string;
+    emptyLabel?: string;
     modelInfo?: Record<string, ModelInfo | null>;
     loading?: boolean;
     disabled?: boolean;
@@ -55,8 +57,6 @@
   const selectedModel = $derived(
     modelOptions.find((entry) => getModelSelectionKey(entry) === selectedModelId) ??
       modelOptions.find((entry) => entry.id === selectedModelId && !entry.node_id) ??
-      recentModels[0] ??
-      modelOptions[0] ??
       null
   );
 
@@ -257,12 +257,42 @@
     <span class="composer-model-pill-label">
       {#if selectedModel}
         {selectedModel.label ?? selectedModel.model}
-        <span class="muted">· {selectedModel.provider}</span>
+        {#if selectedModel.node_label}
+          <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+            <Tooltip.Root disableHoverableContent>
+              <Tooltip.Trigger>
+                {#snippet child({ props })}
+                  {@const { type: _type, tabindex: _tabindex, class: triggerClass = '', ...triggerProps } = props}
+                  <!-- tabindex from the spread is stripped and overridden to -1 below -->
+                  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                  <span
+                    {...triggerProps}
+                    class={`${triggerClass} muted composer-model-pill-node`}
+                    tabindex={-1}
+                    aria-label={`Using ${selectedModel.provider} from ${selectedModel.node_label}`}
+                  >
+                    · {selectedModel.provider}
+                    <Network size={12} aria-hidden="true" />
+                  </span>
+                {/snippet}
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content class="app-tooltip-content" sideOffset={6}>
+                  Using <b>{selectedModel.provider}</b> from <b>{selectedModel.node_label}</b>
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
+          </Tooltip.Provider>
+        {:else}
+          <span class="muted">· {selectedModel.provider}</span>
+        {/if}
         {#if agentLabel}
           <span class="muted">· {agentLabel}</span>
         {/if}
+      {:else if selectedModelId}
+        {selectedModelId}{loading ? '' : ' (unavailable)'}
       {:else}
-        Select model
+        {loading ? 'Loading model...' : emptyLabel}
       {/if}
     </span>
   </button>

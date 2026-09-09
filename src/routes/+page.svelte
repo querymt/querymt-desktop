@@ -79,7 +79,7 @@
       activeSessionId={null}
       promptFocusToken={agentsStore.promptFocusToken}
       modelOptions={primaryAgentId ? (agentsStore.modelsByAgent[primaryAgentId] ?? []) : []}
-      selectedModelId={agentsStore.composerModelId}
+      selectedModelId={agentsStore.launchModelId}
       modelInfo={primaryAgentId ? (agentsStore.modelInfoByAgent[primaryAgentId] ?? {}) : {}}
       recentModels={primaryAgentId ? agentsStore.getRecentModels(primaryAgentId) : []}
       modelLoading={primaryAgentId ? !!agentsStore.modelLoadingByAgent[primaryAgentId] : false}
@@ -94,11 +94,9 @@
       selectedLaunchReasoningId={agentsStore.composerReasoningId}
       targetOptions={agentsStore.getTargetOptions(primaryAgentId)}
       selectedTargetId={agentsStore.composerTargetId}
-      sessionConfigOptions={agentsStore.activeSession.configOptions}
-      sessionConfigPending={agentsStore.sessionConfigPending}
       onCwdInput={(value) => agentsStore.setComposerCwd(value)}
       onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
-      onModelChange={(value) => agentsStore.setComposerModel(value)}
+      onModelChange={(value) => agentsStore.setLaunchModel(value)}
       onRefreshModels={() => primaryAgentId && agentsStore.refreshModelsForAgent(primaryAgentId)}
       onAddAttachments={(attachments) => agentsStore.addPromptAttachments(attachments)}
       onRemoveAttachment={(attachmentId) => agentsStore.removePromptAttachment(attachmentId)}
@@ -106,7 +104,6 @@
       onLaunchModeChange={(modeId) => agentsStore.setComposerMode(modeId)}
       onLaunchReasoningChange={(reasoningId) => agentsStore.setComposerReasoning(reasoningId)}
       onTargetChange={(targetId) => agentsStore.setComposerTarget(targetId)}
-      onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
       onCreateSession={() => startBlankSessionFromToday()}
       onDismissError={() => agentsStore.clearError()}
       onSendPrompt={() => startSessionFromToday()}

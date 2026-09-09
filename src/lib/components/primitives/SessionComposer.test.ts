@@ -332,6 +332,27 @@ describe('SessionComposer', () => {
     expect(onModelChange).toHaveBeenCalledWith(getModelSelectionKey(remoteModel));
   });
 
+  it('shows unknown rather than a recent or first model for an unconfigured session', () => {
+    renderComposer({ sessionOnly: true, selectedModelId: '', recentModels: modelOptions });
+    expect(screen.getByRole('button', { name: 'Model unknown' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Claude Sonnet 4/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps an unavailable model identity visible instead of substituting the first model', () => {
+    renderComposer({ sessionOnly: true, selectedModelId: 'xai/grok-4.6', recentModels: modelOptions });
+    expect(screen.getByRole('button', { name: 'xai/grok-4.6 (unavailable)' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Claude Sonnet 4/i })).not.toBeInTheDocument();
+  });
+
+  it('disables session model changes while loading or waiting for a config response', async () => {
+    const { rerender } = renderComposer({ sessionOnly: true, selectedModelId: '', modelLoading: true });
+    expect(screen.getByRole('button', { name: 'Loading model...' })).toBeDisabled();
+    await rerender({ modelLoading: false, selectedModelId: modelOptions[0].id, sessionConfigPending: { model: true } });
+    expect(screen.getByRole('button', { name: /Claude Sonnet 4/i })).toBeDisabled();
+    await rerender({ sessionConfigPending: {} });
+    expect(screen.getByRole('button', { name: /Claude Sonnet 4/i })).toBeEnabled();
+  });
+
   it('opens the model picker with Cmd+M from the prompt', async () => {
     renderComposer();
 
