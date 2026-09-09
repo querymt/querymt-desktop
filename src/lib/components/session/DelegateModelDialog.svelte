@@ -60,6 +60,7 @@
   let query = $state('');
 
   const anyPending = $derived(Object.values(pending).some(Boolean));
+  const editable = $derived(assignments?.editable !== false);
   const activeAssignment = $derived.by(() => {
     const target = selectedTarget;
     if (target?.kind !== 'delegate') return null;
@@ -149,13 +150,13 @@
   }
 
   async function assignModel(model: ModelEntry) {
-    if (!selectedAgentId || pending[selectedAgentId]) return;
+    if (!selectedAgentId || !editable || pending[selectedAgentId]) return;
     const changed = await onAssign(selectedAgentId, { model_id: model.id, node_id: model.node_id ?? undefined });
     if (changed) selectedTarget = null;
   }
 
   async function useProfileDefault() {
-    if (!selectedAgentId || pending[selectedAgentId]) return;
+    if (!selectedAgentId || !editable || pending[selectedAgentId]) return;
     const changed = await onAssign(selectedAgentId, null);
     if (changed) selectedTarget = null;
   }
@@ -322,7 +323,7 @@
         class="delegate-model-default-choice"
         class:delegate-model-choice-selected={!activeAssignment.model}
         type="button"
-        disabled={!!pending[selectedAgentId]}
+        disabled={!editable || !!pending[selectedAgentId]}
         onclick={useProfileDefault}
       >
         <span class="delegate-model-choice-icon"><RotateCcw size={16} /></span>
@@ -348,7 +349,7 @@
           aria-label="Search delegate models"
         />
         {#if onRefreshModels}
-          <button type="button" aria-label="Refresh delegate models" disabled={modelLoading} onclick={onRefreshModels}>
+          <button type="button" aria-label="Refresh delegate models" disabled={!editable || modelLoading} onclick={onRefreshModels}>
             <RefreshCw size={14} class={modelLoading ? 'animate-spin' : ''} />
           </button>
         {/if}
@@ -370,7 +371,7 @@
                   class="delegate-model-choice"
                   class:delegate-model-choice-selected={selectedSelectionKey === selectionKey}
                   type="button"
-                  disabled={!!pending[selectedAgentId]}
+                  disabled={!editable || !!pending[selectedAgentId]}
                   onclick={() => assignModel(model)}
                 >
                   <span><strong>{model.label ?? model.model}</strong><small>{model.id}</small></span>
@@ -389,7 +390,7 @@
     {#snippet footer()}
       <button class="action-btn" type="button" disabled={!!pending[selectedAgentId]} onclick={() => (selectedTarget = null)}>Cancel</button>
       {#if activeOrphan}
-        <button class="action-btn action-btn-danger" type="button" disabled={!!pending[selectedAgentId]} onclick={useProfileDefault}>
+        <button class="action-btn action-btn-danger" type="button" disabled={!editable || !!pending[selectedAgentId]} onclick={useProfileDefault}>
           {#if pending[selectedAgentId]}<LoaderCircle size={14} class="animate-spin" />{/if}
           Clear saved route
         </button>

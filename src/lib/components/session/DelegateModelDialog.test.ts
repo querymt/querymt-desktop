@@ -87,6 +87,31 @@ describe('DelegateModelDialog', () => {
     expect(onAssign).toHaveBeenCalledWith('removed-reviewer', null);
   });
 
+  it('locks nested picker actions if a refresh makes the session read-only', async () => {
+    const onAssign = vi.fn(async () => true);
+    const { rerender } = render(DelegateModelDialog, {
+      props: { open: true, assignments, models, onAssign, onRefresh: vi.fn(), onRefreshModels: vi.fn() }
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: /Coder coder/i }));
+    await rerender({
+      open: true,
+      assignments: { ...assignments, editable: false },
+      models,
+      onAssign,
+      onRefresh: vi.fn(),
+      onRefreshModels: vi.fn()
+    });
+
+    const defaultButton = screen.getByRole('button', { name: /Use profile default/i });
+    const modelButton = screen.getByRole('button', { name: /Grok 4.6/i });
+    expect(defaultButton).toHaveProperty('disabled', true);
+    expect(modelButton).toHaveProperty('disabled', true);
+    await fireEvent.click(defaultButton);
+    await fireEvent.click(modelButton);
+    expect(onAssign).not.toHaveBeenCalled();
+  });
+
   it('shows conflict recovery and locks delegated child routes', () => {
     render(DelegateModelDialog, {
       props: {
