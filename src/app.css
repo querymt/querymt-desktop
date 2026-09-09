@@ -4084,8 +4084,22 @@ summary:focus-visible {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--accent), var(--border) 65%);
   border-radius: 0.65rem;
+}
+
+.delegate-model-agent-mark {
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+}
+
+.delegate-model-agent-mark svg {
+  width: 100%;
+  height: 100%;
+}
+
+.delegate-model-choice-icon {
+  border: 1px solid color-mix(in srgb, var(--accent), var(--border) 65%);
   background: color-mix(in srgb, var(--accent-dim), transparent 30%);
   color: var(--accent);
 }
