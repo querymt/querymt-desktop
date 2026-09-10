@@ -1185,6 +1185,74 @@ describe('AgentsStore delegate model assignments', () => {
     expect(store.activeDelegateAssignments?.durable).toBe(false);
   });
 
+  it('preserves local reasoning when a model-only confirmation omits it and readback fails', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.delegateAssignmentsBySession = {
+      'agent-1:session-1': {
+        ...assignmentState,
+        assignments: [{
+          ...assignmentState.assignments[0],
+          model: { model_id: 'codex/gpt-5.6-sol' },
+          source: DelegateAssignmentSource.Override,
+          reasoning_effort: DelegateReasoningEffort.High
+        }]
+      }
+    };
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1,
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model: { model_id: 'xai/grok-4.6' },
+      revision: 3,
+      durable: true
+    });
+    mockClient.getDelegateModels.mockRejectedValueOnce(new Error('Failed to load delegate models.'));
+
+    await expect(store.setActiveDelegateModel('coder', { model_id: 'xai/grok-4.6' })).resolves.toBe(true);
+
+    expect(store.activeDelegateAssignments?.assignments[0]).toMatchObject({
+      model: { model_id: 'xai/grok-4.6' },
+      source: DelegateAssignmentSource.Override,
+      reasoning_effort: DelegateReasoningEffort.High
+    });
+    expect(store.activeDelegateAssignmentsError).toBe('Failed to load delegate models.');
+  });
+
+  it('preserves orphaned reasoning when a model-only confirmation omits it and readback fails', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.delegateAssignmentsBySession = {
+      'agent-1:session-1': {
+        ...assignmentState,
+        assignments: [],
+        orphaned_overrides: [{
+          agent_id: 'removed-role',
+          model: { model_id: 'legacy/model' },
+          reasoning_effort: DelegateReasoningEffort.High
+        }]
+      }
+    };
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1,
+      session_id: 'session-1',
+      agent_id: 'removed-role',
+      model: { model_id: 'xai/grok-4.6' },
+      revision: 3,
+      durable: true
+    });
+    mockClient.getDelegateModels.mockRejectedValueOnce(new Error('Failed to load delegate models.'));
+
+    await expect(store.setActiveDelegateModel('removed-role', { model_id: 'xai/grok-4.6' })).resolves.toBe(true);
+
+    expect(store.activeDelegateAssignments?.orphaned_overrides[0]).toMatchObject({
+      agent_id: 'removed-role',
+      model: { model_id: 'xai/grok-4.6' },
+      reasoning_effort: DelegateReasoningEffort.High
+    });
+    expect(store.activeDelegateAssignmentsError).toBe('Failed to load delegate models.');
+  });
+
   it('serializes rapid writes and keeps role pending until its final write completes', async () => {
     const store = createStore();
     selectSession(store);

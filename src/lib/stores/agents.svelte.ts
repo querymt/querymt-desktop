@@ -3296,12 +3296,22 @@ function sameDelegateModel(left: DelegateModelOverride | null, right: DelegateMo
   return left?.model_id === right?.model_id && (left?.node_id ?? null) === (right?.node_id ?? null);
 }
 
+function confirmedDelegateReasoningEffort(
+  current: DelegateReasoningEffort | null | undefined,
+  incoming: DelegateReasoningEffort | null | undefined
+): DelegateReasoningEffort | null {
+  return incoming === undefined ? current ?? null : incoming;
+}
+
 function applyDelegateModelConfirmation(
   state: DelegateAssignmentsInfo | null | undefined,
   response: SetDelegateModelResponse
 ): DelegateAssignmentsInfo | null {
   if (!state || state.session_id !== response.session_id) return null;
-  const hasAssignment = state.assignments.some((assignment) => assignment.agent_id === response.agent_id);
+  const currentAssignment = state.assignments.find((assignment) => assignment.agent_id === response.agent_id) ??
+    state.orphaned_overrides.find((assignment) => assignment.agent_id === response.agent_id);
+  const reasoningEffort = confirmedDelegateReasoningEffort(currentAssignment?.reasoning_effort, response.reasoning_effort);
+  const hasAssignment = Boolean(currentAssignment && state.assignments.includes(currentAssignment));
   return {
     ...state,
     revision: response.revision,
@@ -3312,18 +3322,18 @@ function applyDelegateModelConfirmation(
           ...assignment,
           model: response.model,
           source: response.model ? DelegateAssignmentSource.Override : DelegateAssignmentSource.ProfileDefault,
-          reasoning_effort: response.reasoning_effort ?? null
+          reasoning_effort: reasoningEffort
         }
         : assignment
     ),
     orphaned_overrides: state.orphaned_overrides
       .filter((assignment) => assignment.agent_id !== response.agent_id)
       .concat(
-        !hasAssignment && (response.model || response.reasoning_effort)
+        !hasAssignment && (response.model || reasoningEffort)
           ? [{
             agent_id: response.agent_id,
             model: response.model,
-            reasoning_effort: response.reasoning_effort ?? null
+            reasoning_effort: reasoningEffort
           }]
           : []
       )
