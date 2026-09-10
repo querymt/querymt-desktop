@@ -1,6 +1,9 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
+  import { page } from '$app/state';
   import {
     AlertTriangle,
+    ArrowUpRight,
     Check,
     ChevronDown,
     CircleEllipsis,
@@ -19,7 +22,7 @@
     Trash2,
     Wrench
   } from '@lucide/svelte';
-  import { getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
+  import { getDelegateTargetAgentId, getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
   import type { SessionToolCallItem } from '$lib/domain/types';
 
   let { tool }: { tool: SessionToolCallItem } = $props();
@@ -27,6 +30,25 @@
   let open = $state(false);
   let copiedPart = $state<'arguments' | 'result' | null>(null);
   const presentation = $derived(getSessionToolPresentation(tool));
+  const delegateTarget = $derived(presentation.icon === 'delegate' ? getDelegateTargetAgentId(tool) : null);
+  const childSessionHref = $derived.by(() => {
+    const agentId = page.params.agentId;
+    const childSessionId = tool.childSessionId?.trim();
+    if (!agentId || !childSessionId) return null;
+    return `/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(childSessionId)}`;
+  });
+
+  function openChildSession(event: MouseEvent | KeyboardEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!childSessionHref) return;
+    void goto(childSessionHref);
+  }
+
+  function handleChildSessionKeydown(event: KeyboardEvent) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    openChildSession(event);
+  }
 
   async function copyDetail(part: 'arguments' | 'result', value: string) {
     try {
@@ -79,6 +101,20 @@
     </span>
 
     <span class="session-tool-summary-state">
+      {#if childSessionHref}
+        <span
+          class="session-tool-session-pill"
+          role="button"
+          tabindex="0"
+          aria-label={delegateTarget ? `Open ${delegateTarget} session` : 'Open delegated session'}
+          title={delegateTarget ? `Open ${delegateTarget}` : 'Open delegated session'}
+          onclick={openChildSession}
+          onkeydown={handleChildSessionKeydown}
+        >
+          <ArrowUpRight size={12} aria-hidden="true" />
+          <span class="session-tool-session-pill-label">{delegateTarget ?? 'Open session'}</span>
+        </span>
+      {/if}
       {#if presentation.expandable}
         <span class="session-tool-disclosure" aria-hidden="true"><ChevronDown size={13} /></span>
       {/if}

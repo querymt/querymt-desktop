@@ -1292,6 +1292,34 @@ describe('AgentsStore delegate model assignments', () => {
     expect(store.activeDelegateAssignments).toEqual(assignmentState);
   });
 
+  it('attaches child session ids from live delegation updates', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.activeSession.toolCalls = [{
+      id: 'delegate-1',
+      title: 'Run delegate',
+      status: 'in_progress',
+      kind: 'delegate',
+      arguments: '{"target_agent_id":"linus","objective":"Review the current bearer-auth diff"}'
+    }];
+    await store.connectAgent('agent-1');
+
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/delegationUpdate',
+      params: {
+        version: 1,
+        sessionId: 'session-1',
+        toolCallId: 'delegate-1',
+        childSessionId: 'child-session-1',
+        state: 'forked',
+        targetAgentId: 'linus',
+        objective: 'Review the current bearer-auth diff'
+      }
+    });
+
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
+  });
+
   it('exposes unavailable and orphaned assignments without altering them on read', async () => {
     const store = createStore();
     selectSession(store);

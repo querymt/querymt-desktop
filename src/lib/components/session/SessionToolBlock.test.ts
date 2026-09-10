@@ -3,12 +3,19 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SessionToolBlock from './SessionToolBlock.svelte';
 
+const goto = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('$app/navigation', () => ({ goto }));
+vi.mock('$app/state', () => ({
+  page: { params: { agentId: 'agent-1' } }
+}));
+
 const writeText = vi.fn().mockResolvedValue(undefined);
 Object.assign(navigator, { clipboard: { writeText } });
 
 afterEach(() => {
   cleanup();
   writeText.mockClear();
+  goto.mockClear();
 });
 
 describe('SessionToolBlock', () => {
@@ -60,5 +67,39 @@ describe('SessionToolBlock', () => {
 
     expect(screen.getByText('Failed')).toHaveClass('sr-only');
     expect(screen.getByRole('region', { name: 'Tool result' })).toHaveTextContent('oldString not found');
+  });
+
+  it('opens the delegated child session without expanding the tool row', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'delegate-1',
+        title: 'Run delegate',
+        kind: 'delegate',
+        status: 'in_progress',
+        arguments: '{"target_agent_id":"linus","objective":"Review the current bearer-auth diff"}',
+        childSessionId: 'child-session-1'
+      }
+    });
+
+    const toolGroup = screen.getByText('Delegate task').closest('details');
+    expect(toolGroup).not.toBeNull();
+    expect(toolGroup).not.toHaveAttribute('open');
+    await fireEvent.click(screen.getByRole('button', { name: 'Open linus session' }));
+    expect(goto).toHaveBeenCalledWith('/sessions/agent-1/child-session-1');
+    expect(toolGroup).not.toHaveAttribute('open');
+  });
+
+  it('hides the session pill until a child session exists', () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'delegate-1',
+        title: 'Run delegate',
+        kind: 'delegate',
+        status: 'in_progress',
+        arguments: '{"target_agent_id":"linus","objective":"Review the current bearer-auth diff"}'
+      }
+    });
+
+    expect(screen.queryByRole('button', { name: 'Open linus session' })).toBeNull();
   });
 });

@@ -78,6 +78,19 @@ function stripRunPrefix(value: string): string {
   return value.replace(/^run\s+/i, '').trim();
 }
 
+export function isDelegateToolName(name: string): boolean {
+  return name === 'delegate' || name === 'route_delegation_to_peer';
+}
+
+export function getDelegateTargetAgentId(tool: SessionToolCallItem): string | null {
+  return getDelegateTargetAgentIdFromArgs(parseObject(tool.arguments));
+}
+
+function getDelegateTargetAgentIdFromArgs(args: Record<string, unknown> | null): string | null {
+  if (!args) return null;
+  return stringValue(args.target_agent_id) || stringValue(args.peer) || null;
+}
+
 function toolLabel(name: string): string {
   if (name === 'shell' || name === 'execute') return 'Run command';
   if (name === 'read_tool') return 'Read file';
@@ -99,7 +112,7 @@ function toolLabel(name: string): string {
   if (name === 'language_query') return 'Query language server';
   if (name === 'browse' || name === 'web_fetch') return 'Fetch URL';
   if (name === 'question') return 'Ask question';
-  if (name === 'delegate' || name === 'route_delegation_to_peer') return 'Delegate task';
+  if (isDelegateToolName(name)) return 'Delegate task';
   if (name === 'create_task') return 'Create task';
   if (name === 'todowrite') return 'Update tasks';
   if (name === 'todoread') return 'Read tasks';
@@ -115,7 +128,7 @@ function toolIcon(name: string): SessionToolIcon {
   if (SEARCH_TOOLS.has(name)) return 'search';
   if (WEB_TOOLS.has(name)) return 'web';
   if (name === 'question') return 'question';
-  if (name === 'delegate' || name === 'route_delegation_to_peer') return 'delegate';
+  if (isDelegateToolName(name)) return 'delegate';
   if (TASK_TOOLS.has(name)) return 'task';
   if (name === 'skill') return 'skill';
   return 'tool';
@@ -150,8 +163,8 @@ function toolPreview(name: string, args: Record<string, unknown> | null, rawResu
     const questions = Array.isArray(args.questions) ? args.questions.length : 0;
     return questions > 0 ? `${questions} question${questions === 1 ? '' : 's'}` : null;
   }
-  if (name === 'delegate' || name === 'route_delegation_to_peer') {
-    const target = stringValue(args.target_agent_id) || stringValue(args.peer);
+  if (isDelegateToolName(name)) {
+    const target = getDelegateTargetAgentIdFromArgs(args);
     const objective = stringValue(args.objective);
     return compact([target, objective].filter(Boolean).join(' - '));
   }

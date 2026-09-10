@@ -331,6 +331,7 @@ function canonicalizeToolCall(toolCalls: SessionToolCallItem[], toolCallId: stri
     canonical.arguments = canonical.arguments ?? duplicate.arguments;
     canonical.result = canonical.result ?? duplicate.result;
     canonical.isError = canonical.isError ?? duplicate.isError;
+    canonical.childSessionId = canonical.childSessionId ?? duplicate.childSessionId;
     canonical.eventIndex = Math.min(
       canonical.eventIndex ?? Number.MAX_SAFE_INTEGER,
       duplicate.eventIndex ?? Number.MAX_SAFE_INTEGER
@@ -537,6 +538,34 @@ function stringifyToolContent(value: unknown): string | null {
   }
 
   return stringifyOptional(value);
+}
+
+export function applyDelegationChildSession(
+  current: ActiveSessionViewModel,
+  update: {
+    sessionId?: string | null;
+    session_id?: string | null;
+    toolCallId?: string | null;
+    tool_call_id?: string | null;
+    childSessionId?: string | null;
+    child_session_id?: string | null;
+  }
+): ActiveSessionViewModel {
+  const sessionId = readNonEmptyString(update.sessionId) ?? readNonEmptyString(update.session_id);
+  const toolCallId = readNonEmptyString(update.toolCallId) ?? readNonEmptyString(update.tool_call_id);
+  const childSessionId = readNonEmptyString(update.childSessionId) ?? readNonEmptyString(update.child_session_id);
+  if (!toolCallId || !childSessionId) return current;
+  if (sessionId && current.sessionId && sessionId !== current.sessionId) return current;
+
+  const next = cloneSession(current);
+  const target = canonicalizeToolCall(next.toolCalls, toolCallId);
+  if (!target || target.childSessionId === childSessionId) return current;
+  target.childSessionId = childSessionId;
+  return next;
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 export function beginSessionWork(session: ActiveSessionViewModel, startedAt = Date.now()) {

@@ -6668,6 +6668,52 @@ summary:focus-visible {
   color: var(--text-dim);
 }
 
+.session-tool-session-pill {
+  display: inline-flex;
+  max-width: 7.5rem;
+  min-width: 0;
+  align-items: center;
+  gap: 0.18rem;
+  height: 1.15rem;
+  margin-right: 0.1rem;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 0.38rem 0 0.28rem;
+  background: color-mix(in srgb, var(--border) 48%, transparent);
+  color: color-mix(in srgb, var(--text), transparent 8%);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 560;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.session-tool-session-pill :where(svg) {
+  display: block;
+  flex: 0 0 auto;
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.session-tool-session-pill-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 0.75rem;
+}
+
+.session-tool-session-pill:hover {
+  background: color-mix(in srgb, var(--border) 72%, transparent);
+  color: var(--text);
+}
+
+.session-tool-session-pill:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--selected-border);
+}
+
 .session-tool-disclosure,
 .session-tool-status {
   display: inline-flex;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionNotification } from '@agentclientprotocol/sdk';
 import {
+  applyDelegationChildSession,
   applySessionNotification,
   beginSessionWork,
   createEmptyActiveSession,
@@ -242,6 +243,49 @@ describe('applySessionNotification tool calls', () => {
 
     expect(next.toolCalls).toHaveLength(1);
     expect(next.toolCalls[0]).toMatchObject({ status: 'completed', arguments: '{}', result: 'Option B' });
+  });
+
+  it('attaches a child session id from a live delegation update', () => {
+    const session = createEmptyActiveSession();
+    session.sessionId = 'session-1';
+    session.toolCalls = [{
+      id: 'delegate-1',
+      title: 'Run delegate',
+      status: 'in_progress',
+      kind: 'delegate',
+      arguments: '{"target_agent_id":"linus"}'
+    }];
+
+    const next = applyDelegationChildSession(session, {
+      sessionId: 'session-1',
+      toolCallId: 'delegate-1',
+      childSessionId: 'child-session-1'
+    });
+
+    expect(next).not.toBe(session);
+    expect(next.toolCalls[0]?.childSessionId).toBe('child-session-1');
+    expect(session.toolCalls[0]?.childSessionId).toBeUndefined();
+  });
+
+  it('ignores delegation updates for another session or missing child id', () => {
+    const session = createEmptyActiveSession();
+    session.sessionId = 'session-1';
+    session.toolCalls = [{
+      id: 'delegate-1',
+      title: 'Run delegate',
+      status: 'in_progress',
+      kind: 'delegate'
+    }];
+
+    expect(applyDelegationChildSession(session, {
+      sessionId: 'session-2',
+      toolCallId: 'delegate-1',
+      childSessionId: 'child-session-1'
+    })).toBe(session);
+    expect(applyDelegationChildSession(session, {
+      sessionId: 'session-1',
+      toolCallId: 'delegate-1'
+    })).toBe(session);
   });
 });
 

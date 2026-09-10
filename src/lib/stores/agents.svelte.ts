@@ -16,6 +16,7 @@ import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from 
 import {
   createEmptyActiveSession,
   applySessionNotification,
+  applyDelegationChildSession,
   reduceSessionReplay,
   beginSessionWork,
   endSessionWork,
@@ -1980,6 +1981,20 @@ export class AgentsStore {
           const params = notification.params as DelegateModelsChangedNotification;
           if (this.isSelectedSession(agentId, params.session_id)) {
             void this.refreshDelegateAssignments(agentId, params.session_id);
+          }
+        }
+        if (notification.method === 'querymt/session/delegationUpdate') {
+          const params = (notification.params ?? {}) as {
+            sessionId?: string;
+            session_id?: string;
+            toolCallId?: string;
+            tool_call_id?: string;
+            childSessionId?: string;
+            child_session_id?: string;
+          };
+          const sessionId = params.sessionId ?? params.session_id;
+          if (sessionId && this.isSelectedSession(agentId, sessionId)) {
+            this.activeSession = applyDelegationChildSession(this.activeSession, params);
           }
         }
         if (notification.method === 'querymt/schedules/changed') {
