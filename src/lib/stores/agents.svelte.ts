@@ -62,6 +62,7 @@ import type {
   DelegateAssignmentsInfo,
   DelegateModelsChangedNotification,
   DelegateModelOverride,
+  DelegateReasoningEffort,
   MeshInviteCreatedInfo,
   MeshInviteListInfo,
   MeshInviteRevokedInfo,
@@ -1786,7 +1787,11 @@ export class AgentsStore {
     }
   }
 
-  async setActiveDelegateModel(agentId: string, model: DelegateModelOverride | null): Promise<boolean> {
+  async setActiveDelegateModel(
+    agentId: string,
+    model: DelegateModelOverride | null,
+    reasoningEffort?: DelegateReasoningEffort | null
+  ): Promise<boolean> {
     if (!this.activeAgentId || !this.activeSessionId) return false;
     const ownerAgentId = this.activeAgentId;
     const sessionId = this.activeSessionId;
@@ -1794,9 +1799,12 @@ export class AgentsStore {
     const current = this.delegateAssignmentsBySession[key];
     if (!current?.editable) return false;
 
-    const previous = current.assignments.find((assignment) => assignment.agent_id === agentId)?.model ??
-      current.orphaned_overrides.find((assignment) => assignment.agent_id === agentId)?.model ?? null;
-    if (sameDelegateModel(previous, model)) return true;
+    if (reasoningEffort !== undefined && current.reasoning_effort_supported !== true) return false;
+    const currentAssignment = current.assignments.find((assignment) => assignment.agent_id === agentId) ??
+      current.orphaned_overrides.find((assignment) => assignment.agent_id === agentId);
+    const previous = currentAssignment?.model ?? null;
+    const reasoningUnchanged = reasoningEffort === undefined || (currentAssignment?.reasoning_effort ?? null) === reasoningEffort;
+    if (sameDelegateModel(previous, model) && reasoningUnchanged) return true;
 
     const pendingForSession = this.delegateAssignmentPendingBySession[key] ?? {};
     this.delegateAssignmentPendingBySession = {
@@ -1817,6 +1825,7 @@ export class AgentsStore {
           agent_id: agentId,
           model_id: model?.model_id ?? null,
           node_id: model?.node_id ?? null,
+          ...(reasoningEffort !== undefined ? { reasoning_effort: reasoningEffort } : {}),
           expected_revision: latest.revision
         });
         if (response.session_id !== sessionId || response.agent_id !== agentId) {
@@ -3287,15 +3296,20 @@ function applyDelegateModelConfirmation(
         ? {
           ...assignment,
           model: response.model,
-          source: response.model ? DelegateAssignmentSource.Override : DelegateAssignmentSource.ProfileDefault
+          source: response.model ? DelegateAssignmentSource.Override : DelegateAssignmentSource.ProfileDefault,
+          reasoning_effort: response.reasoning_effort ?? null
         }
         : assignment
     ),
     orphaned_overrides: state.orphaned_overrides
       .filter((assignment) => assignment.agent_id !== response.agent_id)
       .concat(
-        !hasAssignment && response.model
-          ? [{ agent_id: response.agent_id, model: response.model }]
+        !hasAssignment && (response.model || response.reasoning_effort)
+          ? [{
+            agent_id: response.agent_id,
+            model: response.model,
+            reasoning_effort: response.reasoning_effort ?? null
+          }]
           : []
       )
   };

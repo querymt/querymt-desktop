@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DelegateReasoningEffort } from '$lib/querymt/generated/types';
 import {
   QMT_METHOD_AUTH_CLEAR_API_TOKEN,
   QMT_METHOD_AUTH_SET_API_TOKEN,
@@ -52,6 +53,7 @@ describe('QuerymtExtensions delegate model assignments', () => {
       if (method.endsWith('delegateModels')) {
         return {
           version: 1,
+          reasoning_effort_supported: true,
           session_id: 's1',
           profile_id: 'quorum',
           revision: 4,
@@ -63,9 +65,11 @@ describe('QuerymtExtensions delegate model assignments', () => {
       }
       return {
         version: 1,
+        reasoning_effort_supported: true,
         session_id: 's1',
         agent_id: 'coder',
         model: { model_id: 'codex/gpt-5.6-sol' },
+        reasoning_effort: 'high',
         revision: 5,
         durable: true
       };
@@ -78,6 +82,7 @@ describe('QuerymtExtensions delegate model assignments', () => {
       agent_id: 'coder',
       model_id: 'codex/gpt-5.6-sol',
       node_id: null,
+      reasoning_effort: DelegateReasoningEffort.High,
       expected_revision: 4
     });
 
@@ -89,8 +94,52 @@ describe('QuerymtExtensions delegate model assignments', () => {
       agent_id: 'coder',
       model_id: 'codex/gpt-5.6-sol',
       node_id: null,
+      reasoning_effort: 'high',
       expected_revision: 4
     });
+  });
+
+  it('accepts the older model-only version-one response shape', async () => {
+    const extMethod = vi.fn(async (method: string) => method.endsWith('delegateModels')
+      ? {
+        version: 1,
+        session_id: 's1',
+        profile_id: 'quorum',
+        revision: 4,
+        durable: true,
+        editable: true,
+        assignments: [{
+          agent_id: 'coder',
+          name: 'Coder',
+          description: 'Writes code',
+          model: null,
+          source: 'profile_default',
+          configured_default_model_id: 'codex/gpt-5.6-sol'
+        }],
+        orphaned_overrides: [{ agent_id: 'removed-role', model: { model_id: 'legacy/model' } }]
+      }
+      : {
+        version: 1,
+        session_id: 's1',
+        agent_id: 'removed-role',
+        model: null,
+        revision: 5,
+        durable: true
+      });
+    const extensions = new QuerymtExtensions({ extMethod } as never);
+
+    const state = await extensions.delegateModels({ session_id: 's1' });
+    const response = await extensions.setDelegateModel({
+      session_id: 's1',
+      agent_id: 'removed-role',
+      model_id: null,
+      expected_revision: 4
+    });
+
+    expect(state.reasoning_effort_supported).toBeUndefined();
+    expect(state.assignments[0].reasoning_effort).toBeUndefined();
+    expect(state.orphaned_overrides[0].reasoning_effort).toBeUndefined();
+    expect(response.reasoning_effort).toBeUndefined();
   });
 
   it('rejects unknown contract versions instead of guessing their meaning', async () => {

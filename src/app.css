@@ -4144,7 +4144,6 @@ summary:focus-visible {
   min-width: 10rem;
   max-width: 17rem;
   justify-content: flex-end;
-  gap: 0.55rem;
   text-align: right;
 }
 
@@ -4155,6 +4154,19 @@ summary:focus-visible {
   overflow: hidden;
   color: var(--text);
   font-size: 0.74rem;
+}
+
+.delegate-model-route-name {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.32rem;
+}
+
+.delegate-model-route-model {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4171,23 +4183,16 @@ summary:focus-visible {
 
 .delegate-model-source {
   flex: 0 0 auto;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--accent), var(--border) 55%);
   border-radius: 999px;
-  padding: 0.18rem 0.42rem;
-  font-size: 0.62rem;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.delegate-model-source-override {
-  border-color: color-mix(in srgb, var(--accent), var(--border) 55%);
+  padding: 0.06rem 0.28rem;
   background: color-mix(in srgb, var(--accent-dim), transparent 36%);
   color: var(--accent);
-}
-
-.delegate-model-source-default {
-  color: var(--muted);
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  line-height: 1.25;
+  text-transform: uppercase;
 }
 
 .delegate-model-row-unavailable .delegate-model-route-label {
@@ -4269,6 +4274,40 @@ summary:focus-visible {
   overflow: hidden;
 }
 
+.delegate-reasoning-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  padding: 0.65rem 0.75rem;
+}
+
+.delegate-reasoning-control > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--text-muted);
+}
+
+.delegate-reasoning-control > span > span {
+  display: grid;
+  gap: 0.08rem;
+}
+
+.delegate-reasoning-control strong {
+  color: var(--text);
+  font-size: 0.76rem;
+}
+
+.delegate-reasoning-control small {
+  color: var(--muted);
+  font-size: 0.67rem;
+}
+
 .delegate-model-orphan-detail,
 .delegate-model-default-choice {
   gap: 0.7rem;
@@ -4298,9 +4337,54 @@ summary:focus-visible {
   cursor: pointer;
 }
 
+.delegate-model-default-footer {
+  display: inline-flex;
+  width: auto;
+  height: var(--control-height-standard);
+  align-items: center;
+  margin-inline-end: auto;
+  gap: 0.45rem;
+  padding: 0 0.7rem;
+  border-radius: var(--radius-control);
+}
+
+.delegate-model-default-footer > span:nth-child(2) {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.delegate-model-default-footer strong,
+.delegate-model-default-footer small {
+  white-space: nowrap;
+}
+
 .delegate-model-choice-selected {
   border-color: color-mix(in srgb, var(--accent), var(--border) 42%) !important;
   background: color-mix(in srgb, var(--accent-dim), var(--bg-card) 72%);
+}
+
+.delegate-model-choice-name {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.28rem;
+}
+
+.delegate-model-choice-name strong {
+  min-width: 0;
+}
+
+.delegate-model-choice-name-selected {
+  color: var(--accent);
+}
+
+.delegate-model-choice-check {
+  flex: 0 0 auto;
+  width: 0.85em;
+  height: 0.85em;
+  color: var(--accent);
 }
 
 .delegate-model-search input {
@@ -4324,7 +4408,9 @@ summary:focus-visible {
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-card);
+  /* Match sticky titles so Chromium cannot show a 1px lighter strip
+     above the header inside a rounded overflow container. */
+  background: var(--bg-panel-strong);
 }
 
 .delegate-model-picker-group + .delegate-model-picker-group {
@@ -4337,6 +4423,7 @@ summary:focus-visible {
   z-index: 1;
   padding: 0.38rem 0.7rem;
   background: var(--bg-panel-strong);
+  box-shadow: 0 -1px 0 var(--bg-panel-strong);
   color: var(--muted);
   font-size: 0.62rem;
   font-weight: 650;
@@ -4350,7 +4437,7 @@ summary:focus-visible {
   gap: 0.8rem;
   border: 0;
   border-top: 1px solid color-mix(in srgb, var(--border), transparent 28%);
-  background: transparent;
+  background: var(--bg-card);
   padding: 0.68rem 0.72rem;
   color: var(--text);
   text-align: left;
@@ -4385,11 +4472,12 @@ summary:focus-visible {
   .delegate-model-route {
     width: 100%;
     max-width: none;
-    justify-content: space-between;
+    justify-content: flex-start;
     padding-left: 2.75rem;
     text-align: left;
   }
 
+  .delegate-model-route-name,
   .delegate-model-route-label small {
     justify-content: flex-start;
   }
@@ -4684,6 +4772,10 @@ summary:focus-visible {
 
   .app-dialog-footer {
     padding-inline: 1.15rem;
+  }
+
+  .delegate-model-picker .app-dialog-footer {
+    flex-wrap: wrap;
   }
 
   .dialog-row {

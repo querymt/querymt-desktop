@@ -23,7 +23,11 @@
   } from '$lib/domain/session-scroll';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { formatSessionTimestamp, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
-  import { getCurrentProfileId } from '$lib/querymt/config-options';
+  import {
+    findReasoningConfigOption,
+    getConfigOptionChoices,
+    getCurrentProfileId
+  } from '$lib/querymt/config-options';
   import { getForkTarget, getLatestForkTarget, type SessionForkTarget } from '$lib/domain/session-fork';
   import { getCurrentUndoTarget, getUndoAffectedTurnCount, getUndoableSessionTurns, isTurnReverted } from '$lib/domain/session-undo';
   import { agentsStore } from '$lib/stores/agents.svelte';
@@ -35,6 +39,11 @@
   const sessionId = $derived(decodeURIComponent(page.params.sessionId ?? ''));
   const selectedSession = $derived(getSessionById(agentsStore.sessionsByAgent[agentId] ?? [], sessionId, agentId));
   const sessionProfileId = $derived(getCurrentProfileId(agentsStore.activeSession.configOptions) ?? null);
+  const inheritedReasoningLabel = $derived.by(() => {
+    const option = findReasoningConfigOption(agentsStore.activeSession.configOptions);
+    if (!option) return null;
+    return getConfigOptionChoices(option).find((choice) => choice.value === option.currentValue)?.name ?? option.currentValue;
+  });
   const sessionProfileLabel = $derived.by(() => {
     if (!sessionProfileId) return null;
     const option = agentsStore.getProfileOptions().find((candidate) => candidate.id === sessionProfileId);
@@ -644,6 +653,8 @@
     bind:open={delegateModelDialogOpen}
     assignments={agentsStore.activeDelegateAssignments}
     models={agentsStore.modelsByAgent[agentId] ?? []}
+    modelInfo={agentsStore.modelInfoByAgent[agentId] ?? {}}
+    {inheritedReasoningLabel}
     loading={agentsStore.activeDelegateAssignmentsLoading}
     modelLoading={!!agentsStore.modelLoadingByAgent[agentId]}
     pending={agentsStore.activeDelegateAssignmentPending}
@@ -651,7 +662,8 @@
     conflict={agentsStore.activeDelegateAssignmentConflict}
     onRefresh={() => agentsStore.refreshDelegateAssignments(agentId, sessionId)}
     onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}
-    onAssign={(delegateAgentId, model) => agentsStore.setActiveDelegateModel(delegateAgentId, model)}
+    onAssign={(delegateAgentId, model, reasoningEffort) =>
+      agentsStore.setActiveDelegateModel(delegateAgentId, model, reasoningEffort)}
     onDismissConflict={() => agentsStore.dismissActiveDelegateAssignmentConflict()}
   />
 

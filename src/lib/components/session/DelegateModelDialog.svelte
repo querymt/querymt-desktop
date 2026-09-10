@@ -1,8 +1,10 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import {
+    Brain,
     Check,
     CloudOff,
+    Gauge,
     HardDrive,
     LoaderCircle,
     Network,
@@ -13,12 +15,23 @@
     Waypoints
   } from '@lucide/svelte';
   import AppDialog from '$lib/components/primitives/AppDialog.svelte';
+  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import {
+    displayedInputModalities,
+    formatContextSize,
+    knownInputModalities,
+    modalityIcon,
+    modalityLabel,
+    type ModelInfoMap
+  } from '$lib/domain/model-capabilities';
+  import { scoreModelSearch } from '$lib/domain/model-search';
   import type { ModelEntry } from '$lib/domain/types';
-  import type {
-    DelegateAssignmentInfo,
-    DelegateAssignmentsInfo,
-    DelegateModelOverride,
-    OrphanedDelegateAssignment
+  import {
+    DelegateReasoningEffort,
+    type DelegateAssignmentInfo,
+    type DelegateAssignmentsInfo,
+    type DelegateModelOverride,
+    type OrphanedDelegateAssignment
   } from '$lib/querymt/generated/types';
   import { getModelSelectionKey } from '$lib/querymt/config-options';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
@@ -31,6 +44,8 @@
     open = $bindable(false),
     assignments = null,
     models = [],
+    modelInfo = {},
+    inheritedReasoningLabel = null,
     loading = false,
     modelLoading = false,
     pending = {},
@@ -44,6 +59,8 @@
     open?: boolean;
     assignments?: DelegateAssignmentsInfo | null;
     models?: ModelEntry[];
+    modelInfo?: ModelInfoMap;
+    inheritedReasoningLabel?: string | null;
     loading?: boolean;
     modelLoading?: boolean;
     pending?: Record<string, boolean>;
@@ -51,7 +68,11 @@
     conflict?: boolean;
     onRefresh: () => void | Promise<void>;
     onRefreshModels?: (() => void | Promise<void>) | null;
-    onAssign: (agentId: string, model: DelegateModelOverride | null) => boolean | Promise<boolean>;
+    onAssign: (
+      agentId: string,
+      model: DelegateModelOverride | null,
+      reasoningEffort?: DelegateReasoningEffort | null
+    ) => boolean | Promise<boolean>;
     onDismissConflict?: (() => void) | null;
   } = $props();
 
@@ -62,6 +83,7 @@
 
   const anyPending = $derived(Object.values(pending).some(Boolean));
   const editable = $derived(assignments?.editable !== false);
+  const reasoningSupported = $derived(assignments?.reasoning_effort_supported === true);
   const activeAssignment = $derived.by(() => {
     const target = selectedTarget;
     if (target?.kind !== 'delegate') return null;
@@ -77,14 +99,22 @@
   const selectedSelectionKey = $derived(overrideSelectionKey(selectedOverride));
   const currentModel = $derived(findModel(selectedOverride));
   const filteredModels = $derived.by(() => {
-    const needle = query.trim().toLowerCase();
+    const needle = query.trim();
     if (!needle) return models;
-    return models.filter((model) =>
-      [model.label, model.model, model.provider, model.node_label]
-        .filter((value): value is string => Boolean(value))
-        .some((value) => value.toLowerCase().includes(needle))
-    );
+    return models
+      .map((model) => ({ model, score: scoreModelSearch(model, needle) }))
+      .filter(({ score }) => score > Number.NEGATIVE_INFINITY)
+      .sort((a, b) => b.score - a.score)
+      .map(({ model }) => model);
   });
+  const reasoningOptions = [
+    { value: 'inherit', label: 'Inherit' },
+    { value: DelegateReasoningEffort.Auto, label: 'Auto' },
+    { value: DelegateReasoningEffort.Low, label: 'Low' },
+    { value: DelegateReasoningEffort.Medium, label: 'Medium' },
+    { value: DelegateReasoningEffort.High, label: 'High' },
+    { value: DelegateReasoningEffort.Max, label: 'Max' }
+  ];
   const modelGroups = $derived.by(() => {
     const groups = new Map<string, ModelEntry[]>();
     for (const model of filteredModels) {
@@ -95,8 +125,18 @@
   });
   const description = $derived(
     assignments
-      ? `Choose which model each ${assignments.profile_id} delegate will use the next time it starts.`
-      : 'Choose which model each delegate will use the next time it starts.'
+      ? reasoningSupported
+        ? `Choose the model and reasoning each ${assignments.profile_id} delegate will use the next time it starts.`
+        : `Choose which model each ${assignments.profile_id} delegate will use the next time it starts.`
+      : 'Choose delegate routes for the next time they start.'
+  );
+  const dialogTitle = $derived(selectedTarget ? `Route ${selectedTargetLabel()}` : 'Delegate routing');
+  const dialogDescription = $derived(
+    selectedTarget
+      ? activeOrphan
+        ? 'This delegate was removed from the profile. Clear its saved route to finish cleanup.'
+        : 'The selected route applies the next time this delegate starts. Already-running work is unchanged.'
+      : description
   );
 
   $effect(() => {
@@ -138,6 +178,11 @@
     return activeAssignment?.name ?? activeOrphan?.agent_id ?? 'delegate';
   }
 
+  function reasoningLabel(reasoningEffort: DelegateReasoningEffort | null | undefined): string {
+    if (!reasoningEffort) return inheritedReasoningLabel ? `Inherit · ${inheritedReasoningLabel}` : 'Inherit';
+    return reasoningOptions.find((option) => option.value === reasoningEffort)?.label ?? reasoningEffort;
+  }
+
   function selectDelegate(assignment: DelegateAssignmentInfo) {
     if (loading || anyPending) return;
     selectedTarget = { kind: 'delegate', assignment };
@@ -158,22 +203,154 @@
 
   async function useProfileDefault() {
     if (!selectedAgentId || !editable || pending[selectedAgentId]) return;
-    const changed = await onAssign(selectedAgentId, null);
+    await onAssign(selectedAgentId, null);
+  }
+
+  async function assignReasoning(value: string) {
+    if (!selectedAgentId || !editable || pending[selectedAgentId]) return;
+    const reasoningEffort = value === 'inherit' ? null : value as DelegateReasoningEffort;
+    await onAssign(selectedAgentId, selectedOverride, reasoningEffort);
+  }
+
+  async function clearSavedRoute() {
+    if (!selectedAgentId || !editable || pending[selectedAgentId]) return;
+    const changed = reasoningSupported
+      ? await onAssign(selectedAgentId, null, null)
+      : await onAssign(selectedAgentId, null);
     if (changed) selectedTarget = null;
+  }
+
+  function handlePickerDismiss(event: Event) {
+    if (!selectedTarget) return;
+    event.preventDefault();
+    if (anyPending) return;
+    selectedTarget = null;
   }
 </script>
 
 <AppDialog
   bind:open
-  title="Delegate routing"
-  {description}
+  title={dialogTitle}
+  description={dialogDescription}
   size="wide"
   pending={anyPending}
   closeLabel="Close delegate routing"
   portalTarget={overlayPortalTarget}
-  contentClass="delegate-model-dialog"
-  bodyClass="delegate-model-dialog-body"
+  contentClass={selectedTarget ? 'delegate-model-dialog delegate-model-picker' : 'delegate-model-dialog'}
+  bodyClass={selectedTarget ? 'delegate-model-picker-body' : 'delegate-model-dialog-body'}
+  onEscapeKeydown={handlePickerDismiss}
+  onInteractOutside={handlePickerDismiss}
 >
+  {#if selectedTarget}
+    {#if activeOrphan}
+      <div class="delegate-model-orphan-detail">
+        <TriangleAlert size={18} />
+        <span><strong>Saved route for removed role</strong><small>{modelLabel(activeOrphan.model)}{reasoningSupported ? ` · ${reasoningLabel(activeOrphan.reasoning_effort)}` : ''}</small></span>
+      </div>
+    {:else if activeAssignment}
+      {#if activeAssignment.model && !currentModel}
+        <div class="delegate-model-notice delegate-model-notice-warning">
+          <CloudOff size={16} />
+          <span><strong>Current override unavailable.</strong> {activeAssignment.model.model_id}{activeAssignment.model.node_id ? ` on ${activeAssignment.model.node_id}` : ''} is preserved until you replace or reset it.</span>
+        </div>
+      {/if}
+    {/if}
+
+    {#if !activeOrphan}
+      <div class="app-picker-search-shell delegate-model-search">
+        <Search size={15} />
+        <input
+          class="app-picker-search-input"
+          placeholder="Search models, providers, nodes…"
+          bind:value={query}
+          aria-label="Search delegate models"
+        />
+        {#if onRefreshModels}
+          <button type="button" aria-label="Refresh delegate models" disabled={!editable || modelLoading} onclick={onRefreshModels}>
+            <RefreshCw size={14} class={modelLoading ? 'animate-spin' : ''} />
+          </button>
+        {/if}
+      </div>
+
+      <div class="delegate-model-picker-list">
+        {#if modelGroups.length === 0}
+          <div class="delegate-model-empty delegate-model-empty-compact">
+            <strong>{modelLoading ? 'Loading models…' : 'No matching models'}</strong>
+            <span>{models.length === 0 ? 'Refresh after the agent finishes discovering providers.' : `Nothing matches “${query}”.`}</span>
+          </div>
+        {:else}
+          {#each modelGroups as group}
+            <section class="delegate-model-picker-group">
+              <div class="delegate-model-picker-group-title">{group.label}</div>
+              {#each group.items as model}
+                {@const selectionKey = getModelSelectionKey(model)}
+                {@const info = modelInfo[selectionKey]}
+                {@const knownModalities = knownInputModalities(model, modelInfo)}
+                <button
+                  class="delegate-model-choice"
+                  type="button"
+                  disabled={!editable || !!pending[selectedAgentId]}
+                  onclick={() => assignModel(model)}
+                >
+                  <span>
+                    <span class="delegate-model-choice-name">
+                      <strong class:delegate-model-choice-name-selected={selectedSelectionKey === selectionKey}>{model.label ?? model.model}</strong>
+                      {#if selectedSelectionKey === selectionKey}
+                        <Check class="delegate-model-choice-check" size={12} strokeWidth={2.4} aria-hidden="true" />
+                      {/if}
+                    </span>
+                    <small>{model.id}</small>
+                  </span>
+                  <span class="delegate-model-choice-meta">
+                    {#if model.node_label}<small><Network size={11} />{model.node_label}</small>{/if}
+                  </span>
+                  <span class="app-picker-row-detail delegate-model-choice-detail">
+                    <span
+                      class="app-picker-row-context"
+                      aria-label={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
+                      title={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
+                    >
+                      <Gauge size={12} aria-hidden="true" />
+                      <span>{info?.limits?.context ? formatContextSize(info.limits.context) : 'UNK'}</span>
+                    </span>
+                    <span
+                      class="app-picker-model-modalities"
+                      aria-label={knownModalities.length > 0 ? `Input modalities: ${knownModalities.join(', ')}` : 'Input modalities unknown'}
+                    >
+                      {#each displayedInputModalities(model, modelInfo) as modality}
+                        {@const ModalityIcon = modalityIcon(modality)}
+                        <span
+                          class="app-picker-model-modality"
+                          aria-label={modalityLabel(modality, knownModalities.length > 0)}
+                          title={modalityLabel(modality, knownModalities.length > 0)}
+                        >
+                          <ModalityIcon size={13} strokeWidth={1.9} aria-hidden="true" />
+                        </span>
+                      {/each}
+                    </span>
+                  </span>
+                </button>
+              {/each}
+            </section>
+          {/each}
+        {/if}
+      </div>
+    {/if}
+
+    {#if activeAssignment && reasoningSupported}
+      <div class="delegate-reasoning-control">
+        <span><Brain size={15} /><span><strong>Reasoning effort</strong><small>Inherit the parent session or override this delegate.</small></span></span>
+        <AppSelect
+          value={activeAssignment.reasoning_effort ?? 'inherit'}
+          options={reasoningOptions}
+          ariaLabel="Delegate reasoning effort"
+          disabled={!editable || !!pending[selectedAgentId]}
+          pill={true}
+          onValueChange={assignReasoning}
+        />
+      </div>
+    {/if}
+  {:else}
   {#if conflict}
     <div class="delegate-model-notice delegate-model-notice-warning" role="status">
       <TriangleAlert size={16} />
@@ -269,12 +446,15 @@
                 {#if pending[assignment.agent_id]}
                   <LoaderCircle size={14} class="animate-spin" /> Updating…
                 {:else}
-                  {modelLabel(assignment.model)}
+                  <span class="delegate-model-route-name">
+                    <span class="delegate-model-route-model">{modelLabel(assignment.model)}</span>
+                    {#if assignment.model}
+                      <span class="delegate-model-source">Override</span>
+                    {/if}
+                  </span>
+                  {#if reasoningSupported}<small><Brain size={11} />{reasoningLabel(assignment.reasoning_effort)}</small>{/if}
                   {#if assignedModel?.node_label}<small><Network size={11} />{assignedModel.node_label}</small>{/if}
                 {/if}
-              </span>
-              <span class={`delegate-model-source delegate-model-source-${assignment.model ? 'override' : 'default'}`}>
-                {assignment.model ? 'Override' : 'Profile'}
               </span>
             </span>
           </button>
@@ -302,7 +482,7 @@
             onclick={() => selectOrphan(assignment)}
           >
             <TriangleAlert size={14} />
-            <span><code>{assignment.agent_id}</code><small>{modelLabel(assignment.model)}</small></span>
+            <span><code>{assignment.agent_id}</code><small>{modelLabel(assignment.model)}{reasoningSupported ? ` · ${reasoningLabel(assignment.reasoning_effort)}` : ''}</small></span>
             {#if pending[assignment.agent_id]}<LoaderCircle size={13} class="animate-spin" />{:else}<RotateCcw size={13} />{/if}
           </button>
         {/each}
@@ -315,109 +495,32 @@
       <span>This agent does not expose session delegate assignments.</span>
     </div>
   {/if}
+  {/if}
 
   {#snippet footer()}
-    <button class="action-btn" type="button" disabled={anyPending} onclick={() => (open = false)}>Done</button>
-  {/snippet}
-</AppDialog>
-
-{#if selectedTarget}
-  <AppDialog
-    open={true}
-    title={`Route ${selectedTargetLabel()}`}
-    description={activeOrphan
-      ? 'This delegate was removed from the profile. Clear its saved route to finish cleanup.'
-      : 'The selected route applies the next time this delegate starts. Already-running work is unchanged.'}
-    size="workflow"
-    pending={!!pending[selectedAgentId]}
-    closeLabel="Close model selection"
-    portalTarget={overlayPortalTarget}
-    contentClass="delegate-model-picker"
-    bodyClass="delegate-model-picker-body"
-    onDismiss={() => (selectedTarget = null)}
-  >
-    {#if activeOrphan}
-      <div class="delegate-model-orphan-detail">
-        <TriangleAlert size={18} />
-        <span><strong>Saved route for removed role</strong><small>{modelLabel(activeOrphan.model)}</small></span>
-      </div>
-    {:else if activeAssignment}
-      <button
-        class="delegate-model-default-choice"
-        class:delegate-model-choice-selected={!activeAssignment.model}
-        type="button"
-        disabled={!editable || !!pending[selectedAgentId]}
-        onclick={useProfileDefault}
-      >
-        <span class="delegate-model-choice-icon"><RotateCcw size={16} /></span>
-        <span><strong>Use profile default</strong><small>{defaultLabel(activeAssignment)}</small></span>
-        {#if !activeAssignment.model}<Check size={16} />{/if}
-      </button>
-
-      {#if activeAssignment.model && !currentModel}
-        <div class="delegate-model-notice delegate-model-notice-warning">
-          <CloudOff size={16} />
-          <span><strong>Current override unavailable.</strong> {activeAssignment.model.model_id}{activeAssignment.model.node_id ? ` on ${activeAssignment.model.node_id}` : ''} is preserved until you replace or reset it.</span>
-        </div>
+    {#if selectedTarget}
+      {#if activeAssignment}
+        <button
+          class="delegate-model-default-choice delegate-model-default-footer"
+          class:delegate-model-choice-selected={!activeAssignment.model}
+          type="button"
+          disabled={!editable || !!pending[selectedAgentId]}
+          onclick={useProfileDefault}
+        >
+          <RotateCcw size={14} />
+          <span><strong>Use profile default</strong><small>{defaultLabel(activeAssignment)}</small></span>
+          {#if !activeAssignment.model}<Check size={14} />{/if}
+        </button>
       {/if}
-    {/if}
-
-    {#if !activeOrphan}
-      <div class="app-picker-search-shell delegate-model-search">
-        <Search size={15} />
-        <input
-          class="app-picker-search-input"
-          placeholder="Search models, providers, nodes…"
-          bind:value={query}
-          aria-label="Search delegate models"
-        />
-        {#if onRefreshModels}
-          <button type="button" aria-label="Refresh delegate models" disabled={!editable || modelLoading} onclick={onRefreshModels}>
-            <RefreshCw size={14} class={modelLoading ? 'animate-spin' : ''} />
-          </button>
-        {/if}
-      </div>
-
-      <div class="delegate-model-picker-list">
-        {#if modelGroups.length === 0}
-          <div class="delegate-model-empty delegate-model-empty-compact">
-            <strong>{modelLoading ? 'Loading models…' : 'No matching models'}</strong>
-            <span>{models.length === 0 ? 'Refresh after the agent finishes discovering providers.' : `Nothing matches “${query}”.`}</span>
-          </div>
-        {:else}
-          {#each modelGroups as group}
-            <section class="delegate-model-picker-group">
-              <div class="delegate-model-picker-group-title">{group.label}</div>
-              {#each group.items as model}
-                {@const selectionKey = getModelSelectionKey(model)}
-                <button
-                  class="delegate-model-choice"
-                  class:delegate-model-choice-selected={selectedSelectionKey === selectionKey}
-                  type="button"
-                  disabled={!editable || !!pending[selectedAgentId]}
-                  onclick={() => assignModel(model)}
-                >
-                  <span><strong>{model.label ?? model.model}</strong><small>{model.id}</small></span>
-                  <span class="delegate-model-choice-meta">
-                    {#if model.node_label}<small><Network size={11} />{model.node_label}</small>{/if}
-                    {#if selectedSelectionKey === selectionKey}<Check size={16} />{/if}
-                  </span>
-                </button>
-              {/each}
-            </section>
-          {/each}
-        {/if}
-      </div>
-    {/if}
-
-    {#snippet footer()}
       <button class="action-btn" type="button" disabled={!!pending[selectedAgentId]} onclick={() => (selectedTarget = null)}>Cancel</button>
       {#if activeOrphan}
-        <button class="action-btn action-btn-danger" type="button" disabled={!editable || !!pending[selectedAgentId]} onclick={useProfileDefault}>
+        <button class="action-btn action-btn-danger" type="button" disabled={!editable || !!pending[selectedAgentId]} onclick={clearSavedRoute}>
           {#if pending[selectedAgentId]}<LoaderCircle size={14} class="animate-spin" />{/if}
           Clear saved route
         </button>
       {/if}
-    {/snippet}
-  </AppDialog>
-{/if}
+    {:else}
+      <button class="action-btn" type="button" disabled={anyPending} onclick={() => (open = false)}>Done</button>
+    {/if}
+  {/snippet}
+</AppDialog>

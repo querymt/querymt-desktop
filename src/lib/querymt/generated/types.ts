@@ -649,6 +649,7 @@ export interface DelegateAssignmentInfo {
 	model: DelegateModelOverride | null;
 	source: DelegateAssignmentSource;
 	configured_default_model_id: string | null;
+	reasoning_effort?: DelegateReasoningEffort | null;
 }
 
 export interface DelegateModelOverride {
@@ -658,11 +659,13 @@ export interface DelegateModelOverride {
 
 export interface OrphanedDelegateAssignment {
 	agent_id: string;
-	model: DelegateModelOverride;
+	model: DelegateModelOverride | null;
+	reasoning_effort?: DelegateReasoningEffort | null;
 }
 
 export interface DelegateAssignmentsInfo {
 	version: number;
+	reasoning_effort_supported?: boolean;
 	session_id: string;
 	profile_id: string;
 	revision: number | null;
@@ -1070,6 +1073,14 @@ export interface SessionLoadSnapshot {
 }
 
 /** High-level runtime state for stop/resume orchestration. */
+export enum DelegateReasoningEffort {
+	Auto = "auto",
+	Low = "low",
+	Medium = "medium",
+	High = "high",
+	Max = "max",
+}
+
 export enum SessionRuntimeStatus {
 	Idle = "idle",
 	Running = "running",
@@ -1092,16 +1103,19 @@ export interface SessionMeta {
 export interface SetDelegateModelRequest {
 	session_id: string;
 	agent_id: string;
-	model_id?: string | null;
+	model_id: string | null;
 	node_id?: string | null;
+	reasoning_effort?: DelegateReasoningEffort | null;
 	expected_revision?: number | null;
 }
 
 export interface SetDelegateModelResponse {
 	version: number;
+	reasoning_effort_supported?: boolean;
 	session_id: string;
 	agent_id: string;
 	model: DelegateModelOverride | null;
+	reasoning_effort?: DelegateReasoningEffort | null;
 	revision: number | null;
 	durable: boolean;
 }

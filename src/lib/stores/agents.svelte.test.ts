@@ -4,6 +4,7 @@ import type { ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domai
 import { getModelSelectionKey } from '$lib/querymt/config-options';
 import {
   DelegateAssignmentSource,
+  DelegateReasoningEffort,
   type DelegateAssignmentsInfo,
   type SetDelegateModelRequest,
   type SetDelegateModelResponse
@@ -72,6 +73,7 @@ const mockClient = vi.hoisted(() => {
     getModelInfo: vi.fn(async () => ({})),
     getDelegateModels: vi.fn(async (request: { session_id: string }): Promise<DelegateAssignmentsInfo> => ({
       version: 1,
+      reasoning_effort_supported: true,
       session_id: request.session_id,
       profile_id: 'quorum',
       revision: 0,
@@ -82,9 +84,11 @@ const mockClient = vi.hoisted(() => {
     })),
     setDelegateModel: vi.fn(async (request: SetDelegateModelRequest): Promise<SetDelegateModelResponse> => ({
       version: 1,
+      reasoning_effort_supported: true,
       session_id: request.session_id,
       agent_id: request.agent_id,
       model: request.model_id ? { model_id: request.model_id, node_id: request.node_id ?? undefined } : null,
+      reasoning_effort: request.reasoning_effort ?? null,
       revision: (request.expected_revision ?? 0) + 1,
       durable: true
     })),
@@ -198,6 +202,7 @@ beforeEach(() => {
   mockClient.getModelInfo.mockResolvedValue({});
   mockClient.getDelegateModels.mockReset().mockImplementation(async (request: { session_id: string }) => ({
     version: 1,
+    reasoning_effort_supported: true,
     session_id: request.session_id,
     profile_id: 'quorum',
     revision: 0,
@@ -208,9 +213,11 @@ beforeEach(() => {
   }));
   mockClient.setDelegateModel.mockReset().mockImplementation(async (request: SetDelegateModelRequest): Promise<SetDelegateModelResponse> => ({
     version: 1,
+    reasoning_effort_supported: true,
     session_id: request.session_id,
     agent_id: request.agent_id,
     model: request.model_id ? { model_id: request.model_id, node_id: request.node_id ?? undefined } : null,
+    reasoning_effort: request.reasoning_effort ?? null,
     revision: (request.expected_revision ?? 0) + 1,
     durable: true
   }));
@@ -966,6 +973,7 @@ describe('AgentsStore model info cache', () => {
 describe('AgentsStore delegate model assignments', () => {
   const assignmentState: DelegateAssignmentsInfo = {
     version: 1,
+    reasoning_effort_supported: true,
     session_id: 'session-1',
     profile_id: 'quorum',
     revision: 2,
@@ -977,7 +985,8 @@ describe('AgentsStore delegate model assignments', () => {
       description: 'Writes code',
       model: null,
       source: DelegateAssignmentSource.ProfileDefault,
-      configured_default_model_id: 'codex/gpt-5.6-sol'
+      configured_default_model_id: 'codex/gpt-5.6-sol',
+      reasoning_effort: null
     }],
     orphaned_overrides: []
   };
@@ -1044,6 +1053,101 @@ describe('AgentsStore delegate model assignments', () => {
     await vi.waitFor(() => expect(store.activeDelegateAssignments).toEqual(assignmentState));
   });
 
+  it('writes explicit reasoning and can restore parent-session inheritance', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': assignmentState };
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1,
+      reasoning_effort_supported: true,
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model: null,
+      reasoning_effort: DelegateReasoningEffort.High,
+      revision: 3,
+      durable: true
+    });
+    mockClient.getDelegateModels.mockResolvedValueOnce({
+      ...assignmentState,
+      revision: 3,
+      assignments: [{
+        ...assignmentState.assignments[0],
+        reasoning_effort: DelegateReasoningEffort.High
+      }]
+    });
+
+    await expect(store.setActiveDelegateModel('coder', null, DelegateReasoningEffort.High)).resolves.toBe(true);
+
+    expect(mockClient.setDelegateModel).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model_id: null,
+      node_id: null,
+      reasoning_effort: DelegateReasoningEffort.High,
+      expected_revision: 2
+    });
+    expect(store.activeDelegateAssignments?.assignments[0].reasoning_effort).toBe(DelegateReasoningEffort.High);
+
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1,
+      reasoning_effort_supported: true,
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model: null,
+      reasoning_effort: null,
+      revision: 4,
+      durable: true
+    });
+    mockClient.getDelegateModels.mockResolvedValueOnce({ ...assignmentState, revision: 4 });
+    await expect(store.setActiveDelegateModel('coder', null, null)).resolves.toBe(true);
+    expect(mockClient.setDelegateModel).toHaveBeenLastCalledWith({
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model_id: null,
+      node_id: null,
+      reasoning_effort: null,
+      expected_revision: 3
+    });
+  });
+
+  it('rejects reasoning writes but preserves model-only cleanup for an older backend', async () => {
+    const store = createStore();
+    selectSession(store);
+    const oldBackendState: DelegateAssignmentsInfo = {
+      ...assignmentState,
+      reasoning_effort_supported: undefined,
+      assignments: [],
+      orphaned_overrides: [{ agent_id: 'removed-role', model: { model_id: 'legacy/model' } }]
+    };
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': oldBackendState };
+
+    await expect(store.setActiveDelegateModel('removed-role', null, null)).resolves.toBe(false);
+    expect(mockClient.setDelegateModel).not.toHaveBeenCalled();
+
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1,
+      session_id: 'session-1',
+      agent_id: 'removed-role',
+      model: null,
+      revision: 3,
+      durable: true
+    });
+    mockClient.getDelegateModels.mockResolvedValueOnce({
+      ...oldBackendState,
+      revision: 3,
+      orphaned_overrides: []
+    });
+
+    await expect(store.setActiveDelegateModel('removed-role', null)).resolves.toBe(true);
+    expect(mockClient.setDelegateModel).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      agent_id: 'removed-role',
+      model_id: null,
+      node_id: null,
+      expected_revision: 2
+    });
+  });
+
   it('omits revision checking for run-only storage by sending a null expected revision', async () => {
     const store = createStore();
     selectSession(store);
@@ -1051,9 +1155,11 @@ describe('AgentsStore delegate model assignments', () => {
     store.delegateAssignmentsBySession = { 'agent-1:session-1': runOnlyState };
     mockClient.setDelegateModel.mockResolvedValueOnce({
       version: 1,
+      reasoning_effort_supported: true,
       session_id: 'session-1',
       agent_id: 'coder',
       model: { model_id: 'xai/grok-4.6' },
+      reasoning_effort: null,
       revision: null,
       durable: false
     });
@@ -1115,9 +1221,11 @@ describe('AgentsStore delegate model assignments', () => {
 
     resolveFirst({
       version: 1,
+      reasoning_effort_supported: true,
       session_id: 'session-1',
       agent_id: 'coder',
       model: { model_id: 'xai/grok-4.6' },
+      reasoning_effort: null,
       revision: 3,
       durable: true
     });
@@ -1134,9 +1242,11 @@ describe('AgentsStore delegate model assignments', () => {
 
     resolveSecond({
       version: 1,
+      reasoning_effort_supported: true,
       session_id: 'session-1',
       agent_id: 'coder',
       model: { model_id: 'codex/gpt-5.6-sol' },
+      reasoning_effort: null,
       revision: 4,
       durable: true
     });
@@ -1192,7 +1302,11 @@ describe('AgentsStore delegate model assignments', () => {
         model: { model_id: 'missing/model', node_id: 'offline-node' },
         source: DelegateAssignmentSource.Override
       }],
-      orphaned_overrides: [{ agent_id: 'removed-role', model: { model_id: 'legacy/model' } }]
+      orphaned_overrides: [{
+        agent_id: 'removed-role',
+        model: { model_id: 'legacy/model' },
+        reasoning_effort: null
+      }]
     };
     mockClient.getDelegateModels.mockResolvedValueOnce(state);
 
