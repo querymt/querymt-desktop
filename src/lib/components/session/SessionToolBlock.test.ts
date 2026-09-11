@@ -54,6 +54,24 @@ describe('SessionToolBlock', () => {
     expect(writeText).toHaveBeenCalledWith('{\n  "command": "bun",\n  "args": [\n    "run",\n    "check"\n  ]\n}');
   });
 
+  it('shows compact added and removed counts for completed edits', () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'edit-1',
+        title: 'Run edit',
+        kind: 'edit',
+        status: 'completed',
+        arguments: '{"path":"src/app.ts","oldString":"one\\ntwo\\nthree","newString":"one\\nfour"}'
+      }
+    });
+
+    const added = screen.getByText('+1');
+    const removed = screen.getByText('-2');
+    expect(added).toHaveClass('session-tool-change-added');
+    expect(removed).toHaveClass('session-tool-change-removed');
+    expect(screen.getByRole('group', { name: 'Edit file - src/app.ts +1 -2' })).toBeInTheDocument();
+  });
+
   it('surfaces failed status and preserves error detail', () => {
     render(SessionToolBlock, {
       tool: {

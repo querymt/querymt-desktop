@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatTechnicalText, getDelegateTargetAgentId, getSessionToolPresentation, humanizeToolName } from './session-tool-presentation';
+import { formatChangeStats, formatTechnicalText, getDelegateTargetAgentId, getSessionToolPresentation, humanizeToolName } from './session-tool-presentation';
 import type { SessionToolCallItem } from './types';
 
 function tool(overrides: Partial<SessionToolCallItem> = {}): SessionToolCallItem {
@@ -69,6 +69,73 @@ describe('getSessionToolPresentation', () => {
     ).toMatchObject({ statusLabel: 'Failed', resultText: 'oldString not found', expandable: true });
   });
 
+  it('summarizes completed edit, write, and patch line counts', () => {
+    expect(
+      getSessionToolPresentation(
+        tool({
+          title: 'Run edit',
+          kind: 'edit',
+          arguments: '{"path":"src/app.ts","oldString":"one\\ntwo\\nthree","newString":"one\\nfour"}'
+        })
+      )
+    ).toMatchObject({
+      preview: 'src/app.ts',
+      changeStats: { added: 1, removed: 2 }
+    });
+    expect(
+      getSessionToolPresentation(
+        tool({
+          title: 'Run multiedit',
+          kind: 'multiedit',
+          arguments: '{"filePath":"src/lib.ts","edits":[{"oldString":"a\\nb","newString":"a\\nb\\nc"},{"oldString":"x","newString":""}]}'
+        })
+      ).changeStats
+    ).toEqual({ added: 1, removed: 1 });
+    expect(
+      getSessionToolPresentation(
+        tool({
+          title: 'Run write_file',
+          kind: 'write_file',
+          arguments: '{"path":"src/new.ts","content":"export const value = 1;\\nexport const other = 2;\\n"}'
+        })
+      ).changeStats
+    ).toEqual({ added: 2, removed: 0 });
+    expect(
+      getSessionToolPresentation(
+        tool({
+          title: 'Run apply_patch',
+          kind: 'apply_patch',
+          arguments: '{"path":"src/app.ts"}',
+          result: '--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n context\n'
+        })
+      ).changeStats
+    ).toEqual({ added: 1, removed: 1 });
+  });
+
+  it('hides edit change stats until the tool completes', () => {
+    expect(
+      getSessionToolPresentation(
+        tool({
+          title: 'Run edit',
+          kind: 'edit',
+          status: 'in_progress',
+          arguments: '{"path":"src/app.ts","oldString":"one","newString":"two"}'
+        })
+      ).changeStats
+    ).toBeNull();
+    expect(
+      getSessionToolPresentation(
+        tool({
+          title: 'Run edit',
+          kind: 'edit',
+          status: 'failed',
+          arguments: '{"path":"src/app.ts","oldString":"one","newString":"two"}',
+          result: 'oldString not found'
+        })
+      ).changeStats
+    ).toBeNull();
+  });
+
   it('summarizes delegate targets and exposes the target agent id', () => {
     const delegate = tool({
       title: 'Run delegate',
@@ -92,5 +159,12 @@ describe('tool text formatting', () => {
 
   it('humanizes unknown provider and MCP tool names', () => {
     expect(humanizeToolName('mcp_custom.lookup-symbol')).toBe('Custom lookup symbol');
+  });
+
+  it('formats compact added and removed counts', () => {
+    expect(formatChangeStats({ added: 10, removed: 20 })).toBe('+10 -20');
+    expect(formatChangeStats({ added: 4, removed: 0 })).toBe('+4');
+    expect(formatChangeStats({ added: 0, removed: 2 })).toBe('-2');
+    expect(formatChangeStats(null)).toBeNull();
   });
 });

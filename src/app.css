@@ -6673,6 +6673,26 @@ summary:focus-visible {
   color: var(--text-dim);
 }
 
+.session-tool-change-stats {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.28rem;
+  margin-right: 0.15rem;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.session-tool-change-added {
+  color: var(--status-success);
+}
+
+.session-tool-change-removed {
+  color: var(--status-danger);
+}
+
 .session-tool-session-pill {
   display: inline-flex;
   max-width: 7.5rem;
