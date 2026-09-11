@@ -372,6 +372,21 @@ describe('DesktopSessionList', () => {
     expect(onCreateWorkspaceSession).toHaveBeenCalledWith('/recent');
   });
 
+  it('retries an uninitialized workspace after the catalog generation changes', async () => {
+    const onOpenWorkspace = vi.fn(async () => {});
+    const { rerender } = render(DesktopSessionList, {
+      workspaceGroups: [createWorkspaceGroup({ initialized: false, catalogGeneration: 1 })],
+      onOpenWorkspace
+    });
+
+    await waitFor(() => expect(onOpenWorkspace).toHaveBeenCalledTimes(1));
+    await rerender({
+      workspaceGroups: [createWorkspaceGroup({ initialized: false, catalogGeneration: 2 })],
+      onOpenWorkspace
+    });
+    await waitFor(() => expect(onOpenWorkspace).toHaveBeenCalledTimes(2));
+  });
+
   it('loads an unopened workspace and requests ten more when pagination is available', async () => {
     const onOpenWorkspace = vi.fn(async () => {});
     const onLoadMoreWorkspace = vi.fn(async () => {});
@@ -400,6 +415,7 @@ function createWorkspaceGroup(overrides: Partial<{
   loading: boolean;
   hasMore: boolean;
   error: string | null;
+  catalogGeneration: number;
 }> = {}) {
   return {
     key: '/projects/querymt',
@@ -412,6 +428,7 @@ function createWorkspaceGroup(overrides: Partial<{
     loading: false,
     hasMore: false,
     error: null,
+    catalogGeneration: 0,
     ...overrides
   };
 }

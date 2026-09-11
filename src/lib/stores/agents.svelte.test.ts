@@ -388,6 +388,9 @@ describe('AgentsStore connections', () => {
       }),
       expect.objectContaining({ sessionId: 'session-1', hasChildren: true, forkCount: 1 })
     ]));
+    expect(store.workspaceSessionGroups[0].sessions.map((session) => session.sessionId)).toEqual(
+      expect.arrayContaining(['fork-session', 'session-1'])
+    );
     expect(store.activeSessionId).toBe('session-1');
   });
 
@@ -2731,6 +2734,123 @@ describe('AgentsStore prompt session start', () => {
     expect(store.workspaceSessionGroups).toHaveLength(1);
     expect(store.workspaceSessionGroups[0].sessions).toHaveLength(10);
     expect(store.workspaceSessionGroups[0].hasMore).toBe(true);
+  });
+
+  it('inserts a newly created session into the workspace catalog before list refresh', async () => {
+    const store = createStore();
+    store.workspaceSessionSources = {
+      'agent-1': {
+        '/tmp/work': {
+          agentId: 'agent-1',
+          agentName: 'QMTCODE',
+          cwd: '/tmp/work',
+          sessions: [{
+            agentId: 'agent-1',
+            agentName: 'QMTCODE',
+            sessionId: 'session-old',
+            title: 'Old',
+            cwd: '/tmp/work',
+            updatedAt: '2026-07-18T12:00:00Z',
+            runtimeId: 'agent-1',
+            runtimeName: 'QMTCODE',
+            source: 'acp',
+            status: 'idle'
+          }],
+          latestActivity: '2026-07-18T12:00:00Z',
+          nextCursor: '10',
+          initialized: true,
+          loading: false,
+          error: null
+        }
+      }
+    };
+    mockClient.createSession.mockResolvedValueOnce({ sessionId: 'session-new', configOptions: [] });
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [] });
+
+    await store.createBackgroundSession('agent-1', '/tmp/work');
+
+    expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: 'session-new', cwd: '/tmp/work' })
+    ]));
+    expect(store.workspaceSessionGroups[0].sessions.map((session) => session.sessionId)).toEqual(
+      expect.arrayContaining(['session-new', 'session-old'])
+    );
+  });
+
+  it('merges a newly listed local session into an already initialized workspace group', async () => {
+    const store = createStore();
+    store.workspaceSessionSources = {
+      'agent-1': {
+        '/tmp/work': {
+          agentId: 'agent-1',
+          agentName: 'QMTCODE',
+          cwd: '/tmp/work',
+          sessions: [{
+            agentId: 'agent-1',
+            agentName: 'QMTCODE',
+            sessionId: 'session-old',
+            title: 'Old',
+            cwd: '/tmp/work',
+            updatedAt: '2026-07-18T12:00:00Z',
+            runtimeId: 'agent-1',
+            runtimeName: 'QMTCODE',
+            source: 'acp',
+            status: 'idle'
+          }],
+          latestActivity: '2026-07-18T12:00:00Z',
+          nextCursor: '10',
+          initialized: true,
+          loading: false,
+          error: null
+        }
+      }
+    };
+    mockClient.listSessions.mockResolvedValueOnce({
+      sessions: [{
+        sessionId: 'session-new',
+        title: 'New',
+        cwd: '/tmp/work',
+        updatedAt: '2026-07-18T12:05:00Z'
+      }]
+    });
+
+    await store.refreshSessionsForAgent('agent-1');
+
+    expect(store.workspaceSessionGroups[0].sessions.map((session) => session.sessionId)).toEqual([
+      'session-new',
+      'session-old'
+    ]);
+    expect(store.workspaceSessionGroups[0].initialized).toBe(true);
+    expect(store.workspaceSessionSources['agent-1']['/tmp/work'].nextCursor).toBe('10');
+  });
+
+  it('waits for in-flight discovery before applying an incremental session refresh', async () => {
+    const store = createStore();
+    let resolveDiscovery!: (value: { sessions: Array<{ sessionId: string; title: string; cwd: string; updatedAt: string }> }) => void;
+    mockClient.listSessions
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveDiscovery = resolve;
+      }))
+      .mockResolvedValueOnce({
+        sessions: [{ sessionId: 'session-new', title: 'New', cwd: '/tmp/work', updatedAt: '2026-07-18T12:05:00Z' }]
+      });
+
+    const discovery = store.refreshSessionsForAgent('agent-1', true);
+    const incremental = store.refreshSessionsForAgent('agent-1');
+    await vi.waitFor(() => expect(resolveDiscovery).toBeTypeOf('function'));
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+
+    resolveDiscovery({
+      sessions: [{ sessionId: 'session-old', title: 'Old', cwd: '/tmp/work', updatedAt: '2026-07-18T12:00:00Z' }]
+    });
+    await Promise.all([discovery, incremental]);
+
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, {});
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, {});
+    expect(store.sessionsByAgent['agent-1'].map((session) => session.sessionId)).toEqual([
+      'session-new',
+      'session-old'
+    ]);
   });
 
   it('clears attention when a session is acknowledged', () => {

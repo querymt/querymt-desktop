@@ -39,6 +39,7 @@ export interface WorkspaceSessionGroup {
   loading: boolean;
   hasMore: boolean;
   error: string | null;
+  catalogGeneration: number;
 }
 
 export interface SessionRailItem {
@@ -225,7 +226,8 @@ export function groupSessionsByWorkspace(sessions: DesktopSessionSummary[]): Wor
         initialized: true,
         loading: false,
         hasMore: false,
-        error: null
+        error: null,
+        catalogGeneration: 0
       };
     })
     .sort((a, b) => compareNullableTimestamps(b.latestActivity, a.latestActivity));

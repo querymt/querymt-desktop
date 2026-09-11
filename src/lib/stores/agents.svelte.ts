@@ -180,6 +180,7 @@ export class AgentsStore {
   private seenWorkspaceCursors = new Map<string, Set<string>>();
   private completedWorkspaceDiscoveries = new Set<string>();
   private workspaceDiscoveryPromises = new Map<string, Promise<void>>();
+  private sessionListRefreshChain = new Map<string, Promise<void>>();
   private hydratedRemoteSessionKeys = new Set<string>();
   private unlistenAgentLogs: UnlistenFn | null = null;
   private agentLogSubscriptionPending = false;
@@ -352,7 +353,11 @@ export class AgentsStore {
           initialized: sources.every((source) => source.initialized),
           loading: sources.some((source) => source.loading),
           hasMore: sessions.length > visibleLimit || sources.some((source) => source.nextCursor !== null),
-          error: sources.find((source) => source.error)?.error ?? null
+          error: sources.find((source) => source.error)?.error ?? null,
+          catalogGeneration: Math.max(
+            0,
+            ...sources.map((source) => this.workspaceSourceVersions.get(source.agentId) ?? 0)
+          )
         };
       })
       .sort((a, b) => (b.latestActivity ?? '').localeCompare(a.latestActivity ?? ''));
@@ -884,7 +889,18 @@ export class AgentsStore {
     }
   }
 
-    async refreshSessionsForAgent(agentId: string, discoverAll = false) {
+  private enqueueSessionListRefresh(agentId: string, task: () => Promise<void>): Promise<void> {
+    const previous = this.sessionListRefreshChain.get(agentId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(task);
+    this.sessionListRefreshChain.set(agentId, next);
+    return next.finally(() => {
+      if (this.sessionListRefreshChain.get(agentId) === next) {
+        this.sessionListRefreshChain.delete(agentId);
+      }
+    });
+  }
+
+  async refreshSessionsForAgent(agentId: string, discoverAll = false) {
     if (discoverAll) {
       const existingDiscovery = this.workspaceDiscoveryPromises.get(agentId);
       if (existingDiscovery) {
@@ -892,7 +908,9 @@ export class AgentsStore {
         return;
       }
 
-      const discovery = this.refreshSessionsForAgentRequest(agentId, true).finally(() => {
+      const discovery = this.enqueueSessionListRefresh(agentId, () =>
+        this.refreshSessionsForAgentRequest(agentId, true)
+      ).finally(() => {
         if (this.workspaceDiscoveryPromises.get(agentId) === discovery) {
           this.workspaceDiscoveryPromises.delete(agentId);
         }
@@ -902,7 +920,11 @@ export class AgentsStore {
       return;
     }
 
-    await this.refreshSessionsForAgentRequest(agentId, false);
+    return this.enqueueSessionListRefresh(agentId, async () => {
+      const existingDiscovery = this.workspaceDiscoveryPromises.get(agentId);
+      if (existingDiscovery) await existingDiscovery;
+      await this.refreshSessionsForAgentRequest(agentId, false);
+    });
   }
 
   private async refreshSessionsForAgentRequest(agentId: string, discoverAll: boolean) {
@@ -979,9 +1001,14 @@ export class AgentsStore {
     while (true) {
       const group = this.workspaceSessionGroups.find((candidate) => candidate.cwd === cwd);
       const sources = this.getWorkspaceSources(cwd);
-      if (sources.length === 0 || (group && group.sessions.length >= target)) return;
+      if (sources.length === 0) return;
       const candidates = sources.filter((source) => !source.initialized || source.nextCursor !== null);
       if (candidates.length === 0) return;
+      const initializedEnough =
+        Boolean(group) &&
+        group!.sessions.length >= target &&
+        sources.every((source) => source.initialized);
+      if (initializedEnough) return;
       await Promise.all(candidates.map((source) => this.loadWorkspaceSourcePage(source)));
     }
   }
@@ -1003,6 +1030,12 @@ export class AgentsStore {
     const seenCursors = new Set<string>();
     let nextCursor = firstPage.nextCursor ?? null;
 
+    // TODO(backend): QueryMT session/list cursors are integer offsets
+    // (`"10"`, `"100"`), not opaque keyset tokens. Inserting a newly created
+    // session at the top of `ORDER BY updated_at DESC` makes later pages
+    // skip/duplicate. Desktop currently only uses these cursors for discovery
+    // and "load more"; replace with a stable keyset/id cursor in
+    // crates/agent session list before relying on them across creates.
     while (nextCursor && !seenCursors.has(nextCursor)) {
       seenCursors.add(nextCursor);
       const page = await client.listSessions({ cursor: nextCursor });
@@ -1026,18 +1059,15 @@ export class AgentsStore {
     const nextSources: Record<string, WorkspaceSessionSource> = replace ? {} : { ...currentSources };
     for (const [cwd, workspaceSessions] of discovered) {
       const current = currentSources[cwd];
-      const latestActivity = maxTimestamp(workspaceSessions.map((session) => session.updatedAt));
-      const hasRemoteSessions = workspaceSessions.some((session) => session.location === 'remote');
-      const fallbackSessions = cwd && !hasRemoteSessions ? [] : workspaceSessions;
+      const latestActivity = maxTimestamp([
+        current?.latestActivity ?? null,
+        ...workspaceSessions.map((session) => session.updatedAt)
+      ]);
       nextSources[cwd] = {
         agentId: config.id,
         agentName: config.name,
         cwd,
-        sessions: current
-          ? cwd && !hasRemoteSessions
-            ? updateKnownSessions(current.sessions, workspaceSessions)
-            : mergeSessions(current.sessions, workspaceSessions)
-          : fallbackSessions,
+        sessions: mergeSessions(current?.sessions ?? [], workspaceSessions),
         latestActivity,
         nextCursor: current && !replace ? current.nextCursor : null,
         initialized: current && !replace ? current.initialized : !cwd,
@@ -1049,6 +1079,43 @@ export class AgentsStore {
     this.workspaceSessionSources = {
       ...this.workspaceSessionSources,
       [config.id]: nextSources
+    };
+  }
+
+  private upsertWorkspaceSessions(agentId: string, sessions: DesktopSessionSummary[]) {
+    if (sessions.length === 0) return;
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) return;
+
+    const currentSources = { ...(this.workspaceSessionSources[agentId] ?? {}) };
+    const grouped = new Map<string, DesktopSessionSummary[]>();
+    for (const session of sessions) {
+      const workspaceSessions = grouped.get(session.cwd) ?? [];
+      workspaceSessions.push(session);
+      grouped.set(session.cwd, workspaceSessions);
+    }
+
+    for (const [cwd, workspaceSessions] of grouped) {
+      const current = currentSources[cwd];
+      currentSources[cwd] = {
+        agentId,
+        agentName: config.name,
+        cwd,
+        sessions: mergeSessions(current?.sessions ?? [], workspaceSessions),
+        latestActivity: maxTimestamp([
+          current?.latestActivity ?? null,
+          ...workspaceSessions.map((session) => session.updatedAt)
+        ]),
+        nextCursor: current?.nextCursor ?? null,
+        initialized: current?.initialized ?? !cwd,
+        loading: current?.loading ?? false,
+        error: current?.error ?? null
+      };
+    }
+
+    this.workspaceSessionSources = {
+      ...this.workspaceSessionSources,
+      [agentId]: currentSources
     };
   }
 
@@ -1075,6 +1142,9 @@ export class AgentsStore {
       current = this.workspaceSessionSources[source.agentId]?.[source.cwd];
 
       const requestCursor = current?.initialized ? current.nextCursor : null;
+      // TODO(backend): these cwd cursors are QueryMT integer offsets. A create
+      // that lands at the top of the workspace list makes "load more" skip or
+      // duplicate until session/list uses a stable keyset cursor.
       if (requestCursor && seenCursors.has(requestCursor)) {
         throw new Error(`${source.agentName} returned a repeated session cursor.`);
       }
@@ -1213,6 +1283,24 @@ export class AgentsStore {
     this.sessionConfigOptions.set(buildSessionKey(agentId, response.sessionId), response.configOptions ?? []);
     this.restoreSessionModel(agentId, response.sessionId, response.configOptions ?? [], response);
     this.rememberRecentWorkspace(normalizedCwd);
+    const summary: DesktopSessionSummary = {
+      agentId,
+      agentName: config.name,
+      sessionId: response.sessionId,
+      title: 'Untitled session',
+      cwd: normalizedCwd,
+      updatedAt: new Date().toISOString(),
+      runtimeId: agentId,
+      runtimeName: config.name,
+      source: 'acp',
+      location: 'local',
+      status: 'idle'
+    };
+    this.sessionsByAgent = {
+      ...this.sessionsByAgent,
+      [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [summary])
+    };
+    this.upsertWorkspaceSessions(agentId, [summary]);
     await this.refreshSessionsForAgent(agentId);
     return response;
   }
@@ -1638,6 +1726,7 @@ export class AgentsStore {
         ...this.sessionsByAgent,
         [agentId]: optimisticSessions.sort(compareSessionsByActivity)
       };
+      this.upsertWorkspaceSessions(agentId, optimisticSessions);
       return response.sessionId;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fork session.';
@@ -2873,6 +2962,8 @@ export class AgentsStore {
       ...this.sessionsByAgent,
       [agentId]: nextSessions
     };
+    const updated = nextSessions.find((session) => session.sessionId === notification.sessionId);
+    if (updated) this.upsertWorkspaceSessions(agentId, [updated]);
   }
 
   private handleSessionNotification(
@@ -3385,11 +3476,6 @@ function mergeSessions(current: DesktopSessionSummary[], incoming: DesktopSessio
     sessions.set(getSessionKey(session), session);
   }
   return [...sessions.values()].sort(compareSessionsByActivity);
-}
-
-function updateKnownSessions(current: DesktopSessionSummary[], incoming: DesktopSessionSummary[]): DesktopSessionSummary[] {
-  const updates = new Map(incoming.map((session) => [getSessionKey(session), session]));
-  return current.map((session) => updates.get(getSessionKey(session)) ?? session).sort(compareSessionsByActivity);
 }
 
 function maxTimestamp(values: Array<string | null>): string | null {
