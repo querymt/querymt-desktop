@@ -4268,6 +4268,11 @@ summary:focus-visible {
   gap: 0.1rem;
 }
 
+.delegate-model-dialog .app-dialog-description {
+  max-width: none;
+  white-space: nowrap;
+}
+
 .delegate-model-picker-body {
   display: grid;
   gap: 0.8rem;

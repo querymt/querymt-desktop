@@ -20,6 +20,7 @@
     onOpenAutoFocus = undefined,
     onCloseAutoFocus = undefined,
     onDismiss = undefined,
+    onClose = undefined,
     onEscapeKeydown = undefined,
     onInteractOutside = undefined
   }: {
@@ -39,6 +40,7 @@
     onOpenAutoFocus?: (event: Event) => void;
     onCloseAutoFocus?: (event: Event) => void;
     onDismiss?: () => void;
+    onClose?: (event: MouseEvent) => void;
     onEscapeKeydown?: (event: KeyboardEvent) => void;
     onInteractOutside?: (event: PointerEvent) => void;
   } = $props();
@@ -49,7 +51,12 @@
     if (!nextOpen) onDismiss?.();
   }
 
-  function close() {
+  function close(event?: MouseEvent) {
+    if (pending) return;
+    if (event) {
+      onClose?.(event);
+      if (event.defaultPrevented) return;
+    }
     handleOpenChange(false);
   }
 </script>

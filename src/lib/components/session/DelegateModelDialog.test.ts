@@ -61,6 +61,9 @@ describe('DelegateModelDialog', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Grok 4.6/i }));
 
     expect(onAssign).toHaveBeenCalledWith('coder', { model_id: 'xai/grok-4.6', node_id: 'node-1' });
+    expect(screen.getByRole('dialog', { name: 'Route Coder' })).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(screen.getByRole('dialog', { name: 'Delegate routing' })).toBeTruthy();
   });
 
   it('preserves unavailable overrides and offers an explicit reset', async () => {
@@ -152,7 +155,7 @@ describe('DelegateModelDialog', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: /Coder coder/i }));
     expect(screen.queryByRole('button', { name: 'Delegate reasoning effort' })).toBeNull();
-    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(screen.getByRole('dialog', { name: 'Delegate routing' })).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: /removed-reviewer/i }));
     await fireEvent.click(screen.getByRole('button', { name: 'Clear saved route' }));
@@ -166,6 +169,7 @@ describe('DelegateModelDialog', () => {
     });
 
     await fireEvent.click(screen.getByRole('button', { name: /Coder coder/i }));
+    expect(screen.getByRole('button', { name: 'Refresh models' })).toBeTruthy();
     await rerender({
       open: true,
       assignments: { ...assignments, editable: false },
@@ -193,6 +197,19 @@ describe('DelegateModelDialog', () => {
     expect(screen.getByRole('dialog', { name: 'Route Coder' })).toBeTruthy();
 
     await fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Delegate routing' })).toBeTruthy();
+    expect(screen.getByText('Saved with this session')).toBeTruthy();
+  });
+
+  it('returns to the routing list from picker close without closing the dialog', async () => {
+    render(DelegateModelDialog, {
+      props: { open: true, assignments, models, onAssign: vi.fn(), onRefresh: vi.fn() }
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: /Coder coder/i }));
+    expect(screen.getByRole('dialog', { name: 'Route Coder' })).toBeTruthy();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Back to delegate routing' }));
     expect(screen.getByRole('dialog', { name: 'Delegate routing' })).toBeTruthy();
     expect(screen.getByText('Saved with this session')).toBeTruthy();
   });

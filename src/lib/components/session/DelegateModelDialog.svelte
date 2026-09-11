@@ -16,6 +16,7 @@
   } from '@lucide/svelte';
   import AppDialog from '$lib/components/primitives/AppDialog.svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import {
     displayedInputModalities,
     formatContextSize,
@@ -197,8 +198,12 @@
 
   async function assignModel(model: ModelEntry) {
     if (!selectedAgentId || !editable || pending[selectedAgentId]) return;
-    const changed = await onAssign(selectedAgentId, { model_id: model.id, node_id: model.node_id ?? undefined });
-    if (changed) selectedTarget = null;
+    await onAssign(selectedAgentId, { model_id: model.id, node_id: model.node_id ?? undefined });
+  }
+
+  function returnToRoutingList() {
+    if (anyPending) return;
+    selectedTarget = null;
   }
 
   async function useProfileDefault() {
@@ -234,10 +239,11 @@
   description={dialogDescription}
   size="wide"
   pending={anyPending}
-  closeLabel="Close delegate routing"
+  closeLabel={selectedTarget ? 'Back to delegate routing' : 'Close delegate routing'}
   portalTarget={overlayPortalTarget}
   contentClass={selectedTarget ? 'delegate-model-dialog delegate-model-picker' : 'delegate-model-dialog'}
   bodyClass={selectedTarget ? 'delegate-model-picker-body' : 'delegate-model-dialog-body'}
+  onClose={handlePickerDismiss}
   onEscapeKeydown={handlePickerDismiss}
   onInteractOutside={handlePickerDismiss}
 >
@@ -266,9 +272,14 @@
           aria-label="Search delegate models"
         />
         {#if onRefreshModels}
-          <button type="button" aria-label="Refresh delegate models" disabled={!editable || modelLoading} onclick={onRefreshModels}>
-            <RefreshCw size={14} class={modelLoading ? 'animate-spin' : ''} />
-          </button>
+          <IconTooltipButton
+            label="Refresh models"
+            icon={RefreshCw}
+            controlSize="compact"
+            iconClass={modelLoading ? 'animate-spin' : ''}
+            disabled={!editable || modelLoading}
+            onclick={onRefreshModels}
+          />
         {/if}
       </div>
 
@@ -512,13 +523,13 @@
           {#if !activeAssignment.model}<Check size={14} />{/if}
         </button>
       {/if}
-      <button class="action-btn" type="button" disabled={!!pending[selectedAgentId]} onclick={() => (selectedTarget = null)}>Cancel</button>
       {#if activeOrphan}
         <button class="action-btn action-btn-danger" type="button" disabled={!editable || !!pending[selectedAgentId]} onclick={clearSavedRoute}>
           {#if pending[selectedAgentId]}<LoaderCircle size={14} class="animate-spin" />{/if}
           Clear saved route
         </button>
       {/if}
+      <button class="action-btn" type="button" disabled={!!pending[selectedAgentId]} onclick={returnToRoutingList}>Done</button>
     {:else}
       <button class="action-btn" type="button" disabled={anyPending} onclick={() => (open = false)}>Done</button>
     {/if}
