@@ -142,12 +142,54 @@ function isMermaidLanguage(language: string) {
   return language.trim().toLowerCase() === 'mermaid';
 }
 
+type MermaidLook = 'classic';
+
+type MermaidThemeVariables = {
+  primaryColor: string;
+  primaryTextColor: string;
+  primaryBorderColor: string;
+  secondaryColor: string;
+  tertiaryColor: string;
+  lineColor: string;
+  textColor: string;
+  titleColor: string;
+  mainBkg: string;
+  nodeBorder: string;
+  nodeBkg: string;
+  clusterBkg: string;
+  clusterBorder: string;
+  edgeLabelBackground: string;
+  labelTextColor: string;
+  actorBkg: string;
+  actorBorder: string;
+  actorTextColor: string;
+  signalTextColor: string;
+  labelBoxBkgColor: string;
+  activationBkgColor: string;
+  sequenceNumberColor: string;
+  noteBkgColor: string;
+  noteTextColor: string;
+  noteBorderColor: string;
+  classText: string;
+  useGradient: boolean;
+  dropShadow: string;
+};
+
 type MermaidApi = {
   initialize: (config: {
     startOnLoad: boolean;
     securityLevel: 'strict';
     htmlLabels: boolean;
-    theme: 'dark' | 'default';
+    theme: 'base';
+    look: MermaidLook;
+    themeVariables: MermaidThemeVariables;
+    flowchart: { look: MermaidLook };
+    sequence: { look: MermaidLook };
+    class: { look: MermaidLook };
+    state: { look: MermaidLook };
+    er: { look: MermaidLook };
+    requirement: { look: MermaidLook };
+    mindmap: { look: MermaidLook };
     suppressErrorRendering: boolean;
     logLevel: 'error';
     secure: string[];
@@ -177,7 +219,8 @@ const MERMAID_SECURE = [
     'themeCSS',
     'themeVariables',
     'fontFamily',
-    'altFontFamily'
+    'altFontFamily',
+    'look'
   ])
 ];
 
@@ -192,12 +235,63 @@ function resolvedColorScheme(): 'dark' | 'light' {
   return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
 }
 
+function cssToken(name: string, fallback: string) {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
 function mermaidConfig(theme: 'dark' | 'light') {
+  const dark = theme === 'dark';
+  const fill = cssToken(dark ? '--bg-panel-strong' : '--bg-card', dark ? '#272727' : '#ffffff');
+  const border = cssToken(dark ? '--border-strong' : '--border', dark ? '#505050' : '#deddda');
+  const text = cssToken('--text', dark ? '#f5f5f5' : '#241f31');
+  const muted = cssToken('--text-muted', dark ? '#c4c4c4' : '#5e5c64');
+  const look = 'classic' as const;
+  const themeVariables: MermaidThemeVariables = {
+    primaryColor: fill,
+    primaryTextColor: text,
+    primaryBorderColor: border,
+    secondaryColor: fill,
+    tertiaryColor: fill,
+    lineColor: muted,
+    textColor: text,
+    titleColor: text,
+    mainBkg: fill,
+    nodeBorder: border,
+    nodeBkg: fill,
+    clusterBkg: fill,
+    clusterBorder: border,
+    edgeLabelBackground: fill,
+    labelTextColor: text,
+    actorBkg: fill,
+    actorBorder: border,
+    actorTextColor: text,
+    signalTextColor: text,
+    labelBoxBkgColor: fill,
+    activationBkgColor: fill,
+    sequenceNumberColor: text,
+    noteBkgColor: fill,
+    noteTextColor: text,
+    noteBorderColor: border,
+    classText: text,
+    useGradient: false,
+    dropShadow: 'none'
+  };
+
   return {
     startOnLoad: false,
     securityLevel: 'strict' as const,
     htmlLabels: false,
-    theme: theme === 'dark' ? ('dark' as const) : ('default' as const),
+    theme: 'base' as const,
+    look,
+    themeVariables,
+    flowchart: { look },
+    sequence: { look },
+    class: { look },
+    state: { look },
+    er: { look },
+    requirement: { look },
+    mindmap: { look },
     suppressErrorRendering: true,
     logLevel: 'error' as const,
     secure: [...MERMAID_SECURE]

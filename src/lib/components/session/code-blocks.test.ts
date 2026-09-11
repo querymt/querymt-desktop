@@ -104,7 +104,11 @@ describe('enhanceCodeBlocks', () => {
         startOnLoad: false,
         securityLevel: 'strict',
         htmlLabels: false,
-        theme: 'default',
+        theme: 'base',
+        look: 'classic',
+        flowchart: { look: 'classic' },
+        sequence: { look: 'classic' },
+        class: { look: 'classic' },
         secure: expect.arrayContaining([
           'secure',
           'securityLevel',
@@ -116,10 +120,25 @@ describe('enhanceCodeBlocks', () => {
           'themeCSS',
           'themeVariables',
           'fontFamily',
-          'altFontFamily'
+          'altFontFamily',
+          'look'
         ])
       })
     );
+    const lightConfig = mermaidInitialize.mock.calls[0]?.[0] as {
+      themeVariables: {
+        primaryColor: string;
+        mainBkg: string;
+        nodeBkg: string;
+        actorBkg: string;
+        primaryTextColor: string;
+      };
+    };
+    expect(lightConfig.themeVariables.primaryColor).toBe('#ffffff');
+    expect(lightConfig.themeVariables.mainBkg).toBe(lightConfig.themeVariables.primaryColor);
+    expect(lightConfig.themeVariables.nodeBkg).toBe(lightConfig.themeVariables.primaryColor);
+    expect(lightConfig.themeVariables.actorBkg).toBe(lightConfig.themeVariables.primaryColor);
+    expect(lightConfig.themeVariables.primaryTextColor).toBe('#241f31');
     const diagram = document.querySelector('.mermaid-diagram');
     const source = document.querySelector<HTMLElement>('.code-block-shell pre');
     const header = document.querySelector('.code-block-header');
@@ -288,7 +307,35 @@ describe('enhanceCodeBlocks', () => {
     document.documentElement.dataset.theme = 'dark';
 
     await vi.waitFor(() => expect(mermaidRender).toHaveBeenCalledTimes(2));
-    expect(mermaidInitialize).toHaveBeenCalledWith(expect.objectContaining({ theme: 'dark' }));
+    const darkConfig = mermaidInitialize.mock.calls.find((call) => {
+      const themeVariables = (call[0] as { themeVariables?: { primaryTextColor?: string } })
+        ?.themeVariables;
+      return themeVariables?.primaryTextColor === '#f5f5f5';
+    })?.[0] as {
+      theme: string;
+      look: string;
+      themeVariables: {
+        primaryColor: string;
+        mainBkg: string;
+        nodeBkg: string;
+        actorBkg: string;
+        primaryTextColor: string;
+      };
+    };
+    expect(darkConfig).toEqual(
+      expect.objectContaining({
+        theme: 'base',
+        look: 'classic',
+        flowchart: { look: 'classic' },
+        sequence: { look: 'classic' },
+        class: { look: 'classic' }
+      })
+    );
+    expect(darkConfig.themeVariables.primaryColor).toBe('#272727');
+    expect(darkConfig.themeVariables.mainBkg).toBe(darkConfig.themeVariables.primaryColor);
+    expect(darkConfig.themeVariables.nodeBkg).toBe(darkConfig.themeVariables.primaryColor);
+    expect(darkConfig.themeVariables.actorBkg).toBe(darkConfig.themeVariables.primaryColor);
+    expect(darkConfig.themeVariables.primaryTextColor).toBe('#f5f5f5');
     expect(document.querySelector('.mermaid-diagram svg')?.getAttribute('data-mermaid-theme')).toBe('dark');
     expect(document.querySelectorAll('[data-mermaid-source-toggle]')).toHaveLength(1);
     expect(document.querySelector('.code-block-shell')?.getAttribute('data-mermaid-view')).toBe('source');
