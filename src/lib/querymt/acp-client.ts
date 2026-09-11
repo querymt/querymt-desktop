@@ -98,6 +98,7 @@ const PROTOCOL_VERSION = 1;
 export interface LoadedAcpSession {
   response: LoadSessionResponse;
   replay: SessionNotification[];
+  finishReplay: () => SessionNotification[];
 }
 
 export class DesktopAcpClient {
@@ -222,9 +223,14 @@ export class DesktopAcpClient {
             }
           : undefined
       });
+      // Keep capture open until the store finishes its post-RPC flush.
+      // session/update notifications can still be in-flight after this RPC
+      // resolves; finishing later includes them in replay instead of letting
+      // live handlers apply them onto a session that assignment then overwrites.
       return {
         response,
-        replay: this.browserClient.completeSessionReplay(capture)
+        replay: capture.notifications,
+        finishReplay: () => this.browserClient.completeSessionReplay(capture)
       };
     } catch (error) {
       this.browserClient.abortSessionReplay(capture);

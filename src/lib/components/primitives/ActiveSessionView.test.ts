@@ -294,6 +294,20 @@ describe('ActiveSessionView turn window', () => {
     expect(screen.queryByText('Prompt 10')).not.toBeInTheDocument();
     expect(document.querySelector('.session-turn-spacer')).toBeInTheDocument();
   });
+
+  it('mounts transcript after an empty first load without waiting for resize', async () => {
+    const empty = createEmptyActiveSession();
+    empty.sessionId = 'session-long';
+    const { rerender } = render(ActiveSessionView, { session: empty });
+    expect(screen.getByText('No conversation yet')).toBeInTheDocument();
+
+    await rerender({ session: longStreamingSession(3) });
+    await tick();
+
+    expect(screen.queryByText('No conversation yet')).not.toBeInTheDocument();
+    expect(screen.getByText('Live answer 2')).toBeInTheDocument();
+    expect(screen.getByText('Prompt 0')).toBeInTheDocument();
+  });
 });
 
 describe('ActiveSessionView turn action settle hold', () => {

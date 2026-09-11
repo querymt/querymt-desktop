@@ -18,11 +18,12 @@ describe('DesktopAcpClient session metadata', () => {
     const loadSession = vi.fn(async () => ({ configOptions: [] }));
     (client as unknown as { connection: { loadSession: typeof loadSession } }).connection = { loadSession };
 
-    await expect(client.loadSession('session-1', '/tmp/work', 'operation-1')).resolves.toEqual({
-      response: { configOptions: [] },
-      replay: []
-    });
+    const loaded = await client.loadSession('session-1', '/tmp/work', 'operation-1');
+    expect(loaded.response).toEqual({ configOptions: [] });
+    expect(loaded.replay).toEqual([]);
     expect(beginSessionReplay).toHaveBeenCalledWith('session-1');
+    expect(completeSessionReplay).not.toHaveBeenCalled();
+    expect(loaded.finishReplay()).toEqual([]);
     expect(completeSessionReplay).toHaveBeenCalledTimes(1);
     expect(loadSession).toHaveBeenCalledWith({
       sessionId: 'session-1',

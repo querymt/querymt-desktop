@@ -1613,6 +1613,7 @@ export class AgentsStore {
       }, 10_000);
     }
     let telemetryStatus = 'success';
+    let finishReplay: (() => SessionNotification[]) | null = null;
     try {
       // Stale-while-revalidate: when reloading the session that is already on
       // screen and still has content, keep the transcript rendered while the
@@ -1643,7 +1644,10 @@ export class AgentsStore {
         ? await record.client.loadSession(target.sessionId, target.cwd, telemetryOperationId)
         : await record.client.loadSession(target.sessionId, target.cwd);
       const loadedSession = 'response' in loaded ? loaded.response : (loaded as unknown as LoadSessionResponse);
-      const replay = 'replay' in loaded ? loaded.replay : [];
+      let replay = 'replay' in loaded ? loaded.replay : [];
+      if ('finishReplay' in loaded && typeof loaded.finishReplay === 'function') {
+        finishReplay = loaded.finishReplay;
+      }
       checkpoint('frontend.acp_wait');
       if (!this.isSelectedSession(agentId, sessionId)) {
         telemetryStatus = 'cancelled';
@@ -1654,6 +1658,10 @@ export class AgentsStore {
       await tick();
       await new Promise((resolve) => setTimeout(resolve, 0));
       checkpoint('frontend.response_flush');
+      if (finishReplay) {
+        replay = finishReplay();
+        finishReplay = null;
+      }
       if (!this.isSelectedSession(agentId, sessionId)) {
         telemetryStatus = 'cancelled';
         return;
@@ -1662,11 +1670,19 @@ export class AgentsStore {
       this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
       const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
       checkpoint('frontend.snapshot_transform');
-      const hasReplayHistory =
-        replaySession.transcript.length > 0 || replaySession.toolCalls.length > 0 || replaySession.events.length > 0;
-      const hasSnapshotHistory =
-        snapshotSession.transcript.length > 0 || snapshotSession.toolCalls.length > 0 || snapshotSession.events.length > 0;
-      this.activeSession = hasReplayHistory ? replaySession : hasSnapshotHistory ? snapshotSession : replaySession;
+      const liveSession = this.activeSession;
+      const liveHasVisibleHistory =
+        liveSession.sessionId === sessionId && sessionHasVisibleHistory(liveSession);
+      // session_info_update and similar metadata create events without a
+      // transcript. Treating those as history overwrites late live updates
+      // that arrived after capture closed (first child load, empty chat).
+      this.activeSession = sessionHasVisibleHistory(replaySession)
+        ? replaySession
+        : sessionHasVisibleHistory(snapshotSession)
+          ? snapshotSession
+          : liveHasVisibleHistory
+            ? liveSession
+            : replaySession;
       this.activeLoadMeasurement?.increment('historyAssignments');
       const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
       checkpoint('frontend.queued_replay');
@@ -1695,7 +1711,7 @@ export class AgentsStore {
         telemetryStatus = 'cancelled';
         return;
       }
-      if (!hasReplayHistory && !hasSnapshotHistory && drainedCount === 0) {
+      if (!sessionHasVisibleHistory(this.activeSession) && drainedCount === 0) {
         this.activeSession.activityLabel = 'Session loaded, but the agent returned no replayable history.';
       }
       this.hydrateLoadedSessionSummary(agentId, sessionId, replay);
@@ -1725,6 +1741,7 @@ export class AgentsStore {
       this.activeSession.activityLabel = message;
       this.error = message;
     } finally {
+      finishReplay?.();
       this.sessionHistoryLoading = false;
       if (heartbeat) clearInterval(heartbeat);
       await telemetryQueue;
@@ -3531,6 +3548,10 @@ function delegateAssignmentErrorMessage(error: unknown, fallback: string): strin
 
 function buildWorkspaceSourceKey(agentId: string, cwd: string): string {
   return `${agentId}\u0000${cwd}`;
+}
+
+function sessionHasVisibleHistory(session: ActiveSessionViewModel): boolean {
+  return session.transcript.length > 0 || session.toolCalls.length > 0;
 }
 
 function inferSessionSummaryFromActiveSession(session: ActiveSessionViewModel): { title: string | null; updatedAt: string | null } {

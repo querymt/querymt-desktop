@@ -377,6 +377,112 @@ describe('AgentsStore connections', () => {
       .not.toContain('session-child');
   });
 
+  it('keeps first-load child transcript from late updates when replay is metadata-only', async () => {
+    const store = createStore();
+    store.composerCwd = '/tmp/work';
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1',
+        agentName: 'QMTCODE',
+        sessionId: 'session-root',
+        title: 'Root',
+        cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z',
+        runtimeId: 'agent-1',
+        runtimeName: 'QMTCODE',
+        source: 'acp',
+        status: 'idle'
+      }]
+    };
+    mockClient.listSessions.mockResolvedValueOnce({
+      sessions: [{ sessionId: 'session-root', title: 'Root', cwd: '/tmp/work', updatedAt: '2026-07-18T17:00:00Z' }]
+    });
+    mockClient.loadSession.mockImplementationOnce(async (sessionId?: string) => {
+      mockClient.emitSessionUpdate({
+        sessionId: sessionId ?? 'session-child',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          messageId: 'child-1',
+          content: { type: 'text', text: 'Child answer' }
+        }
+      });
+      return {
+        response: { configOptions: [] },
+        replay: [{
+          sessionId: sessionId ?? 'session-child',
+          update: {
+            sessionUpdate: 'session_info_update',
+            title: 'Task: Final PASS review',
+            updatedAt: '2026-07-18T18:00:00Z'
+          }
+        }]
+      };
+    });
+
+    await store.connectAgent('agent-1');
+    await store.loadSession('agent-1', 'session-child');
+
+    expect(mockClient.listSessions).toHaveBeenCalledWith(listSessionsRequest());
+    expect(store.error).toBeNull();
+    expect(store.activeSessionId).toBe('session-child');
+    expect(store.activeSession.transcript).toEqual([
+      expect.objectContaining({ messageId: 'child-1', text: 'Child answer' })
+    ]);
+    expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sessionId: 'session-child',
+        title: 'Task: Final PASS review'
+      })
+    ]));
+  });
+
+  it('includes after-response replay captured during the post-RPC flush', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1',
+        agentName: 'QMTCODE',
+        sessionId: 'session-1',
+        title: 'A',
+        cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z',
+        runtimeId: 'agent-1',
+        runtimeName: 'QMTCODE',
+        source: 'acp',
+        status: 'idle'
+      }]
+    };
+    const replay: SessionNotification[] = [{
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'session_info_update',
+        title: 'Question session',
+        updatedAt: '2026-07-18T17:00:00Z'
+      }
+    }];
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [] },
+      replay,
+      finishReplay: () => {
+        replay.push({
+          sessionId: 'session-1',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            messageId: 'agent-1',
+            content: { type: 'text', text: 'Answer after RPC' }
+          }
+        });
+        return replay;
+      }
+    });
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activeSession.transcript).toEqual([
+      expect.objectContaining({ messageId: 'agent-1', text: 'Answer after RPC' })
+    ]);
+  });
+
   it('hydrates and activates an attached remote session without reloading it immediately', async () => {
     const store = createStore();
     store.remoteSessionsByAgent = {

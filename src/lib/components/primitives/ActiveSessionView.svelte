@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import Conversation from '$lib/components/ai-elements/conversation.svelte';
   import SessionTurn from '$lib/components/session/SessionTurn.svelte';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
@@ -103,6 +102,7 @@
     if (sessionId === heightSessionId) return;
     heightSessionId = sessionId;
     turnHeights = {};
+    viewport = { top: 0, height: 0 };
   });
 
   function resolveScrollViewport(): { element: HTMLElement; eventTarget: HTMLElement | Window } {
@@ -138,25 +138,27 @@
     if (changed) turnHeights = next;
   }
 
-  onMount(() => {
-    syncViewport();
-    measureVisibleTurns();
+  // Conversation unmounts this root while the session is empty, so bind
+  // scroll/resize measurement to the root itself. onMount ran too early on
+  // first load and never observed the later-mounted transcript.
+  $effect(() => {
+    const root = conversationRoot;
+    if (!root) return;
     const { eventTarget } = resolveScrollViewport();
     const onScroll = () => {
       syncViewport();
       measureVisibleTurns();
     };
+    syncViewport();
+    measureVisibleTurns();
     eventTarget.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onScroll);
     const observer =
-      typeof ResizeObserver === 'function'
-        ? new ResizeObserver(() => {
-            syncViewport();
-            measureVisibleTurns();
-          })
-        : null;
-    if (conversationRoot && observer) observer.observe(conversationRoot);
+      typeof ResizeObserver === 'function' ? new ResizeObserver(onScroll) : null;
+    observer?.observe(root);
+    const frame = requestAnimationFrame(onScroll);
     return () => {
+      cancelAnimationFrame(frame);
       eventTarget.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onScroll);
       observer?.disconnect();
