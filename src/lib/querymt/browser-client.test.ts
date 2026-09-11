@@ -49,4 +49,25 @@ describe('BrowserClient replay capture', () => {
     await client.sessionUpdate(notification('session-1', 'live'));
     expect(handler).toHaveBeenCalledWith(notification('session-1', 'live'));
   });
+
+  it('keeps capturing after-response updates until completeSessionReplay', async () => {
+    const client = new BrowserClient();
+    const handler = vi.fn();
+    client.onSessionUpdate(handler);
+    const capture = client.beginSessionReplay('session-1');
+
+    await client.sessionUpdate(notification('session-1', 'during'));
+    await Promise.resolve();
+    await client.sessionUpdate(notification('session-1', 'after'));
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(client.completeSessionReplay(capture)).toEqual([
+      notification('session-1', 'during'),
+      notification('session-1', 'after')
+    ]);
+    expect(client.completeSessionReplay(capture)).toEqual([
+      notification('session-1', 'during'),
+      notification('session-1', 'after')
+    ]);
+  });
 });

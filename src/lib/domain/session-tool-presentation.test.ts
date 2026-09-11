@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatTechnicalText, getSessionToolPresentation, humanizeToolName } from './session-tool-presentation';
+import { formatTechnicalText, getDelegateTargetAgentId, getSessionToolPresentation, humanizeToolName } from './session-tool-presentation';
 import type { SessionToolCallItem } from './types';
 
 function tool(overrides: Partial<SessionToolCallItem> = {}): SessionToolCallItem {
@@ -67,6 +67,20 @@ describe('getSessionToolPresentation', () => {
     expect(
       getSessionToolPresentation(tool({ status: 'failed', result: 'oldString not found' }))
     ).toMatchObject({ statusLabel: 'Failed', resultText: 'oldString not found', expandable: true });
+  });
+
+  it('summarizes delegate targets and exposes the target agent id', () => {
+    const delegate = tool({
+      title: 'Run delegate',
+      kind: 'delegate',
+      arguments: '{"target_agent_id":"linus","objective":"Review the current bearer-auth diff"}'
+    });
+    expect(getSessionToolPresentation(delegate)).toMatchObject({
+      label: 'Delegate task',
+      preview: 'linus - Review the current bearer-auth diff',
+      icon: 'delegate'
+    });
+    expect(getDelegateTargetAgentId(delegate)).toBe('linus');
   });
 });
 

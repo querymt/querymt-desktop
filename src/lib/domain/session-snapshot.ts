@@ -64,6 +64,8 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
   }
 
   const toolCallsById = new Map<string, SessionToolCallItem>();
+  const pendingDelegationToolCalls = new Map<string, string>();
+  const pendingChildSessionsByDelegation = new Map<string, string>();
   const structuredPrompts = indexStructuredPrompts(snapshot);
   const restoredStructuredPrompts = new Set<string>();
   let lastAssistantMessageId: string | null = null;
@@ -205,6 +207,26 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
         eventIndex: event.seq
       });
       session.events.push({ id: eventId, kind, text: stringifyOptional(data.result ?? data.output ?? data.content) ?? '', messageId });
+      continue;
+    }
+
+    if (kind === 'delegation_requested') {
+      const toolCallId = readString(data.tool_call_id);
+      const publicId = readString(readObject(data.delegation)?.public_id);
+      if (toolCallId && publicId) {
+        pendingDelegationToolCalls.set(publicId, toolCallId);
+        const childSessionId = pendingChildSessionsByDelegation.get(publicId);
+        if (childSessionId) mergeHistoricalToolCall(toolCallsById, toolCallId, { childSessionId });
+      }
+      continue;
+    }
+
+    if (kind === 'session_forked') {
+      const childSessionId = readString(data.child_session_id);
+      const forkPointRef = readString(data.fork_point_ref);
+      const toolCallId = pendingDelegationToolCalls.get(forkPointRef ?? '') ?? readString(data.tool_call_id);
+      if (childSessionId && forkPointRef) pendingChildSessionsByDelegation.set(forkPointRef, childSessionId);
+      if (childSessionId && toolCallId) mergeHistoricalToolCall(toolCallsById, toolCallId, { childSessionId });
     }
   }
 
@@ -400,7 +422,8 @@ function mergeHistoricalToolCall(
     arguments: update.arguments ?? existing?.arguments ?? null,
     result: update.result ?? existing?.result ?? null,
     isError: update.isError ?? existing?.isError,
-    eventIndex: mergeEventIndex(existing?.eventIndex, update.eventIndex)
+    eventIndex: mergeEventIndex(existing?.eventIndex, update.eventIndex),
+    childSessionId: update.childSessionId ?? existing?.childSessionId ?? null
   });
 }
 
@@ -529,6 +552,10 @@ function resolveAssistantMessageId(data: Record<string, unknown>, fallback: stri
 
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function readObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 function readBoolean(value: unknown): boolean {

@@ -16,6 +16,7 @@ import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from 
 import {
   createEmptyActiveSession,
   applySessionNotification,
+  applyDelegationChildSession,
   reduceSessionReplay,
   beginSessionWork,
   endSessionWork,
@@ -25,6 +26,7 @@ import {
   readClientPromptId
 } from '$lib/domain/session-updates';
 import {
+  buildListSessionsRequest,
   buildSessionKey,
   getSessionById,
   getSessionKey,
@@ -52,12 +54,17 @@ import type {
   SessionRunState,
   SessionStatus
 } from '$lib/domain/types';
+import { DelegateAssignmentSource } from '$lib/querymt/generated/types';
 import type {
   AuthMethod,
   AuthProviderEntry,
   CapabilitiesInfo,
   CreateMeshInviteRequest,
   CreateScheduleControlRequest,
+  DelegateAssignmentsInfo,
+  DelegateModelsChangedNotification,
+  DelegateModelOverride,
+  DelegateReasoningEffort,
   MeshInviteCreatedInfo,
   MeshInviteListInfo,
   MeshInviteRevokedInfo,
@@ -69,7 +76,8 @@ import type {
   RemoteSessionListInfo,
   ScheduleActionResult,
   ScheduleInfo,
-  ScheduleListInfo
+  ScheduleListInfo,
+  SetDelegateModelResponse
 } from '$lib/querymt/generated/types';
 import {
   findModeConfigOption,
@@ -87,7 +95,9 @@ import {
 } from '$lib/querymt/config-options';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
 import {
+  QMT_METHOD_SESSION_DELEGATE_MODELS,
   QMT_METHOD_SESSION_REDO,
+  QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK
 } from '$lib/querymt/querymt-extensions';
@@ -171,6 +181,7 @@ export class AgentsStore {
   private seenWorkspaceCursors = new Map<string, Set<string>>();
   private completedWorkspaceDiscoveries = new Set<string>();
   private workspaceDiscoveryPromises = new Map<string, Promise<void>>();
+  private sessionListRefreshChain = new Map<string, Promise<void>>();
   private hydratedRemoteSessionKeys = new Set<string>();
   private unlistenAgentLogs: UnlistenFn | null = null;
   private agentLogSubscriptionPending = false;
@@ -180,6 +191,9 @@ export class AgentsStore {
   private sessionConfigOptions = new Map<string, SessionConfigOption[]>();
   private sessionModelIds = $state<Record<string, string>>({});
   private pendingSessionConfigs = $state<Record<string, Record<string, number>>>({});
+  private delegateAssignmentRequests = new Map<string, Promise<boolean>>();
+  private delegateAssignmentRoleRequests = new Map<string, Promise<boolean>>();
+  private delegateAssignmentRefreshVersions = new Map<string, number>();
   private activeLoadMeasurement: SessionLoadMeasurement | null = null;
   private applyingDrainedUpdates = false;
   private pendingSessionNotifications: Array<{
@@ -261,9 +275,49 @@ export class AgentsStore {
   modelsByAgent = $state<Record<string, ModelEntry[]>>({});
   modelInfoByAgent = $state<Record<string, Record<string, ModelInfo | null>>>({});
   modelLoadingByAgent = $state<Record<string, boolean>>({});
+  delegateAssignmentsBySession = $state<Record<string, DelegateAssignmentsInfo | null>>({});
+  delegateAssignmentsLoadingBySession = $state<Record<string, boolean>>({});
+  delegateAssignmentsErrorBySession = $state<Record<string, string | null>>({});
+  delegateAssignmentPendingBySession = $state<Record<string, Record<string, boolean>>>({});
+  delegateAssignmentConflictBySession = $state<Record<string, boolean>>({});
   lastSessionLoadMetrics = $state<SessionLoadMetrics | null>(null);
   recentModelsByAgent = $state<Record<string, string[]>>(loadRecentModels());
   recentWorkspaces = $state<string[]>(loadRecentWorkspaces());
+
+  get activeDelegateAssignments(): DelegateAssignmentsInfo | null {
+    const key = this.activeAgentId && this.activeSessionId
+      ? buildSessionKey(this.activeAgentId, this.activeSessionId)
+      : '';
+    return this.delegateAssignmentsBySession[key] ?? null;
+  }
+
+  get activeDelegateAssignmentsLoading(): boolean {
+    const key = this.activeAgentId && this.activeSessionId
+      ? buildSessionKey(this.activeAgentId, this.activeSessionId)
+      : '';
+    return this.delegateAssignmentsLoadingBySession[key] ?? false;
+  }
+
+  get activeDelegateAssignmentsError(): string | null {
+    const key = this.activeAgentId && this.activeSessionId
+      ? buildSessionKey(this.activeAgentId, this.activeSessionId)
+      : '';
+    return this.delegateAssignmentsErrorBySession[key] ?? null;
+  }
+
+  get activeDelegateAssignmentPending(): Record<string, boolean> {
+    const key = this.activeAgentId && this.activeSessionId
+      ? buildSessionKey(this.activeAgentId, this.activeSessionId)
+      : '';
+    return this.delegateAssignmentPendingBySession[key] ?? {};
+  }
+
+  get activeDelegateAssignmentConflict(): boolean {
+    const key = this.activeAgentId && this.activeSessionId
+      ? buildSessionKey(this.activeAgentId, this.activeSessionId)
+      : '';
+    return this.delegateAssignmentConflictBySession[key] ?? false;
+  }
 
   get sessions(): DesktopSessionSummary[] {
     return Object.values(this.sessionsByAgent).flat().sort((a, b) => {
@@ -300,7 +354,11 @@ export class AgentsStore {
           initialized: sources.every((source) => source.initialized),
           loading: sources.some((source) => source.loading),
           hasMore: sessions.length > visibleLimit || sources.some((source) => source.nextCursor !== null),
-          error: sources.find((source) => source.error)?.error ?? null
+          error: sources.find((source) => source.error)?.error ?? null,
+          catalogGeneration: Math.max(
+            0,
+            ...sources.map((source) => this.workspaceSourceVersions.get(source.agentId) ?? 0)
+          )
         };
       })
       .sort((a, b) => (b.latestActivity ?? '').localeCompare(a.latestActivity ?? ''));
@@ -344,6 +402,21 @@ export class AgentsStore {
       client?.supportsQuerymtMethod(QMT_METHOD_SESSION_UNDO_STACK) &&
         client.supportsQuerymtMethod(QMT_METHOD_SESSION_UNDO) &&
         client.supportsQuerymtMethod(QMT_METHOD_SESSION_REDO)
+    );
+  }
+
+  canConfigureDelegateModels(agentId: string): boolean {
+    if (this.activeAgentId !== agentId) return false;
+    const client = this.clients.get(agentId)?.client;
+    const assignments = this.activeDelegateAssignments;
+    return Boolean(
+      client?.supportsQuerymtMethod(QMT_METHOD_SESSION_DELEGATE_MODELS) &&
+        client.supportsQuerymtMethod(QMT_METHOD_SESSION_SET_DELEGATE_MODEL) &&
+        (
+          this.activeDelegateAssignmentsError !== null ||
+          (assignments &&
+            (assignments.assignments.length > 0 || assignments.orphaned_overrides.length > 0))
+        )
     );
   }
 
@@ -574,6 +647,7 @@ export class AgentsStore {
     delete this.authLoadingByAgent[agentId];
     delete this.authErrorsByAgent[agentId];
     delete this.remoteSessionsByAgent[agentId];
+    this.clearDelegateAssignmentsForAgent(agentId);
     delete this.lastScheduleActionByAgent[agentId];
     delete this.lastCreatedScheduleByAgent[agentId];
     delete this.lastMeshInviteByAgent[agentId];
@@ -679,6 +753,7 @@ export class AgentsStore {
         this.activeSessionId = null;
         this.activeSession = createEmptyActiveSession();
       }
+      this.clearDelegateAssignmentsForAgent(config.id);
     } catch (error) {
       this.error = error instanceof Error ? error.message : `Failed to disconnect ${config.name}.`;
     }
@@ -754,6 +829,9 @@ export class AgentsStore {
         [config.id]: null
       };
       void this.loadInitialModelsForAgent(config.id, 6);
+      if (this.activeAgentId === config.id && this.activeSessionId) {
+        void this.refreshDelegateAssignments(config.id, this.activeSessionId);
+      }
     } catch (error) {
       record.error = error instanceof Error ? error.message : `Failed to initialize ${config.name}.`;
       record.connectionState = 'failed';
@@ -815,7 +893,18 @@ export class AgentsStore {
     }
   }
 
-    async refreshSessionsForAgent(agentId: string, discoverAll = false) {
+  private enqueueSessionListRefresh(agentId: string, task: () => Promise<void>): Promise<void> {
+    const previous = this.sessionListRefreshChain.get(agentId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(task);
+    this.sessionListRefreshChain.set(agentId, next);
+    return next.finally(() => {
+      if (this.sessionListRefreshChain.get(agentId) === next) {
+        this.sessionListRefreshChain.delete(agentId);
+      }
+    });
+  }
+
+  async refreshSessionsForAgent(agentId: string, discoverAll = false) {
     if (discoverAll) {
       const existingDiscovery = this.workspaceDiscoveryPromises.get(agentId);
       if (existingDiscovery) {
@@ -823,7 +912,9 @@ export class AgentsStore {
         return;
       }
 
-      const discovery = this.refreshSessionsForAgentRequest(agentId, true).finally(() => {
+      const discovery = this.enqueueSessionListRefresh(agentId, () =>
+        this.refreshSessionsForAgentRequest(agentId, true)
+      ).finally(() => {
         if (this.workspaceDiscoveryPromises.get(agentId) === discovery) {
           this.workspaceDiscoveryPromises.delete(agentId);
         }
@@ -833,7 +924,11 @@ export class AgentsStore {
       return;
     }
 
-    await this.refreshSessionsForAgentRequest(agentId, false);
+    return this.enqueueSessionListRefresh(agentId, async () => {
+      const existingDiscovery = this.workspaceDiscoveryPromises.get(agentId);
+      if (existingDiscovery) await existingDiscovery;
+      await this.refreshSessionsForAgentRequest(agentId, false);
+    });
   }
 
   private async refreshSessionsForAgentRequest(agentId: string, discoverAll: boolean) {
@@ -851,7 +946,7 @@ export class AgentsStore {
     record.error = null;
 
     try {
-      const firstPage = await record.client.listSessions({});
+      const firstPage = await record.client.listSessions(this.buildSessionListRequest());
       const pages = discoverAll ? await this.collectSessionPages(record.client, firstPage) : [firstPage];
       const listedSessions = pages.flatMap((page) => page.sessions);
       const previousSessions = this.sessionsByAgent[agentId] ?? [];
@@ -910,11 +1005,82 @@ export class AgentsStore {
     while (true) {
       const group = this.workspaceSessionGroups.find((candidate) => candidate.cwd === cwd);
       const sources = this.getWorkspaceSources(cwd);
-      if (sources.length === 0 || (group && group.sessions.length >= target)) return;
+      if (sources.length === 0) return;
       const candidates = sources.filter((source) => !source.initialized || source.nextCursor !== null);
       if (candidates.length === 0) return;
+      const initializedEnough =
+        Boolean(group) &&
+        group!.sessions.length >= target &&
+        sources.every((source) => source.initialized);
+      if (initializedEnough) return;
       await Promise.all(candidates.map((source) => this.loadWorkspaceSourcePage(source)));
     }
+  }
+
+  private buildSessionListRequest(input: { cwd?: string | null; cursor?: string | null } = {}) {
+    return buildListSessionsRequest(input);
+  }
+
+  private ensureSessionLoadTarget(agentId: string, sessionId: string): DesktopSessionSummary | null {
+    const existing = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    if (existing) return existing;
+
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) return null;
+
+    const knownSessions = this.sessionsByAgent[agentId] ?? [];
+    const cwd =
+      this.composerCwd.trim() ||
+      (this.activeAgentId === agentId
+        ? getSessionById(knownSessions, this.activeSessionId ?? '')?.cwd ?? ''
+        : '') ||
+      knownSessions[0]?.cwd ||
+      '';
+    const fallback: DesktopSessionSummary = {
+      agentId,
+      agentName: config.name,
+      sessionId,
+      title: 'Session',
+      cwd,
+      updatedAt: null,
+      runtimeId: agentId,
+      runtimeName: config.name,
+      source: 'acp',
+      location: 'local',
+      status: 'idle'
+    };
+    this.sessionsByAgent = {
+      ...this.sessionsByAgent,
+      [agentId]: mergeSessions(knownSessions, [fallback])
+    };
+    return fallback;
+  }
+
+  private hydrateLoadedSessionSummary(agentId: string, sessionId: string, replay: SessionNotification[]) {
+    const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    if (!current) return;
+
+    let title = current.title;
+    let updatedAt = current.updatedAt;
+    for (const notification of replay) {
+      if (notification.sessionId !== sessionId) continue;
+      const update = notification.update;
+      if (update.sessionUpdate !== 'session_info_update') continue;
+      if (typeof update.title === 'string' && update.title.trim()) title = update.title.trim();
+      if (update.updatedAt !== undefined) updatedAt = update.updatedAt;
+    }
+
+    const inferred = inferSessionSummaryFromActiveSession(this.activeSession);
+    if (!title || title === 'Session') title = inferred.title ?? title;
+    if (!updatedAt) updatedAt = inferred.updatedAt;
+    if (title === current.title && updatedAt === current.updatedAt) return;
+
+    this.sessionsByAgent = {
+      ...this.sessionsByAgent,
+      [agentId]: (this.sessionsByAgent[agentId] ?? []).map((session) =>
+        session.sessionId === sessionId ? { ...session, title, updatedAt } : session
+      )
+    };
   }
 
   async loadMoreWorkspaceSessions(cwd: string) {
@@ -934,9 +1100,15 @@ export class AgentsStore {
     const seenCursors = new Set<string>();
     let nextCursor = firstPage.nextCursor ?? null;
 
+    // TODO(backend): QueryMT session/list cursors are integer offsets
+    // (`"10"`, `"100"`), not opaque keyset tokens. Inserting a newly created
+    // session at the top of `ORDER BY updated_at DESC` makes later pages
+    // skip/duplicate. Desktop currently only uses these cursors for discovery
+    // and "load more"; replace with a stable keyset/id cursor in
+    // crates/agent session list before relying on them across creates.
     while (nextCursor && !seenCursors.has(nextCursor)) {
       seenCursors.add(nextCursor);
-      const page = await client.listSessions({ cursor: nextCursor });
+      const page = await client.listSessions(this.buildSessionListRequest({ cursor: nextCursor }));
       pages.push(page);
       nextCursor = page.nextCursor ?? null;
     }
@@ -957,18 +1129,15 @@ export class AgentsStore {
     const nextSources: Record<string, WorkspaceSessionSource> = replace ? {} : { ...currentSources };
     for (const [cwd, workspaceSessions] of discovered) {
       const current = currentSources[cwd];
-      const latestActivity = maxTimestamp(workspaceSessions.map((session) => session.updatedAt));
-      const hasRemoteSessions = workspaceSessions.some((session) => session.location === 'remote');
-      const fallbackSessions = cwd && !hasRemoteSessions ? [] : workspaceSessions;
+      const latestActivity = maxTimestamp([
+        current?.latestActivity ?? null,
+        ...workspaceSessions.map((session) => session.updatedAt)
+      ]);
       nextSources[cwd] = {
         agentId: config.id,
         agentName: config.name,
         cwd,
-        sessions: current
-          ? cwd && !hasRemoteSessions
-            ? updateKnownSessions(current.sessions, workspaceSessions)
-            : mergeSessions(current.sessions, workspaceSessions)
-          : fallbackSessions,
+        sessions: mergeSessions(current?.sessions ?? [], workspaceSessions),
         latestActivity,
         nextCursor: current && !replace ? current.nextCursor : null,
         initialized: current && !replace ? current.initialized : !cwd,
@@ -980,6 +1149,43 @@ export class AgentsStore {
     this.workspaceSessionSources = {
       ...this.workspaceSessionSources,
       [config.id]: nextSources
+    };
+  }
+
+  private upsertWorkspaceSessions(agentId: string, sessions: DesktopSessionSummary[]) {
+    if (sessions.length === 0) return;
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) return;
+
+    const currentSources = { ...(this.workspaceSessionSources[agentId] ?? {}) };
+    const grouped = new Map<string, DesktopSessionSummary[]>();
+    for (const session of sessions) {
+      const workspaceSessions = grouped.get(session.cwd) ?? [];
+      workspaceSessions.push(session);
+      grouped.set(session.cwd, workspaceSessions);
+    }
+
+    for (const [cwd, workspaceSessions] of grouped) {
+      const current = currentSources[cwd];
+      currentSources[cwd] = {
+        agentId,
+        agentName: config.name,
+        cwd,
+        sessions: mergeSessions(current?.sessions ?? [], workspaceSessions),
+        latestActivity: maxTimestamp([
+          current?.latestActivity ?? null,
+          ...workspaceSessions.map((session) => session.updatedAt)
+        ]),
+        nextCursor: current?.nextCursor ?? null,
+        initialized: current?.initialized ?? !cwd,
+        loading: current?.loading ?? false,
+        error: current?.error ?? null
+      };
+    }
+
+    this.workspaceSessionSources = {
+      ...this.workspaceSessionSources,
+      [agentId]: currentSources
     };
   }
 
@@ -1006,14 +1212,19 @@ export class AgentsStore {
       current = this.workspaceSessionSources[source.agentId]?.[source.cwd];
 
       const requestCursor = current?.initialized ? current.nextCursor : null;
+      // TODO(backend): these cwd cursors are QueryMT integer offsets. A create
+      // that lands at the top of the workspace list makes "load more" skip or
+      // duplicate until session/list uses a stable keyset cursor.
       if (requestCursor && seenCursors.has(requestCursor)) {
         throw new Error(`${source.agentName} returned a repeated session cursor.`);
       }
       if (requestCursor) seenCursors.add(requestCursor);
-      const response = await record.client.listSessions({
-        cwd: source.cwd,
-        cursor: requestCursor ?? undefined
-      });
+      const response = await record.client.listSessions(
+        this.buildSessionListRequest({
+          cwd: source.cwd,
+          cursor: requestCursor
+        })
+      );
       if ((this.workspaceSourceVersions.get(source.agentId) ?? 0) !== sourceVersion || !current) return;
       const pageSessions = mapAcpSessionsToDesktopSessions(response.sessions, {
         agentId: config.id,
@@ -1100,6 +1311,17 @@ export class AgentsStore {
       });
     }
     this.acknowledgeSession(agentId, sessionId);
+    const key = buildSessionKey(agentId, sessionId);
+    delete this.delegateAssignmentsBySession[key];
+    delete this.delegateAssignmentsLoadingBySession[key];
+    delete this.delegateAssignmentsErrorBySession[key];
+    delete this.delegateAssignmentPendingBySession[key];
+    delete this.delegateAssignmentConflictBySession[key];
+    this.delegateAssignmentRequests.delete(key);
+    this.delegateAssignmentRefreshVersions.delete(key);
+    for (const roleKey of this.delegateAssignmentRoleRequests.keys()) {
+      if (roleKey.startsWith(`${key}\0`)) this.delegateAssignmentRoleRequests.delete(roleKey);
+    }
 
     if (this.isSelectedSession(agentId, sessionId)) {
       this.activeAgentId = null;
@@ -1133,6 +1355,24 @@ export class AgentsStore {
     this.sessionConfigOptions.set(buildSessionKey(agentId, response.sessionId), response.configOptions ?? []);
     this.restoreSessionModel(agentId, response.sessionId, response.configOptions ?? [], response);
     this.rememberRecentWorkspace(normalizedCwd);
+    const summary: DesktopSessionSummary = {
+      agentId,
+      agentName: config.name,
+      sessionId: response.sessionId,
+      title: 'Untitled session',
+      cwd: normalizedCwd,
+      updatedAt: new Date().toISOString(),
+      runtimeId: agentId,
+      runtimeName: config.name,
+      source: 'acp',
+      location: 'local',
+      status: 'idle'
+    };
+    this.sessionsByAgent = {
+      ...this.sessionsByAgent,
+      [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [summary])
+    };
+    this.upsertWorkspaceSessions(agentId, [summary]);
     await this.refreshSessionsForAgent(agentId);
     return response;
   }
@@ -1324,6 +1564,7 @@ export class AgentsStore {
       this.isSelectedSession(agentId, sessionId)
     ) {
       this.acknowledgeSession(agentId, sessionId);
+      await this.refreshDelegateAssignments(agentId, sessionId);
       return;
     }
 
@@ -1332,7 +1573,7 @@ export class AgentsStore {
       await this.refreshSessionsForAgent(agentId);
     }
 
-    const target = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    const target = this.ensureSessionLoadTarget(agentId, sessionId);
     if (!target) {
       this.error = `Unable to locate session ${sessionId}.`;
       return;
@@ -1372,6 +1613,7 @@ export class AgentsStore {
       }, 10_000);
     }
     let telemetryStatus = 'success';
+    let finishReplay: (() => SessionNotification[]) | null = null;
     try {
       // Stale-while-revalidate: when reloading the session that is already on
       // screen and still has content, keep the transcript rendered while the
@@ -1402,7 +1644,10 @@ export class AgentsStore {
         ? await record.client.loadSession(target.sessionId, target.cwd, telemetryOperationId)
         : await record.client.loadSession(target.sessionId, target.cwd);
       const loadedSession = 'response' in loaded ? loaded.response : (loaded as unknown as LoadSessionResponse);
-      const replay = 'replay' in loaded ? loaded.replay : [];
+      let replay = 'replay' in loaded ? loaded.replay : [];
+      if ('finishReplay' in loaded && typeof loaded.finishReplay === 'function') {
+        finishReplay = loaded.finishReplay;
+      }
       checkpoint('frontend.acp_wait');
       if (!this.isSelectedSession(agentId, sessionId)) {
         telemetryStatus = 'cancelled';
@@ -1413,6 +1658,10 @@ export class AgentsStore {
       await tick();
       await new Promise((resolve) => setTimeout(resolve, 0));
       checkpoint('frontend.response_flush');
+      if (finishReplay) {
+        replay = finishReplay();
+        finishReplay = null;
+      }
       if (!this.isSelectedSession(agentId, sessionId)) {
         telemetryStatus = 'cancelled';
         return;
@@ -1421,11 +1670,19 @@ export class AgentsStore {
       this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
       const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
       checkpoint('frontend.snapshot_transform');
-      const hasReplayHistory =
-        replaySession.transcript.length > 0 || replaySession.toolCalls.length > 0 || replaySession.events.length > 0;
-      const hasSnapshotHistory =
-        snapshotSession.transcript.length > 0 || snapshotSession.toolCalls.length > 0 || snapshotSession.events.length > 0;
-      this.activeSession = hasReplayHistory ? replaySession : hasSnapshotHistory ? snapshotSession : replaySession;
+      const liveSession = this.activeSession;
+      const liveHasVisibleHistory =
+        liveSession.sessionId === sessionId && sessionHasVisibleHistory(liveSession);
+      // session_info_update and similar metadata create events without a
+      // transcript. Treating those as history overwrites late live updates
+      // that arrived after capture closed (first child load, empty chat).
+      this.activeSession = sessionHasVisibleHistory(replaySession)
+        ? replaySession
+        : sessionHasVisibleHistory(snapshotSession)
+          ? snapshotSession
+          : liveHasVisibleHistory
+            ? liveSession
+            : replaySession;
       this.activeLoadMeasurement?.increment('historyAssignments');
       const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
       checkpoint('frontend.queued_replay');
@@ -1454,11 +1711,13 @@ export class AgentsStore {
         telemetryStatus = 'cancelled';
         return;
       }
-      if (!hasReplayHistory && !hasSnapshotHistory && drainedCount === 0) {
+      if (!sessionHasVisibleHistory(this.activeSession) && drainedCount === 0) {
         this.activeSession.activityLabel = 'Session loaded, but the agent returned no replayable history.';
       }
+      this.hydrateLoadedSessionSummary(agentId, sessionId, replay);
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
       checkpoint('frontend.model_hydrate');
+      void this.refreshDelegateAssignments(agentId, sessionId);
       await tick();
       await new Promise<void>((resolve) => {
         if (typeof requestAnimationFrame === 'function') {
@@ -1482,6 +1741,7 @@ export class AgentsStore {
       this.activeSession.activityLabel = message;
       this.error = message;
     } finally {
+      finishReplay?.();
       this.sessionHistoryLoading = false;
       if (heartbeat) clearInterval(heartbeat);
       await telemetryQueue;
@@ -1556,6 +1816,7 @@ export class AgentsStore {
         ...this.sessionsByAgent,
         [agentId]: optimisticSessions.sort(compareSessionsByActivity)
       };
+      this.upsertWorkspaceSessions(agentId, optimisticSessions);
       return response.sessionId;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fork session.';
@@ -1674,6 +1935,149 @@ export class AgentsStore {
     }
   }
 
+  async refreshDelegateAssignments(agentId = this.activeAgentId, sessionId = this.activeSessionId) {
+    if (!agentId || !sessionId) return;
+    const key = buildSessionKey(agentId, sessionId);
+    const record = this.ensureClientRecord(agentId);
+    if (!record.client.supportsQuerymtMethod(QMT_METHOD_SESSION_DELEGATE_MODELS)) {
+      this.delegateAssignmentsBySession = { ...this.delegateAssignmentsBySession, [key]: null };
+      this.delegateAssignmentsErrorBySession = { ...this.delegateAssignmentsErrorBySession, [key]: null };
+      return;
+    }
+
+    const refreshVersion = (this.delegateAssignmentRefreshVersions.get(key) ?? 0) + 1;
+    this.delegateAssignmentRefreshVersions.set(key, refreshVersion);
+    this.delegateAssignmentsLoadingBySession = { ...this.delegateAssignmentsLoadingBySession, [key]: true };
+    try {
+      const state = await record.client.getDelegateModels({ session_id: sessionId });
+      if (state.session_id !== sessionId) {
+        throw new Error('Agent returned delegate assignments for a different session.');
+      }
+      if (this.delegateAssignmentRefreshVersions.get(key) !== refreshVersion) return;
+      const current = this.delegateAssignmentsBySession[key];
+      const stale = current?.revision != null && state.revision != null && state.revision < current.revision;
+      if (!stale) {
+        this.delegateAssignmentsBySession = { ...this.delegateAssignmentsBySession, [key]: state };
+      }
+      this.delegateAssignmentsErrorBySession = { ...this.delegateAssignmentsErrorBySession, [key]: null };
+    } catch (error) {
+      if (this.delegateAssignmentRefreshVersions.get(key) !== refreshVersion) return;
+      const message = delegateAssignmentErrorMessage(error, 'Failed to load delegate models.');
+      this.delegateAssignmentsErrorBySession = { ...this.delegateAssignmentsErrorBySession, [key]: message };
+    } finally {
+      if (this.delegateAssignmentRefreshVersions.get(key) === refreshVersion) {
+        this.delegateAssignmentsLoadingBySession = { ...this.delegateAssignmentsLoadingBySession, [key]: false };
+      }
+    }
+  }
+
+  async setActiveDelegateModel(
+    agentId: string,
+    model: DelegateModelOverride | null,
+    reasoningEffort?: DelegateReasoningEffort | null
+  ): Promise<boolean> {
+    if (!this.activeAgentId || !this.activeSessionId) return false;
+    const ownerAgentId = this.activeAgentId;
+    const sessionId = this.activeSessionId;
+    const key = buildSessionKey(ownerAgentId, sessionId);
+    const current = this.delegateAssignmentsBySession[key];
+    if (!current?.editable) return false;
+
+    if (reasoningEffort !== undefined && current.reasoning_effort_supported !== true) return false;
+    const currentAssignment = current.assignments.find((assignment) => assignment.agent_id === agentId) ??
+      current.orphaned_overrides.find((assignment) => assignment.agent_id === agentId);
+    const previous = currentAssignment?.model ?? null;
+    const reasoningUnchanged = reasoningEffort === undefined || (currentAssignment?.reasoning_effort ?? null) === reasoningEffort;
+    if (sameDelegateModel(previous, model) && reasoningUnchanged) return true;
+
+    const pendingForSession = this.delegateAssignmentPendingBySession[key] ?? {};
+    this.delegateAssignmentPendingBySession = {
+      ...this.delegateAssignmentPendingBySession,
+      [key]: { ...pendingForSession, [agentId]: true }
+    };
+    this.delegateAssignmentConflictBySession = { ...this.delegateAssignmentConflictBySession, [key]: false };
+    this.delegateAssignmentsErrorBySession = { ...this.delegateAssignmentsErrorBySession, [key]: null };
+
+    const previousRequest = this.delegateAssignmentRequests.get(key) ?? Promise.resolve(true);
+    const request = previousRequest.catch(() => false).then(async (): Promise<boolean> => {
+      const latest = this.delegateAssignmentsBySession[key];
+      if (!latest?.editable) return false;
+      const record = this.ensureClientRecord(ownerAgentId);
+      try {
+        const response = await record.client.setDelegateModel({
+          session_id: sessionId,
+          agent_id: agentId,
+          model_id: model?.model_id ?? null,
+          node_id: model?.node_id ?? null,
+          ...(reasoningEffort !== undefined ? { reasoning_effort: reasoningEffort } : {}),
+          expected_revision: latest.revision
+        });
+        if (response.session_id !== sessionId || response.agent_id !== agentId) {
+          throw new Error('Agent confirmed a different delegate-model assignment.');
+        }
+        const confirmed = applyDelegateModelConfirmation(this.delegateAssignmentsBySession[key], response);
+        if (confirmed) {
+          this.delegateAssignmentsBySession = { ...this.delegateAssignmentsBySession, [key]: confirmed };
+        }
+        await this.refreshDelegateAssignments(ownerAgentId, sessionId);
+        return true;
+      } catch (error) {
+        const conflict = readDelegateAssignmentConflict(error);
+        if (conflict) {
+          this.delegateAssignmentConflictBySession = { ...this.delegateAssignmentConflictBySession, [key]: true };
+          await this.refreshDelegateAssignments(ownerAgentId, sessionId);
+          return false;
+        }
+        const message = delegateAssignmentErrorMessage(error, 'Failed to update delegate model.');
+        this.delegateAssignmentsErrorBySession = { ...this.delegateAssignmentsErrorBySession, [key]: message };
+        return false;
+      }
+    });
+    const roleKey = `${key}\0${agentId}`;
+    this.delegateAssignmentRequests.set(key, request);
+    this.delegateAssignmentRoleRequests.set(roleKey, request);
+    try {
+      return await request;
+    } finally {
+      if (this.delegateAssignmentRequests.get(key) === request) this.delegateAssignmentRequests.delete(key);
+      if (this.delegateAssignmentRoleRequests.get(roleKey) === request) {
+        this.delegateAssignmentRoleRequests.delete(roleKey);
+        const latestPending = { ...(this.delegateAssignmentPendingBySession[key] ?? {}) };
+        delete latestPending[agentId];
+        this.delegateAssignmentPendingBySession = {
+          ...this.delegateAssignmentPendingBySession,
+          [key]: latestPending
+        };
+      }
+    }
+  }
+
+  dismissActiveDelegateAssignmentConflict() {
+    if (!this.activeAgentId || !this.activeSessionId) return;
+    const key = buildSessionKey(this.activeAgentId, this.activeSessionId);
+    this.delegateAssignmentConflictBySession = { ...this.delegateAssignmentConflictBySession, [key]: false };
+  }
+
+  private clearDelegateAssignmentsForAgent(agentId: string) {
+    const prefix = `${agentId}:`;
+    const omitAgent = <T>(values: Record<string, T>) =>
+      Object.fromEntries(Object.entries(values).filter(([key]) => !key.startsWith(prefix)));
+    this.delegateAssignmentsBySession = omitAgent(this.delegateAssignmentsBySession);
+    this.delegateAssignmentsLoadingBySession = omitAgent(this.delegateAssignmentsLoadingBySession);
+    this.delegateAssignmentsErrorBySession = omitAgent(this.delegateAssignmentsErrorBySession);
+    this.delegateAssignmentPendingBySession = omitAgent(this.delegateAssignmentPendingBySession);
+    this.delegateAssignmentConflictBySession = omitAgent(this.delegateAssignmentConflictBySession);
+    for (const key of this.delegateAssignmentRequests.keys()) {
+      if (key.startsWith(prefix)) this.delegateAssignmentRequests.delete(key);
+    }
+    for (const key of this.delegateAssignmentRoleRequests.keys()) {
+      if (key.startsWith(prefix)) this.delegateAssignmentRoleRequests.delete(key);
+    }
+    for (const key of this.delegateAssignmentRefreshVersions.keys()) {
+      if (key.startsWith(prefix)) this.delegateAssignmentRefreshVersions.delete(key);
+    }
+  }
+
   private async hydrateUndoStack(agentId: string, sessionId: string, client: DesktopAcpClient) {
     if (!client.supportsQuerymtMethod(QMT_METHOD_SESSION_UNDO_STACK)) {
       this.activeSession.undo.stack = [];
@@ -1755,6 +2159,26 @@ export class AgentsStore {
       record.unsubscribeExtensionNotifications = record.client.onExtensionNotification((notification) => {
         if (notification.method === 'querymt/models/changed') {
           void this.loadInitialModelsForAgent(agentId, 1);
+        }
+        if (notification.method === 'querymt/session/delegateModelsChanged') {
+          const params = notification.params as DelegateModelsChangedNotification;
+          if (this.isSelectedSession(agentId, params.session_id)) {
+            void this.refreshDelegateAssignments(agentId, params.session_id);
+          }
+        }
+        if (notification.method === 'querymt/session/delegationUpdate') {
+          const params = (notification.params ?? {}) as {
+            sessionId?: string;
+            session_id?: string;
+            toolCallId?: string;
+            tool_call_id?: string;
+            childSessionId?: string;
+            child_session_id?: string;
+          };
+          const sessionId = params.sessionId ?? params.session_id;
+          if (sessionId && this.isSelectedSession(agentId, sessionId)) {
+            this.activeSession = applyDelegationChildSession(this.activeSession, params);
+          }
         }
         if (notification.method === 'querymt/schedules/changed') {
           const params = notification.params as { node_id?: string };
@@ -2628,6 +3052,8 @@ export class AgentsStore {
       ...this.sessionsByAgent,
       [agentId]: nextSessions
     };
+    const updated = nextSessions.find((session) => session.sessionId === notification.sessionId);
+    if (updated) this.upsertWorkspaceSessions(agentId, [updated]);
   }
 
   private handleSessionNotification(
@@ -3051,8 +3477,94 @@ function getDefaultModelId(models: ModelEntry[]): string {
   return models[0] ? getModelSelectionKey(models[0]) : '';
 }
 
+function sameDelegateModel(left: DelegateModelOverride | null, right: DelegateModelOverride | null): boolean {
+  return left?.model_id === right?.model_id && (left?.node_id ?? null) === (right?.node_id ?? null);
+}
+
+function confirmedDelegateReasoningEffort(
+  current: DelegateReasoningEffort | null | undefined,
+  incoming: DelegateReasoningEffort | null | undefined
+): DelegateReasoningEffort | null {
+  return incoming === undefined ? current ?? null : incoming;
+}
+
+function applyDelegateModelConfirmation(
+  state: DelegateAssignmentsInfo | null | undefined,
+  response: SetDelegateModelResponse
+): DelegateAssignmentsInfo | null {
+  if (!state || state.session_id !== response.session_id) return null;
+  const currentAssignment = state.assignments.find((assignment) => assignment.agent_id === response.agent_id) ??
+    state.orphaned_overrides.find((assignment) => assignment.agent_id === response.agent_id);
+  const reasoningEffort = confirmedDelegateReasoningEffort(currentAssignment?.reasoning_effort, response.reasoning_effort);
+  const hasAssignment = Boolean(currentAssignment && state.assignments.includes(currentAssignment));
+  return {
+    ...state,
+    revision: response.revision,
+    durable: response.durable,
+    assignments: state.assignments.map((assignment) =>
+      assignment.agent_id === response.agent_id
+        ? {
+          ...assignment,
+          model: response.model,
+          source: response.model ? DelegateAssignmentSource.Override : DelegateAssignmentSource.ProfileDefault,
+          reasoning_effort: reasoningEffort
+        }
+        : assignment
+    ),
+    orphaned_overrides: state.orphaned_overrides
+      .filter((assignment) => assignment.agent_id !== response.agent_id)
+      .concat(
+        !hasAssignment && (response.model || reasoningEffort)
+          ? [{
+            agent_id: response.agent_id,
+            model: response.model,
+            reasoning_effort: reasoningEffort
+          }]
+          : []
+      )
+  };
+}
+
+function readDelegateAssignmentConflict(error: unknown): { expected_revision: number; actual_revision: number } | null {
+  const data = (error as { data?: unknown } | null)?.data;
+  if (!data || typeof data !== 'object') return null;
+  const candidate = data as Record<string, unknown>;
+  return candidate.code === 'delegate_assignment_conflict' &&
+    typeof candidate.expected_revision === 'number' &&
+    typeof candidate.actual_revision === 'number'
+    ? { expected_revision: candidate.expected_revision, actual_revision: candidate.actual_revision }
+    : null;
+}
+
+function delegateAssignmentErrorMessage(error: unknown, fallback: string): string {
+  const data = (error as { data?: unknown } | null)?.data;
+  if (typeof data === 'string' && data.trim()) return data;
+  if (data && typeof data === 'object') {
+    const message = (data as Record<string, unknown>).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
 function buildWorkspaceSourceKey(agentId: string, cwd: string): string {
   return `${agentId}\u0000${cwd}`;
+}
+
+function sessionHasVisibleHistory(session: ActiveSessionViewModel): boolean {
+  return session.transcript.length > 0 || session.toolCalls.length > 0;
+}
+
+function inferSessionSummaryFromActiveSession(session: ActiveSessionViewModel): { title: string | null; updatedAt: string | null } {
+  const firstUser = session.transcript.find((item) => item.kind === 'user_message_chunk' && item.text.trim());
+  const title = firstUser?.text.trim().split(/\n/)[0]?.slice(0, 80) || null;
+  const timestamps = session.transcript
+    .map((item) => item.timestampMs)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const latestMs = timestamps.length > 0 ? Math.max(...timestamps) : null;
+  return {
+    title,
+    updatedAt: latestMs !== null ? new Date(latestMs).toISOString() : null
+  };
 }
 
 function compareSessionsByActivity(a: DesktopSessionSummary, b: DesktopSessionSummary): number {
@@ -3071,11 +3583,6 @@ function mergeSessions(current: DesktopSessionSummary[], incoming: DesktopSessio
     sessions.set(getSessionKey(session), session);
   }
   return [...sessions.values()].sort(compareSessionsByActivity);
-}
-
-function updateKnownSessions(current: DesktopSessionSummary[], incoming: DesktopSessionSummary[]): DesktopSessionSummary[] {
-  const updates = new Map(incoming.map((session) => [getSessionKey(session), session]));
-  return current.map((session) => updates.get(getSessionKey(session)) ?? session).sort(compareSessionsByActivity);
 }
 
 function maxTimestamp(values: Array<string | null>): string | null {

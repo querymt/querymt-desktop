@@ -1,22 +1,16 @@
 <script lang="ts">
-  import { AudioLines, Bot, FileText, Gauge, Image, Network, Paperclip, RefreshCw, Search, Type, Video, X } from '@lucide/svelte';
+  import { Bot, Gauge, Network, RefreshCw, Search, X } from '@lucide/svelte';
   import { getContext, tick } from 'svelte';
   import { Dialog, Tooltip } from 'bits-ui';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
+  import { displayedInputModalities, formatContextSize, knownInputModalities, modalityIcon, modalityLabel, showFamily } from '$lib/domain/model-capabilities';
+  import { scoreModelSearch } from '$lib/domain/model-search';
   import type { ModelEntry, ModelInfo } from '$lib/domain/types';
   import { getModelSelectionKey } from '$lib/querymt/config-options';
 
   type ModelGroup = {
     label: string;
     items: ModelEntry[];
-  };
-
-  const modalityIcons = {
-    text: Type,
-    image: Image,
-    pdf: FileText,
-    audio: AudioLines,
-    video: Video
   };
 
   let {
@@ -67,7 +61,7 @@
     const groups: ModelGroup[] = [];
 
     const recentItems = recentModels
-      .map((model) => ({ model, score: scoreModel(model, normalizedQuery) }))
+      .map((model) => ({ model, score: scoreModelSearch(model, normalizedQuery, [model.family, ...knownInputModalities(model, modelInfo)]) }))
       .filter(({ score }) => score > Number.NEGATIVE_INFINITY)
       .sort((a, b) => b.score - a.score)
       .map(({ model }) => model);
@@ -77,7 +71,7 @@
     const providerMap = new Map<string, Array<{ model: ModelEntry; score: number }>>();
     for (const model of modelOptions) {
       if (recentIds.has(getModelSelectionKey(model))) continue;
-      const score = scoreModel(model, normalizedQuery);
+      const score = scoreModelSearch(model, normalizedQuery, [model.family, ...knownInputModalities(model, modelInfo)]);
       if (score === Number.NEGATIVE_INFINITY) continue;
       const key = model.provider;
       providerMap.set(key, [...(providerMap.get(key) ?? []), { model, score }]);
@@ -163,74 +157,6 @@
       event.preventDefault();
       closePicker();
     }
-  }
-
-  function knownInputModalities(model: ModelEntry): string[] {
-    const modalities = modelInfo[getModelSelectionKey(model)]?.capabilities?.modalities?.input;
-    if (!modalities?.length) return [];
-    return [...new Set(modalities.map((modality) => modality.trim().toLowerCase()).filter(Boolean))];
-  }
-
-  function displayedInputModalities(model: ModelEntry): string[] {
-    const modalities = knownInputModalities(model);
-    return modalities.length > 0 ? modalities : ['text'];
-  }
-
-  function modalityIcon(modality: string) {
-    return modalityIcons[modality as keyof typeof modalityIcons] ?? Paperclip;
-  }
-
-  function modalityLabel(modality: string, known: boolean) {
-    return known ? `Supports ${modality} input` : 'Model modalities unknown';
-  }
-
-  function formatContextSize(tokens: number) {
-    if (tokens >= 1_000_000) return `${Math.round(tokens / 1_000_000)}M`;
-    if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
-    return tokens.toLocaleString('en-US');
-  }
-
-  function showFamily(model: ModelEntry) {
-    if (!model.family) return false;
-    const family = model.family.toLocaleLowerCase();
-    return family !== model.model.toLocaleLowerCase() && family !== model.label?.toLocaleLowerCase();
-  }
-
-  function scoreModel(model: ModelEntry, normalizedQuery: string): number {
-    if (!normalizedQuery) return 1;
-
-    const fields = [model.label, model.model, model.provider, model.node_label, model.family, ...knownInputModalities(model)]
-      .filter((value): value is string => Boolean(value))
-      .map((value) => value.toLowerCase());
-
-    let best = Number.NEGATIVE_INFINITY;
-    for (const field of fields) {
-      const substring = field.indexOf(normalizedQuery);
-      if (substring !== -1) {
-        best = Math.max(best, 1000 - substring);
-      }
-
-      const words = field.split(/[^a-z0-9]+/g).filter(Boolean);
-      if (words.some((word) => word.startsWith(normalizedQuery))) {
-        best = Math.max(best, 800);
-      }
-
-      if (isOrderedSubsequence(field, normalizedQuery)) {
-        best = Math.max(best, 400 - Math.max(field.length - normalizedQuery.length, 0));
-      }
-    }
-
-    return best;
-  }
-
-  function isOrderedSubsequence(value: string, normalizedQuery: string): boolean {
-    let q = 0;
-    for (let i = 0; i < value.length && q < normalizedQuery.length; i += 1) {
-      if (value[i] === normalizedQuery[q]) {
-        q += 1;
-      }
-    }
-    return q === normalizedQuery.length;
   }
 
   function clamp(value: number, min: number, max: number): number {
@@ -348,7 +274,7 @@
                       {@const selectionKey = getModelSelectionKey(model)}
                       {@const index = flatResults.findIndex((entry) => getModelSelectionKey(entry) === selectionKey)}
                       {@const info = modelInfo[selectionKey]}
-                      {@const knownModalities = knownInputModalities(model)}
+                      {@const knownModalities = knownInputModalities(model, modelInfo)}
                       <button
                         class="app-picker-row"
                         class:app-picker-row-highlighted={highlightedIndex === index}
@@ -374,21 +300,19 @@
                           </div>
                         </div>
                         <div class="app-picker-row-detail">
-                          {#if info?.limits?.context}
-                            <span
-                              class="app-picker-row-context"
-                              aria-label={`${info.limits.context.toLocaleString('en-US')} token context window`}
-                              title={`${info.limits.context.toLocaleString('en-US')} token context window`}
-                            >
-                              <Gauge size={12} aria-hidden="true" />
-                              <span>{formatContextSize(info.limits.context)}</span>
-                            </span>
-                          {/if}
+                          <span
+                            class="app-picker-row-context"
+                            aria-label={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
+                            title={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
+                          >
+                            <Gauge size={12} aria-hidden="true" />
+                            <span>{info?.limits?.context ? formatContextSize(info.limits.context) : 'UNK'}</span>
+                          </span>
                           <span
                             class="app-picker-model-modalities"
                             aria-label={knownModalities.length > 0 ? `Input modalities: ${knownModalities.join(', ')}` : 'Input modalities unknown'}
                           >
-                            {#each displayedInputModalities(model) as modality}
+                            {#each displayedInputModalities(model, modelInfo) as modality}
                               {@const ModalityIcon = modalityIcon(modality)}
                               <span
                                 class="app-picker-model-modality"

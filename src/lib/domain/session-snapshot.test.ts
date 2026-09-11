@@ -315,6 +315,110 @@ describe('activeSessionFromLoadResponse', () => {
     });
   });
 
+  it('attaches child session ids from delegation fork events', () => {
+    const session = activeSessionFromLoadResponse('session-1', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [
+              {
+                seq: 1,
+                kind: {
+                  type: 'tool_call_start',
+                  data: {
+                    tool_call_id: 'delegate-1',
+                    tool_name: 'delegate',
+                    arguments: '{"target_agent_id":"linus","objective":"Review the diff"}'
+                  }
+                }
+              },
+              {
+                seq: 2,
+                kind: {
+                  type: 'delegation_requested',
+                  data: {
+                    tool_call_id: 'delegate-1',
+                    delegation: { public_id: 'delegation-1' }
+                  }
+                }
+              },
+              {
+                seq: 3,
+                kind: {
+                  type: 'session_forked',
+                  data: {
+                    parent_session_id: 'session-1',
+                    child_session_id: 'child-session-1',
+                    target_agent_id: 'linus',
+                    origin: 'delegation',
+                    fork_point_type: 'progress_entry',
+                    fork_point_ref: 'delegation-1'
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(session.toolCalls[0]).toMatchObject({
+      id: 'delegate-1',
+      kind: 'delegate',
+      childSessionId: 'child-session-1'
+    });
+  });
+
+  it('attaches child session ids when the fork event arrives before the requested event', () => {
+    const session = activeSessionFromLoadResponse('session-1', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [
+              {
+                seq: 1,
+                kind: {
+                  type: 'session_forked',
+                  data: {
+                    parent_session_id: 'session-1',
+                    child_session_id: 'child-session-1',
+                    target_agent_id: 'linus',
+                    origin: 'delegation',
+                    fork_point_type: 'progress_entry',
+                    fork_point_ref: 'delegation-1'
+                  }
+                }
+              },
+              {
+                seq: 2,
+                kind: {
+                  type: 'tool_call_start',
+                  data: {
+                    tool_call_id: 'delegate-1',
+                    tool_name: 'delegate',
+                    arguments: '{"target_agent_id":"linus","objective":"Review the diff"}'
+                  }
+                }
+              },
+              {
+                seq: 3,
+                kind: {
+                  type: 'delegation_requested',
+                  data: {
+                    tool_call_id: 'delegate-1',
+                    delegation: { public_id: 'delegation-1' }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(session.toolCalls[0]?.childSessionId).toBe('child-session-1');
+  });
+
   it('hydrates stored assistant thinking as reasoning from QueryMT load snapshots', () => {
     const session = activeSessionFromLoadResponse('session-1', {
       _meta: {

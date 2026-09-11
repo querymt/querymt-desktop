@@ -26,6 +26,8 @@ import type {
   AuthProviderEntry,
   CapabilitiesInfo,
   CreateMeshInviteRequest,
+  DelegateAssignmentsInfo,
+  DelegateModelsRequest,
   CreateRemoteSessionRequest,
   CreateScheduleControlRequest,
   MeshInviteCreatedInfo,
@@ -43,7 +45,9 @@ import type {
   ScheduleInfo,
   ScheduleListInfo,
   ListSchedulesControlRequest,
-  PluginUpdateResult
+  PluginUpdateResult,
+  SetDelegateModelRequest,
+  SetDelegateModelResponse
 } from '$lib/querymt/generated/types';
 import { BrowserClient } from '$lib/querymt/browser-client';
 import {
@@ -70,7 +74,9 @@ import {
   QMT_METHOD_SCHEDULES_PAUSE,
   QMT_METHOD_SCHEDULES_RESUME,
   QMT_METHOD_SCHEDULES_TRIGGER,
+  QMT_METHOD_SESSION_DELEGATE_MODELS,
   QMT_METHOD_SESSION_REDO,
+  QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK,
   QuerymtExtensions,
@@ -92,6 +98,7 @@ const PROTOCOL_VERSION = 1;
 export interface LoadedAcpSession {
   response: LoadSessionResponse;
   replay: SessionNotification[];
+  finishReplay: () => SessionNotification[];
 }
 
 export class DesktopAcpClient {
@@ -216,9 +223,14 @@ export class DesktopAcpClient {
             }
           : undefined
       });
+      // Keep capture open until the store finishes its post-RPC flush.
+      // session/update notifications can still be in-flight after this RPC
+      // resolves; finishing later includes them in replay instead of letting
+      // live handlers apply them onto a session that assignment then overwrites.
       return {
         response,
-        replay: this.browserClient.completeSessionReplay(capture)
+        replay: capture.notifications,
+        finishReplay: () => this.browserClient.completeSessionReplay(capture)
       };
     } catch (error) {
       this.browserClient.abortSessionReplay(capture);
@@ -285,6 +297,22 @@ export class DesktopAcpClient {
     }
     this.assertQuerymtMethod(QMT_METHOD_SESSION_REDO);
     return this.querymtExtensions!.redoSession(sessionId);
+  }
+
+  async getDelegateModels(request: DelegateModelsRequest): Promise<DelegateAssignmentsInfo> {
+    if (!this.querymtExtensions) {
+      await this.connect();
+    }
+    this.assertQuerymtMethod(QMT_METHOD_SESSION_DELEGATE_MODELS);
+    return this.querymtExtensions!.delegateModels(request);
+  }
+
+  async setDelegateModel(request: SetDelegateModelRequest): Promise<SetDelegateModelResponse> {
+    if (!this.querymtExtensions) {
+      await this.connect();
+    }
+    this.assertQuerymtMethod(QMT_METHOD_SESSION_SET_DELEGATE_MODEL);
+    return this.querymtExtensions!.setDelegateModel(request);
   }
 
   async listModels(): Promise<ModelEntry[]> {

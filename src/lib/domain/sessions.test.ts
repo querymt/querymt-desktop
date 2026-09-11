@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
-import { getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, mapAcpSessionsToDesktopSessions } from './sessions';
+import { buildListSessionsRequest, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, mapAcpSessionsToDesktopSessions } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 
 function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionId: string }): DesktopSessionSummary {
@@ -30,6 +30,19 @@ function createSession(meta?: Record<string, unknown>): SessionInfo {
     _meta: meta
   } as SessionInfo;
 }
+
+describe('session list request meta', () => {
+  it('defaults ACP session/list requests to root scope meta', () => {
+    expect(buildListSessionsRequest()).toEqual({
+      _meta: { session_scope: 'root' }
+    });
+    expect(buildListSessionsRequest({ cwd: '/tmp/work', cursor: '10' })).toEqual({
+      _meta: { session_scope: 'root' },
+      cwd: '/tmp/work',
+      cursor: '10'
+    });
+  });
+});
 
 describe('session relationship metadata', () => {
   it('maps durable fork hierarchy metadata from ACP session info', () => {

@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DelegateReasoningEffort } from '$lib/querymt/generated/types';
 import {
   QMT_METHOD_AUTH_CLEAR_API_TOKEN,
   QMT_METHOD_AUTH_SET_API_TOKEN,
   QMT_METHOD_AUTH_SET_METHOD,
+  QMT_METHOD_SESSION_DELEGATE_MODELS,
   QMT_METHOD_SESSION_REDO,
+  QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK,
   QuerymtExtensions,
@@ -41,6 +44,120 @@ describe('QuerymtExtensions undo and redo', () => {
     expect(extMethod).toHaveBeenNthCalledWith(1, toAcpExtensionMethod(QMT_METHOD_SESSION_UNDO_STACK), { session_id: 's1' });
     expect(extMethod).toHaveBeenNthCalledWith(2, toAcpExtensionMethod(QMT_METHOD_SESSION_UNDO), { session_id: 's1', message_id: 'm1' });
     expect(extMethod).toHaveBeenNthCalledWith(3, toAcpExtensionMethod(QMT_METHOD_SESSION_REDO), { session_id: 's1' });
+  });
+});
+
+describe('QuerymtExtensions delegate model assignments', () => {
+  it('reads and writes the versioned session assignment contract', async () => {
+    const extMethod = vi.fn(async (method: string) => {
+      if (method.endsWith('delegateModels')) {
+        return {
+          version: 1,
+          reasoning_effort_supported: true,
+          session_id: 's1',
+          profile_id: 'quorum',
+          revision: 4,
+          durable: true,
+          editable: true,
+          assignments: [],
+          orphaned_overrides: []
+        };
+      }
+      return {
+        version: 1,
+        reasoning_effort_supported: true,
+        session_id: 's1',
+        agent_id: 'coder',
+        model: { model_id: 'codex/gpt-5.6-sol' },
+        reasoning_effort: 'high',
+        revision: 5,
+        durable: true
+      };
+    });
+    const extensions = new QuerymtExtensions({ extMethod } as never);
+
+    await extensions.delegateModels({ session_id: 's1' });
+    await extensions.setDelegateModel({
+      session_id: 's1',
+      agent_id: 'coder',
+      model_id: 'codex/gpt-5.6-sol',
+      node_id: null,
+      reasoning_effort: DelegateReasoningEffort.High,
+      expected_revision: 4
+    });
+
+    expect(extMethod).toHaveBeenNthCalledWith(1, toAcpExtensionMethod(QMT_METHOD_SESSION_DELEGATE_MODELS), {
+      session_id: 's1'
+    });
+    expect(extMethod).toHaveBeenNthCalledWith(2, toAcpExtensionMethod(QMT_METHOD_SESSION_SET_DELEGATE_MODEL), {
+      session_id: 's1',
+      agent_id: 'coder',
+      model_id: 'codex/gpt-5.6-sol',
+      node_id: null,
+      reasoning_effort: 'high',
+      expected_revision: 4
+    });
+  });
+
+  it('accepts the older model-only version-one response shape', async () => {
+    const extMethod = vi.fn(async (method: string) => method.endsWith('delegateModels')
+      ? {
+        version: 1,
+        session_id: 's1',
+        profile_id: 'quorum',
+        revision: 4,
+        durable: true,
+        editable: true,
+        assignments: [{
+          agent_id: 'coder',
+          name: 'Coder',
+          description: 'Writes code',
+          model: null,
+          source: 'profile_default',
+          configured_default_model_id: 'codex/gpt-5.6-sol'
+        }],
+        orphaned_overrides: [{ agent_id: 'removed-role', model: { model_id: 'legacy/model' } }]
+      }
+      : {
+        version: 1,
+        session_id: 's1',
+        agent_id: 'removed-role',
+        model: null,
+        revision: 5,
+        durable: true
+      });
+    const extensions = new QuerymtExtensions({ extMethod } as never);
+
+    const state = await extensions.delegateModels({ session_id: 's1' });
+    const response = await extensions.setDelegateModel({
+      session_id: 's1',
+      agent_id: 'removed-role',
+      model_id: null,
+      expected_revision: 4
+    });
+
+    expect(state.reasoning_effort_supported).toBeUndefined();
+    expect(state.assignments[0].reasoning_effort).toBeUndefined();
+    expect(state.orphaned_overrides[0].reasoning_effort).toBeUndefined();
+    expect(response.reasoning_effort).toBeUndefined();
+  });
+
+  it('rejects unknown contract versions instead of guessing their meaning', async () => {
+    const extMethod = vi.fn(async () => ({
+      version: 2,
+      session_id: 's1',
+      profile_id: 'quorum',
+      revision: 0,
+      durable: true,
+      editable: true,
+      assignments: [],
+      orphaned_overrides: []
+    }));
+    const extensions = new QuerymtExtensions({ extMethod } as never);
+
+    await expect(extensions.delegateModels({ session_id: 's1' })).rejects.toThrow(
+      'Unsupported delegate-model contract version 2'
+    );
   });
 });
 

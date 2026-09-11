@@ -19,7 +19,10 @@
     footer = undefined,
     onOpenAutoFocus = undefined,
     onCloseAutoFocus = undefined,
-    onDismiss = undefined
+    onDismiss = undefined,
+    onClose = undefined,
+    onEscapeKeydown = undefined,
+    onInteractOutside = undefined
   }: {
     open: boolean;
     title: string;
@@ -37,6 +40,9 @@
     onOpenAutoFocus?: (event: Event) => void;
     onCloseAutoFocus?: (event: Event) => void;
     onDismiss?: () => void;
+    onClose?: (event: MouseEvent) => void;
+    onEscapeKeydown?: (event: KeyboardEvent) => void;
+    onInteractOutside?: (event: PointerEvent) => void;
   } = $props();
 
   function handleOpenChange(nextOpen: boolean) {
@@ -45,7 +51,12 @@
     if (!nextOpen) onDismiss?.();
   }
 
-  function close() {
+  function close(event?: MouseEvent) {
+    if (pending) return;
+    if (event) {
+      onClose?.(event);
+      if (event.defaultPrevented) return;
+    }
     handleOpenChange(false);
   }
 </script>
@@ -58,8 +69,14 @@
       data-blocking-overlay="true"
       {onOpenAutoFocus}
       {onCloseAutoFocus}
-      onEscapeKeydown={(event) => pending && event.preventDefault()}
-      onInteractOutside={(event) => pending && event.preventDefault()}
+      onEscapeKeydown={(event) => {
+        if (pending) event.preventDefault();
+        onEscapeKeydown?.(event);
+      }}
+      onInteractOutside={(event) => {
+        if (pending) event.preventDefault();
+        onInteractOutside?.(event);
+      }}
     >
       <header class={`app-dialog-header ${divided ? '' : 'app-dialog-header-undivided'}`}>
         <div class="app-dialog-heading">

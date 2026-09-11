@@ -45,7 +45,8 @@ export class BrowserClient implements Client {
   }
 
   completeSessionReplay(capture: SessionReplayCapture): SessionNotification[] {
-    if (this.replayCaptures.get(capture.sessionId) !== capture) {
+    const active = this.replayCaptures.get(capture.sessionId);
+    if (active && active !== capture) {
       throw new Error('Session replay capture is no longer active.');
     }
     this.replayCaptures.delete(capture.sessionId);

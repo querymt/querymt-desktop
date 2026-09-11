@@ -231,6 +231,7 @@ export interface SessionToolCallItem {
   result?: string | null;
   isError?: boolean;
   eventIndex?: number;
+  childSessionId?: string | null;
 }
 
 export interface SessionPlanEntry {

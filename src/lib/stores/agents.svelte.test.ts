@@ -2,8 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
 import type { ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
+import {
+  DelegateAssignmentSource,
+  DelegateReasoningEffort,
+  type DelegateAssignmentsInfo,
+  type SetDelegateModelRequest,
+  type SetDelegateModelResponse
+} from '$lib/querymt/generated/types';
 import { tick } from 'svelte';
 import { AgentsStore } from './agents.svelte';
+import { DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
+
+function listSessionsRequest(input: { cwd?: string; cursor?: string } = {}) {
+  return {
+    _meta: { session_scope: DEFAULT_SESSION_LIST_SCOPE },
+    ...input
+  };
+}
 
 const mockListManagedProfiles = vi.hoisted(() => vi.fn(async () => []));
 const mockListen = vi.hoisted(() => vi.fn());
@@ -12,6 +27,7 @@ const mockDrainAgentSessionUpdates = vi.hoisted(() => vi.fn(async () => [] as Se
 const mockClient = vi.hoisted(() => {
   let sessionUpdateHandler: ((notification: SessionNotification) => void) | null = null;
   let connectionLossHandler: ((reason: string) => void) | null = null;
+  let extensionNotificationHandler: ((notification: { method: string; params: unknown }) => void) | null = null;
   let permissionUnsubscribe = vi.fn();
   let elicitationUnsubscribe = vi.fn();
 
@@ -63,6 +79,27 @@ const mockClient = vi.hoisted(() => {
     listModels: vi.fn(async (): Promise<ModelEntry[]> => []),
     refreshAndListModels: vi.fn(async (): Promise<ModelEntry[]> => []),
     getModelInfo: vi.fn(async () => ({})),
+    getDelegateModels: vi.fn(async (request: { session_id: string }): Promise<DelegateAssignmentsInfo> => ({
+      version: 1,
+      reasoning_effort_supported: true,
+      session_id: request.session_id,
+      profile_id: 'quorum',
+      revision: 0,
+      durable: true,
+      editable: true,
+      assignments: [],
+      orphaned_overrides: []
+    })),
+    setDelegateModel: vi.fn(async (request: SetDelegateModelRequest): Promise<SetDelegateModelResponse> => ({
+      version: 1,
+      reasoning_effort_supported: true,
+      session_id: request.session_id,
+      agent_id: request.agent_id,
+      model: request.model_id ? { model_id: request.model_id, node_id: request.node_id ?? undefined } : null,
+      reasoning_effort: request.reasoning_effort ?? null,
+      revision: (request.expected_revision ?? 0) + 1,
+      durable: true
+    })),
     onConnectionLost: vi.fn((handler: (reason: string) => void) => {
       connectionLossHandler = handler;
       return () => {
@@ -77,12 +114,19 @@ const mockClient = vi.hoisted(() => {
     emitSessionUpdate: (notification: SessionNotification) => sessionUpdateHandler?.(notification),
     resetSessionUpdateHandler: () => {
       sessionUpdateHandler = null;
+      extensionNotificationHandler = null;
       permissionUnsubscribe = vi.fn();
       elicitationUnsubscribe = vi.fn();
     },
     permissionUnsubscribe: () => permissionUnsubscribe,
     elicitationUnsubscribe: () => elicitationUnsubscribe,
-    onExtensionNotification: vi.fn(() => () => undefined),
+    onExtensionNotification: vi.fn((handler: (notification: { method: string; params: unknown }) => void) => {
+      extensionNotificationHandler = handler;
+      return () => {
+        extensionNotificationHandler = null;
+      };
+    }),
+    emitExtensionNotification: (notification: { method: string; params: unknown }) => extensionNotificationHandler?.(notification),
     onPermissionRequest: vi.fn(() => permissionUnsubscribe),
     onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
     setSessionConfigOption: vi.fn(async (_request: SetSessionConfigOptionRequest): Promise<SessionConfigOption[]> => []),
@@ -164,6 +208,27 @@ beforeEach(() => {
   mockClient.listModels.mockResolvedValue([]);
   mockClient.refreshAndListModels.mockResolvedValue([]);
   mockClient.getModelInfo.mockResolvedValue({});
+  mockClient.getDelegateModels.mockReset().mockImplementation(async (request: { session_id: string }) => ({
+    version: 1,
+    reasoning_effort_supported: true,
+    session_id: request.session_id,
+    profile_id: 'quorum',
+    revision: 0,
+    durable: true,
+    editable: true,
+    assignments: [],
+    orphaned_overrides: []
+  }));
+  mockClient.setDelegateModel.mockReset().mockImplementation(async (request: SetDelegateModelRequest): Promise<SetDelegateModelResponse> => ({
+    version: 1,
+    reasoning_effort_supported: true,
+    session_id: request.session_id,
+    agent_id: request.agent_id,
+    model: request.model_id ? { model_id: request.model_id, node_id: request.node_id ?? undefined } : null,
+    reasoning_effort: request.reasoning_effort ?? null,
+    revision: (request.expected_revision ?? 0) + 1,
+    durable: true
+  }));
   mockDrainAgentSessionUpdates.mockResolvedValue([]);
   mockClient.setSessionConfigOption.mockReset().mockResolvedValue([]);
   mockClient.loadSession.mockReset().mockResolvedValue({ response: { configOptions: [] }, replay: [] });
@@ -215,8 +280,8 @@ describe('AgentsStore connections', () => {
 
     await store.initialize();
 
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, {});
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { cursor: 'opaque-global-page-2' });
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, listSessionsRequest());
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, listSessionsRequest({ cursor: 'opaque-global-page-2' }));
     expect(store.workspaceSessionGroups.map((group) => group.cwd)).toEqual(['/tmp/a', '/tmp/b']);
     expect(store.loading).toBe(false);
   });
@@ -260,6 +325,162 @@ describe('AgentsStore connections', () => {
     expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '/tmp/work');
     expect(mockClient.permissionUnsubscribe()).not.toHaveBeenCalled();
     expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
+  });
+
+  it('loads a known child session without switching the catalog off root', async () => {
+    const store = createStore();
+    store.composerCwd = '/tmp/work';
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1',
+        agentName: 'QMTCODE',
+        sessionId: 'session-root',
+        title: 'Root',
+        cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z',
+        runtimeId: 'agent-1',
+        runtimeName: 'QMTCODE',
+        source: 'acp',
+        status: 'idle'
+      }]
+    };
+    mockClient.listSessions.mockResolvedValueOnce({
+      sessions: [{ sessionId: 'session-root', title: 'Root', cwd: '/tmp/work', updatedAt: '2026-07-18T17:00:00Z' }]
+    });
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [] },
+      replay: [{
+        sessionId: 'session-child',
+        update: {
+          sessionUpdate: 'session_info_update',
+          title: 'Task: Final PASS review',
+          updatedAt: '2026-07-18T18:00:00Z'
+        }
+      }]
+    });
+
+    await store.connectAgent('agent-1');
+    await store.loadSession('agent-1', 'session-child');
+
+    expect(mockClient.listSessions).toHaveBeenCalledWith(listSessionsRequest());
+    expect(mockClient.loadSession).toHaveBeenCalledWith('session-child', '/tmp/work');
+    expect(store.error).toBeNull();
+    expect(store.activeSessionId).toBe('session-child');
+    expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sessionId: 'session-child',
+        title: 'Task: Final PASS review',
+        updatedAt: '2026-07-18T18:00:00Z'
+      })
+    ]));
+    expect(store.workspaceSessionGroups.flatMap((group) => group.sessions.map((session) => session.sessionId)))
+      .not.toContain('session-child');
+  });
+
+  it('keeps first-load child transcript from late updates when replay is metadata-only', async () => {
+    const store = createStore();
+    store.composerCwd = '/tmp/work';
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1',
+        agentName: 'QMTCODE',
+        sessionId: 'session-root',
+        title: 'Root',
+        cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z',
+        runtimeId: 'agent-1',
+        runtimeName: 'QMTCODE',
+        source: 'acp',
+        status: 'idle'
+      }]
+    };
+    mockClient.listSessions.mockResolvedValueOnce({
+      sessions: [{ sessionId: 'session-root', title: 'Root', cwd: '/tmp/work', updatedAt: '2026-07-18T17:00:00Z' }]
+    });
+    mockClient.loadSession.mockImplementationOnce(async (sessionId?: string) => {
+      mockClient.emitSessionUpdate({
+        sessionId: sessionId ?? 'session-child',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          messageId: 'child-1',
+          content: { type: 'text', text: 'Child answer' }
+        }
+      });
+      return {
+        response: { configOptions: [] },
+        replay: [{
+          sessionId: sessionId ?? 'session-child',
+          update: {
+            sessionUpdate: 'session_info_update',
+            title: 'Task: Final PASS review',
+            updatedAt: '2026-07-18T18:00:00Z'
+          }
+        }]
+      };
+    });
+
+    await store.connectAgent('agent-1');
+    await store.loadSession('agent-1', 'session-child');
+
+    expect(mockClient.listSessions).toHaveBeenCalledWith(listSessionsRequest());
+    expect(store.error).toBeNull();
+    expect(store.activeSessionId).toBe('session-child');
+    expect(store.activeSession.transcript).toEqual([
+      expect.objectContaining({ messageId: 'child-1', text: 'Child answer' })
+    ]);
+    expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sessionId: 'session-child',
+        title: 'Task: Final PASS review'
+      })
+    ]));
+  });
+
+  it('includes after-response replay captured during the post-RPC flush', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1',
+        agentName: 'QMTCODE',
+        sessionId: 'session-1',
+        title: 'A',
+        cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z',
+        runtimeId: 'agent-1',
+        runtimeName: 'QMTCODE',
+        source: 'acp',
+        status: 'idle'
+      }]
+    };
+    const replay: SessionNotification[] = [{
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'session_info_update',
+        title: 'Question session',
+        updatedAt: '2026-07-18T17:00:00Z'
+      }
+    }];
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [] },
+      replay,
+      finishReplay: () => {
+        replay.push({
+          sessionId: 'session-1',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            messageId: 'agent-1',
+            content: { type: 'text', text: 'Answer after RPC' }
+          }
+        });
+        return replay;
+      }
+    });
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activeSession.transcript).toEqual([
+      expect.objectContaining({ messageId: 'agent-1', text: 'Answer after RPC' })
+    ]);
   });
 
   it('hydrates and activates an attached remote session without reloading it immediately', async () => {
@@ -331,6 +552,9 @@ describe('AgentsStore connections', () => {
       }),
       expect.objectContaining({ sessionId: 'session-1', hasChildren: true, forkCount: 1 })
     ]));
+    expect(store.workspaceSessionGroups[0].sessions.map((session) => session.sessionId)).toEqual(
+      expect.arrayContaining(['fork-session', 'session-1'])
+    );
     expect(store.activeSessionId).toBe('session-1');
   });
 
@@ -910,6 +1134,489 @@ describe('AgentsStore model info cache', () => {
 
     expect(mockClient.getModelInfo).toHaveBeenCalledTimes(2);
     expect(store.modelInfoByAgent['agent-1'][localModel.id]).toEqual(modelInfo);
+  });
+});
+
+describe('AgentsStore delegate model assignments', () => {
+  const assignmentState: DelegateAssignmentsInfo = {
+    version: 1,
+    reasoning_effort_supported: true,
+    session_id: 'session-1',
+    profile_id: 'quorum',
+    revision: 2,
+    durable: true,
+    editable: true,
+    assignments: [{
+      agent_id: 'coder',
+      name: 'Coder',
+      description: 'Writes code',
+      model: null,
+      source: DelegateAssignmentSource.ProfileDefault,
+      configured_default_model_id: 'codex/gpt-5.6-sol',
+      reasoning_effort: null
+    }],
+    orphaned_overrides: []
+  };
+
+  function selectSession(store: AgentsStore) {
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+  }
+
+  it('exposes routing only when the current session has delegate roles', async () => {
+    const store = createStore();
+    selectSession(store);
+    await store.connectAgent('agent-1');
+
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(false);
+
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': { ...assignmentState, assignments: [] } };
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(false);
+
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': assignmentState };
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
+
+    store.delegateAssignmentsBySession = {
+      'agent-1:session-1': {
+        ...assignmentState,
+        assignments: [],
+        orphaned_overrides: [{ agent_id: 'removed-role', model: { model_id: 'legacy/model' }, reasoning_effort: null }]
+      }
+    };
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
+  });
+
+  it('keeps routing available after the initial assignment read fails', async () => {
+    const store = createStore();
+    selectSession(store);
+    mockClient.getDelegateModels.mockRejectedValueOnce(new Error('Failed to load delegate models.'));
+    await store.connectAgent('agent-1');
+
+    expect(store.activeDelegateAssignments).toBeNull();
+    expect(store.activeDelegateAssignmentsError).toBe('Failed to load delegate models.');
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
+
+    mockClient.getDelegateModels.mockResolvedValueOnce(assignmentState);
+    await store.refreshDelegateAssignments('agent-1', 'session-1');
+
+    expect(store.activeDelegateAssignmentsError).toBeNull();
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
+  });
+
+  it('loads authoritative assignments with session history and writes with the current revision', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Delegates', cwd: '/tmp/work',
+        updatedAt: '2026-09-08T09:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    mockClient.getDelegateModels
+      .mockResolvedValueOnce(assignmentState)
+      .mockResolvedValueOnce({
+        ...assignmentState,
+        revision: 3,
+        assignments: [{
+          ...assignmentState.assignments[0],
+          model: { model_id: 'xai/grok-4.6', node_id: 'node-1' },
+          source: DelegateAssignmentSource.Override
+        }]
+      });
+
+    await store.loadSession('agent-1', 'session-1');
+    await vi.waitFor(() => expect(store.activeDelegateAssignments).toEqual(assignmentState));
+
+    await expect(store.setActiveDelegateModel('coder', { model_id: 'xai/grok-4.6', node_id: 'node-1' })).resolves.toBe(true);
+    expect(mockClient.setDelegateModel).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model_id: 'xai/grok-4.6',
+      node_id: 'node-1',
+      expected_revision: 2
+    });
+    expect(store.activeDelegateAssignments?.revision).toBe(3);
+    expect(store.activeDelegateAssignmentPending.coder).toBeUndefined();
+  });
+
+  it('does not delay session rendering while assignment readback is pending', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Delegates', cwd: '/tmp/work',
+        updatedAt: '2026-09-08T09:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    let resolveAssignments!: (state: DelegateAssignmentsInfo) => void;
+    mockClient.getDelegateModels.mockImplementationOnce(
+      () => new Promise<DelegateAssignmentsInfo>((resolve) => { resolveAssignments = resolve; })
+    );
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(mockClient.getDelegateModels).toHaveBeenCalledWith({ session_id: 'session-1' });
+    expect(store.activeDelegateAssignmentsLoading).toBe(true);
+    resolveAssignments(assignmentState);
+    await vi.waitFor(() => expect(store.activeDelegateAssignments).toEqual(assignmentState));
+  });
+
+  it('writes explicit reasoning and can restore parent-session inheritance', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': assignmentState };
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1,
+      reasoning_effort_supported: true,
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model: null,
+      reasoning_effort: DelegateReasoningEffort.High,
+      revision: 3,
+      durable: true
+    });
+    mockClient.getDelegateModels.mockResolvedValueOnce({
+      ...assignmentState,
+      revision: 3,
+      assignments: [{
+        ...assignmentState.assignments[0],
+        reasoning_effort: DelegateReasoningEffort.High
+      }]
+    });
+
+    await expect(store.setActiveDelegateModel('coder', null, DelegateReasoningEffort.High)).resolves.toBe(true);
+
+    expect(mockClient.setDelegateModel).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model_id: null,
+      node_id: null,
+      reasoning_effort: DelegateReasoningEffort.High,
+      expected_revision: 2
+    });
+    expect(store.activeDelegateAssignments?.assignments[0].reasoning_effort).toBe(DelegateReasoningEffort.High);
+
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1,
+      reasoning_effort_supported: true,
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model: null,
+      reasoning_effort: null,
+      revision: 4,
+      durable: true
+    });
+    mockClient.getDelegateModels.mockResolvedValueOnce({ ...assignmentState, revision: 4 });
+    await expect(store.setActiveDelegateModel('coder', null, null)).resolves.toBe(true);
+    expect(mockClient.setDelegateModel).toHaveBeenLastCalledWith({
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model_id: null,
+      node_id: null,
+      reasoning_effort: null,
+      expected_revision: 3
+    });
+  });
+
+  it('rejects reasoning writes but preserves model-only cleanup for an older backend', async () => {
+    const store = createStore();
+    selectSession(store);
+    const oldBackendState: DelegateAssignmentsInfo = {
+      ...assignmentState,
+      reasoning_effort_supported: undefined,
+      assignments: [],
+      orphaned_overrides: [{ agent_id: 'removed-role', model: { model_id: 'legacy/model' } }]
+    };
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': oldBackendState };
+
+    await expect(store.setActiveDelegateModel('removed-role', null, null)).resolves.toBe(false);
+    expect(mockClient.setDelegateModel).not.toHaveBeenCalled();
+
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1,
+      session_id: 'session-1',
+      agent_id: 'removed-role',
+      model: null,
+      revision: 3,
+      durable: true
+    });
+    mockClient.getDelegateModels.mockResolvedValueOnce({
+      ...oldBackendState,
+      revision: 3,
+      orphaned_overrides: []
+    });
+
+    await expect(store.setActiveDelegateModel('removed-role', null)).resolves.toBe(true);
+    expect(mockClient.setDelegateModel).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      agent_id: 'removed-role',
+      model_id: null,
+      node_id: null,
+      expected_revision: 2
+    });
+  });
+
+  it('omits revision checking for run-only storage by sending a null expected revision', async () => {
+    const store = createStore();
+    selectSession(store);
+    const runOnlyState: DelegateAssignmentsInfo = { ...assignmentState, revision: null, durable: false };
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': runOnlyState };
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1,
+      reasoning_effort_supported: true,
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model: { model_id: 'xai/grok-4.6' },
+      reasoning_effort: null,
+      revision: null,
+      durable: false
+    });
+    mockClient.getDelegateModels.mockResolvedValueOnce({
+      ...runOnlyState,
+      assignments: [{
+        ...runOnlyState.assignments[0],
+        model: { model_id: 'xai/grok-4.6' },
+        source: DelegateAssignmentSource.Override
+      }]
+    });
+
+    await expect(store.setActiveDelegateModel('coder', { model_id: 'xai/grok-4.6' })).resolves.toBe(true);
+
+    expect(mockClient.setDelegateModel).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model_id: 'xai/grok-4.6',
+      node_id: null,
+      expected_revision: null
+    });
+    expect(store.activeDelegateAssignments?.revision).toBeNull();
+    expect(store.activeDelegateAssignments?.durable).toBe(false);
+  });
+
+  it('preserves local reasoning when a model-only confirmation omits it and readback fails', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.delegateAssignmentsBySession = {
+      'agent-1:session-1': {
+        ...assignmentState,
+        assignments: [{
+          ...assignmentState.assignments[0],
+          model: { model_id: 'codex/gpt-5.6-sol' },
+          source: DelegateAssignmentSource.Override,
+          reasoning_effort: DelegateReasoningEffort.High
+        }]
+      }
+    };
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1,
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model: { model_id: 'xai/grok-4.6' },
+      revision: 3,
+      durable: true
+    });
+    mockClient.getDelegateModels.mockRejectedValueOnce(new Error('Failed to load delegate models.'));
+
+    await expect(store.setActiveDelegateModel('coder', { model_id: 'xai/grok-4.6' })).resolves.toBe(true);
+
+    expect(store.activeDelegateAssignments?.assignments[0]).toMatchObject({
+      model: { model_id: 'xai/grok-4.6' },
+      source: DelegateAssignmentSource.Override,
+      reasoning_effort: DelegateReasoningEffort.High
+    });
+    expect(store.activeDelegateAssignmentsError).toBe('Failed to load delegate models.');
+  });
+
+  it('preserves orphaned reasoning when a model-only confirmation omits it and readback fails', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.delegateAssignmentsBySession = {
+      'agent-1:session-1': {
+        ...assignmentState,
+        assignments: [],
+        orphaned_overrides: [{
+          agent_id: 'removed-role',
+          model: { model_id: 'legacy/model' },
+          reasoning_effort: DelegateReasoningEffort.High
+        }]
+      }
+    };
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1,
+      session_id: 'session-1',
+      agent_id: 'removed-role',
+      model: { model_id: 'xai/grok-4.6' },
+      revision: 3,
+      durable: true
+    });
+    mockClient.getDelegateModels.mockRejectedValueOnce(new Error('Failed to load delegate models.'));
+
+    await expect(store.setActiveDelegateModel('removed-role', { model_id: 'xai/grok-4.6' })).resolves.toBe(true);
+
+    expect(store.activeDelegateAssignments?.orphaned_overrides[0]).toMatchObject({
+      agent_id: 'removed-role',
+      model: { model_id: 'xai/grok-4.6' },
+      reasoning_effort: DelegateReasoningEffort.High
+    });
+    expect(store.activeDelegateAssignmentsError).toBe('Failed to load delegate models.');
+  });
+
+  it('serializes rapid writes and keeps role pending until its final write completes', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': assignmentState };
+    let resolveFirst!: (response: SetDelegateModelResponse) => void;
+    let resolveSecond!: (response: SetDelegateModelResponse) => void;
+    mockClient.setDelegateModel
+      .mockImplementationOnce(() => new Promise<SetDelegateModelResponse>((resolve) => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise<SetDelegateModelResponse>((resolve) => { resolveSecond = resolve; }));
+    mockClient.getDelegateModels
+      .mockResolvedValueOnce({
+        ...assignmentState,
+        revision: 3,
+        assignments: [{
+          ...assignmentState.assignments[0],
+          model: { model_id: 'xai/grok-4.6' },
+          source: DelegateAssignmentSource.Override
+        }]
+      })
+      .mockResolvedValueOnce({
+        ...assignmentState,
+        revision: 4,
+        assignments: [{
+          ...assignmentState.assignments[0],
+          model: { model_id: 'codex/gpt-5.6-sol' },
+          source: DelegateAssignmentSource.Override
+        }]
+      });
+
+    const first = store.setActiveDelegateModel('coder', { model_id: 'xai/grok-4.6' });
+    const second = store.setActiveDelegateModel('coder', { model_id: 'codex/gpt-5.6-sol' });
+    await vi.waitFor(() => expect(mockClient.setDelegateModel).toHaveBeenCalledTimes(1));
+    expect(store.activeDelegateAssignmentPending.coder).toBe(true);
+
+    resolveFirst({
+      version: 1,
+      reasoning_effort_supported: true,
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model: { model_id: 'xai/grok-4.6' },
+      reasoning_effort: null,
+      revision: 3,
+      durable: true
+    });
+    await expect(first).resolves.toBe(true);
+    await vi.waitFor(() => expect(mockClient.setDelegateModel).toHaveBeenCalledTimes(2));
+    expect(mockClient.setDelegateModel).toHaveBeenLastCalledWith({
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model_id: 'codex/gpt-5.6-sol',
+      node_id: null,
+      expected_revision: 3
+    });
+    expect(store.activeDelegateAssignmentPending.coder).toBe(true);
+
+    resolveSecond({
+      version: 1,
+      reasoning_effort_supported: true,
+      session_id: 'session-1',
+      agent_id: 'coder',
+      model: { model_id: 'codex/gpt-5.6-sol' },
+      reasoning_effort: null,
+      revision: 4,
+      durable: true
+    });
+    await expect(second).resolves.toBe(true);
+    expect(store.activeDelegateAssignmentPending.coder).toBeUndefined();
+    expect(store.activeDelegateAssignments?.revision).toBe(4);
+  });
+
+  it('refreshes after a conflict and requires user review instead of retrying the write', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': assignmentState };
+    mockClient.setDelegateModel.mockRejectedValueOnce(
+      new RequestError(-32602, 'Invalid params', {
+        code: 'delegate_assignment_conflict',
+        expected_revision: 2,
+        actual_revision: 3,
+        message: 'Delegate assignments changed; refresh before retrying'
+      })
+    );
+    mockClient.getDelegateModels.mockResolvedValueOnce({ ...assignmentState, revision: 3 });
+
+    await expect(store.setActiveDelegateModel('coder', { model_id: 'xai/grok-4.6' })).resolves.toBe(false);
+
+    expect(mockClient.setDelegateModel).toHaveBeenCalledTimes(1);
+    expect(mockClient.getDelegateModels).toHaveBeenCalledWith({ session_id: 'session-1' });
+    expect(store.activeDelegateAssignmentConflict).toBe(true);
+    expect(store.activeDelegateAssignments?.revision).toBe(3);
+  });
+
+  it('refreshes the selected session when an assignment invalidation arrives', async () => {
+    const store = createStore();
+    selectSession(store);
+    await store.connectAgent('agent-1');
+    mockClient.getDelegateModels.mockResolvedValueOnce(assignmentState);
+
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/delegateModelsChanged',
+      params: { version: 1, session_id: 'session-1', revision: 2 }
+    });
+
+    await vi.waitFor(() => expect(mockClient.getDelegateModels).toHaveBeenCalledWith({ session_id: 'session-1' }));
+    expect(store.activeDelegateAssignments).toEqual(assignmentState);
+  });
+
+  it('attaches child session ids from live delegation updates', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.activeSession.toolCalls = [{
+      id: 'delegate-1',
+      title: 'Run delegate',
+      status: 'in_progress',
+      kind: 'delegate',
+      arguments: '{"target_agent_id":"linus","objective":"Review the current bearer-auth diff"}'
+    }];
+    await store.connectAgent('agent-1');
+
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/delegationUpdate',
+      params: {
+        version: 1,
+        sessionId: 'session-1',
+        toolCallId: 'delegate-1',
+        childSessionId: 'child-session-1',
+        state: 'forked',
+        targetAgentId: 'linus',
+        objective: 'Review the current bearer-auth diff'
+      }
+    });
+
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
+  });
+
+  it('exposes unavailable and orphaned assignments without altering them on read', async () => {
+    const store = createStore();
+    selectSession(store);
+    const state = {
+      ...assignmentState,
+      assignments: [{
+        ...assignmentState.assignments[0],
+        model: { model_id: 'missing/model', node_id: 'offline-node' },
+        source: DelegateAssignmentSource.Override
+      }],
+      orphaned_overrides: [{
+        agent_id: 'removed-role',
+        model: { model_id: 'legacy/model' },
+        reasoning_effort: null
+      }]
+    };
+    mockClient.getDelegateModels.mockResolvedValueOnce(state);
+
+    await store.refreshDelegateAssignments();
+
+    expect(store.activeDelegateAssignments).toEqual(state);
+    expect(mockClient.setDelegateModel).not.toHaveBeenCalled();
   });
 });
 
@@ -1827,8 +2534,8 @@ describe('AgentsStore prompt session start', () => {
     await store.startConfiguredAgent('remote-agent');
 
     expect(mockClient.connect).toHaveBeenCalled();
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, {});
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { cursor: 'remote-page-2' });
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, listSessionsRequest());
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, listSessionsRequest({ cursor: 'remote-page-2' }));
   });
 
   it('marks WebSocket loss immediately and completes discovery after reconnecting', async () => {
@@ -1857,7 +2564,7 @@ describe('AgentsStore prompt session start', () => {
     expect(store.agentErrors['remote-agent']).toBe('WebSocket closed (code 1006).');
     await vi.advanceTimersByTimeAsync(250);
     expect(mockClient.connect.mock.calls.length).toBeGreaterThan(connectCallsBeforeLoss);
-    expect(mockClient.listSessions).toHaveBeenCalledWith({ cursor: 'reconnect-page-2' });
+    expect(mockClient.listSessions).toHaveBeenCalledWith(listSessionsRequest({ cursor: 'reconnect-page-2' }));
     expect(store.connectionStates['remote-agent']).toBe('initialized');
     vi.useRealTimers();
   });
@@ -2045,8 +2752,8 @@ describe('AgentsStore prompt session start', () => {
 
     await store.refreshSessionsForAgent('agent-1', true);
 
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, {});
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { cursor: 'opaque-global-page-2' });
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, listSessionsRequest());
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, listSessionsRequest({ cursor: 'opaque-global-page-2' }));
     expect(store.workspaceSessionGroups.map((group) => group.cwd)).toEqual(['/tmp/a', '/tmp/b']);
     expect(store.workspaceSessionGroups.every((group) => !group.initialized)).toBe(true);
   });
@@ -2097,16 +2804,16 @@ describe('AgentsStore prompt session start', () => {
 
     await store.loadWorkspaceSessions('/tmp/work');
 
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, { cwd: '/tmp/work', cursor: undefined });
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, listSessionsRequest({ cwd: '/tmp/work' }));
     expect(store.workspaceSessionGroups[0].sessions).toHaveLength(10);
     expect(store.workspaceSessionGroups[0].hasMore).toBe(true);
 
     await store.loadMoreWorkspaceSessions('/tmp/work');
 
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, {
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, listSessionsRequest({
       cwd: '/tmp/work',
       cursor: 'opaque-workspace-page-2'
-    });
+    }));
     expect(store.workspaceSessionGroups[0].sessions).toHaveLength(20);
     expect(store.workspaceSessionGroups[0].hasMore).toBe(false);
   });
@@ -2172,7 +2879,7 @@ describe('AgentsStore prompt session start', () => {
     await store.loadWorkspaceSessions('/tmp/work');
 
     expect(mockClient.listSessions).toHaveBeenCalledTimes(3);
-    expect(mockClient.listSessions).toHaveBeenLastCalledWith({ cwd: '/tmp/work', cursor: 'agent-1-next' });
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest({ cwd: '/tmp/work', cursor: 'agent-1-next' }));
     expect(store.workspaceSessionGroups[0].sessions).toHaveLength(10);
   });
 
@@ -2208,6 +2915,123 @@ describe('AgentsStore prompt session start', () => {
     expect(store.workspaceSessionGroups).toHaveLength(1);
     expect(store.workspaceSessionGroups[0].sessions).toHaveLength(10);
     expect(store.workspaceSessionGroups[0].hasMore).toBe(true);
+  });
+
+  it('inserts a newly created session into the workspace catalog before list refresh', async () => {
+    const store = createStore();
+    store.workspaceSessionSources = {
+      'agent-1': {
+        '/tmp/work': {
+          agentId: 'agent-1',
+          agentName: 'QMTCODE',
+          cwd: '/tmp/work',
+          sessions: [{
+            agentId: 'agent-1',
+            agentName: 'QMTCODE',
+            sessionId: 'session-old',
+            title: 'Old',
+            cwd: '/tmp/work',
+            updatedAt: '2026-07-18T12:00:00Z',
+            runtimeId: 'agent-1',
+            runtimeName: 'QMTCODE',
+            source: 'acp',
+            status: 'idle'
+          }],
+          latestActivity: '2026-07-18T12:00:00Z',
+          nextCursor: '10',
+          initialized: true,
+          loading: false,
+          error: null
+        }
+      }
+    };
+    mockClient.createSession.mockResolvedValueOnce({ sessionId: 'session-new', configOptions: [] });
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [] });
+
+    await store.createBackgroundSession('agent-1', '/tmp/work');
+
+    expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: 'session-new', cwd: '/tmp/work' })
+    ]));
+    expect(store.workspaceSessionGroups[0].sessions.map((session) => session.sessionId)).toEqual(
+      expect.arrayContaining(['session-new', 'session-old'])
+    );
+  });
+
+  it('merges a newly listed local session into an already initialized workspace group', async () => {
+    const store = createStore();
+    store.workspaceSessionSources = {
+      'agent-1': {
+        '/tmp/work': {
+          agentId: 'agent-1',
+          agentName: 'QMTCODE',
+          cwd: '/tmp/work',
+          sessions: [{
+            agentId: 'agent-1',
+            agentName: 'QMTCODE',
+            sessionId: 'session-old',
+            title: 'Old',
+            cwd: '/tmp/work',
+            updatedAt: '2026-07-18T12:00:00Z',
+            runtimeId: 'agent-1',
+            runtimeName: 'QMTCODE',
+            source: 'acp',
+            status: 'idle'
+          }],
+          latestActivity: '2026-07-18T12:00:00Z',
+          nextCursor: '10',
+          initialized: true,
+          loading: false,
+          error: null
+        }
+      }
+    };
+    mockClient.listSessions.mockResolvedValueOnce({
+      sessions: [{
+        sessionId: 'session-new',
+        title: 'New',
+        cwd: '/tmp/work',
+        updatedAt: '2026-07-18T12:05:00Z'
+      }]
+    });
+
+    await store.refreshSessionsForAgent('agent-1');
+
+    expect(store.workspaceSessionGroups[0].sessions.map((session) => session.sessionId)).toEqual([
+      'session-new',
+      'session-old'
+    ]);
+    expect(store.workspaceSessionGroups[0].initialized).toBe(true);
+    expect(store.workspaceSessionSources['agent-1']['/tmp/work'].nextCursor).toBe('10');
+  });
+
+  it('waits for in-flight discovery before applying an incremental session refresh', async () => {
+    const store = createStore();
+    let resolveDiscovery!: (value: { sessions: Array<{ sessionId: string; title: string; cwd: string; updatedAt: string }> }) => void;
+    mockClient.listSessions
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveDiscovery = resolve;
+      }))
+      .mockResolvedValueOnce({
+        sessions: [{ sessionId: 'session-new', title: 'New', cwd: '/tmp/work', updatedAt: '2026-07-18T12:05:00Z' }]
+      });
+
+    const discovery = store.refreshSessionsForAgent('agent-1', true);
+    const incremental = store.refreshSessionsForAgent('agent-1');
+    await vi.waitFor(() => expect(resolveDiscovery).toBeTypeOf('function'));
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+
+    resolveDiscovery({
+      sessions: [{ sessionId: 'session-old', title: 'Old', cwd: '/tmp/work', updatedAt: '2026-07-18T12:00:00Z' }]
+    });
+    await Promise.all([discovery, incremental]);
+
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, listSessionsRequest());
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, listSessionsRequest());
+    expect(store.sessionsByAgent['agent-1'].map((session) => session.sessionId)).toEqual([
+      'session-new',
+      'session-old'
+    ]);
   });
 
   it('clears attention when a session is acknowledged', () => {

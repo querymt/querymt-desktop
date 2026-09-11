@@ -84,4 +84,24 @@ describe('windowSessionTurns', () => {
     expect(getConversationViewport(-480, 0, 640)).toEqual({ top: 480, height: 640 });
     expect(getConversationViewport(80, 80, 400)).toEqual({ top: 0, height: 400 });
   });
+
+  it('pins a follow-scroll viewport to estimated content instead of collapsing to spacers', () => {
+    const turns = Array.from({ length: 20 }, (_, index) => turn(`t${index}`, true));
+    const items = windowSessionTurns(turns, { top: 8000, height: 700 }, {}, {
+      overscan: 0,
+      defaultHeight: 100
+    });
+
+    expect(ids(items)).toEqual(['spacer:1300', 't13', 't14', 't15', 't16', 't17', 't18', 't19']);
+  });
+
+  it('renders every turn if clamping still produces no visible turn', () => {
+    const turns = [turn('a', true), turn('b', true)];
+    const items = windowSessionTurns(turns, { top: 8000, height: 700 }, {}, {
+      overscan: 0,
+      defaultHeight: 0
+    });
+
+    expect(ids(items)).toEqual(['a', 'b']);
+  });
 });

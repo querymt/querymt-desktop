@@ -51,7 +51,7 @@
   let statusFilter = $state<SessionFilter>('all');
   let openGroups = $state<string[]>([]);
   let lastWorkspaceKeySignature = $state('');
-  let requestedWorkspaceKeys = $state<string[]>([]);
+  let requestedWorkspaceLoads = $state<Record<string, number>>({});
   let copiedSessionId = $state<string | null>(null);
   let pendingDeleteSession = $state<DesktopSessionSummary | null>(null);
   let deletingSessionKey = $state<string | null>(null);
@@ -126,13 +126,10 @@
         !group.initialized &&
         !group.loading &&
         !group.error &&
-        !requestedWorkspaceKeys.includes(group.key)
+        requestedWorkspaceLoads[group.key] !== group.catalogGeneration
       ) {
-        requestedWorkspaceKeys = [...requestedWorkspaceKeys, group.key];
+        requestedWorkspaceLoads = { ...requestedWorkspaceLoads, [group.key]: group.catalogGeneration };
         void onOpenWorkspace?.(group.cwd);
-      }
-      if ((group.initialized || group.error) && requestedWorkspaceKeys.includes(group.key)) {
-        requestedWorkspaceKeys = requestedWorkspaceKeys.filter((key) => key !== group.key);
       }
     }
   });
