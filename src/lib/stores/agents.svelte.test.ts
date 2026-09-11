@@ -11,6 +11,14 @@ import {
 } from '$lib/querymt/generated/types';
 import { tick } from 'svelte';
 import { AgentsStore } from './agents.svelte';
+import { DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
+
+function listSessionsRequest(input: { cwd?: string; cursor?: string } = {}) {
+  return {
+    _meta: { session_scope: DEFAULT_SESSION_LIST_SCOPE },
+    ...input
+  };
+}
 
 const mockListManagedProfiles = vi.hoisted(() => vi.fn(async () => []));
 const mockListen = vi.hoisted(() => vi.fn());
@@ -272,8 +280,8 @@ describe('AgentsStore connections', () => {
 
     await store.initialize();
 
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, {});
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { cursor: 'opaque-global-page-2' });
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, listSessionsRequest());
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, listSessionsRequest({ cursor: 'opaque-global-page-2' }));
     expect(store.workspaceSessionGroups.map((group) => group.cwd)).toEqual(['/tmp/a', '/tmp/b']);
     expect(store.loading).toBe(false);
   });
@@ -2353,8 +2361,8 @@ describe('AgentsStore prompt session start', () => {
     await store.startConfiguredAgent('remote-agent');
 
     expect(mockClient.connect).toHaveBeenCalled();
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, {});
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { cursor: 'remote-page-2' });
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, listSessionsRequest());
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, listSessionsRequest({ cursor: 'remote-page-2' }));
   });
 
   it('marks WebSocket loss immediately and completes discovery after reconnecting', async () => {
@@ -2383,7 +2391,7 @@ describe('AgentsStore prompt session start', () => {
     expect(store.agentErrors['remote-agent']).toBe('WebSocket closed (code 1006).');
     await vi.advanceTimersByTimeAsync(250);
     expect(mockClient.connect.mock.calls.length).toBeGreaterThan(connectCallsBeforeLoss);
-    expect(mockClient.listSessions).toHaveBeenCalledWith({ cursor: 'reconnect-page-2' });
+    expect(mockClient.listSessions).toHaveBeenCalledWith(listSessionsRequest({ cursor: 'reconnect-page-2' }));
     expect(store.connectionStates['remote-agent']).toBe('initialized');
     vi.useRealTimers();
   });
@@ -2571,8 +2579,8 @@ describe('AgentsStore prompt session start', () => {
 
     await store.refreshSessionsForAgent('agent-1', true);
 
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, {});
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { cursor: 'opaque-global-page-2' });
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, listSessionsRequest());
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, listSessionsRequest({ cursor: 'opaque-global-page-2' }));
     expect(store.workspaceSessionGroups.map((group) => group.cwd)).toEqual(['/tmp/a', '/tmp/b']);
     expect(store.workspaceSessionGroups.every((group) => !group.initialized)).toBe(true);
   });
@@ -2623,16 +2631,16 @@ describe('AgentsStore prompt session start', () => {
 
     await store.loadWorkspaceSessions('/tmp/work');
 
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, { cwd: '/tmp/work', cursor: undefined });
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, listSessionsRequest({ cwd: '/tmp/work' }));
     expect(store.workspaceSessionGroups[0].sessions).toHaveLength(10);
     expect(store.workspaceSessionGroups[0].hasMore).toBe(true);
 
     await store.loadMoreWorkspaceSessions('/tmp/work');
 
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, {
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, listSessionsRequest({
       cwd: '/tmp/work',
       cursor: 'opaque-workspace-page-2'
-    });
+    }));
     expect(store.workspaceSessionGroups[0].sessions).toHaveLength(20);
     expect(store.workspaceSessionGroups[0].hasMore).toBe(false);
   });
@@ -2698,7 +2706,7 @@ describe('AgentsStore prompt session start', () => {
     await store.loadWorkspaceSessions('/tmp/work');
 
     expect(mockClient.listSessions).toHaveBeenCalledTimes(3);
-    expect(mockClient.listSessions).toHaveBeenLastCalledWith({ cwd: '/tmp/work', cursor: 'agent-1-next' });
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest({ cwd: '/tmp/work', cursor: 'agent-1-next' }));
     expect(store.workspaceSessionGroups[0].sessions).toHaveLength(10);
   });
 
@@ -2845,8 +2853,8 @@ describe('AgentsStore prompt session start', () => {
     });
     await Promise.all([discovery, incremental]);
 
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, {});
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, {});
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, listSessionsRequest());
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, listSessionsRequest());
     expect(store.sessionsByAgent['agent-1'].map((session) => session.sessionId)).toEqual([
       'session-new',
       'session-old'

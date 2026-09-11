@@ -1,4 +1,4 @@
-import type { SessionInfo } from '@agentclientprotocol/sdk';
+import type { ListSessionsRequest, SessionInfo } from '@agentclientprotocol/sdk';
 import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
 import {
   SessionRuntimeStatus as QuerymtSessionRuntimeStatus,
@@ -6,6 +6,8 @@ import {
 } from '$lib/querymt/generated/types';
 
 export type SessionRailTone = 'attention' | 'active' | 'recent';
+export type SessionListScope = 'all' | 'root' | 'forks' | 'delegates' | 'children';
+export const DEFAULT_SESSION_LIST_SCOPE: SessionListScope = 'root';
 
 export interface WorkspaceSessionSource {
   agentId: string;
@@ -68,6 +70,18 @@ const ACTIVE_SESSION_STATUSES = new Set<SessionStatus>(['thinking', 'waiting', '
 
 export function buildSessionKey(agentId: string, sessionId: string): string {
   return `${agentId}:${sessionId}`;
+}
+
+export function buildListSessionsRequest(input: {
+  cwd?: string | null;
+  cursor?: string | null;
+} = {}): ListSessionsRequest {
+  const request: ListSessionsRequest = {
+    _meta: { session_scope: DEFAULT_SESSION_LIST_SCOPE }
+  };
+  if (input.cwd) request.cwd = input.cwd;
+  if (input.cursor) request.cursor = input.cursor;
+  return request;
 }
 
 export function getSessionKey(session: Pick<DesktopSessionSummary, 'agentId' | 'sessionId'>): string {

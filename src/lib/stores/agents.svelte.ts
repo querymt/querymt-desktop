@@ -26,6 +26,7 @@ import {
   readClientPromptId
 } from '$lib/domain/session-updates';
 import {
+  buildListSessionsRequest,
   buildSessionKey,
   getSessionById,
   getSessionKey,
@@ -942,7 +943,7 @@ export class AgentsStore {
     record.error = null;
 
     try {
-      const firstPage = await record.client.listSessions({});
+      const firstPage = await record.client.listSessions(this.buildSessionListRequest());
       const pages = discoverAll ? await this.collectSessionPages(record.client, firstPage) : [firstPage];
       const listedSessions = pages.flatMap((page) => page.sessions);
       const previousSessions = this.sessionsByAgent[agentId] ?? [];
@@ -1013,6 +1014,10 @@ export class AgentsStore {
     }
   }
 
+  private buildSessionListRequest(input: { cwd?: string | null; cursor?: string | null } = {}) {
+    return buildListSessionsRequest(input);
+  }
+
   async loadMoreWorkspaceSessions(cwd: string) {
     const currentLimit = this.workspaceVisibleLimits[cwd] ?? WORKSPACE_SESSION_PAGE_SIZE;
     const nextLimit = currentLimit + WORKSPACE_SESSION_PAGE_SIZE;
@@ -1038,7 +1043,7 @@ export class AgentsStore {
     // crates/agent session list before relying on them across creates.
     while (nextCursor && !seenCursors.has(nextCursor)) {
       seenCursors.add(nextCursor);
-      const page = await client.listSessions({ cursor: nextCursor });
+      const page = await client.listSessions(this.buildSessionListRequest({ cursor: nextCursor }));
       pages.push(page);
       nextCursor = page.nextCursor ?? null;
     }
@@ -1149,10 +1154,12 @@ export class AgentsStore {
         throw new Error(`${source.agentName} returned a repeated session cursor.`);
       }
       if (requestCursor) seenCursors.add(requestCursor);
-      const response = await record.client.listSessions({
-        cwd: source.cwd,
-        cursor: requestCursor ?? undefined
-      });
+      const response = await record.client.listSessions(
+        this.buildSessionListRequest({
+          cwd: source.cwd,
+          cursor: requestCursor
+        })
+      );
       if ((this.workspaceSourceVersions.get(source.agentId) ?? 0) !== sourceVersion || !current) return;
       const pageSessions = mapAcpSessionsToDesktopSessions(response.sessions, {
         agentId: config.id,
