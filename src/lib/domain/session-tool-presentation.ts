@@ -13,6 +13,11 @@ export type SessionToolIcon =
   | 'delete'
   | 'tool';
 
+export type SessionToolChangeStats = {
+  added: number;
+  removed: number;
+};
+
 export type SessionToolPresentation = {
   name: string;
   label: string;
@@ -22,29 +27,40 @@ export type SessionToolPresentation = {
   expandable: boolean;
   argumentsText: string | null;
   resultText: string | null;
+  changeStats: SessionToolChangeStats | null;
 };
 
 const READ_TOOLS = new Set(['read_tool', 'get_function', 'get_symbol', 'index', 'ls', 'read_shared']);
-const EDIT_TOOLS = new Set(['edit', 'multiedit', 'replace_symbol', 'write_file', 'apply_patch']);
+const EDIT_TOOLS = new Set(['edit', 'multiedit', 'replace_symbol', 'write_file']);
 const SEARCH_TOOLS = new Set(['search_text', 'glob', 'find_references', 'find_symbol_references', 'mdq', 'language_query']);
 const WEB_TOOLS = new Set(['browse', 'web_fetch']);
 const TASK_TOOLS = new Set(['create_task', 'todowrite', 'todoread']);
 
 export function getSessionToolPresentation(tool: SessionToolCallItem): SessionToolPresentation {
   const name = normalizeToolName(tool);
+  const args = parseObject(tool.arguments);
   const argumentsText = formatTechnicalText(tool.arguments);
   const resultText = formatTechnicalText(tool.result);
 
   return {
     name,
     label: toolLabel(name),
-    preview: toolPreview(name, parseObject(tool.arguments), tool.result),
+    preview: toolPreview(name, args, tool.result),
     icon: toolIcon(name),
     statusLabel: statusLabel(tool.status),
     expandable: Boolean(argumentsText || resultText),
     argumentsText,
-    resultText
+    resultText,
+    changeStats: toolChangeStats(name, tool.status, args, tool.result)
   };
+}
+
+export function formatChangeStats(stats: SessionToolChangeStats | null | undefined): string | null {
+  if (!stats) return null;
+  const parts: string[] = [];
+  if (stats.added > 0) parts.push(`+${stats.added}`);
+  if (stats.removed > 0) parts.push(`-${stats.removed}`);
+  return parts.length > 0 ? parts.join(' ') : null;
 }
 
 export function humanizeToolName(value: string): string {
@@ -103,7 +119,6 @@ function toolLabel(name: string): string {
   if (name === 'multiedit') return 'Edit file';
   if (name === 'replace_symbol') return 'Replace symbol';
   if (name === 'write_file') return 'Write file';
-  if (name === 'apply_patch') return 'Apply patch';
   if (name === 'delete_file') return 'Delete file';
   if (name === 'search_text') return 'Search text';
   if (name === 'glob') return 'Find files';
@@ -139,6 +154,101 @@ function statusLabel(status: SessionToolCallItem['status']): string {
   if (status === 'completed') return 'Completed';
   if (status === 'failed') return 'Failed';
   return 'Pending';
+}
+
+function toolChangeStats(
+  name: string,
+  status: SessionToolCallItem['status'],
+  args: Record<string, unknown> | null,
+  rawResult: string | null | undefined
+): SessionToolChangeStats | null {
+  if (status !== 'completed' || !EDIT_TOOLS.has(name)) return null;
+  return statsFromEditReceipt(rawResult) ?? statsFromEditArgs(args);
+}
+
+function statsFromEditReceipt(rawResult: string | null | undefined): SessionToolChangeStats | null {
+  const firstLine = rawResult?.trim().split('\n')[0];
+  if (!firstLine?.startsWith('OK ')) return null;
+  const added = firstLine.match(/\badded=(\d+)\b/);
+  const deleted = firstLine.match(/\bdeleted=(\d+)\b/);
+  if (!added && !deleted) return null;
+  return compactChangeStats(Number(added?.[1] ?? 0), Number(deleted?.[1] ?? 0));
+}
+
+function statsFromEditArgs(args: Record<string, unknown> | null): SessionToolChangeStats | null {
+  if (!args) return null;
+
+  const grouped = sumChangeStats(asObjectArray(args.edits) ?? asObjectArray(args.replacements));
+  if (grouped) return grouped;
+
+  const replacement = replacementStats(args);
+  if (replacement) return replacement;
+
+  const content = stringValue(args.content) || stringValue(args.contents);
+  return content ? compactChangeStats(countLines(content), 0) : null;
+}
+
+function sumChangeStats(items: Record<string, unknown>[] | null): SessionToolChangeStats | null {
+  if (!items) return null;
+  let added = 0;
+  let removed = 0;
+  let found = false;
+  for (const item of items) {
+    const stats = replacementStats(item);
+    if (!stats) continue;
+    found = true;
+    added += stats.added;
+    removed += stats.removed;
+  }
+  return found ? compactChangeStats(added, removed) : null;
+}
+
+function replacementStats(value: Record<string, unknown>): SessionToolChangeStats | null {
+  const oldText = optionalString(value, ['oldString', 'old_string', 'oldText', 'old_text']);
+  const newText = optionalString(value, ['newString', 'new_string', 'newText', 'new_text']);
+  if (oldText === null && newText === null) return null;
+  return lineChangeStats(oldText ?? '', newText ?? '');
+}
+
+function lineChangeStats(oldText: string, newText: string): SessionToolChangeStats | null {
+  const oldLines = splitLines(oldText);
+  const newLines = splitLines(newText);
+  let start = 0;
+  const shared = Math.min(oldLines.length, newLines.length);
+  while (start < shared && oldLines[start] === newLines[start]) start += 1;
+  let oldEnd = oldLines.length;
+  let newEnd = newLines.length;
+  while (oldEnd > start && newEnd > start && oldLines[oldEnd - 1] === newLines[newEnd - 1]) {
+    oldEnd -= 1;
+    newEnd -= 1;
+  }
+  return compactChangeStats(newEnd - start, oldEnd - start);
+}
+
+function compactChangeStats(added: number, removed: number): SessionToolChangeStats | null {
+  return added > 0 || removed > 0 ? { added, removed } : null;
+}
+
+function asObjectArray(value: unknown): Record<string, unknown>[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const items = value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
+  return items.length > 0 ? items : null;
+}
+
+function optionalString(value: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    if (typeof value[key] === 'string') return value[key];
+  }
+  return null;
+}
+
+function countLines(value: string): number {
+  return splitLines(value).length;
+}
+
+function splitLines(value: string): string[] {
+  if (!value) return [];
+  return value.endsWith('\n') ? value.slice(0, -1).split('\n') : value.split('\n');
 }
 
 function toolPreview(name: string, args: Record<string, unknown> | null, rawResult: string | null | undefined): string | null {

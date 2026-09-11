@@ -22,7 +22,7 @@
     Trash2,
     Wrench
   } from '@lucide/svelte';
-  import { getDelegateTargetAgentId, getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
+  import { formatChangeStats, getDelegateTargetAgentId, getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
   import type { SessionToolCallItem } from '$lib/domain/types';
 
   let { tool }: { tool: SessionToolCallItem } = $props();
@@ -30,6 +30,10 @@
   let open = $state(false);
   let copiedPart = $state<'arguments' | 'result' | null>(null);
   const presentation = $derived(getSessionToolPresentation(tool));
+  const changeStatsLabel = $derived(formatChangeStats(presentation.changeStats));
+  const summaryLabel = $derived(
+    `${presentation.label}${presentation.preview ? ` - ${presentation.preview}` : ''}${changeStatsLabel ? ` ${changeStatsLabel}` : ''}`
+  );
   const delegateTarget = $derived(presentation.icon === 'delegate' ? getDelegateTargetAgentId(tool) : null);
   const childSessionHref = $derived.by(() => {
     const agentId = page.params.agentId;
@@ -66,9 +70,9 @@
 <details
   bind:open
   class={`details-reset session-tool-block session-tool-block-${tool.status}`}
-  aria-label={`${presentation.label}${presentation.preview ? ` - ${presentation.preview}` : ''}`}
+  aria-label={summaryLabel}
 >
-  <summary class="session-tool-summary" aria-label={`${presentation.label}${presentation.preview ? ` - ${presentation.preview}` : ''}, ${presentation.statusLabel}`}>
+  <summary class="session-tool-summary" aria-label={`${summaryLabel}, ${presentation.statusLabel}`}>
     <span class="session-tool-icon" aria-hidden="true">
       {#if presentation.icon === 'terminal'}
         <TerminalSquare size={14} />
@@ -101,6 +105,16 @@
     </span>
 
     <span class="session-tool-summary-state">
+      {#if presentation.changeStats}
+        <span class="session-tool-change-stats" aria-hidden="true">
+          {#if presentation.changeStats.added > 0}
+            <span class="session-tool-change-added">+{presentation.changeStats.added}</span>
+          {/if}
+          {#if presentation.changeStats.removed > 0}
+            <span class="session-tool-change-removed">-{presentation.changeStats.removed}</span>
+          {/if}
+        </span>
+      {/if}
       {#if childSessionHref}
         <span
           class="session-tool-session-pill"
