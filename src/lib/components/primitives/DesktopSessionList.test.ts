@@ -71,6 +71,35 @@ describe('DesktopSessionList', () => {
     expect(await screen.findByText('Inspect workspace')).toBeInTheDocument();
   });
 
+  it('finds a session by its full session id without matching siblings', async () => {
+    render(DesktopSessionList, { sessions });
+    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), {
+      target: { value: '8f2a91bc-1234-5678-9012-abcdefabcdef' }
+    });
+
+    expect(await screen.findByText('Inspect workspace')).toBeInTheDocument();
+    expect(screen.queryByText('Fix tests')).not.toBeInTheDocument();
+  });
+
+  it('finds a session by the displayed 13-character session id prefix', async () => {
+    render(DesktopSessionList, { sessions });
+    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), {
+      target: { value: '8f2a91bc-1234' }
+    });
+
+    expect(await screen.findByText('Inspect workspace')).toBeInTheDocument();
+    expect(screen.queryByText('Fix tests')).not.toBeInTheDocument();
+  });
+
+  it('shows the empty state when no session id matches the query', async () => {
+    render(DesktopSessionList, { sessions });
+    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), {
+      target: { value: 'ffffffff-ffff-ffff-ffff-ffffffffffff' }
+    });
+
+    expect(screen.getByText('No matching sessions')).toBeInTheDocument();
+  });
+
   it('keeps loaded sessions visible during refresh errors', async () => {
     const onRefresh = vi.fn();
     render(DesktopSessionList, { sessions, loading: true, error: 'Connection timed out.', onRefresh });

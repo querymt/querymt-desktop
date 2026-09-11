@@ -101,7 +101,8 @@
           const matchesQuery =
             workspaceMatches ||
             session.title.toLowerCase().includes(normalizedQuery) ||
-            session.agentName.toLowerCase().includes(normalizedQuery);
+            session.agentName.toLowerCase().includes(normalizedQuery) ||
+            session.sessionId.toLowerCase().includes(normalizedQuery);
           return matchesStatus && matchesQuery;
         });
         return { ...group, sessions: filteredSessions };
