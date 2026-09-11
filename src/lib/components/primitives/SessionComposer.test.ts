@@ -123,6 +123,17 @@ describe('SessionComposer', () => {
     expect(onOpenDelegateModels).toHaveBeenCalledOnce();
   });
 
+  it('hides delegate routing when the session has no delegate roles', async () => {
+    renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      sessionProfileLabel: 'Default'
+    });
+
+    await fireEvent.click(screen.getByLabelText('Session options'));
+    expect(screen.queryByText('Delegate routing')).toBeNull();
+  });
+
   it('keeps launch mode visible and moves reasoning into session options', async () => {
     const onLaunchModeChange = vi.fn();
     const onLaunchReasoningChange = vi.fn();

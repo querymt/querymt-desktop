@@ -997,6 +997,29 @@ describe('AgentsStore delegate model assignments', () => {
     store.activeSession.sessionId = 'session-1';
   }
 
+  it('exposes routing only when the current session has delegate roles', async () => {
+    const store = createStore();
+    selectSession(store);
+    await store.connectAgent('agent-1');
+
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(false);
+
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': { ...assignmentState, assignments: [] } };
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(false);
+
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': assignmentState };
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
+
+    store.delegateAssignmentsBySession = {
+      'agent-1:session-1': {
+        ...assignmentState,
+        assignments: [],
+        orphaned_overrides: [{ agent_id: 'removed-role', model: { model_id: 'legacy/model' }, reasoning_effort: null }]
+      }
+    };
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
+  });
+
   it('loads authoritative assignments with session history and writes with the current revision', async () => {
     const store = createStore();
     store.sessionsByAgent = {

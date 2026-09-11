@@ -400,10 +400,14 @@ export class AgentsStore {
   }
 
   canConfigureDelegateModels(agentId: string): boolean {
+    if (this.activeAgentId !== agentId) return false;
     const client = this.clients.get(agentId)?.client;
+    const assignments = this.activeDelegateAssignments;
     return Boolean(
       client?.supportsQuerymtMethod(QMT_METHOD_SESSION_DELEGATE_MODELS) &&
-        client.supportsQuerymtMethod(QMT_METHOD_SESSION_SET_DELEGATE_MODEL)
+        client.supportsQuerymtMethod(QMT_METHOD_SESSION_SET_DELEGATE_MODEL) &&
+        assignments &&
+        (assignments.assignments.length > 0 || assignments.orphaned_overrides.length > 0)
     );
   }
 
