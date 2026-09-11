@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const codeToHtml = vi.fn(
   () => '<pre><code class="language-ts">const value = 1;</code></pre>'
 );
+const mermaidInitialize = vi.fn();
+const mermaidRender = vi.fn(async (_id: string, source: string) => ({
+  svg: `<svg data-mermaid-source="${source}"><g></g></svg>`
+}));
 
 vi.mock('$app/environment', () => ({ browser: true }));
 
@@ -21,17 +25,31 @@ vi.mock('@shikijs/themes/github-light', () => ({ default: { name: 'github-light'
 vi.mock('@shikijs/themes/github-dark', () => ({ default: { name: 'github-dark' } }));
 vi.mock('@shikijs/langs/typescript', () => ({ default: { name: 'typescript' } }));
 
+vi.mock('mermaid', () => ({
+  default: {
+    initialize: mermaidInitialize,
+    render: mermaidRender
+  }
+}));
+
 import { enhanceCodeBlocks } from './code-blocks';
 
 describe('enhanceCodeBlocks', () => {
   beforeEach(() => {
     codeToHtml.mockClear();
+    mermaidInitialize.mockClear();
+    mermaidRender.mockClear();
+    mermaidRender.mockResolvedValue({
+      svg: '<svg data-mermaid-source="flowchart TD\n  A-->B"><g></g></svg>'
+    });
+    document.documentElement.dataset.theme = 'light';
     document.body.innerHTML = '';
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     document.body.innerHTML = '';
+    delete document.documentElement.dataset.theme;
   });
 
   it('disconnects the mutation observer while replacing a highlighted block', async () => {
@@ -67,6 +85,99 @@ describe('enhanceCodeBlocks', () => {
 
     await Promise.resolve();
     expect(codeToHtml).not.toHaveBeenCalled();
+    action.destroy?.();
+  });
+
+  it('renders mermaid fences as diagrams and keeps the source for copy', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    document.body.innerHTML =
+      '<div class="host"><div class="code-block-shell"><div class="code-block-header"><span class="code-block-language">mermaid</span><button class="code-block-copy" type="button" data-code-copy aria-label="Copy code">Copy</button></div><pre><code class="language-mermaid">flowchart TD\n  A--&gt;B</code></pre></div></div>';
+    const host = document.querySelector('.host') as HTMLElement;
+    const action = enhanceCodeBlocks(host);
+
+    await vi.waitFor(() => expect(mermaidRender).toHaveBeenCalledTimes(1));
+    expect(codeToHtml).not.toHaveBeenCalled();
+    expect(mermaidInitialize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        htmlLabels: false,
+        theme: 'default'
+      })
+    );
+    expect(document.querySelector('.mermaid-diagram svg')).not.toBeNull();
+    expect(document.querySelector<HTMLElement>('.code-block-shell pre')?.hidden).toBe(true);
+
+    const button = document.querySelector<HTMLButtonElement>('[data-code-copy]');
+    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText).toHaveBeenCalledWith('flowchart TD\n  A-->B');
+    action.destroy?.();
+  });
+
+  it('leaves mermaid source visible when rendering fails', async () => {
+    mermaidRender.mockRejectedValueOnce(new Error('bad diagram'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    document.body.innerHTML =
+      '<div class="host"><div class="code-block-shell"><pre><code class="language-mermaid">not a diagram</code></pre></div></div>';
+    const host = document.querySelector('.host') as HTMLElement;
+    const action = enhanceCodeBlocks(host);
+
+    await vi.waitFor(() =>
+      expect(document.querySelector('.code-block-shell')?.getAttribute('data-mermaid-state')).toBe('error')
+    );
+    expect(document.querySelector('.mermaid-diagram')).toBeNull();
+    expect(document.querySelector<HTMLElement>('.code-block-shell pre')?.hidden).toBe(false);
+    expect(document.querySelector('.code-block-shell pre')?.textContent).toContain('not a diagram');
+    warn.mockRestore();
+    action.destroy?.();
+  });
+
+  it('discards a stale mermaid SVG when the color scheme flips mid-render', async () => {
+    let resolveFirst: ((value: { svg: string }) => void) | undefined;
+    const firstRender = new Promise<{ svg: string }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    mermaidRender.mockImplementationOnce(async () => firstRender).mockResolvedValue({
+      svg: '<svg data-mermaid-theme="dark"><g></g></svg>'
+    });
+
+    document.body.innerHTML =
+      '<div class="host"><div class="code-block-shell"><pre><code class="language-mermaid">flowchart TD\n  A-->B</code></pre></div></div>';
+    const host = document.querySelector('.host') as HTMLElement;
+    const action = enhanceCodeBlocks(host);
+
+    await vi.waitFor(() => expect(mermaidRender).toHaveBeenCalledTimes(1));
+    document.documentElement.dataset.theme = 'dark';
+    resolveFirst?.({ svg: '<svg data-mermaid-theme="light"><g></g></svg>' });
+
+    await vi.waitFor(() => expect(mermaidRender).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(document.querySelector('.mermaid-diagram svg')?.getAttribute('data-mermaid-theme')).toBe('dark')
+    );
+    expect(document.querySelector('.code-block-shell')?.getAttribute('data-mermaid-theme')).toBe('dark');
+    expect(document.querySelector('.code-block-shell')?.getAttribute('data-mermaid-state')).toBe('rendered');
+    action.destroy?.();
+  });
+
+  it('re-renders mermaid diagrams when the color scheme changes', async () => {
+    document.body.innerHTML =
+      '<div class="host"><div class="code-block-shell"><pre><code class="language-mermaid">flowchart TD\n  A-->B</code></pre></div></div>';
+    const host = document.querySelector('.host') as HTMLElement;
+    const action = enhanceCodeBlocks(host);
+
+    await vi.waitFor(() => expect(mermaidRender).toHaveBeenCalledTimes(1));
+    mermaidRender.mockResolvedValue({
+      svg: '<svg data-mermaid-theme="dark"><g></g></svg>'
+    });
+    document.documentElement.dataset.theme = 'dark';
+
+    await vi.waitFor(() => expect(mermaidRender).toHaveBeenCalledTimes(2));
+    expect(mermaidInitialize).toHaveBeenCalledWith(expect.objectContaining({ theme: 'dark' }));
+    expect(document.querySelector('.mermaid-diagram svg')?.getAttribute('data-mermaid-theme')).toBe('dark');
     action.destroy?.();
   });
 

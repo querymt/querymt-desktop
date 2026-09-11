@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import DOMPurify from 'isomorphic-dompurify';
 
 const lightTheme = 'github-light';
 const darkTheme = 'github-dark';
@@ -137,6 +138,172 @@ function languageFromCodeElement(code: HTMLElement) {
   return '';
 }
 
+function isMermaidLanguage(language: string) {
+  return language.trim().toLowerCase() === 'mermaid';
+}
+
+type MermaidApi = {
+  initialize: (config: {
+    startOnLoad: boolean;
+    securityLevel: 'strict';
+    htmlLabels: boolean;
+    theme: 'dark' | 'default';
+    suppressErrorRendering: boolean;
+    logLevel: 'error';
+  }) => void;
+  render: (id: string, text: string) => Promise<{ svg: string }>;
+};
+
+const MERMAID_PURIFY_CONFIG = {
+  USE_PROFILES: { svg: true, svgFilters: true },
+  FORBID_TAGS: ['script', 'foreignObject', 'iframe', 'object', 'embed', 'a'],
+  FORBID_ATTR: ['onerror', 'onload', 'onclick']
+};
+
+let mermaidPromise: Promise<MermaidApi> | null = null;
+let mermaidRenderId = 0;
+let mermaidTheme: 'dark' | 'light' | null = null;
+const mermaidRoots = new Set<HTMLElement>();
+let mermaidThemeObserver: MutationObserver | null = null;
+
+function resolvedColorScheme(): 'dark' | 'light' {
+  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+}
+
+function mermaidConfig(theme: 'dark' | 'light') {
+  return {
+    startOnLoad: false,
+    securityLevel: 'strict' as const,
+    htmlLabels: false,
+    theme: theme === 'dark' ? ('dark' as const) : ('default' as const),
+    suppressErrorRendering: true,
+    logLevel: 'error' as const
+  };
+}
+
+async function getMermaid() {
+  mermaidPromise ??= import('mermaid').then(({ default: mermaid }) => mermaid as MermaidApi);
+  const mermaid = await mermaidPromise;
+  const theme = resolvedColorScheme();
+  if (mermaidTheme !== theme) {
+    mermaid.initialize(mermaidConfig(theme));
+    mermaidTheme = theme;
+  }
+  return { mermaid, theme };
+}
+
+function sanitizeMermaidSvg(svg: string) {
+  return DOMPurify.sanitize(svg, MERMAID_PURIFY_CONFIG);
+}
+
+async function svgForMermaid(source: string) {
+  const { mermaid, theme } = await getMermaid();
+  mermaidRenderId += 1;
+  const { svg } = await mermaid.render(`mermaidDiagram${mermaidRenderId}`, source);
+  return { svg: sanitizeMermaidSvg(svg), theme };
+}
+
+function mermaidSourceFromShell(shell: HTMLElement) {
+  return shell.querySelector('code')?.textContent?.trim() ?? '';
+}
+
+async function paintMermaidDiagram(shell: HTMLElement, source: string, observer?: MutationObserver, root?: HTMLElement) {
+  let svg = '';
+  let renderTheme: 'dark' | 'light';
+  do {
+    const rendered = await svgForMermaid(source);
+    svg = rendered.svg;
+    renderTheme = rendered.theme;
+    if (!svg) throw new Error('Mermaid produced empty SVG');
+  } while (resolvedColorScheme() !== renderTheme);
+
+  observer?.disconnect();
+  const pre = shell.querySelector('pre');
+  let figure = shell.querySelector<HTMLElement>('.mermaid-diagram');
+  if (!figure) {
+    figure = document.createElement('div');
+    figure.className = 'mermaid-diagram';
+    figure.setAttribute('role', 'img');
+    figure.setAttribute('aria-label', 'Mermaid diagram');
+    if (pre) pre.after(figure);
+    else shell.append(figure);
+  }
+  figure.innerHTML = svg;
+  if (pre) pre.hidden = true;
+  if (observer && root) observer.observe(root, { childList: true, subtree: true });
+
+  if (resolvedColorScheme() !== renderTheme) {
+    await paintMermaidDiagram(shell, source, observer, root);
+    return;
+  }
+
+  shell.dataset.mermaidState = 'rendered';
+  shell.dataset.mermaidTheme = renderTheme;
+}
+
+async function renderMermaidBlock(code: HTMLElement, observer?: MutationObserver, root?: HTMLElement) {
+  const shell = code.closest('.code-block-shell');
+  if (!(shell instanceof HTMLElement)) return;
+  if (
+    shell.dataset.mermaidState === 'loading' ||
+    shell.dataset.mermaidState === 'rendered' ||
+    shell.dataset.mermaidState === 'error'
+  ) {
+    return;
+  }
+
+  const source = (code.textContent ?? '').trim();
+  if (!source) {
+    shell.dataset.mermaidState = 'empty';
+    return;
+  }
+
+  shell.dataset.mermaidState = 'loading';
+  if (root) watchMermaidTheme(root);
+  try {
+    await paintMermaidDiagram(shell, source, observer, root);
+  } catch (error) {
+    console.warn('Failed to render mermaid diagram', error);
+    shell.dataset.mermaidState = 'error';
+  }
+}
+
+async function refreshMermaidDiagrams(root: HTMLElement) {
+  const theme = resolvedColorScheme();
+  for (const shell of root.querySelectorAll<HTMLElement>('.code-block-shell[data-mermaid-state="rendered"]')) {
+    if (shell.dataset.mermaidTheme === theme) continue;
+    const source = mermaidSourceFromShell(shell);
+    if (!source) continue;
+    try {
+      await paintMermaidDiagram(shell, source);
+    } catch (error) {
+      console.warn('Failed to refresh mermaid diagram', error);
+    }
+  }
+}
+
+function watchMermaidTheme(root: HTMLElement) {
+  mermaidRoots.add(root);
+  if (mermaidThemeObserver || !browser) return;
+
+  mermaidThemeObserver = new MutationObserver(() => {
+    for (const host of mermaidRoots) {
+      void refreshMermaidDiagrams(host);
+    }
+  });
+  mermaidThemeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme']
+  });
+}
+
+function unwatchMermaidTheme(root: HTMLElement) {
+  mermaidRoots.delete(root);
+  if (mermaidRoots.size > 0 || !mermaidThemeObserver) return;
+  mermaidThemeObserver.disconnect();
+  mermaidThemeObserver = null;
+}
+
 async function highlightCodeBlock(code: HTMLElement, observer?: MutationObserver, root?: HTMLElement) {
   if (code.dataset.shikiState === 'highlighted' || code.dataset.shikiState === 'loading') return;
 
@@ -191,6 +358,10 @@ function highlightCodeBlocks(node: HTMLElement, observer?: MutationObserver) {
   if (!browser) return;
 
   for (const code of node.querySelectorAll<HTMLElement>('.code-block-shell pre code')) {
+    if (isMermaidLanguage(languageFromCodeElement(code))) {
+      void renderMermaidBlock(code, observer, node);
+      continue;
+    }
     void highlightCodeBlock(code, observer, node);
   }
 }
@@ -299,6 +470,7 @@ export function enhanceCodeBlocks(node: HTMLElement) {
     destroy() {
       observer.disconnect();
       node.removeEventListener('click', handleClick);
+      unwatchMermaidTheme(node);
     }
   };
 }

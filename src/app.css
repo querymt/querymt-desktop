@@ -5164,6 +5164,21 @@ summary:focus-visible {
   min-height: 1.45em;
 }
 
+.markdown-body .code-block-shell pre[hidden] {
+  display: none;
+}
+
+.markdown-body .code-block-shell .mermaid-diagram {
+  overflow-x: auto;
+  padding: 0.85rem;
+}
+
+.markdown-body .code-block-shell .mermaid-diagram svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
 :root:not([data-theme='dark']) .shiki,
 :root:not([data-theme='dark']) .shiki span {
   color: var(--shiki-light) !important;
