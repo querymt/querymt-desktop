@@ -104,11 +104,31 @@ describe('enhanceCodeBlocks', () => {
         startOnLoad: false,
         securityLevel: 'strict',
         htmlLabels: false,
-        theme: 'default'
+        theme: 'default',
+        secure: expect.arrayContaining([
+          'secure',
+          'securityLevel',
+          'startOnLoad',
+          'maxTextSize',
+          'suppressErrorRendering',
+          'maxEdges',
+          'theme',
+          'themeCSS',
+          'themeVariables',
+          'fontFamily',
+          'altFontFamily'
+        ])
       })
     );
-    expect(document.querySelector('.mermaid-diagram svg')).not.toBeNull();
-    expect(document.querySelector<HTMLElement>('.code-block-shell pre')?.hidden).toBe(true);
+    const diagram = document.querySelector('.mermaid-diagram');
+    const source = document.querySelector<HTMLElement>('.code-block-shell pre');
+    expect(diagram?.querySelector('svg')).not.toBeNull();
+    expect(source?.hidden).toBe(false);
+    expect(source?.classList.contains('mermaid-source')).toBe(true);
+    expect(source?.id).toBeTruthy();
+    expect(diagram?.getAttribute('role')).toBe('img');
+    expect(diagram?.getAttribute('aria-label')).toBe('Mermaid diagram');
+    expect(diagram?.getAttribute('aria-describedby')).toBe(source?.id);
 
     const button = document.querySelector<HTMLButtonElement>('[data-code-copy]');
     button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -131,9 +151,49 @@ describe('enhanceCodeBlocks', () => {
     );
     expect(document.querySelector('.mermaid-diagram')).toBeNull();
     expect(document.querySelector<HTMLElement>('.code-block-shell pre')?.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>('.code-block-shell pre')?.classList.contains('mermaid-source')).toBe(
+      false
+    );
     expect(document.querySelector('.code-block-shell pre')?.textContent).toContain('not a diagram');
     warn.mockRestore();
     action.destroy?.();
+  });
+
+  it('does not reconnect the mutation observer after destroy during mermaid render', async () => {
+    const disconnect = vi.fn();
+    const observe = vi.fn();
+    class FakeObserver {
+      constructor(private readonly callback: MutationCallback) {}
+      observe = observe;
+      disconnect = disconnect;
+      takeRecords() {
+        return [];
+      }
+    }
+    vi.stubGlobal('MutationObserver', FakeObserver);
+
+    let resolveRender: ((value: { svg: string }) => void) | undefined;
+    const pendingRender = new Promise<{ svg: string }>((resolve) => {
+      resolveRender = resolve;
+    });
+    mermaidRender.mockImplementationOnce(async () => pendingRender);
+
+    document.body.innerHTML =
+      '<div class="host"><div class="code-block-shell"><pre><code class="language-mermaid">flowchart TD\n  A-->B</code></pre></div></div>';
+    const host = document.querySelector('.host') as HTMLElement;
+    const action = enhanceCodeBlocks(host);
+
+    await vi.waitFor(() => expect(mermaidRender).toHaveBeenCalledTimes(1));
+    const observeCallsAtDestroy = observe.mock.calls.length;
+    action.destroy?.();
+    resolveRender?.({ svg: '<svg data-mermaid-source="flowchart TD\n  A-->B"><g></g></svg>' });
+
+    await mermaidRender.mock.results[0]?.value;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(observe.mock.calls.length).toBe(observeCallsAtDestroy);
+    expect(host.querySelector('.mermaid-diagram')).toBeNull();
+    expect(host.querySelector('.mermaid-source')).toBeNull();
   });
 
   it('discards a stale mermaid SVG when the color scheme flips mid-render', async () => {
