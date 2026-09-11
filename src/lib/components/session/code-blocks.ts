@@ -240,6 +240,34 @@ function hideMermaidSource(pre: HTMLElement, figure: HTMLElement) {
   figure.setAttribute('aria-describedby', pre.id);
 }
 
+function ensureMermaidSourceToggle(shell: HTMLElement) {
+  const header = shell.querySelector('.code-block-header');
+  if (!(header instanceof HTMLElement)) return;
+  if (header.querySelector('[data-mermaid-source-toggle]')) return;
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'code-block-copy';
+  button.setAttribute('data-mermaid-source-toggle', '');
+  button.setAttribute('aria-pressed', 'false');
+  button.setAttribute('aria-label', 'Show source');
+  button.textContent = 'Source';
+
+  const copy = header.querySelector('[data-code-copy]');
+  if (copy) copy.before(button);
+  else header.append(button);
+
+  if (!shell.dataset.mermaidView) shell.dataset.mermaidView = 'diagram';
+}
+
+function toggleMermaidSourceView(shell: HTMLElement, button: HTMLButtonElement) {
+  const showingSource = shell.dataset.mermaidView === 'source';
+  const next = showingSource ? 'diagram' : 'source';
+  shell.dataset.mermaidView = next;
+  button.setAttribute('aria-pressed', next === 'source' ? 'true' : 'false');
+  button.setAttribute('aria-label', next === 'source' ? 'Show diagram' : 'Show source');
+}
+
 async function paintMermaidDiagram(
   shell: HTMLElement,
   source: string,
@@ -285,6 +313,7 @@ async function paintMermaidDiagram(
 
   shell.dataset.mermaidState = 'rendered';
   shell.dataset.mermaidTheme = renderTheme;
+  ensureMermaidSourceToggle(shell);
 }
 
 async function renderMermaidBlock(
@@ -497,6 +526,13 @@ export function enhanceCodeBlocks(node: HTMLElement) {
       window.setTimeout(() => {
         if (label) label.textContent = 'Copy';
       }, 1200);
+      return;
+    }
+
+    const toggle = target?.closest<HTMLButtonElement>('[data-mermaid-source-toggle]');
+    if (toggle) {
+      const shell = toggle.closest('.code-block-shell');
+      if (shell instanceof HTMLElement) toggleMermaidSourceView(shell, toggle);
       return;
     }
 

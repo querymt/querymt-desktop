@@ -122,6 +122,9 @@ describe('enhanceCodeBlocks', () => {
     );
     const diagram = document.querySelector('.mermaid-diagram');
     const source = document.querySelector<HTMLElement>('.code-block-shell pre');
+    const header = document.querySelector('.code-block-header');
+    const toggle = header?.querySelector<HTMLButtonElement>('[data-mermaid-source-toggle]');
+    const copy = header?.querySelector<HTMLButtonElement>('[data-code-copy]');
     expect(diagram?.querySelector('svg')).not.toBeNull();
     expect(source?.hidden).toBe(false);
     expect(source?.classList.contains('mermaid-source')).toBe(true);
@@ -129,11 +132,52 @@ describe('enhanceCodeBlocks', () => {
     expect(diagram?.getAttribute('role')).toBe('img');
     expect(diagram?.getAttribute('aria-label')).toBe('Mermaid diagram');
     expect(diagram?.getAttribute('aria-describedby')).toBe(source?.id);
+    expect(toggle).not.toBeNull();
+    expect(toggle?.nextElementSibling).toBe(copy);
+    expect(toggle?.getAttribute('aria-pressed')).toBe('false');
+    expect(toggle?.getAttribute('aria-label')).toBe('Show source');
+    expect(toggle?.textContent).toBe('Source');
 
-    const button = document.querySelector<HTMLButtonElement>('[data-code-copy]');
-    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    copy?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText).toHaveBeenCalledWith('flowchart TD\n  A-->B');
+    action.destroy?.();
+  });
+
+  it('toggles mermaid source in the code block bar without copying', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    document.body.innerHTML =
+      '<div class="host"><div class="code-block-shell"><div class="code-block-header"><span class="code-block-language">mermaid</span><button class="code-block-copy" type="button" data-code-copy aria-label="Copy code">Copy</button></div><pre><code class="language-mermaid">flowchart TD\n  A--&gt;B</code></pre></div></div>';
+    const host = document.querySelector('.host') as HTMLElement;
+    const action = enhanceCodeBlocks(host);
+
+    await vi.waitFor(() => expect(document.querySelector('[data-mermaid-source-toggle]')).not.toBeNull());
+    const shell = document.querySelector<HTMLElement>('.code-block-shell');
+    const toggle = document.querySelector<HTMLButtonElement>('[data-mermaid-source-toggle]');
+    const copy = document.querySelector<HTMLButtonElement>('[data-code-copy]');
+
+    toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(shell?.dataset.mermaidView).toBe('source');
+    expect(toggle?.getAttribute('aria-pressed')).toBe('true');
+    expect(toggle?.getAttribute('aria-label')).toBe('Show diagram');
+    expect(toggle?.textContent).toBe('Source');
+    expect(shell?.querySelector('pre.mermaid-source')).not.toBeNull();
+    expect(shell?.querySelector('.mermaid-diagram')).not.toBeNull();
+    expect(writeText).not.toHaveBeenCalled();
+
+    copy?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText).toHaveBeenCalledWith('flowchart TD\n  A-->B');
+
+    toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(shell?.dataset.mermaidView).toBe('diagram');
+    expect(toggle?.getAttribute('aria-pressed')).toBe('false');
+    expect(toggle?.getAttribute('aria-label')).toBe('Show source');
+    expect(shell?.querySelector('pre.mermaid-source')).not.toBeNull();
+    expect(shell?.querySelector('.mermaid-diagram')).not.toBeNull();
+    expect(writeText).toHaveBeenCalledTimes(1);
     action.destroy?.();
   });
 
@@ -150,6 +194,7 @@ describe('enhanceCodeBlocks', () => {
       expect(document.querySelector('.code-block-shell')?.getAttribute('data-mermaid-state')).toBe('error')
     );
     expect(document.querySelector('.mermaid-diagram')).toBeNull();
+    expect(document.querySelector('[data-mermaid-source-toggle]')).toBeNull();
     expect(document.querySelector<HTMLElement>('.code-block-shell pre')?.hidden).toBe(false);
     expect(document.querySelector<HTMLElement>('.code-block-shell pre')?.classList.contains('mermaid-source')).toBe(
       false
@@ -225,11 +270,14 @@ describe('enhanceCodeBlocks', () => {
 
   it('re-renders mermaid diagrams when the color scheme changes', async () => {
     document.body.innerHTML =
-      '<div class="host"><div class="code-block-shell"><pre><code class="language-mermaid">flowchart TD\n  A-->B</code></pre></div></div>';
+      '<div class="host"><div class="code-block-shell"><div class="code-block-header"><span class="code-block-language">mermaid</span><button class="code-block-copy" type="button" data-code-copy aria-label="Copy code">Copy</button></div><pre><code class="language-mermaid">flowchart TD\n  A-->B</code></pre></div></div>';
     const host = document.querySelector('.host') as HTMLElement;
     const action = enhanceCodeBlocks(host);
 
     await vi.waitFor(() => expect(mermaidRender).toHaveBeenCalledTimes(1));
+    const toggle = document.querySelector<HTMLButtonElement>('[data-mermaid-source-toggle]');
+    toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(document.querySelector('.code-block-shell')?.getAttribute('data-mermaid-view')).toBe('source');
     mermaidRender.mockResolvedValue({
       svg: '<svg data-mermaid-theme="dark"><g></g></svg>'
     });
@@ -238,6 +286,9 @@ describe('enhanceCodeBlocks', () => {
     await vi.waitFor(() => expect(mermaidRender).toHaveBeenCalledTimes(2));
     expect(mermaidInitialize).toHaveBeenCalledWith(expect.objectContaining({ theme: 'dark' }));
     expect(document.querySelector('.mermaid-diagram svg')?.getAttribute('data-mermaid-theme')).toBe('dark');
+    expect(document.querySelectorAll('[data-mermaid-source-toggle]')).toHaveLength(1);
+    expect(document.querySelector('.code-block-shell')?.getAttribute('data-mermaid-view')).toBe('source');
+    expect(toggle?.getAttribute('aria-pressed')).toBe('true');
     action.destroy?.();
   });
 

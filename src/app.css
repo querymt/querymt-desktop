@@ -5134,6 +5134,10 @@ summary:focus-visible {
   text-transform: uppercase;
 }
 
+.code-block-header [data-mermaid-source-toggle] {
+  margin-left: auto;
+}
+
 .code-block-copy:hover {
   border-color: var(--border);
   background: var(--bg-card-hover);
@@ -5180,6 +5184,22 @@ summary:focus-visible {
   border: 0;
 }
 
+.markdown-body .code-block-shell[data-mermaid-view='source'] pre.mermaid-source {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: 0.85rem;
+  margin: 0;
+  overflow-x: auto;
+  clip: auto;
+  white-space: pre;
+  border: 0;
+}
+
+.markdown-body .code-block-shell[data-mermaid-view='source'] .mermaid-diagram {
+  display: none;
+}
+
 .markdown-body .code-block-shell .mermaid-diagram {
   overflow-x: auto;
   padding: 0.85rem;
@@ -5189,6 +5209,7 @@ summary:focus-visible {
   display: block;
   max-width: 100%;
   height: auto;
+  margin-inline: auto;
 }
 
 :root:not([data-theme='dark']) .shiki,
