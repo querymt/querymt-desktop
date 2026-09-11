@@ -251,7 +251,8 @@ function ensureMermaidSourceToggle(shell: HTMLElement) {
   button.setAttribute('data-mermaid-source-toggle', '');
   button.setAttribute('aria-pressed', 'false');
   button.setAttribute('aria-label', 'Show source');
-  button.textContent = 'Source';
+  button.title = 'Show source';
+  button.innerHTML = MERMAID_CODE_ICON;
 
   const copy = header.querySelector('[data-code-copy]');
   if (copy) copy.before(button);
@@ -265,7 +266,10 @@ function toggleMermaidSourceView(shell: HTMLElement, button: HTMLButtonElement) 
   const next = showingSource ? 'diagram' : 'source';
   shell.dataset.mermaidView = next;
   button.setAttribute('aria-pressed', next === 'source' ? 'true' : 'false');
-  button.setAttribute('aria-label', next === 'source' ? 'Show diagram' : 'Show source');
+  const label = next === 'source' ? 'Show diagram' : 'Show source';
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  button.innerHTML = next === 'source' ? MERMAID_DIAGRAM_ICON : MERMAID_CODE_ICON;
 }
 
 async function paintMermaidDiagram(
@@ -450,6 +454,12 @@ function highlightCodeBlocks(node: HTMLElement, observer?: MutationObserver, isA
 }
 
 const TABLE_COPY_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+
+const MERMAID_CODE_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>';
+
+const MERMAID_DIAGRAM_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12c.552 0 1.005-.449.95-.998a10 10 0 0 0-8.953-8.951c-.55-.055-.998.398-.998.95v8a1 1 0 0 0 1 1z"/><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/></svg>';
 
 function tableToMarkdown(table: HTMLTableElement): string {
   const headerCells = Array.from(table.querySelectorAll<HTMLTableCellElement>('thead th, thead td'));

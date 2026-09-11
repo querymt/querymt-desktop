@@ -136,7 +136,8 @@ describe('enhanceCodeBlocks', () => {
     expect(toggle?.nextElementSibling).toBe(copy);
     expect(toggle?.getAttribute('aria-pressed')).toBe('false');
     expect(toggle?.getAttribute('aria-label')).toBe('Show source');
-    expect(toggle?.textContent).toBe('Source');
+    expect(toggle?.querySelector('svg')).not.toBeNull();
+    expect(toggle?.innerHTML).toContain('m14.5 4-5 16');
 
     copy?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
@@ -162,7 +163,8 @@ describe('enhanceCodeBlocks', () => {
     expect(shell?.dataset.mermaidView).toBe('source');
     expect(toggle?.getAttribute('aria-pressed')).toBe('true');
     expect(toggle?.getAttribute('aria-label')).toBe('Show diagram');
-    expect(toggle?.textContent).toBe('Source');
+    expect(toggle?.innerHTML).toContain('M21.21 15.89');
+    expect(toggle?.innerHTML).not.toContain('m14.5 4-5 16');
     expect(shell?.querySelector('pre.mermaid-source')).not.toBeNull();
     expect(shell?.querySelector('.mermaid-diagram')).not.toBeNull();
     expect(writeText).not.toHaveBeenCalled();
@@ -175,6 +177,8 @@ describe('enhanceCodeBlocks', () => {
     expect(shell?.dataset.mermaidView).toBe('diagram');
     expect(toggle?.getAttribute('aria-pressed')).toBe('false');
     expect(toggle?.getAttribute('aria-label')).toBe('Show source');
+    expect(toggle?.innerHTML).toContain('m14.5 4-5 16');
+    expect(toggle?.innerHTML).not.toContain('M21.21 15.89');
     expect(shell?.querySelector('pre.mermaid-source')).not.toBeNull();
     expect(shell?.querySelector('.mermaid-diagram')).not.toBeNull();
     expect(writeText).toHaveBeenCalledTimes(1);

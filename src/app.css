@@ -5136,6 +5136,13 @@ summary:focus-visible {
 
 .code-block-header [data-mermaid-source-toggle] {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.18rem 0.3rem;
+}
+.code-block-header [data-mermaid-source-toggle] svg {
+  display: block;
 }
 
 .code-block-copy:hover {
