@@ -1031,6 +1031,23 @@ describe('AgentsStore delegate model assignments', () => {
     expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
   });
 
+  it('keeps routing available after the initial assignment read fails', async () => {
+    const store = createStore();
+    selectSession(store);
+    mockClient.getDelegateModels.mockRejectedValueOnce(new Error('Failed to load delegate models.'));
+    await store.connectAgent('agent-1');
+
+    expect(store.activeDelegateAssignments).toBeNull();
+    expect(store.activeDelegateAssignmentsError).toBe('Failed to load delegate models.');
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
+
+    mockClient.getDelegateModels.mockResolvedValueOnce(assignmentState);
+    await store.refreshDelegateAssignments('agent-1', 'session-1');
+
+    expect(store.activeDelegateAssignmentsError).toBeNull();
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
+  });
+
   it('loads authoritative assignments with session history and writes with the current revision', async () => {
     const store = createStore();
     store.sessionsByAgent = {

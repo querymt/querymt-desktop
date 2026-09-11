@@ -412,8 +412,11 @@ export class AgentsStore {
     return Boolean(
       client?.supportsQuerymtMethod(QMT_METHOD_SESSION_DELEGATE_MODELS) &&
         client.supportsQuerymtMethod(QMT_METHOD_SESSION_SET_DELEGATE_MODEL) &&
-        assignments &&
-        (assignments.assignments.length > 0 || assignments.orphaned_overrides.length > 0)
+        (
+          this.activeDelegateAssignmentsError !== null ||
+          (assignments &&
+            (assignments.assignments.length > 0 || assignments.orphaned_overrides.length > 0))
+        )
     );
   }
 
