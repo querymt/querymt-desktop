@@ -327,6 +327,56 @@ describe('AgentsStore connections', () => {
     expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
   });
 
+  it('loads a known child session without switching the catalog off root', async () => {
+    const store = createStore();
+    store.composerCwd = '/tmp/work';
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1',
+        agentName: 'QMTCODE',
+        sessionId: 'session-root',
+        title: 'Root',
+        cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z',
+        runtimeId: 'agent-1',
+        runtimeName: 'QMTCODE',
+        source: 'acp',
+        status: 'idle'
+      }]
+    };
+    mockClient.listSessions.mockResolvedValueOnce({
+      sessions: [{ sessionId: 'session-root', title: 'Root', cwd: '/tmp/work', updatedAt: '2026-07-18T17:00:00Z' }]
+    });
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [] },
+      replay: [{
+        sessionId: 'session-child',
+        update: {
+          sessionUpdate: 'session_info_update',
+          title: 'Task: Final PASS review',
+          updatedAt: '2026-07-18T18:00:00Z'
+        }
+      }]
+    });
+
+    await store.connectAgent('agent-1');
+    await store.loadSession('agent-1', 'session-child');
+
+    expect(mockClient.listSessions).toHaveBeenCalledWith(listSessionsRequest());
+    expect(mockClient.loadSession).toHaveBeenCalledWith('session-child', '/tmp/work');
+    expect(store.error).toBeNull();
+    expect(store.activeSessionId).toBe('session-child');
+    expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sessionId: 'session-child',
+        title: 'Task: Final PASS review',
+        updatedAt: '2026-07-18T18:00:00Z'
+      })
+    ]));
+    expect(store.workspaceSessionGroups.flatMap((group) => group.sessions.map((session) => session.sessionId)))
+      .not.toContain('session-child');
+  });
+
   it('hydrates and activates an attached remote session without reloading it immediately', async () => {
     const store = createStore();
     store.remoteSessionsByAgent = {

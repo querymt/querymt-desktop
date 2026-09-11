@@ -1021,6 +1021,68 @@ export class AgentsStore {
     return buildListSessionsRequest(input);
   }
 
+  private ensureSessionLoadTarget(agentId: string, sessionId: string): DesktopSessionSummary | null {
+    const existing = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    if (existing) return existing;
+
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) return null;
+
+    const knownSessions = this.sessionsByAgent[agentId] ?? [];
+    const cwd =
+      this.composerCwd.trim() ||
+      (this.activeAgentId === agentId
+        ? getSessionById(knownSessions, this.activeSessionId ?? '')?.cwd ?? ''
+        : '') ||
+      knownSessions[0]?.cwd ||
+      '';
+    const fallback: DesktopSessionSummary = {
+      agentId,
+      agentName: config.name,
+      sessionId,
+      title: 'Session',
+      cwd,
+      updatedAt: null,
+      runtimeId: agentId,
+      runtimeName: config.name,
+      source: 'acp',
+      location: 'local',
+      status: 'idle'
+    };
+    this.sessionsByAgent = {
+      ...this.sessionsByAgent,
+      [agentId]: mergeSessions(knownSessions, [fallback])
+    };
+    return fallback;
+  }
+
+  private hydrateLoadedSessionSummary(agentId: string, sessionId: string, replay: SessionNotification[]) {
+    const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    if (!current) return;
+
+    let title = current.title;
+    let updatedAt = current.updatedAt;
+    for (const notification of replay) {
+      if (notification.sessionId !== sessionId) continue;
+      const update = notification.update;
+      if (update.sessionUpdate !== 'session_info_update') continue;
+      if (typeof update.title === 'string' && update.title.trim()) title = update.title.trim();
+      if (update.updatedAt !== undefined) updatedAt = update.updatedAt;
+    }
+
+    const inferred = inferSessionSummaryFromActiveSession(this.activeSession);
+    if (!title || title === 'Session') title = inferred.title ?? title;
+    if (!updatedAt) updatedAt = inferred.updatedAt;
+    if (title === current.title && updatedAt === current.updatedAt) return;
+
+    this.sessionsByAgent = {
+      ...this.sessionsByAgent,
+      [agentId]: (this.sessionsByAgent[agentId] ?? []).map((session) =>
+        session.sessionId === sessionId ? { ...session, title, updatedAt } : session
+      )
+    };
+  }
+
   async loadMoreWorkspaceSessions(cwd: string) {
     const currentLimit = this.workspaceVisibleLimits[cwd] ?? WORKSPACE_SESSION_PAGE_SIZE;
     const nextLimit = currentLimit + WORKSPACE_SESSION_PAGE_SIZE;
@@ -1511,7 +1573,7 @@ export class AgentsStore {
       await this.refreshSessionsForAgent(agentId);
     }
 
-    const target = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    const target = this.ensureSessionLoadTarget(agentId, sessionId);
     if (!target) {
       this.error = `Unable to locate session ${sessionId}.`;
       return;
@@ -1636,6 +1698,7 @@ export class AgentsStore {
       if (!hasReplayHistory && !hasSnapshotHistory && drainedCount === 0) {
         this.activeSession.activityLabel = 'Session loaded, but the agent returned no replayable history.';
       }
+      this.hydrateLoadedSessionSummary(agentId, sessionId, replay);
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
       checkpoint('frontend.model_hydrate');
       void this.refreshDelegateAssignments(agentId, sessionId);
@@ -3468,6 +3531,19 @@ function delegateAssignmentErrorMessage(error: unknown, fallback: string): strin
 
 function buildWorkspaceSourceKey(agentId: string, cwd: string): string {
   return `${agentId}\u0000${cwd}`;
+}
+
+function inferSessionSummaryFromActiveSession(session: ActiveSessionViewModel): { title: string | null; updatedAt: string | null } {
+  const firstUser = session.transcript.find((item) => item.kind === 'user_message_chunk' && item.text.trim());
+  const title = firstUser?.text.trim().split(/\n/)[0]?.slice(0, 80) || null;
+  const timestamps = session.transcript
+    .map((item) => item.timestampMs)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const latestMs = timestamps.length > 0 ? Math.max(...timestamps) : null;
+  return {
+    title,
+    updatedAt: latestMs !== null ? new Date(latestMs).toISOString() : null
+  };
 }
 
 function compareSessionsByActivity(a: DesktopSessionSummary, b: DesktopSessionSummary): number {
