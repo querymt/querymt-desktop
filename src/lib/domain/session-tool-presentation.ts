@@ -31,7 +31,7 @@ export type SessionToolPresentation = {
 };
 
 const READ_TOOLS = new Set(['read_tool', 'get_function', 'get_symbol', 'index', 'ls', 'read_shared']);
-const EDIT_TOOLS = new Set(['edit', 'multiedit', 'replace_symbol', 'write_file', 'apply_patch']);
+const EDIT_TOOLS = new Set(['edit', 'multiedit', 'replace_symbol', 'write_file']);
 const SEARCH_TOOLS = new Set(['search_text', 'glob', 'find_references', 'find_symbol_references', 'mdq', 'language_query']);
 const WEB_TOOLS = new Set(['browse', 'web_fetch']);
 const TASK_TOOLS = new Set(['create_task', 'todowrite', 'todoread']);
@@ -119,7 +119,6 @@ function toolLabel(name: string): string {
   if (name === 'multiedit') return 'Edit file';
   if (name === 'replace_symbol') return 'Replace symbol';
   if (name === 'write_file') return 'Write file';
-  if (name === 'apply_patch') return 'Apply patch';
   if (name === 'delete_file') return 'Delete file';
   if (name === 'search_text') return 'Search text';
   if (name === 'glob') return 'Find files';
@@ -164,7 +163,16 @@ function toolChangeStats(
   rawResult: string | null | undefined
 ): SessionToolChangeStats | null {
   if (status !== 'completed' || !EDIT_TOOLS.has(name)) return null;
-  return statsFromEditArgs(args) ?? statsFromDiffText(rawResult);
+  return statsFromEditReceipt(rawResult) ?? statsFromEditArgs(args);
+}
+
+function statsFromEditReceipt(rawResult: string | null | undefined): SessionToolChangeStats | null {
+  const firstLine = rawResult?.trim().split('\n')[0];
+  if (!firstLine?.startsWith('OK ')) return null;
+  const added = firstLine.match(/\badded=(\d+)\b/);
+  const deleted = firstLine.match(/\bdeleted=(\d+)\b/);
+  if (!added && !deleted) return null;
+  return compactChangeStats(Number(added?.[1] ?? 0), Number(deleted?.[1] ?? 0));
 }
 
 function statsFromEditArgs(args: Record<string, unknown> | null): SessionToolChangeStats | null {
@@ -177,9 +185,7 @@ function statsFromEditArgs(args: Record<string, unknown> | null): SessionToolCha
   if (replacement) return replacement;
 
   const content = stringValue(args.content) || stringValue(args.contents);
-  if (content) return compactChangeStats(countLines(content), 0);
-
-  return statsFromDiffText(stringValue(args.patch) || stringValue(args.diff) || null);
+  return content ? compactChangeStats(countLines(content), 0) : null;
 }
 
 function sumChangeStats(items: Record<string, unknown>[] | null): SessionToolChangeStats | null {
@@ -217,26 +223,6 @@ function lineChangeStats(oldText: string, newText: string): SessionToolChangeSta
     newEnd -= 1;
   }
   return compactChangeStats(newEnd - start, oldEnd - start);
-}
-
-function statsFromDiffText(value: string | null | undefined): SessionToolChangeStats | null {
-  const trimmed = value?.trim();
-  if (!trimmed || !looksLikeUnifiedDiff(trimmed)) return null;
-
-  let added = 0;
-  let removed = 0;
-  for (const line of trimmed.split('\n')) {
-    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@') || line.startsWith('diff ') || line.startsWith('index ')) {
-      continue;
-    }
-    if (line.startsWith('+')) added += 1;
-    else if (line.startsWith('-')) removed += 1;
-  }
-  return compactChangeStats(added, removed);
-}
-
-function looksLikeUnifiedDiff(value: string): boolean {
-  return /^(diff |--- |\+\+\+ |@@ )/m.test(value);
 }
 
 function compactChangeStats(added: number, removed: number): SessionToolChangeStats | null {

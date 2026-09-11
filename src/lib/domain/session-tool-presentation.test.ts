@@ -69,7 +69,20 @@ describe('getSessionToolPresentation', () => {
     ).toMatchObject({ statusLabel: 'Failed', resultText: 'oldString not found', expandable: true });
   });
 
-  it('summarizes completed edit, write, and patch line counts', () => {
+  it('summarizes completed edit and write line counts', () => {
+    expect(
+      getSessionToolPresentation(
+        tool({
+          title: 'Run edit',
+          kind: 'edit',
+          arguments: '{"path":"src/app.ts","oldString":"one\\ntwo\\nthree","newString":"one\\nfour"}',
+          result: 'OK paths=1 edits=1 added=1 deleted=2\nP src/app.ts\nH replace old=1,3 new=1,2 +1 -2'
+        })
+      )
+    ).toMatchObject({
+      preview: 'src/app.ts',
+      changeStats: { added: 1, removed: 2 }
+    });
     expect(
       getSessionToolPresentation(
         tool({
@@ -77,11 +90,8 @@ describe('getSessionToolPresentation', () => {
           kind: 'edit',
           arguments: '{"path":"src/app.ts","oldString":"one\\ntwo\\nthree","newString":"one\\nfour"}'
         })
-      )
-    ).toMatchObject({
-      preview: 'src/app.ts',
-      changeStats: { added: 1, removed: 2 }
-    });
+      ).changeStats
+    ).toEqual({ added: 1, removed: 2 });
     expect(
       getSessionToolPresentation(
         tool({
@@ -100,16 +110,6 @@ describe('getSessionToolPresentation', () => {
         })
       ).changeStats
     ).toEqual({ added: 2, removed: 0 });
-    expect(
-      getSessionToolPresentation(
-        tool({
-          title: 'Run apply_patch',
-          kind: 'apply_patch',
-          arguments: '{"path":"src/app.ts"}',
-          result: '--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n context\n'
-        })
-      ).changeStats
-    ).toEqual({ added: 1, removed: 1 });
   });
 
   it('hides edit change stats until the tool completes', () => {
