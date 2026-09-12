@@ -353,6 +353,66 @@ describe('buildSessionToolDiffs', () => {
     expect(buildSessionToolDiffs('write_file', 'completed', args, 'write failed')).toEqual([]);
   });
 
+  it('rejects write_file JSON receipts that do not match the requested path', () => {
+    const content = '{"path":"src/a.ts","content":"export const value = 1;\\n"}';
+    const [matched] = buildSessionToolDiffs('write_file', 'completed', content, '{"path":"src/a.ts","bytes":24}');
+    expect(matched?.path).toBe('src/a.ts');
+    expect(matched?.patch).toContain('+export const value = 1;');
+
+    const [slashEquivalent] = buildSessionToolDiffs(
+      'write_file',
+      'completed',
+      content,
+      '{"path":"/src/a.ts","bytes":24}'
+    );
+    expect(slashEquivalent?.path).toBe('src/a.ts');
+    expect(slashEquivalent?.patch).toContain('+export const value = 1;');
+
+    const [filePathAlias] = buildSessionToolDiffs(
+      'write_file',
+      'completed',
+      '{"filePath":"src/a.ts","content":"export const value = 1;\\n"}',
+      '{"path":"src/a.ts","bytes":24}'
+    );
+    expect(filePathAlias?.path).toBe('src/a.ts');
+
+    const [file_pathAlias] = buildSessionToolDiffs(
+      'write_file',
+      'completed',
+      '{"file_path":"src/a.ts","content":"export const value = 1;\\n"}',
+      '{"path":"/src/a.ts","bytes":24}'
+    );
+    expect(file_pathAlias?.path).toBe('src/a.ts');
+
+    const [fileAlias] = buildSessionToolDiffs(
+      'write_file',
+      'completed',
+      '{"file":"src/a.ts","content":"export const value = 1;\\n"}',
+      '{"path":"src/a.ts","bytes":24}'
+    );
+    expect(fileAlias?.path).toBe('src/a.ts');
+
+    expect(buildSessionToolDiffs('write_file', 'completed', content, '{"path":"src/b.ts","bytes":24}')).toEqual([]);
+    expect(
+      buildSessionToolDiffs(
+        'write_file',
+        'completed',
+        '{"content":"export const value = 1;\\n"}',
+        '{"path":"src/a.ts","bytes":24}'
+      )
+    ).toEqual([]);
+    expect(
+      buildSessionToolDiffs(
+        'write_file',
+        'completed',
+        '{"path":"","content":"export const value = 1;\\n"}',
+        '{"path":"src/a.ts","bytes":24}'
+      )
+    ).toEqual([]);
+    expect(buildSessionToolDiffs('write_file', 'completed', content, '{"path":"src/a.ts"}')).toEqual([]);
+    expect(buildSessionToolDiffs('write_file', 'completed', content, 'write failed')).toEqual([]);
+  });
+
   it('groups replace_symbol replacements by path', () => {
     const files = buildSessionToolDiffs(
       'replace_symbol',
@@ -400,6 +460,22 @@ describe('buildSessionToolDiffs', () => {
         'symbol not found'
       )
     ).toEqual([]);
+  });
+
+  it('rejects zero-count and same-line trailing replace_symbol results', () => {
+    const args = JSON.stringify({ path: 'src/a.ts', oldText: 'alpha', newText: 'beta' });
+
+    expect(buildSessionToolDiffs('replace_symbol', 'completed', args, 'Updated 1 symbol(s).')).toHaveLength(1);
+    expect(
+      buildSessionToolDiffs('replace_symbol', 'completed', args, 'Updated 1 symbol(s).\n- replaced Foo in src/a.ts')
+    ).toHaveLength(1);
+    expect(
+      buildSessionToolDiffs('replace_symbol', 'completed', args, 'Updated 1 symbol(s).\r\n- replaced Foo in src/a.ts')
+    ).toHaveLength(1);
+    expect(buildSessionToolDiffs('replace_symbol', 'completed', args, 'OK replaced 1 symbol')).toHaveLength(1);
+
+    expect(buildSessionToolDiffs('replace_symbol', 'completed', args, 'Updated 0 symbol(s).')).toEqual([]);
+    expect(buildSessionToolDiffs('replace_symbol', 'completed', args, 'Updated 1 symbol(s). failure')).toEqual([]);
   });
 
   it('skips patches for failed or non-OK results and unknown tools', () => {

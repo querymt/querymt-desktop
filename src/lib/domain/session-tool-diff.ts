@@ -43,7 +43,7 @@ export function buildSessionToolDiffs(
 ): SessionToolDiffFile[] {
   if (status !== 'completed' || !isEditToolName(name)) return [];
   const args = parseObject(rawArguments);
-  if (!args || !isSuccessfulToolResult(name, rawResult)) return [];
+  if (!args || !isSuccessfulToolResult(name, args, rawResult)) return [];
 
   if (name === 'write_file') {
     const file = buildWriteFilePatch(args);
@@ -53,26 +53,34 @@ export function buildSessionToolDiffs(
   return buildReplacementPatches(args, parseEditReceipt(rawResult));
 }
 
-function isSuccessfulToolResult(name: string, rawResult?: string | null): boolean {
+function isSuccessfulToolResult(
+  name: string,
+  args: Record<string, unknown>,
+  rawResult?: string | null
+): boolean {
   const result = rawResult?.trim();
   if (!result) return true;
   if (name === 'edit' || name === 'multiedit') return result.startsWith('OK ');
-  if (name === 'replace_symbol') return result.startsWith('OK ') || /^Updated \d+ symbol\(s\)\./.test(result);
-  if (name === 'write_file') return result.startsWith('OK ') || isWriteFileJsonResult(result);
+  if (name === 'replace_symbol')
+    return result.startsWith('OK ') || /^Updated [1-9]\d* symbol\(s\)\.(?:\r?\n|$)/.test(result);
+  if (name === 'write_file') return result.startsWith('OK ') || isWriteFileJsonResult(args, result);
   return false;
 }
 
-function isWriteFileJsonResult(result: string): boolean {
+function isWriteFileJsonResult(args: Record<string, unknown>, result: string): boolean {
   try {
     const parsed: unknown = JSON.parse(result);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
     const record = parsed as Record<string, unknown>;
+    const requestedPath = toolFilePath(args);
+    if (!requestedPath) return false;
     return (
       typeof record.path === 'string' &&
       record.path.trim() !== '' &&
       typeof record.bytes === 'number' &&
       Number.isFinite(record.bytes) &&
-      record.bytes >= 0
+      record.bytes >= 0 &&
+      normalizePatchPath(record.path.trim()) === normalizePatchPath(requestedPath)
     );
   } catch {
     return false;
