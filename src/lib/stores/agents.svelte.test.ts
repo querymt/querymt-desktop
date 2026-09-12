@@ -2904,6 +2904,163 @@ describe('AgentsStore prompt session start', () => {
     expect(store.connectionStates['remote-agent']).toBe('initialized');
   });
 
+  it('does not reconnect after an explicit disconnect while a handshake is in flight', async () => {
+    const initializeResponse: InitializeResponse = {
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
+      authMethods: []
+    };
+    const clientA = createDistinctMockClient();
+    const clientB = createDistinctMockClient();
+    const pendingClients = [clientA, clientB];
+    vi.mocked(DesktopAcpClient).mockImplementation(function () {
+      const next = pendingClients.shift();
+      if (!next) throw new Error('unexpected extra DesktopAcpClient construction');
+      return next as never;
+    });
+
+    clientA.connect.mockImplementation(() => new Promise<InitializeResponse>(() => undefined));
+    clientA.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'auth');
+    clientA.listAuthProviders.mockResolvedValue([
+      {
+        provider: 'stale',
+        display_name: 'Stale',
+        has_stored_api_key: false,
+        has_env_api_key: false,
+        supports_oauth: false
+      }
+    ]);
+    clientA.listSessions.mockResolvedValue({
+      sessions: [{ sessionId: 'session-a', title: 'From A', cwd: '/tmp/work', updatedAt: '2026-07-18T12:00:00Z' }]
+    });
+
+    clientB.connect.mockResolvedValue(initializeResponse);
+    clientB.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'auth');
+    clientB.listAuthProviders.mockResolvedValue([
+      {
+        provider: 'openai',
+        display_name: 'OpenAI',
+        has_stored_api_key: false,
+        has_env_api_key: false,
+        supports_oauth: true
+      }
+    ]);
+    clientB.listSessions.mockResolvedValue({
+      sessions: [{ sessionId: 'session-b', title: 'From B', cwd: '/tmp/work', updatedAt: '2026-07-18T12:00:00Z' }]
+    });
+
+    const store = createStore();
+    store.configs = [
+      {
+        id: 'remote-agent',
+        name: 'Remote QueryMT',
+        transport: 'websocket',
+        commandLine: '',
+        websocketUrl: '127.0.0.1:3030',
+        enabled: true,
+        autoStart: false
+      }
+    ];
+
+    const connectPromise = store.connectAgent('remote-agent');
+    const authPromise = store.refreshAuthProviders('remote-agent');
+    await vi.waitFor(() => expect(clientA.connect).toHaveBeenCalledTimes(1));
+
+    await store.stopConfiguredAgent('remote-agent');
+    await Promise.all([connectPromise, authPromise]);
+
+    expect(vi.mocked(DesktopAcpClient)).toHaveBeenCalledTimes(1);
+    expect(clientB.connect).not.toHaveBeenCalled();
+    expect(clientA.listAuthProviders).not.toHaveBeenCalled();
+    expect(clientA.listSessions).not.toHaveBeenCalled();
+    expect(clientB.listAuthProviders).not.toHaveBeenCalled();
+    expect(clientB.listSessions).not.toHaveBeenCalled();
+    expect(store.connectionStates['remote-agent']).toBe('idle');
+    expect(store.statuses['remote-agent']?.state).toBe('stopped');
+    expect(store.authProvidersByAgent['remote-agent']).toBeUndefined();
+
+    await store.startConfiguredAgent('remote-agent');
+
+    expect(vi.mocked(DesktopAcpClient)).toHaveBeenCalledTimes(2);
+    expect(clientB.connect).toHaveBeenCalledTimes(1);
+    expect(clientA.listAuthProviders).not.toHaveBeenCalled();
+    expect(clientB.listAuthProviders).toHaveBeenCalledTimes(1);
+    expect(store.connectionStates['remote-agent']).toBe('initialized');
+    expect(store.authProvidersByAgent['remote-agent']).toEqual([
+      expect.objectContaining({ provider: 'openai' })
+    ]);
+  });
+
+  it('still replaces the client when restarting during an in-flight handshake', async () => {
+    const initializeResponse: InitializeResponse = {
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
+      authMethods: []
+    };
+    const clientA = createDistinctMockClient();
+    const clientB = createDistinctMockClient();
+    const pendingClients = [clientA, clientB];
+    vi.mocked(DesktopAcpClient).mockImplementation(function () {
+      const next = pendingClients.shift();
+      if (!next) throw new Error('unexpected extra DesktopAcpClient construction');
+      return next as never;
+    });
+
+    clientA.connect.mockImplementation(() => new Promise<InitializeResponse>(() => undefined));
+    clientA.supportsQuerymtFeature.mockReturnValue(false);
+    clientA.listAuthProviders.mockResolvedValue([
+      {
+        provider: 'stale',
+        display_name: 'Stale',
+        has_stored_api_key: false,
+        has_env_api_key: false,
+        supports_oauth: false
+      }
+    ]);
+
+    clientB.connect.mockResolvedValue(initializeResponse);
+    clientB.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'auth');
+    clientB.listAuthProviders.mockResolvedValue([
+      {
+        provider: 'openai',
+        display_name: 'OpenAI',
+        has_stored_api_key: false,
+        has_env_api_key: false,
+        supports_oauth: true
+      }
+    ]);
+    clientB.listSessions.mockResolvedValue({ sessions: [] });
+
+    const store = createStore();
+    store.configs = [
+      {
+        id: 'remote-agent',
+        name: 'Remote QueryMT',
+        transport: 'websocket',
+        commandLine: '',
+        websocketUrl: '127.0.0.1:3030',
+        enabled: true,
+        autoStart: false
+      }
+    ];
+
+    const connectPromise = store.connectAgent('remote-agent');
+    const authPromise = store.refreshAuthProviders('remote-agent');
+    await vi.waitFor(() => expect(clientA.connect).toHaveBeenCalledTimes(1));
+
+    await store.restartConfiguredAgent('remote-agent');
+    await Promise.all([connectPromise, authPromise]);
+
+    expect(vi.mocked(DesktopAcpClient)).toHaveBeenCalledTimes(2);
+    expect(clientA.listAuthProviders).not.toHaveBeenCalled();
+    expect(clientB.connect).toHaveBeenCalledTimes(1);
+    expect(clientB.listAuthProviders).toHaveBeenCalled();
+    expect(store.connectionStates['remote-agent']).toBe('initialized');
+    expect(store.authProvidersByAgent['remote-agent']).toEqual([
+      expect.objectContaining({ provider: 'openai' })
+    ]);
+  });
+
   it('still force-reconnects a websocket agent after the previous handshake has settled', async () => {
     const store = createStore();
     store.configs = [

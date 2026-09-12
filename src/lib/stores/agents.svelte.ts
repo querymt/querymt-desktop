@@ -183,6 +183,7 @@ const DEFAULT_AGENTS: AgentConfig[] = [
 export class AgentsStore {
   private clients = new Map<string, AgentClientRecord>();
   private connectFlights = new Map<string, ConnectFlight>();
+  private connectGenerations = new Map<string, number>();
   private sessionRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectAttempts = new Map<string, number>();
@@ -627,6 +628,9 @@ export class AgentsStore {
     const current = this.configs.find((config) => config.id === agentId);
     if (current?.transport === 'websocket' && (updates.transport || updates.websocketUrl !== undefined || updates.enabled === false)) {
       this.cancelReconnect(agentId);
+      if (updates.enabled === false) {
+        this.invalidateConnectGeneration(agentId);
+      }
       this.disposeClient(agentId);
     }
     this.configs = this.configs.map((config) =>
@@ -641,6 +645,7 @@ export class AgentsStore {
   }
 
   async deleteConfig(agentId: string) {
+    this.invalidateConnectGeneration(agentId);
     await this.stopConfiguredAgent(agentId);
     this.configs = this.configs.filter((config) => config.id !== agentId);
     delete this.statuses[agentId];
@@ -715,16 +720,19 @@ export class AgentsStore {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
+    const generation = this.connectGeneration(agentId);
     this.error = null;
     try {
       if (config.transport === 'websocket') {
         await this.connectAgent(config.id);
+        if (this.connectGeneration(agentId) !== generation) return;
         await this.refreshAgent(config);
       } else {
         const status = await startAgent(config);
         this.statuses = { ...this.statuses, [config.id]: status };
         await this.connectAgent(config.id);
       }
+      if (this.connectGeneration(agentId) !== generation) return;
       await Promise.allSettled([
         this.refreshSessionsForAgent(config.id, true),
         this.refreshMeshForAgent(config.id),
@@ -742,6 +750,7 @@ export class AgentsStore {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
+    this.invalidateConnectGeneration(agentId);
     this.cancelReconnect(agentId);
     this.reconnectAttempts.delete(agentId);
     try {
@@ -772,6 +781,7 @@ export class AgentsStore {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
+    const generation = this.connectGeneration(agentId);
     this.cancelReconnect(agentId);
     this.reconnectAttempts.delete(agentId);
     this.completedWorkspaceDiscoveries.delete(agentId);
@@ -779,12 +789,14 @@ export class AgentsStore {
       if (config.transport === 'websocket') {
         this.disposeClient(agentId);
         await this.connectAgent(config.id, true);
+        if (this.connectGeneration(agentId) !== generation) return;
         await this.refreshAgent(config);
       } else {
         const status = await restartAgent(config);
         this.statuses = { ...this.statuses, [config.id]: status };
         await this.connectAgent(config.id, true);
       }
+      if (this.connectGeneration(agentId) !== generation) return;
       await Promise.allSettled([
         this.refreshSessionsForAgent(config.id, true),
         this.refreshMeshForAgent(config.id),
@@ -799,7 +811,12 @@ export class AgentsStore {
   }
 
   async connectAgent(agentId: string, force = false) {
+    const generation = this.connectGeneration(agentId);
     while (true) {
+      if (this.connectGeneration(agentId) !== generation) {
+        return;
+      }
+
       const config = this.configs.find((candidate) => candidate.id === agentId);
       if (!config) {
         return;
@@ -810,6 +827,9 @@ export class AgentsStore {
         // Overlapping startup (webview reload) must not dispose a handshake
         // that is still current, even when the other caller passed force.
         await inFlight.promise;
+        if (this.connectGeneration(agentId) !== generation) {
+          return;
+        }
         const joined = this.clients.get(agentId);
         if (joined?.initializeResponse) {
           return;
@@ -842,6 +862,9 @@ export class AgentsStore {
         if (this.connectFlights.get(agentId) === flight) {
           this.connectFlights.delete(agentId);
         }
+      }
+      if (this.connectGeneration(agentId) !== generation) {
+        return;
       }
       if (this.clients.get(agentId) === record) {
         return;
@@ -2228,6 +2251,14 @@ export class AgentsStore {
     return record;
   }
 
+  private connectGeneration(agentId: string): number {
+    return this.connectGenerations.get(agentId) ?? 0;
+  }
+
+  private invalidateConnectGeneration(agentId: string) {
+    this.connectGenerations.set(agentId, this.connectGeneration(agentId) + 1);
+  }
+
   private disposeClient(agentId: string) {
     const record = this.clients.get(agentId);
     if (!record) return;
@@ -3362,8 +3393,10 @@ export class AgentsStore {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config || config.transport !== 'websocket' || !config.enabled || !config.autoStart) return;
 
+    const generation = this.connectGeneration(agentId);
     this.completedWorkspaceDiscoveries.delete(agentId);
     await this.connectAgent(agentId, true);
+    if (this.connectGeneration(agentId) !== generation) return;
     const record = this.clients.get(agentId);
     if (record?.connectionState === 'initialized') {
       await Promise.allSettled([
