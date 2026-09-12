@@ -127,6 +127,32 @@ describe('session follow pin', () => {
     expect(pin).toHaveBeenCalledTimes(2);
   });
 
+  it('can be constructed when requestAnimationFrame is unavailable', () => {
+    const originalRequest = globalThis.requestAnimationFrame;
+    const originalCancel = globalThis.cancelAnimationFrame;
+    // @ts-expect-error -- simulate SSR / Node, where rAF is missing
+    delete globalThis.requestAnimationFrame;
+    // @ts-expect-error -- simulate SSR / Node, where rAF is missing
+    delete globalThis.cancelAnimationFrame;
+
+    try {
+      expect(() => createFollowScrollScheduler(() => undefined, () => true)).not.toThrow();
+    } finally {
+      if (originalRequest === undefined) {
+        // @ts-expect-error -- restore a missing rAF global as absent
+        delete globalThis.requestAnimationFrame;
+      } else {
+        globalThis.requestAnimationFrame = originalRequest;
+      }
+      if (originalCancel === undefined) {
+        // @ts-expect-error -- restore a missing rAF global as absent
+        delete globalThis.cancelAnimationFrame;
+      } else {
+        globalThis.cancelAnimationFrame = originalCancel;
+      }
+    }
+  });
+
   it('cancel drops the pending pin', () => {
     const frames: FrameRequestCallback[] = [];
     const pin = vi.fn();
