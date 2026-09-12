@@ -6892,7 +6892,8 @@ summary:focus-visible {
 .session-tool-diff {
   min-width: 0;
   overflow: auto;
-  max-height: 16rem;
+  /* 40 code rows plus Pierre's file header, bottom padding, and host border. */
+  max-height: calc(var(--diffs-line-height) * 40 + 52px);
   border: 1px solid color-mix(in srgb, var(--border), transparent 20%);
   border-radius: var(--radius-control);
   background: color-mix(in srgb, var(--bg-card), transparent 12%);

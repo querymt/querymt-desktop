@@ -1,7 +1,11 @@
 import '@testing-library/jest-dom/vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SessionToolBlock from './SessionToolBlock.svelte';
+
+const appCss = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
 
 const goto = vi.hoisted(() => vi.fn(async () => undefined));
 const loadSessionToolPatchDiff = vi.hoisted(() =>
@@ -295,5 +299,16 @@ describe('SessionToolBlock', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'Open linus session' })).toBeNull();
+  });
+});
+
+describe('session tool diff viewport', () => {
+  const sessionToolDiffRule = appCss.match(/^\.session-tool-diff \{([\s\S]*?)\n\}/m)?.[1] ?? '';
+
+  it('shows up to 40 unwrapped code rows before the host scrolls', () => {
+    expect(sessionToolDiffRule).toContain('overflow: auto;');
+    expect(sessionToolDiffRule).toContain('--diffs-line-height: 18px;');
+    expect(sessionToolDiffRule).toContain('max-height: calc(var(--diffs-line-height) * 40 + 52px);');
+    expect(sessionToolDiffRule).not.toMatch(/^\s*height:/m);
   });
 });
