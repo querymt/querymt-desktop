@@ -6884,6 +6884,29 @@ summary:focus-visible {
   white-space: pre-wrap;
 }
 
+.session-tool-diff {
+  min-width: 0;
+  overflow: auto;
+  max-height: 16rem;
+  border: 1px solid color-mix(in srgb, var(--border), transparent 20%);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--bg-card), transparent 12%);
+  --diffs-font-size: 12px;
+  --diffs-line-height: 18px;
+}
+
+.session-tool-diff-container {
+  display: block;
+  min-width: 0;
+}
+
+.session-tool-diff-error {
+  margin: 0.35rem 0 0;
+  color: var(--status-danger);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
 .session-plan-card {
   border: 1px solid var(--border);
   background: var(--bg-card);

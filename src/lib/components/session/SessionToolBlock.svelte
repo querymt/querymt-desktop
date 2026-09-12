@@ -22,6 +22,7 @@
     Trash2,
     Wrench
   } from '@lucide/svelte';
+  import { buildSessionToolDiffs } from '$lib/domain/session-tool-diff';
   import { formatChangeStats, getDelegateTargetAgentId, getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
   import type { SessionToolCallItem } from '$lib/domain/types';
 
@@ -30,6 +31,8 @@
   let open = $state(false);
   let copiedPart = $state<'arguments' | 'result' | null>(null);
   const presentation = $derived(getSessionToolPresentation(tool));
+  const diffs = $derived(buildSessionToolDiffs(presentation.name, tool.arguments, tool.result));
+  const expandable = $derived(presentation.expandable || diffs.length > 0);
   const changeStatsLabel = $derived(formatChangeStats(presentation.changeStats));
   const summaryLabel = $derived(
     `${presentation.label}${presentation.preview ? ` - ${presentation.preview}` : ''}${changeStatsLabel ? ` ${changeStatsLabel}` : ''}`
@@ -129,7 +132,7 @@
           <span class="session-tool-session-pill-label">{delegateTarget ?? 'Open session'}</span>
         </span>
       {/if}
-      {#if presentation.expandable}
+      {#if expandable}
         <span class="session-tool-disclosure" aria-hidden="true"><ChevronDown size={13} /></span>
       {/if}
       <span class={`session-tool-status session-tool-status-${tool.status}`} title={presentation.statusLabel}>
@@ -147,8 +150,20 @@
     </span>
   </summary>
 
-  {#if presentation.expandable}
+  {#if open && expandable}
     <div class="session-tool-content">
+      {#if diffs.length > 0}
+        <section class="session-tool-detail" aria-label="File diff">
+          <header class="session-tool-detail-header">
+            <span>{diffs.length === 1 ? 'Diff' : 'Diffs'}</span>
+          </header>
+          {#await import('./SessionToolPatchDiff.svelte') then { default: SessionToolPatchDiff }}
+            {#each diffs as file (file.path)}
+              <SessionToolPatchDiff patch={file.patch} />
+            {/each}
+          {/await}
+        </section>
+      {/if}
       {#if presentation.argumentsText}
         <section class="session-tool-detail" aria-label="Tool parameters">
           <header class="session-tool-detail-header">

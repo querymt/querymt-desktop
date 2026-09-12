@@ -8,6 +8,10 @@ vi.mock('$app/navigation', () => ({ goto }));
 vi.mock('$app/state', () => ({
   page: { params: { agentId: 'agent-1' } }
 }));
+vi.mock('./SessionToolPatchDiff.svelte', async () => {
+  const { default: MockPatchDiff } = await import('./SessionToolPatchDiff.stub.svelte');
+  return { default: MockPatchDiff };
+});
 
 const writeText = vi.fn().mockResolvedValue(undefined);
 Object.assign(navigator, { clipboard: { writeText } });
@@ -49,7 +53,7 @@ describe('SessionToolBlock', () => {
     const toolGroup = screen.getByText('Run command').closest('details');
     expect(toolGroup).not.toBeNull();
     await fireEvent.click(toolGroup!.querySelector('summary')!);
-    expect(screen.getByText(/"command": "bun"/)).toBeInTheDocument();
+    expect(await screen.findByText(/"command": "bun"/)).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Copy parameters' }));
     expect(writeText).toHaveBeenCalledWith('{\n  "command": "bun",\n  "args": [\n    "run",\n    "check"\n  ]\n}');
   });
@@ -72,7 +76,54 @@ describe('SessionToolBlock', () => {
     expect(screen.getByRole('group', { name: 'Edit file - src/app.ts +1 -2' })).toBeInTheDocument();
   });
 
-  it('surfaces failed status and preserves error detail', () => {
+  it('keeps generated diffs and raw parameters collapsed until the tool row expands', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'edit-1',
+        title: 'Run edit',
+        kind: 'edit',
+        status: 'completed',
+        arguments: '{"path":"src/app.ts","oldString":"one\\ntwo\\nthree","newString":"one\\nfour"}'
+      }
+    });
+
+    const toolGroup = screen.getByText('Edit file').closest('details');
+    expect(toolGroup).not.toBeNull();
+    expect(toolGroup).not.toHaveAttribute('open');
+    expect(screen.queryByRole('region', { name: 'File diff' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByText(/"oldString"/)).toBeNull();
+
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    expect(toolGroup).toHaveAttribute('open');
+    expect(await screen.findByRole('region', { name: 'File diff' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Tool parameters' })).toHaveTextContent(/"oldString": "one\\ntwo\\nthree"/);
+  });
+
+  it('renders replace_symbol diffs only after expand', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'replace-1',
+        title: 'Run replace_symbol',
+        kind: 'replace_symbol',
+        status: 'completed',
+        arguments: JSON.stringify({
+          replacements: [
+            { path: 'src/a.ts', oldText: 'alpha', newText: 'beta' },
+            { path: 'src/b.ts', old_text: 'gamma', new_text: 'delta' }
+          ]
+        })
+      }
+    });
+
+    expect(screen.queryByRole('region', { name: 'File diff' })).toBeNull();
+    const toolGroup = screen.getByText('Replace symbol').closest('details');
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    expect(await screen.findByRole('region', { name: 'File diff' })).toBeInTheDocument();
+    expect(screen.getByText('Diffs')).toBeInTheDocument();
+  });
+
+  it('surfaces failed status and preserves error detail after expand', async () => {
     render(SessionToolBlock, {
       tool: {
         id: 'edit-1',
@@ -84,7 +135,10 @@ describe('SessionToolBlock', () => {
     });
 
     expect(screen.getByText('Failed')).toHaveClass('sr-only');
-    expect(screen.getByRole('region', { name: 'Tool result' })).toHaveTextContent('oldString not found');
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+    const toolGroup = screen.getByText('Edit file').closest('details');
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    expect(await screen.findByRole('region', { name: 'Tool result' })).toHaveTextContent('oldString not found');
   });
 
   it('opens the delegated child session without expanding the tool row', async () => {
