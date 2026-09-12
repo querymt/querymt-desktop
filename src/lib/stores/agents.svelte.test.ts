@@ -5,11 +5,13 @@ import { getModelSelectionKey } from '$lib/querymt/config-options';
 import {
   DelegateAssignmentSource,
   DelegateReasoningEffort,
+  type AuthProviderEntry,
   type DelegateAssignmentsInfo,
   type SetDelegateModelRequest,
   type SetDelegateModelResponse
 } from '$lib/querymt/generated/types';
 import { tick } from 'svelte';
+import { DesktopAcpClient } from '$lib/querymt/acp-client';
 import { AgentsStore } from './agents.svelte';
 import { DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
 
@@ -169,6 +171,38 @@ vi.mock('$lib/querymt/sidecar', () => ({
   validateWorkspaceDirectory: vi.fn(async () => true)
 }));
 
+function createDistinctMockClient() {
+  let connectionLossHandler: ((reason: string) => void) | null = null;
+
+  return {
+    connect: vi.fn(async (): Promise<InitializeResponse> => ({
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
+      authMethods: []
+    })),
+    disconnect: vi.fn(async () => undefined),
+    listSessions: vi.fn(async (): Promise<{ sessions: Array<{ sessionId: string; title: string; cwd: string; updatedAt: string }> }> => ({
+      sessions: []
+    })),
+    listModels: vi.fn(async (): Promise<ModelEntry[]> => []),
+    listAuthProviders: vi.fn(async (): Promise<AuthProviderEntry[]> => []),
+    supportsQuerymtFeature: vi.fn((_feature: string) => false),
+    getControlCapabilities: vi.fn(() => null),
+    getControlHealth: vi.fn(() => ({ state: 'unknown', summary: 'unknown', missingMethods: [], missingFeatures: [] })),
+    onConnectionLost: vi.fn((handler: (reason: string) => void) => {
+      connectionLossHandler = handler;
+      return () => {
+        connectionLossHandler = null;
+      };
+    }),
+    emitConnectionLoss: (reason: string) => connectionLossHandler?.(reason),
+    onSessionUpdate: vi.fn(() => () => undefined),
+    onExtensionNotification: vi.fn(() => () => undefined),
+    onPermissionRequest: vi.fn(() => vi.fn()),
+    onElicitationRequest: vi.fn(() => vi.fn())
+  };
+}
+
 const createdStores: AgentsStore[] = [];
 
 function createStore() {
@@ -202,6 +236,9 @@ function createStore() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(DesktopAcpClient).mockImplementation(function () {
+    return mockClient;
+  });
   mockListen.mockResolvedValue(() => undefined);
   mockListManagedProfiles.mockResolvedValue([]);
   mockClient.resetSessionUpdateHandler();
@@ -2771,6 +2808,100 @@ describe('AgentsStore prompt session start', () => {
     expect(store.loading).toBe(false);
     expect(store.connectionStates['remote-agent']).toBe('initialized');
     expect(store.error).toBeNull();
+  });
+
+  it('uses the replacement client after the original handshake is aborted', async () => {
+    const initializeResponse: InitializeResponse = {
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
+      authMethods: []
+    };
+    const clientA = createDistinctMockClient();
+    const clientB = createDistinctMockClient();
+    const pendingClients = [clientA, clientB];
+    vi.mocked(DesktopAcpClient).mockImplementation(function () {
+      const next = pendingClients.shift();
+      if (!next) throw new Error('unexpected extra DesktopAcpClient construction');
+      return next as never;
+    });
+
+    clientA.connect.mockImplementation(() => new Promise<InitializeResponse>(() => undefined));
+    clientA.supportsQuerymtFeature.mockReturnValue(false);
+    clientA.listAuthProviders.mockResolvedValue([
+      {
+        provider: 'stale',
+        display_name: 'Stale',
+        has_stored_api_key: false,
+        has_env_api_key: false,
+        supports_oauth: false
+      }
+    ]);
+    clientA.listSessions.mockResolvedValue({
+      sessions: [{ sessionId: 'session-a', title: 'From A', cwd: '/tmp/work', updatedAt: '2026-07-18T12:00:00Z' }]
+    });
+
+    clientB.connect.mockResolvedValue(initializeResponse);
+    clientB.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'auth' ? true : false);
+    clientB.listAuthProviders.mockResolvedValue([
+      {
+        provider: 'openai',
+        display_name: 'OpenAI',
+        has_stored_api_key: false,
+        has_env_api_key: false,
+        supports_oauth: true
+      }
+    ]);
+    clientB.listSessions.mockResolvedValue({
+      sessions: [{ sessionId: 'session-b', title: 'From B', cwd: '/tmp/work', updatedAt: '2026-07-18T12:00:00Z' }]
+    });
+
+    const store = createStore();
+    store.configs = [
+      {
+        id: 'remote-agent',
+        name: 'Remote QueryMT',
+        transport: 'websocket',
+        commandLine: '',
+        websocketUrl: '127.0.0.1:3030',
+        enabled: true,
+        autoStart: false
+      }
+    ];
+    store.workspaceSessionSources = {
+      'remote-agent': {
+        '/tmp/work': {
+          agentId: 'remote-agent',
+          agentName: 'Remote QueryMT',
+          cwd: '/tmp/work',
+          sessions: [],
+          latestActivity: null,
+          nextCursor: null,
+          initialized: false,
+          loading: false,
+          error: null
+        }
+      }
+    };
+
+    const authPromise = store.refreshAuthProviders('remote-agent');
+    const loadPromise = store.loadWorkspaceSessions('/tmp/work');
+    await vi.waitFor(() => expect(clientA.connect).toHaveBeenCalledTimes(1));
+
+    clientA.emitConnectionLoss('WebSocket closed (code 1006).');
+    await vi.waitFor(() => expect(clientB.connect).toHaveBeenCalledTimes(1));
+    await Promise.all([authPromise, loadPromise]);
+
+    expect(clientA.listAuthProviders).not.toHaveBeenCalled();
+    expect(clientA.listSessions).not.toHaveBeenCalled();
+    expect(clientB.listAuthProviders).toHaveBeenCalledTimes(1);
+    expect(clientB.listSessions).toHaveBeenCalledTimes(1);
+    expect(store.authProvidersByAgent['remote-agent']).toEqual([
+      expect.objectContaining({ provider: 'openai' })
+    ]);
+    expect(store.workspaceSessionSources['remote-agent']['/tmp/work'].sessions).toEqual([
+      expect.objectContaining({ sessionId: 'session-b' })
+    ]);
+    expect(store.connectionStates['remote-agent']).toBe('initialized');
   });
 
   it('still force-reconnects a websocket agent after the previous handshake has settled', async () => {
