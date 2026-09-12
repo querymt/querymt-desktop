@@ -94,6 +94,7 @@ import { createTauriAcpStream, createWebSocketAcpStream } from '$lib/querymt/tra
 import type { Stream } from '@agentclientprotocol/sdk';
 
 const PROTOCOL_VERSION = 1;
+const CONNECT_CANCELLED_MESSAGE = 'ACP connection cancelled.';
 
 export interface LoadedAcpSession {
   response: LoadSessionResponse;
@@ -111,6 +112,7 @@ export class DesktopAcpClient {
   private controlCapabilities: CapabilitiesInfo | null = null;
   private connectionLossHandlers = new Set<(reason: string) => void>();
   private intentionallyDisconnected = false;
+  private connectEpoch = 0;
   private controlHealth: AgentControlHealth = {
     state: 'unknown',
     summary: 'Capabilities not checked yet.',
@@ -128,12 +130,21 @@ export class DesktopAcpClient {
       return this.initializeResponse;
     }
 
-    this.stream =
+    const epoch = this.connectEpoch;
+    const stream =
       this.config.transport === 'websocket'
         ? await createWebSocketAcpStream(requireWebSocketUrl(this.config), (reason) => this.handleConnectionLoss(reason))
         : await createTauriAcpStream(this.config.id);
+
+    if (!this.connectIsCurrent(epoch)) {
+      await closeAcpStream(stream);
+      throw connectCancelledError();
+    }
+
     const browserClient = this.browserClient;
-    this.connection = new ClientSideConnection(() => browserClient, this.stream);
+    const connection = new ClientSideConnection(() => browserClient, stream);
+    this.stream = stream;
+    this.connection = connection;
 
     const request: InitializeRequest = {
       protocolVersion: PROTOCOL_VERSION,
@@ -144,22 +155,43 @@ export class DesktopAcpClient {
       clientCapabilities: buildClientCapabilities()
     };
 
-    this.initializeResponse = await this.connection.initialize(request);
-    this.querymtExtensions = new QuerymtExtensions(this.connection);
+    let initializeResponse: InitializeResponse;
+    try {
+      initializeResponse = await connection.initialize(request);
+    } catch (error) {
+      if (!this.connectIsCurrent(epoch, connection)) {
+        throw connectCancelledError();
+      }
+      throw error;
+    }
+
+    if (!this.connectIsCurrent(epoch, connection)) {
+      throw connectCancelledError();
+    }
+
+    const querymtExtensions = new QuerymtExtensions(connection);
+    let controlCapabilities: CapabilitiesInfo | null = null;
+    let controlHealth: AgentControlHealth;
 
     try {
-      this.controlCapabilities = await this.querymtExtensions.capabilities();
-      this.controlHealth = {
+      controlCapabilities = await querymtExtensions.capabilities();
+      if (!this.connectIsCurrent(epoch, connection)) {
+        throw connectCancelledError();
+      }
+      controlHealth = {
         state: 'ready',
-        summary: `Control API v${this.controlCapabilities.querymt_control_version} ready.`,
+        summary: `Control API v${controlCapabilities.querymt_control_version} ready.`,
         missingMethods: [],
         missingFeatures: []
       };
     } catch (error) {
+      if (isConnectCancelled(error) || !this.connectIsCurrent(epoch, connection)) {
+        throw isConnectCancelled(error) ? error : connectCancelledError();
+      }
       const message = error instanceof Error ? error.message : 'QueryMT capabilities unavailable.';
       const isLegacy = /method not found/i.test(message);
-      this.controlCapabilities = null;
-      this.controlHealth = {
+      controlCapabilities = null;
+      controlHealth = {
         state: isLegacy ? 'legacy' : 'failed',
         summary: isLegacy ? 'ACP connected, but QueryMT control API is unavailable.' : message,
         missingMethods: [],
@@ -167,7 +199,15 @@ export class DesktopAcpClient {
       };
     }
 
-    return this.initializeResponse;
+    if (!this.connectIsCurrent(epoch, connection)) {
+      throw connectCancelledError();
+    }
+
+    this.initializeResponse = initializeResponse;
+    this.querymtExtensions = querymtExtensions;
+    this.controlCapabilities = controlCapabilities;
+    this.controlHealth = controlHealth;
+    return initializeResponse;
   }
 
   async listSessions(request: ListSessionsRequest = {}): Promise<ListSessionsResponse> {
@@ -633,13 +673,16 @@ export class DesktopAcpClient {
 
   async disconnect() {
     this.intentionallyDisconnected = true;
-    await this.stream?.readable.cancel().catch(() => undefined);
-    await this.stream?.writable.abort().catch(() => undefined);
+    this.connectEpoch += 1;
+    const stream = this.stream;
     this.stream = null;
     this.connection = null;
     this.initializeResponse = null;
     this.querymtExtensions = null;
     this.controlCapabilities = null;
+    if (stream) {
+      await closeAcpStream(stream);
+    }
   }
 
   onConnectionLost(handler: (reason: string) => void): () => void {
@@ -681,6 +724,14 @@ export class DesktopAcpClient {
     return () => this.browserClient.offExtensionNotification(wrapped);
   }
 
+  private connectIsCurrent(epoch: number, connection?: ClientSideConnection): boolean {
+    return (
+      this.connectEpoch === epoch &&
+      !this.intentionallyDisconnected &&
+      (connection === undefined || this.connection === connection)
+    );
+  }
+
   private handleConnectionLoss(reason: string) {
     if (this.intentionallyDisconnected) return;
     this.connection = null;
@@ -702,6 +753,19 @@ export class DesktopAcpClient {
       throw new Error(`Agent is missing required feature ${feature}.`);
     }
   }
+}
+
+function connectCancelledError(): Error {
+  return new Error(CONNECT_CANCELLED_MESSAGE);
+}
+
+function isConnectCancelled(error: unknown): boolean {
+  return error instanceof Error && error.message === CONNECT_CANCELLED_MESSAGE;
+}
+
+async function closeAcpStream(stream: Stream): Promise<void> {
+  await stream.readable.cancel().catch(() => undefined);
+  await stream.writable.abort().catch(() => undefined);
 }
 
 function buildAttachmentUri(attachment: PromptAttachment): string {

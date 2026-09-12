@@ -628,9 +628,7 @@ export class AgentsStore {
     const current = this.configs.find((config) => config.id === agentId);
     if (current?.transport === 'websocket' && (updates.transport || updates.websocketUrl !== undefined || updates.enabled === false)) {
       this.cancelReconnect(agentId);
-      if (updates.enabled === false) {
-        this.invalidateConnectGeneration(agentId);
-      }
+      this.invalidateConnectGeneration(agentId);
       this.disposeClient(agentId);
     }
     this.configs = this.configs.map((config) =>
