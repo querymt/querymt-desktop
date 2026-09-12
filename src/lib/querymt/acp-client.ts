@@ -113,6 +113,7 @@ export class DesktopAcpClient {
   private connectionLossHandlers = new Set<(reason: string) => void>();
   private intentionallyDisconnected = false;
   private connectEpoch = 0;
+  private connectFlight: Promise<InitializeResponse> | null = null;
   private controlHealth: AgentControlHealth = {
     state: 'unknown',
     summary: 'Capabilities not checked yet.',
@@ -130,6 +131,22 @@ export class DesktopAcpClient {
       return this.initializeResponse;
     }
 
+    if (this.connectFlight) {
+      return this.connectFlight;
+    }
+
+    const flight = this.connectUnlocked();
+    this.connectFlight = flight;
+    try {
+      return await flight;
+    } finally {
+      if (this.connectFlight === flight) {
+        this.connectFlight = null;
+      }
+    }
+  }
+
+  private async connectUnlocked(): Promise<InitializeResponse> {
     const epoch = this.connectEpoch;
     const stream =
       this.config.transport === 'websocket'
@@ -674,6 +691,7 @@ export class DesktopAcpClient {
   async disconnect() {
     this.intentionallyDisconnected = true;
     this.connectEpoch += 1;
+    this.connectFlight = null;
     const stream = this.stream;
     this.stream = null;
     this.connection = null;
