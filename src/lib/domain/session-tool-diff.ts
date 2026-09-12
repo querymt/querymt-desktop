@@ -221,10 +221,10 @@ function parseEditReceipt(rawResult?: string | null): Map<string, ReceiptHunk[]>
 
 function tryAnchorHunks(snippets: SnippetHunk[], receipts: ReceiptHunk[]): SnippetHunk[] | null {
   if (receipts.length === 0 || snippets.length !== receipts.length) return null;
+  if (hasDuplicateSignatures(snippets) || hasDuplicateReceiptSignatures(receipts)) return null;
   if (snippets.every((snippet, index) => signaturesMatch(snippet, receipts[index]!))) {
     return applyReceiptStarts(snippets, receipts);
   }
-  if (hasDuplicateSignatures(snippets) || hasDuplicateReceiptSignatures(receipts)) return null;
 
   const unused = new Set(receipts.map((_, index) => index));
   const matched: Array<{ snippet: SnippetHunk; receiptIndex: number }> = [];

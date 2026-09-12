@@ -290,6 +290,44 @@ describe('buildSessionToolDiffs', () => {
     expect(getSingularPatch(duplicatePatch).hunks.map((hunk) => hunk.collapsedBefore)).toEqual([0, 0]);
   });
 
+  it('keeps both duplicate-signature hunks neutral even when receipt order matches argument order', () => {
+    const receipt = [
+      'OK paths=1 edits=2 added=2 deleted=2',
+      'P src/lib.ts',
+      'H replace old=10,1 new=10,1 +1 -1',
+      'H replace old=80,1 new=80,1 +1 -1'
+    ].join('\n');
+
+    const assertNeutral = (edits: Array<{ oldString: string; newString: string }>) => {
+      const files = buildSessionToolDiffs(
+        'multiedit',
+        'completed',
+        JSON.stringify({ filePath: 'src/lib.ts', edits }),
+        receipt
+      );
+      const patch = files[0]?.patch ?? '';
+      expect((patch.match(/^@@ /gm) || []).length).toBe(2);
+      expect(patch).toContain('@@ -1,1 +1,1 @@');
+      expect(patch).not.toContain('@@ -10,');
+      expect(patch).not.toContain('@@ -80,');
+      expect(patchLines(patch).filter((line) => line.startsWith('@@ '))).toEqual([
+        '@@ -1,1 +1,1 @@',
+        '@@ -1,1 +1,1 @@'
+      ]);
+      expect(hunkBodies(patch)).toEqual(edits.map((edit) => [`-${edit.oldString}`, `+${edit.newString}`]));
+      expect(getSingularPatch(patch).hunks.map((hunk) => hunk.collapsedBefore)).toEqual([0, 0]);
+    };
+
+    assertNeutral([
+      { oldString: 'aaa', newString: 'bbb' },
+      { oldString: 'ccc', newString: 'ddd' }
+    ]);
+    assertNeutral([
+      { oldString: 'ccc', newString: 'ddd' },
+      { oldString: 'aaa', newString: 'bbb' }
+    ]);
+  });
+
   it('renders write_file as a new-file patch using content line splitting', () => {
     const files = buildSessionToolDiffs(
       'write_file',
