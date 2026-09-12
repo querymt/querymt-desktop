@@ -6,6 +6,7 @@ describe('buildSessionToolDiffs', () => {
   it('builds a unified patch from edit input, including snake_case keys', () => {
     const [file] = buildSessionToolDiffs(
       'edit',
+      'completed',
       '{"path":"src/app.ts","oldString":"hello","newString":"world"}',
       'OK paths=1 edits=1 added=1 deleted=1'
     );
@@ -18,6 +19,7 @@ describe('buildSessionToolDiffs', () => {
 
     const snake = buildSessionToolDiffs(
       'edit',
+      'completed',
       '{"file_path":"src/app.ts","old_string":"hello","new_string":"world"}'
     );
     expect(snake[0]?.patch).toContain('-hello');
@@ -27,6 +29,7 @@ describe('buildSessionToolDiffs', () => {
   it('builds one file patch with multiple hunks from multiedit input', () => {
     const files = buildSessionToolDiffs(
       'multiedit',
+      'completed',
       '{"filePath":"src/lib.ts","edits":[{"oldString":"foo","newString":"bar"},{"oldString":"baz","newString":"qux"}]}'
     );
 
@@ -43,6 +46,7 @@ describe('buildSessionToolDiffs', () => {
   it('renders write_file as a new-file patch using content line splitting', () => {
     const files = buildSessionToolDiffs(
       'write_file',
+      'completed',
       '{"path":"src/new.ts","content":"export const value = 1;\\nexport const other = 2;\\n"}'
     );
 
@@ -57,6 +61,7 @@ describe('buildSessionToolDiffs', () => {
   it('groups replace_symbol replacements by path', () => {
     const files = buildSessionToolDiffs(
       'replace_symbol',
+      'completed',
       JSON.stringify({
         replacements: [
           { path: 'src/a.ts', oldText: 'alpha', newText: 'beta' },
@@ -76,17 +81,28 @@ describe('buildSessionToolDiffs', () => {
     expect(
       buildSessionToolDiffs(
         'edit',
+        'completed',
         '{"path":"src/app.ts","oldString":"one","newString":"two"}',
         'oldString not found'
       )
     ).toEqual([]);
-    expect(buildSessionToolDiffs('shell', '{"command":"git status"}')).toEqual([]);
-    expect(buildSessionToolDiffs('apply_patch', '{"patch":"diff --git a/x b/x"}')).toEqual([]);
+    expect(buildSessionToolDiffs('shell', 'completed', '{"command":"git status"}')).toEqual([]);
+    expect(buildSessionToolDiffs('apply_patch', 'completed', '{"patch":"diff --git a/x b/x"}')).toEqual([]);
+  });
+
+  it('skips speculative diffs unless the tool completed successfully', () => {
+    const args = '{"path":"src/app.ts","oldString":"hello","newString":"world"}';
+    expect(buildSessionToolDiffs('edit', 'in_progress', args)).toEqual([]);
+    expect(buildSessionToolDiffs('edit', 'failed', args)).toEqual([]);
+    expect(buildSessionToolDiffs('edit', 'pending', args)).toEqual([]);
+    expect(buildSessionToolDiffs('edit', 'completed', args)).toHaveLength(1);
+    expect(buildSessionToolDiffs('edit', 'completed', args, 'OK paths=1 edits=1 added=1 deleted=1')).toHaveLength(1);
   });
 
   it('parses unequal-length multi-edit hunks without phantom collapsed gaps', () => {
     const files = buildSessionToolDiffs(
       'multiedit',
+      'completed',
       JSON.stringify({
         filePath: 'src/lib.ts',
         edits: [
@@ -111,6 +127,7 @@ describe('buildSessionToolDiffs', () => {
   it('parses edit and write_file patches with Pierre', () => {
     const [editFile] = buildSessionToolDiffs(
       'edit',
+      'completed',
       '{"path":"src/app.ts","oldString":"hello","newString":"world"}'
     );
     const parsedEdit = getSingularPatch(editFile?.patch ?? '');
@@ -121,6 +138,7 @@ describe('buildSessionToolDiffs', () => {
 
     const [writeFile] = buildSessionToolDiffs(
       'write_file',
+      'completed',
       '{"path":"src/new.ts","content":"export const value = 1;\\nexport const other = 2;\\n"}'
     );
     const parsedWrite = getSingularPatch(writeFile?.patch ?? '');

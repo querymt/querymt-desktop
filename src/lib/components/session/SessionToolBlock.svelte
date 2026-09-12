@@ -25,13 +25,14 @@
   import { buildSessionToolDiffs } from '$lib/domain/session-tool-diff';
   import { formatChangeStats, getDelegateTargetAgentId, getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
   import type { SessionToolCallItem } from '$lib/domain/types';
+  import { loadSessionToolPatchDiff } from './session-tool-patch-diff';
 
   let { tool }: { tool: SessionToolCallItem } = $props();
 
   let open = $state(false);
   let copiedPart = $state<'arguments' | 'result' | null>(null);
   const presentation = $derived(getSessionToolPresentation(tool));
-  const diffs = $derived(buildSessionToolDiffs(presentation.name, tool.arguments, tool.result));
+  const diffs = $derived(buildSessionToolDiffs(presentation.name, tool.status, tool.arguments, tool.result));
   const expandable = $derived(presentation.expandable || diffs.length > 0);
   const changeStatsLabel = $derived(formatChangeStats(presentation.changeStats));
   const summaryLabel = $derived(
@@ -157,10 +158,12 @@
           <header class="session-tool-detail-header">
             <span>{diffs.length === 1 ? 'Diff' : 'Diffs'}</span>
           </header>
-          {#await import('./SessionToolPatchDiff.svelte') then { default: SessionToolPatchDiff }}
+          {#await loadSessionToolPatchDiff() then { default: SessionToolPatchDiff }}
             {#each diffs as file (file.path)}
               <SessionToolPatchDiff patch={file.patch} />
             {/each}
+          {:catch}
+            <p class="session-tool-diff-error">Unable to load diff preview.</p>
           {/await}
         </section>
       {/if}

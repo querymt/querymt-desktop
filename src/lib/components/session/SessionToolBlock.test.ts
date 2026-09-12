@@ -4,10 +4,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import SessionToolBlock from './SessionToolBlock.svelte';
 
 const goto = vi.hoisted(() => vi.fn(async () => undefined));
+const loadSessionToolPatchDiff = vi.hoisted(() =>
+  vi.fn(async () => {
+    const { default: MockPatchDiff } = await import('./SessionToolPatchDiff.stub.svelte');
+    return { default: MockPatchDiff };
+  })
+);
 vi.mock('$app/navigation', () => ({ goto }));
 vi.mock('$app/state', () => ({
   page: { params: { agentId: 'agent-1' } }
 }));
+vi.mock('./session-tool-patch-diff', () => ({ loadSessionToolPatchDiff }));
 vi.mock('./SessionToolPatchDiff.svelte', async () => {
   const { default: MockPatchDiff } = await import('./SessionToolPatchDiff.stub.svelte');
   return { default: MockPatchDiff };
@@ -20,6 +27,11 @@ afterEach(() => {
   cleanup();
   writeText.mockClear();
   goto.mockClear();
+  loadSessionToolPatchDiff.mockReset();
+  loadSessionToolPatchDiff.mockImplementation(async () => {
+    const { default: MockPatchDiff } = await import('./SessionToolPatchDiff.stub.svelte');
+    return { default: MockPatchDiff };
+  });
 });
 
 describe('SessionToolBlock', () => {
@@ -98,6 +110,29 @@ describe('SessionToolBlock', () => {
     expect(toolGroup).toHaveAttribute('open');
     expect(await screen.findByRole('region', { name: 'File diff' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Tool parameters' })).toHaveTextContent(/"oldString": "one\\ntwo\\nthree"/);
+  });
+
+  it('shows a stable error when the diff preview fails to load', async () => {
+    loadSessionToolPatchDiff.mockRejectedValueOnce(new Error('Failed to fetch dynamically imported module'));
+
+    render(SessionToolBlock, {
+      tool: {
+        id: 'edit-1',
+        title: 'Run edit',
+        kind: 'edit',
+        status: 'completed',
+        arguments: '{"path":"src/app.ts","oldString":"one\\ntwo\\nthree","newString":"one\\nfour"}'
+      }
+    });
+
+    const toolGroup = screen.getByText('Edit file').closest('details');
+    expect(toolGroup).not.toBeNull();
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+
+    const error = await screen.findByText('Unable to load diff preview.');
+    expect(error).toHaveClass('session-tool-diff-error');
+    expect(screen.getByRole('region', { name: 'File diff' })).toBeInTheDocument();
+    expect(screen.queryByTestId('session-tool-diff')).toBeNull();
   });
 
   it('renders replace_symbol diffs only after expand', async () => {

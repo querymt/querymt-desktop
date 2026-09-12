@@ -6,6 +6,7 @@ import {
   splitLines,
   toolFilePath
 } from '$lib/domain/session-tool-args';
+import type { SessionToolCallItem } from '$lib/domain/types';
 
 export type SessionToolDiffFile = {
   path: string;
@@ -14,10 +15,11 @@ export type SessionToolDiffFile = {
 
 export function buildSessionToolDiffs(
   name: string,
+  status: SessionToolCallItem['status'],
   rawArguments: string | null | undefined,
   rawResult?: string | null
 ): SessionToolDiffFile[] {
-  if (!isEditToolName(name)) return [];
+  if (status !== 'completed' || !isEditToolName(name)) return [];
   const args = parseObject(rawArguments);
   if (!args) return [];
 
