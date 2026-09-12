@@ -27,6 +27,7 @@
   import { buildSessionToolDiffs } from '$lib/domain/session-tool-diff';
   import { formatChangeStats, getDelegateTargetAgentId, getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
   import type { SessionToolCallItem } from '$lib/domain/types';
+  import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { loadSessionToolPatchDiff } from './session-tool-patch-diff';
 
   let { tool }: { tool: SessionToolCallItem } = $props();
@@ -48,10 +49,10 @@
     if (!agentId || !childSessionId) return null;
     return `/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(childSessionId)}`;
   });
-  const sourceOpen = $derived(Boolean(open && sourceOpenForId === tool.id));
+  const sourceOpen = $derived(Boolean(open && chatPreferencesStore.developerMode && sourceOpenForId === tool.id));
 
   $effect(() => {
-    if (!open) sourceOpenForId = null;
+    if (!open || !chatPreferencesStore.developerMode) sourceOpenForId = null;
   });
 
   function handleDetailsToggle(event: Event) {
@@ -182,7 +183,7 @@
             <p class="session-tool-diff-error">Unable to load diff preview.</p>
           {/await}
         </section>
-        {#if presentation.argumentsText || presentation.resultText}
+        {#if chatPreferencesStore.developerMode && (presentation.argumentsText || presentation.resultText)}
           <div class="session-tool-source-toggle">
             <button
               class="session-tool-copy"

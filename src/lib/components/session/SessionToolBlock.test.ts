@@ -2,7 +2,9 @@ import '@testing-library/jest-dom/vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import SessionToolBlock from './SessionToolBlock.svelte';
 
 const appCss = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
@@ -31,6 +33,7 @@ afterEach(() => {
   cleanup();
   writeText.mockClear();
   goto.mockClear();
+  chatPreferencesStore.setDeveloperMode(false);
   loadSessionToolPatchDiff.mockReset();
   loadSessionToolPatchDiff.mockImplementation(async () => {
     const { default: MockPatchDiff } = await import('./SessionToolPatchDiff.stub.svelte');
@@ -98,6 +101,7 @@ describe('SessionToolBlock', () => {
   });
 
   it('keeps generated diffs and raw parameters collapsed until the tool row expands', async () => {
+    chatPreferencesStore.setDeveloperMode(true);
     render(SessionToolBlock, {
       tool: {
         id: 'edit-1',
@@ -134,6 +138,7 @@ describe('SessionToolBlock', () => {
   });
 
   it('reveals and hides raw source data for a completed edit diff', async () => {
+    chatPreferencesStore.setDeveloperMode(true);
     render(SessionToolBlock, {
       tool: {
         id: 'edit-1',
@@ -166,6 +171,7 @@ describe('SessionToolBlock', () => {
   });
 
   it('resets raw source data to hidden when the tool row is closed and reopened', async () => {
+    chatPreferencesStore.setDeveloperMode(true);
     render(SessionToolBlock, {
       tool: {
         id: 'edit-1',
@@ -224,6 +230,7 @@ describe('SessionToolBlock', () => {
   });
 
   it('renders replace_symbol diffs only after expand', async () => {
+    chatPreferencesStore.setDeveloperMode(true);
     render(SessionToolBlock, {
       tool: {
         id: 'replace-1',
@@ -253,6 +260,64 @@ describe('SessionToolBlock', () => {
     const showSource = screen.getByRole('button', { name: 'Show source data' });
     expect(showSource).toHaveAttribute('aria-expanded', 'false');
     expect(showSource.querySelector('.lucide-chevrons-left-right-ellipsis')).not.toBeNull();
+  });
+
+  it('hides the source data toggle for generated diffs when developer mode is off', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'edit-1',
+        title: 'Run edit',
+        kind: 'edit',
+        status: 'completed',
+        arguments: '{"path":"src/app.ts","oldString":"one\\ntwo\\nthree","newString":"one\\nfour"}',
+        result: 'OK src/app.ts updated'
+      }
+    });
+
+    const toolGroup = screen.getByText('Edit file').closest('details');
+    expect(toolGroup).not.toBeNull();
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    expect(await screen.findByRole('region', { name: 'File diff' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show source data' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Hide source data' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+  });
+
+  it('clears stale source data when developer mode is turned off and does not reopen it on re-enable', async () => {
+    chatPreferencesStore.setDeveloperMode(true);
+    render(SessionToolBlock, {
+      tool: {
+        id: 'edit-1',
+        title: 'Run edit',
+        kind: 'edit',
+        status: 'completed',
+        arguments: '{"path":"src/app.ts","oldString":"one\\ntwo\\nthree","newString":"one\\nfour"}',
+        result: 'OK src/app.ts updated'
+      }
+    });
+
+    const toolGroup = screen.getByText('Edit file').closest('details');
+    expect(toolGroup).not.toBeNull();
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    expect(await screen.findByRole('region', { name: 'File diff' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Show source data' }));
+    expect(screen.getByRole('region', { name: 'Tool parameters' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Tool result' })).toBeInTheDocument();
+
+    chatPreferencesStore.setDeveloperMode(false);
+    await tick();
+    expect(screen.queryByRole('button', { name: 'Show source data' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Hide source data' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+
+    chatPreferencesStore.setDeveloperMode(true);
+    await tick();
+    const showSource = screen.getByRole('button', { name: 'Show source data' });
+    expect(showSource).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
   });
 
   it('surfaces failed status and preserves error detail after expand', async () => {
