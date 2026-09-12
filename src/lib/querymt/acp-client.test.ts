@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopAcpClient } from './acp-client';
 
 const beginSessionReplay = vi.fn(() => ({ sessionId: 'session-1', notifications: [] }));
@@ -11,6 +11,37 @@ vi.mock('./browser-client', () => ({
     abortSessionReplay = abortSessionReplay;
   }
 }));
+
+const createWebSocketAcpStream = vi.hoisted(() => vi.fn());
+const createTauriAcpStream = vi.hoisted(() => vi.fn());
+const ClientSideConnectionMock = vi.hoisted(() =>
+  vi.fn(function ClientSideConnectionMock(this: {
+    initialize: ReturnType<typeof vi.fn>;
+    extMethod: ReturnType<typeof vi.fn>;
+  }) {
+    this.initialize = vi.fn(async () => ({
+      protocolVersion: 1,
+      agentCapabilities: {},
+      authMethods: []
+    }));
+    this.extMethod = vi.fn(async () => {
+      throw new Error('method not found');
+    });
+  })
+);
+
+vi.mock('./transport', () => ({
+  createWebSocketAcpStream,
+  createTauriAcpStream
+}));
+
+vi.mock('@agentclientprotocol/sdk', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agentclientprotocol/sdk')>();
+  return {
+    ...actual,
+    ClientSideConnection: ClientSideConnectionMock
+  };
+});
 
 describe('DesktopAcpClient session metadata', () => {
   it('includes the desktop session-load operation id in ACP metadata', async () => {
@@ -154,5 +185,250 @@ describe('DesktopAcpClient forkSession', () => {
       mcpServers: [],
       _meta: { querymt: { message_id: 'assistant-2' } }
     });
+  });
+});
+
+function mockAcpStream() {
+  return {
+    readable: { cancel: vi.fn(async () => undefined) },
+    writable: { abort: vi.fn(async () => undefined) }
+  };
+}
+
+function websocketClient() {
+  return new DesktopAcpClient({
+    id: 'agent-1',
+    name: 'Agent',
+    transport: 'websocket',
+    commandLine: '',
+    websocketUrl: '127.0.0.1:3030',
+    enabled: true,
+    autoStart: true
+  });
+}
+
+describe('DesktopAcpClient connect cancellation', () => {
+  beforeEach(() => {
+    createWebSocketAcpStream.mockReset();
+    createTauriAcpStream.mockReset();
+    ClientSideConnectionMock.mockReset();
+    ClientSideConnectionMock.mockImplementation(function ClientSideConnectionMock(this: {
+      initialize: ReturnType<typeof vi.fn>;
+      extMethod: ReturnType<typeof vi.fn>;
+    }) {
+      this.initialize = vi.fn(async () => ({
+        protocolVersion: 1,
+        agentCapabilities: {},
+        authMethods: []
+      }));
+      this.extMethod = vi.fn(async () => {
+        throw new Error('method not found');
+      });
+    });
+  });
+
+  it('cancels a stream that finishes creating after disconnect', async () => {
+    const stream = mockAcpStream();
+    let resolveStream!: (value: ReturnType<typeof mockAcpStream>) => void;
+    createWebSocketAcpStream.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveStream = resolve;
+        })
+    );
+
+    const client = websocketClient();
+    const connectPromise = client.connect();
+    const expectedCancellation = expect(connectPromise).rejects.toThrow('ACP connection cancelled.');
+    await vi.waitFor(() => expect(createWebSocketAcpStream).toHaveBeenCalledTimes(1));
+
+    await client.disconnect();
+    resolveStream(stream);
+    await expectedCancellation;
+
+    expect(stream.readable.cancel).toHaveBeenCalledTimes(1);
+    expect(stream.writable.abort).toHaveBeenCalledTimes(1);
+    expect(ClientSideConnectionMock).not.toHaveBeenCalled();
+    expect(client.getInitializeResponse()).toBeNull();
+    expect(client.getControlCapabilities()).toBeNull();
+
+    const laterStream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(laterStream);
+    await expect(client.connect()).resolves.toMatchObject({ protocolVersion: 1 });
+    expect(ClientSideConnectionMock).toHaveBeenCalledTimes(1);
+    expect(client.getInitializeResponse()).toMatchObject({ protocolVersion: 1 });
+    expect(laterStream.readable.cancel).not.toHaveBeenCalled();
+  });
+
+  it('does not restore initialize state after disconnect during ACP initialize', async () => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    let resolveInitialize!: (value: { protocolVersion: number; agentCapabilities: object; authMethods: unknown[] }) => void;
+    ClientSideConnectionMock.mockImplementation(function ClientSideConnectionMock(this: {
+      initialize: ReturnType<typeof vi.fn>;
+      extMethod: ReturnType<typeof vi.fn>;
+    }) {
+      this.initialize = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveInitialize = resolve;
+          })
+      );
+      this.extMethod = vi.fn(async () => {
+        throw new Error('method not found');
+      });
+    });
+
+    const client = websocketClient();
+    const connectPromise = client.connect();
+    const expectedCancellation = expect(connectPromise).rejects.toThrow('ACP connection cancelled.');
+    await vi.waitFor(() => expect(ClientSideConnectionMock).toHaveBeenCalledTimes(1));
+
+    await client.disconnect();
+    expect(stream.readable.cancel).toHaveBeenCalledTimes(1);
+    expect(stream.writable.abort).toHaveBeenCalledTimes(1);
+
+    resolveInitialize({ protocolVersion: 1, agentCapabilities: {}, authMethods: [] });
+    await expectedCancellation;
+
+    expect(client.getInitializeResponse()).toBeNull();
+    expect(client.getControlCapabilities()).toBeNull();
+  });
+
+  it('shares one connection attempt across overlapping connect() calls', async () => {
+    const stream = mockAcpStream();
+    let resolveStream!: (value: ReturnType<typeof mockAcpStream>) => void;
+    createWebSocketAcpStream.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveStream = resolve;
+        })
+    );
+
+    const client = websocketClient();
+    const firstConnect = client.connect();
+    const secondConnect = client.connect();
+    await vi.waitFor(() => expect(createWebSocketAcpStream).toHaveBeenCalledTimes(1));
+    expect(ClientSideConnectionMock).not.toHaveBeenCalled();
+
+    resolveStream(stream);
+    const [firstResult, secondResult] = await Promise.all([firstConnect, secondConnect]);
+
+    expect(firstResult).toEqual(secondResult);
+    expect(firstResult).toMatchObject({ protocolVersion: 1 });
+    expect(createWebSocketAcpStream).toHaveBeenCalledTimes(1);
+    expect(ClientSideConnectionMock).toHaveBeenCalledTimes(1);
+    expect(ClientSideConnectionMock.mock.instances[0]?.initialize).toHaveBeenCalledTimes(1);
+    expect(stream.readable.cancel).not.toHaveBeenCalled();
+    expect(stream.writable.abort).not.toHaveBeenCalled();
+  });
+
+  it('rejects every overlapping joiner after disconnect without clearing a newer connect', async () => {
+    const stream = mockAcpStream();
+    let resolveStream!: (value: ReturnType<typeof mockAcpStream>) => void;
+    createWebSocketAcpStream.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveStream = resolve;
+        })
+    );
+
+    const client = websocketClient();
+    const firstConnect = client.connect();
+    const secondConnect = client.connect();
+    const expectedFirstCancellation = expect(firstConnect).rejects.toThrow('ACP connection cancelled.');
+    const expectedSecondCancellation = expect(secondConnect).rejects.toThrow('ACP connection cancelled.');
+    await vi.waitFor(() => expect(createWebSocketAcpStream).toHaveBeenCalledTimes(1));
+
+    await client.disconnect();
+
+    const laterStream = mockAcpStream();
+    let resolveLaterStream!: (value: ReturnType<typeof mockAcpStream>) => void;
+    createWebSocketAcpStream.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveLaterStream = resolve;
+        })
+    );
+
+    const laterConnect = client.connect();
+    await vi.waitFor(() => expect(createWebSocketAcpStream).toHaveBeenCalledTimes(2));
+
+    resolveStream(stream);
+    await expectedFirstCancellation;
+    await expectedSecondCancellation;
+
+    expect(stream.readable.cancel).toHaveBeenCalledTimes(1);
+    expect(stream.writable.abort).toHaveBeenCalledTimes(1);
+    expect(laterStream.readable.cancel).not.toHaveBeenCalled();
+    expect(laterStream.writable.abort).not.toHaveBeenCalled();
+    expect(ClientSideConnectionMock).not.toHaveBeenCalled();
+    expect(client.getInitializeResponse()).toBeNull();
+
+    resolveLaterStream(laterStream);
+    await expect(laterConnect).resolves.toMatchObject({ protocolVersion: 1 });
+    expect(ClientSideConnectionMock).toHaveBeenCalledTimes(1);
+    expect(client.getInitializeResponse()).toMatchObject({ protocolVersion: 1 });
+    expect(laterStream.readable.cancel).not.toHaveBeenCalled();
+    expect(laterStream.writable.abort).not.toHaveBeenCalled();
+  });
+
+  it('does not let a cancelled initialize close a newer same-instance stream', async () => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    let resolveInitialize!: (value: { protocolVersion: number; agentCapabilities: object; authMethods: unknown[] }) => void;
+    ClientSideConnectionMock.mockImplementation(function ClientSideConnectionMock(this: {
+      initialize: ReturnType<typeof vi.fn>;
+      extMethod: ReturnType<typeof vi.fn>;
+    }) {
+      this.initialize = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveInitialize = resolve;
+          })
+      );
+      this.extMethod = vi.fn(async () => {
+        throw new Error('method not found');
+      });
+    });
+
+    const client = websocketClient();
+    const firstConnect = client.connect();
+    const secondConnect = client.connect();
+    const expectedFirstCancellation = expect(firstConnect).rejects.toThrow('ACP connection cancelled.');
+    const expectedSecondCancellation = expect(secondConnect).rejects.toThrow('ACP connection cancelled.');
+    await vi.waitFor(() => expect(ClientSideConnectionMock).toHaveBeenCalledTimes(1));
+
+    await client.disconnect();
+    expect(stream.readable.cancel).toHaveBeenCalledTimes(1);
+    expect(stream.writable.abort).toHaveBeenCalledTimes(1);
+
+    const laterStream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(laterStream);
+    ClientSideConnectionMock.mockImplementation(function ClientSideConnectionMock(this: {
+      initialize: ReturnType<typeof vi.fn>;
+      extMethod: ReturnType<typeof vi.fn>;
+    }) {
+      this.initialize = vi.fn(async () => ({
+        protocolVersion: 1,
+        agentCapabilities: {},
+        authMethods: []
+      }));
+      this.extMethod = vi.fn(async () => {
+        throw new Error('method not found');
+      });
+    });
+
+    const laterConnect = client.connect();
+    await vi.waitFor(() => expect(ClientSideConnectionMock).toHaveBeenCalledTimes(2));
+
+    resolveInitialize({ protocolVersion: 1, agentCapabilities: {}, authMethods: [] });
+    await expectedFirstCancellation;
+    await expectedSecondCancellation;
+
+    await expect(laterConnect).resolves.toMatchObject({ protocolVersion: 1 });
+    expect(laterStream.readable.cancel).not.toHaveBeenCalled();
+    expect(laterStream.writable.abort).not.toHaveBeenCalled();
+    expect(client.getInitializeResponse()).toMatchObject({ protocolVersion: 1 });
   });
 });

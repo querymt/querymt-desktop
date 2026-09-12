@@ -161,6 +161,14 @@ interface AgentClientRecord {
   recentSessionUpdateKeys: string[];
 }
 
+interface ConnectFlight {
+  owner: AgentClientRecord;
+  promise: Promise<void>;
+  abort: () => void;
+}
+
+const CONNECT_ABORTED = Symbol('connect-aborted');
+
 const DEFAULT_AGENTS: AgentConfig[] = [
   {
     id: 'qmtcode-default',
@@ -174,6 +182,8 @@ const DEFAULT_AGENTS: AgentConfig[] = [
 
 export class AgentsStore {
   private clients = new Map<string, AgentClientRecord>();
+  private connectFlights = new Map<string, ConnectFlight>();
+  private connectGenerations = new Map<string, number>();
   private sessionRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectAttempts = new Map<string, number>();
@@ -618,6 +628,7 @@ export class AgentsStore {
     const current = this.configs.find((config) => config.id === agentId);
     if (current?.transport === 'websocket' && (updates.transport || updates.websocketUrl !== undefined || updates.enabled === false)) {
       this.cancelReconnect(agentId);
+      this.invalidateConnectGeneration(agentId);
       this.disposeClient(agentId);
     }
     this.configs = this.configs.map((config) =>
@@ -632,6 +643,7 @@ export class AgentsStore {
   }
 
   async deleteConfig(agentId: string) {
+    this.invalidateConnectGeneration(agentId);
     await this.stopConfiguredAgent(agentId);
     this.configs = this.configs.filter((config) => config.id !== agentId);
     delete this.statuses[agentId];
@@ -706,16 +718,19 @@ export class AgentsStore {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
+    const generation = this.connectGeneration(agentId);
     this.error = null;
     try {
       if (config.transport === 'websocket') {
-        await this.connectAgent(config.id, true);
+        await this.connectAgent(config.id);
+        if (this.connectGeneration(agentId) !== generation) return;
         await this.refreshAgent(config);
       } else {
         const status = await startAgent(config);
         this.statuses = { ...this.statuses, [config.id]: status };
         await this.connectAgent(config.id);
       }
+      if (this.connectGeneration(agentId) !== generation) return;
       await Promise.allSettled([
         this.refreshSessionsForAgent(config.id, true),
         this.refreshMeshForAgent(config.id),
@@ -733,6 +748,7 @@ export class AgentsStore {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
+    this.invalidateConnectGeneration(agentId);
     this.cancelReconnect(agentId);
     this.reconnectAttempts.delete(agentId);
     try {
@@ -763,6 +779,7 @@ export class AgentsStore {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
+    const generation = this.connectGeneration(agentId);
     this.cancelReconnect(agentId);
     this.reconnectAttempts.delete(agentId);
     this.completedWorkspaceDiscoveries.delete(agentId);
@@ -770,12 +787,14 @@ export class AgentsStore {
       if (config.transport === 'websocket') {
         this.disposeClient(agentId);
         await this.connectAgent(config.id, true);
+        if (this.connectGeneration(agentId) !== generation) return;
         await this.refreshAgent(config);
       } else {
         const status = await restartAgent(config);
         this.statuses = { ...this.statuses, [config.id]: status };
         await this.connectAgent(config.id, true);
       }
+      if (this.connectGeneration(agentId) !== generation) return;
       await Promise.allSettled([
         this.refreshSessionsForAgent(config.id, true),
         this.refreshMeshForAgent(config.id),
@@ -790,17 +809,85 @@ export class AgentsStore {
   }
 
   async connectAgent(agentId: string, force = false) {
-    const config = this.configs.find((candidate) => candidate.id === agentId);
-    if (!config) {
-      return;
-    }
+    const generation = this.connectGeneration(agentId);
+    while (true) {
+      if (this.connectGeneration(agentId) !== generation) {
+        return;
+      }
 
-    const existing = this.clients.get(agentId);
-    if (!force && existing?.connectionState === 'initialized' && existing.initializeResponse) {
-      return;
-    }
+      const config = this.configs.find((candidate) => candidate.id === agentId);
+      if (!config) {
+        return;
+      }
 
-    const record = this.ensureClientRecord(agentId, force);
+      const inFlight = this.connectFlights.get(agentId);
+      if (inFlight) {
+        // Overlapping startup (webview reload) must not dispose a handshake
+        // that is still current, even when the other caller passed force.
+        await inFlight.promise;
+        if (this.connectGeneration(agentId) !== generation) {
+          return;
+        }
+        const joined = this.clients.get(agentId);
+        if (joined?.initializeResponse) {
+          return;
+        }
+        continue;
+      }
+
+      const existing = this.clients.get(agentId);
+      if (!force && existing?.initializeResponse) {
+        return;
+      }
+
+      const record = this.ensureClientRecord(agentId, force);
+      let abortConnect: () => void = () => {};
+      const aborted = new Promise<never>((_, reject) => {
+        abortConnect = () => reject(CONNECT_ABORTED);
+      });
+      aborted.catch(() => undefined);
+
+      const connectPromise = this.connectAgentUnlocked(agentId, config, record, aborted);
+      const flight: ConnectFlight = {
+        owner: record,
+        promise: connectPromise,
+        abort: abortConnect
+      };
+      this.connectFlights.set(agentId, flight);
+      try {
+        await connectPromise;
+      } finally {
+        if (this.connectFlights.get(agentId) === flight) {
+          this.connectFlights.delete(agentId);
+        }
+      }
+      if (this.connectGeneration(agentId) !== generation) {
+        return;
+      }
+      if (this.clients.get(agentId) === record) {
+        return;
+      }
+    }
+  }
+
+  private initializedClientRecord(agentId: string): AgentClientRecord | undefined {
+    const record = this.clients.get(agentId);
+    return record?.initializeResponse ? record : undefined;
+  }
+
+  private async connectInitializedRecord(agentId: string): Promise<AgentClientRecord | undefined> {
+    if (!this.initializedClientRecord(agentId)) {
+      await this.connectAgent(agentId);
+    }
+    return this.initializedClientRecord(agentId);
+  }
+
+  private async connectAgentUnlocked(
+    agentId: string,
+    config: AgentConfig,
+    record: AgentClientRecord,
+    aborted: Promise<never>
+  ) {
     record.connectionState = 'connecting';
     record.error = null;
 
@@ -808,7 +895,12 @@ export class AgentsStore {
       if (!record.unsubscribeInbox) {
         record.unsubscribeInbox = inboxStore.bindClient(record.client, config.id, config.name);
       }
-      record.initializeResponse = await record.client.connect();
+      const handshake = record.client.connect();
+      void handshake.catch(() => undefined);
+      record.initializeResponse = await Promise.race([handshake, aborted]);
+      if (this.clients.get(agentId) !== record) {
+        return;
+      }
       record.connectionState = 'initialized';
       this.cancelReconnect(agentId);
       this.reconnectAttempts.delete(agentId);
@@ -833,6 +925,9 @@ export class AgentsStore {
         void this.refreshDelegateAssignments(config.id, this.activeSessionId);
       }
     } catch (error) {
+      if (error === CONNECT_ABORTED || this.clients.get(agentId) !== record) {
+        return;
+      }
       record.error = error instanceof Error ? error.message : `Failed to initialize ${config.name}.`;
       record.connectionState = 'failed';
       this.connectionStates = {
@@ -876,9 +971,12 @@ export class AgentsStore {
   }
 
   async loadInitialModelsForAgent(agentId: string, attempts = 1) {
-    const record = this.ensureClientRecord(agentId);
-    if (record.connectionState !== 'initialized') {
+    if (!this.initializedClientRecord(agentId)) {
       await this.connectAgent(agentId);
+    }
+    const record = this.initializedClientRecord(agentId);
+    if (!record) {
+      return;
     }
 
     for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -937,9 +1035,13 @@ export class AgentsStore {
       return;
     }
 
-    const record = this.ensureClientRecord(agentId);
-    if (record.connectionState === 'idle' || record.connectionState === 'failed') {
+    let record = this.initializedClientRecord(agentId);
+    if (!record) {
       await this.connectAgent(agentId);
+      record = this.initializedClientRecord(agentId);
+    }
+    if (!record) {
+      return;
     }
 
     record.connectionState = 'loading-sessions';
@@ -1207,8 +1309,10 @@ export class AgentsStore {
     try {
       const config = this.configs.find((candidate) => candidate.id === source.agentId);
       if (!config) throw new Error(`Unable to locate ${source.agentName} for workspace sessions.`);
-      const record = this.ensureClientRecord(source.agentId);
-      await this.connectAgent(source.agentId);
+      const record = await this.connectInitializedRecord(source.agentId);
+      if (!record) {
+        throw new Error(`Unable to connect ${source.agentName} for workspace sessions.`);
+      }
       current = this.workspaceSessionSources[source.agentId]?.[source.cwd];
 
       const requestCursor = current?.initialized ? current.nextCursor : null;
@@ -1290,8 +1394,10 @@ export class AgentsStore {
       throw new Error('Unable to locate the agent for this session.');
     }
 
-    await this.connectAgent(agentId);
-    const record = this.ensureClientRecord(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Unable to locate the agent for this session.');
+    }
     if (!record.initializeResponse?.agentCapabilities?.sessionCapabilities?.delete) {
       throw new Error(`${config.name} does not support deleting sessions.`);
     }
@@ -1344,8 +1450,10 @@ export class AgentsStore {
       }
     }
 
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error(`Failed to connect ${config.name}.`);
+    }
 
     const response = await record.client.createSession(
       normalizedCwd,
@@ -1441,13 +1549,15 @@ export class AgentsStore {
 
     const agentId = this.activeAgentId;
     const sessionId = this.activeSessionId;
-    const record = this.ensureClientRecord(agentId);
     const imageMode = chatPreferencesStore.imageSendMode;
     const clientPromptId = retryFailure?.clientPromptId ?? createClientPromptId();
     let turnEventIndex = retryFailure?.turnEventIndex;
 
     try {
-      await this.connectAgent(agentId);
+      const record = await this.connectInitializedRecord(agentId);
+      if (!record) {
+        throw new Error('Failed to connect to the agent.');
+      }
       const hasImages = attachments.some((attachment) => attachment.mimeType.startsWith('image/'));
       const hasResources = attachments.some(
         (attachment) => imageMode === 'resource' || !attachment.mimeType.startsWith('image/')
@@ -1539,13 +1649,14 @@ export class AgentsStore {
       return;
     }
 
-    const record = this.ensureClientRecord(this.activeAgentId);
-
     try {
       this.error = null;
       this.activeSession.activityLabel = 'Cancelling turn…';
       this.activeSession.lastError = null;
-      await this.connectAgent(this.activeAgentId);
+      const record = await this.connectInitializedRecord(this.activeAgentId);
+      if (!record) {
+        throw new Error('Failed to cancel ACP prompt.');
+      }
       await record.client.cancelSession(this.activeSessionId);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to cancel ACP prompt.';
@@ -1581,8 +1692,11 @@ export class AgentsStore {
 
     this.acknowledgeSession(agentId, sessionId);
 
-    await this.connectAgent(agentId);
-    const record = this.ensureClientRecord(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      this.error = 'Failed to connect to the agent.';
+      return;
+    }
 
     if (!record.initializeResponse?.agentCapabilities?.loadSession) {
       this.error = 'This agent does not support session/load.';
@@ -1772,8 +1886,11 @@ export class AgentsStore {
       return null;
     }
 
-    await this.connectAgent(agentId);
-    const record = this.ensureClientRecord(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      this.error = 'Failed to connect to the agent.';
+      return null;
+    }
     if (!this.canForkSession(agentId)) {
       this.error = 'This agent does not support session forks.';
       return null;
@@ -1840,8 +1957,11 @@ export class AgentsStore {
     const sessionId = this.activeSessionId;
     const target = getUndoableSessionTurns(this.activeSession).find((turn) => turn.messageId === messageId);
     if (!target || !canUndoToMessage(this.activeSession, messageId)) return false;
-    await this.connectAgent(agentId);
-    const record = this.ensureClientRecord(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      this.error = 'Failed to connect to the agent.';
+      return false;
+    }
     if (!this.canUseSessionUndo(agentId)) {
       this.error = 'This agent does not support session undo and redo.';
       return false;
@@ -1901,8 +2021,11 @@ export class AgentsStore {
 
     const agentId = this.activeAgentId;
     const sessionId = this.activeSessionId;
-    await this.connectAgent(agentId);
-    const record = this.ensureClientRecord(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      this.error = 'Failed to connect to the agent.';
+      return false;
+    }
     if (!this.canUseSessionUndo(agentId)) {
       this.error = 'This agent does not support session undo and redo.';
       return false;
@@ -2126,9 +2249,22 @@ export class AgentsStore {
     return record;
   }
 
+  private connectGeneration(agentId: string): number {
+    return this.connectGenerations.get(agentId) ?? 0;
+  }
+
+  private invalidateConnectGeneration(agentId: string) {
+    this.connectGenerations.set(agentId, this.connectGeneration(agentId) + 1);
+  }
+
   private disposeClient(agentId: string) {
     const record = this.clients.get(agentId);
     if (!record) return;
+    const flight = this.connectFlights.get(agentId);
+    if (flight?.owner === record) {
+      this.connectFlights.delete(agentId);
+      flight.abort();
+    }
     record.unsubscribeSessionUpdates?.();
     record.unsubscribeExtensionNotifications?.();
     record.unsubscribeConnectionLoss?.();
@@ -2220,8 +2356,10 @@ export class AgentsStore {
   }
 
   async refreshAuthProviders(agentId: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      return [];
+    }
 
     if (!record.client.supportsQuerymtFeature('auth')) {
       this.authProvidersByAgent = {
@@ -2271,46 +2409,58 @@ export class AgentsStore {
   }
 
   async startProviderSignIn(agentId: string, provider: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     return record.client.startProviderOAuth(provider);
   }
 
   async completeProviderSignIn(agentId: string, flow_id: string, response: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const result = await record.client.completeProviderOAuth(flow_id, response);
     await Promise.allSettled([this.refreshAuthProviders(agentId), this.refreshModelsForAgent(agentId)]);
     return result;
   }
 
   async disconnectProvider(agentId: string, provider: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const result = await record.client.disconnectProviderOAuth(provider);
     await Promise.allSettled([this.refreshAuthProviders(agentId), this.refreshModelsForAgent(agentId)]);
     return result;
   }
 
   async setProviderApiToken(agentId: string, provider: string, api_key: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const result = await record.client.setProviderApiToken(provider, api_key);
     await Promise.allSettled([this.refreshAuthProviders(agentId), this.refreshModelsForAgent(agentId)]);
     return result;
   }
 
   async clearProviderApiToken(agentId: string, provider: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const result = await record.client.clearProviderApiToken(provider);
     await Promise.allSettled([this.refreshAuthProviders(agentId), this.refreshModelsForAgent(agentId)]);
     return result;
   }
 
   async setProviderAuthMethod(agentId: string, provider: string, method: AuthMethod) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const result = await record.client.setProviderAuthMethod(provider, method);
     await Promise.allSettled([this.refreshAuthProviders(agentId), this.refreshModelsForAgent(agentId)]);
     return result;
@@ -2330,8 +2480,10 @@ export class AgentsStore {
   }
 
   async updatePluginsForAgent(agentId: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     this.pluginUpdateStatusByAgent = {
       ...this.pluginUpdateStatusByAgent,
       [agentId]: {
@@ -2356,8 +2508,10 @@ export class AgentsStore {
   }
 
   async refreshSchedulesForAgent(agentId: string, node_id?: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const schedules = await record.client.listSchedules(node_id ? { node_id } : {});
     this.schedulesByAgent = {
       ...this.schedulesByAgent,
@@ -2367,8 +2521,10 @@ export class AgentsStore {
   }
 
   async createSchedule(agentId: string, request: CreateScheduleControlRequest) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const schedule = await record.client.createSchedule(request);
     this.lastCreatedScheduleByAgent = {
       ...this.lastCreatedScheduleByAgent,
@@ -2384,8 +2540,10 @@ export class AgentsStore {
     schedule_public_id: string,
     node_id?: string
   ) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const request = node_id ? { node_id, schedule_public_id } : { schedule_public_id };
     const result =
       action === 'pause'
@@ -2404,8 +2562,10 @@ export class AgentsStore {
   }
 
   async refreshMeshForAgent(agentId: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const [meshStatus, meshNodes, meshInvites] = await Promise.all([
       record.client.listMeshStatus(),
       record.client.listMeshNodes(),
@@ -2427,8 +2587,10 @@ export class AgentsStore {
   }
 
   async createMeshInvite(agentId: string, request: CreateMeshInviteRequest = {}) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const result = await record.client.createMeshInvite(request);
     this.lastMeshInviteByAgent = {
       ...this.lastMeshInviteByAgent,
@@ -2439,8 +2601,10 @@ export class AgentsStore {
   }
 
   async revokeMeshInvite(agentId: string, invite_id: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const result = await record.client.revokeMeshInvite({ invite_id });
     this.lastMeshRevokeByAgent = {
       ...this.lastMeshRevokeByAgent,
@@ -2451,8 +2615,10 @@ export class AgentsStore {
   }
 
   async refreshRemoteSessionsForAgent(agentId: string, node_id: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const result = await record.client.listRemoteSessions({ node_id });
     this.remoteSessionsByAgent = {
       ...this.remoteSessionsByAgent,
@@ -2481,8 +2647,10 @@ export class AgentsStore {
   }
 
   private async createRemoteSessionAttach(agentId: string, node_id: string, cwd?: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const result = await record.client.createRemoteSession({ node_id, cwd, attach: true });
     this.lastRemoteAttachByAgent = {
       ...this.lastRemoteAttachByAgent,
@@ -2493,8 +2661,10 @@ export class AgentsStore {
 
   async attachRemoteSession(agentId: string, node_id: string, session_id: string) {
     const remoteSession = this.remoteSessionsByAgent[agentId]?.[node_id]?.sessions.find((session) => session.id === session_id);
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const result = await record.client.attachRemoteSession({ node_id, session_id });
     this.lastRemoteAttachByAgent = {
       ...this.lastRemoteAttachByAgent,
@@ -2552,8 +2722,10 @@ export class AgentsStore {
   }
 
   async dismissRemoteSession(agentId: string, node_id: string, session_id: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
     const result = await record.client.dismissRemoteSession(session_id);
     this.lastRemoteDismissByAgent = {
       ...this.lastRemoteDismissByAgent,
@@ -2588,8 +2760,10 @@ export class AgentsStore {
   }
 
   async refreshModelsForAgent(agentId: string) {
-    const record = this.ensureClientRecord(agentId);
-    await this.connectAgent(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      return;
+    }
     await this.loadModelsForAgent(agentId, () => record.client.refreshAndListModels(), 'Failed to refresh models.', {
       refreshModelInfo: true
     });
@@ -2762,8 +2936,10 @@ export class AgentsStore {
     const previous = this.sessionConfigRequests.get(key);
     const request = (async () => {
       if (previous) await previous.catch(() => undefined);
-      await this.connectAgent(agentId);
-      const record = this.ensureClientRecord(agentId);
+      const record = await this.connectInitializedRecord(agentId);
+      if (!record) {
+        throw new Error('Failed to connect to the agent.');
+      }
       const oldOptions = this.getSessionConfigOptions(agentId, sessionId);
       const payload = options.model
         ? setModelConfigOptionRequest(sessionId, options.model, configId)
@@ -3215,8 +3391,10 @@ export class AgentsStore {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config || config.transport !== 'websocket' || !config.enabled || !config.autoStart) return;
 
+    const generation = this.connectGeneration(agentId);
     this.completedWorkspaceDiscoveries.delete(agentId);
     await this.connectAgent(agentId, true);
+    if (this.connectGeneration(agentId) !== generation) return;
     const record = this.clients.get(agentId);
     if (record?.connectionState === 'initialized') {
       await Promise.allSettled([
