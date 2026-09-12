@@ -228,6 +228,7 @@ let mermaidPromise: Promise<MermaidApi> | null = null;
 let mermaidRenderId = 0;
 let mermaidSourceId = 0;
 let mermaidTheme: 'dark' | 'light' | null = null;
+const mermaidRenderGenerations = new WeakMap<HTMLElement, number>();
 const mermaidRoots = new Set<HTMLElement>();
 let mermaidThemeObserver: MutationObserver | null = null;
 
@@ -373,17 +374,22 @@ async function paintMermaidDiagram(
   root?: HTMLElement,
   isActive?: () => boolean
 ) {
+  const generation = (mermaidRenderGenerations.get(shell) ?? 0) + 1;
+  mermaidRenderGenerations.set(shell, generation);
+  const isSuperseded = () => mermaidRenderGenerations.get(shell) !== generation;
+  const shouldAbort = () => (isActive && !isActive()) || isSuperseded();
+
   let svg = '';
   let renderTheme: 'dark' | 'light';
   do {
     const rendered = await svgForMermaid(source);
-    if (isActive && !isActive()) return;
+    if (shouldAbort()) return;
     svg = rendered.svg;
     renderTheme = rendered.theme;
     if (!svg) throw new Error('Mermaid produced empty SVG');
   } while (resolvedColorScheme() !== renderTheme);
 
-  if (isActive && !isActive()) return;
+  if (shouldAbort()) return;
 
   observer?.disconnect();
   const pre = shell.querySelector('pre');
@@ -396,6 +402,7 @@ async function paintMermaidDiagram(
     if (pre) pre.after(figure);
     else shell.append(figure);
   }
+  if (shouldAbort()) return;
   figure.innerHTML = svg;
   if (pre) hideMermaidSource(pre, figure);
   if (observer && root && (!isActive || isActive())) {
@@ -403,11 +410,12 @@ async function paintMermaidDiagram(
   }
 
   if (resolvedColorScheme() !== renderTheme) {
+    if (shouldAbort()) return;
     await paintMermaidDiagram(shell, source, observer, root, isActive);
     return;
   }
 
-  if (isActive && !isActive()) return;
+  if (shouldAbort()) return;
 
   shell.dataset.mermaidState = 'rendered';
   shell.dataset.mermaidTheme = renderTheme;

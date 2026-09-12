@@ -291,6 +291,52 @@ describe('enhanceCodeBlocks', () => {
     action.destroy?.();
   });
 
+  it('ignores a superseded mermaid SVG when overlapping theme paints resolve out of order', async () => {
+    document.body.innerHTML =
+      '<div class="host"><div class="code-block-shell"><pre><code class="language-mermaid">flowchart TD\n  A-->B</code></pre></div></div>';
+    const host = document.querySelector('.host') as HTMLElement;
+    const action = enhanceCodeBlocks(host);
+
+    await vi.waitFor(() => expect(mermaidRender).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect(document.querySelector('.code-block-shell')?.getAttribute('data-mermaid-state')).toBe('rendered')
+    );
+
+    const pending: Array<() => void> = [];
+    mermaidRender.mockImplementation(async () => {
+      const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+      const svg = `<svg data-mermaid-theme="${theme}"><g></g></svg>`;
+      return new Promise<{ svg: string }>((resolve) => {
+        pending.push(() => resolve({ svg }));
+      });
+    });
+
+    const shell = document.querySelector<HTMLElement>('.code-block-shell');
+    document.documentElement.dataset.theme = 'dark';
+    await vi.waitFor(() => expect(pending.length).toBe(1));
+
+    if (shell) shell.dataset.mermaidTheme = 'dark';
+    document.documentElement.dataset.theme = 'light';
+    await vi.waitFor(() => expect(pending.length).toBe(2));
+
+    pending[1]?.();
+    await vi.waitFor(() =>
+      expect(document.querySelector('.mermaid-diagram svg')?.getAttribute('data-mermaid-theme')).toBe('light')
+    );
+    expect(document.querySelector('.mermaid-diagram svg')?.getAttribute('data-mermaid-theme')).not.toBe('dark');
+
+    pending[0]?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(document.querySelector('.mermaid-diagram svg')?.getAttribute('data-mermaid-theme')).toBe('light');
+    expect(shell?.dataset.mermaidTheme).toBe('light');
+    expect(shell?.getAttribute('data-mermaid-state')).toBe('rendered');
+    expect(document.querySelector('.mermaid-diagram svg')?.getAttribute('data-mermaid-theme')).not.toBe('dark');
+    action.destroy?.();
+  });
+
   it('re-renders mermaid diagrams when the color scheme changes', async () => {
     document.body.innerHTML =
       '<div class="host"><div class="code-block-shell"><div class="code-block-header"><span class="code-block-language">mermaid</span><button class="code-block-copy" type="button" data-code-copy aria-label="Copy code">Copy</button></div><pre><code class="language-mermaid">flowchart TD\n  A-->B</code></pre></div></div>';
