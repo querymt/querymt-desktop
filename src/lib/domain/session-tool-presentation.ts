@@ -1,4 +1,14 @@
 import type { SessionToolCallItem } from '$lib/domain/types';
+import {
+  asObjectArray,
+  countLines,
+  EDIT_TOOLS,
+  parseObject,
+  replacementPair,
+  splitLines,
+  stringValue,
+  toolFilePath
+} from '$lib/domain/session-tool-args';
 
 export type SessionToolIcon =
   | 'terminal'
@@ -31,7 +41,6 @@ export type SessionToolPresentation = {
 };
 
 const READ_TOOLS = new Set(['read_tool', 'get_function', 'get_symbol', 'index', 'ls', 'read_shared']);
-const EDIT_TOOLS = new Set(['edit', 'multiedit', 'replace_symbol', 'write_file']);
 const SEARCH_TOOLS = new Set(['search_text', 'glob', 'find_references', 'find_symbol_references', 'mdq', 'language_query']);
 const WEB_TOOLS = new Set(['browse', 'web_fetch']);
 const TASK_TOOLS = new Set(['create_task', 'todowrite', 'todoread']);
@@ -204,10 +213,8 @@ function sumChangeStats(items: Record<string, unknown>[] | null): SessionToolCha
 }
 
 function replacementStats(value: Record<string, unknown>): SessionToolChangeStats | null {
-  const oldText = optionalString(value, ['oldString', 'old_string', 'oldText', 'old_text']);
-  const newText = optionalString(value, ['newString', 'new_string', 'newText', 'new_text']);
-  if (oldText === null && newText === null) return null;
-  return lineChangeStats(oldText ?? '', newText ?? '');
+  const pair = replacementPair(value);
+  return pair ? lineChangeStats(pair.oldText, pair.newText) : null;
 }
 
 function lineChangeStats(oldText: string, newText: string): SessionToolChangeStats | null {
@@ -227,28 +234,6 @@ function lineChangeStats(oldText: string, newText: string): SessionToolChangeSta
 
 function compactChangeStats(added: number, removed: number): SessionToolChangeStats | null {
   return added > 0 || removed > 0 ? { added, removed } : null;
-}
-
-function asObjectArray(value: unknown): Record<string, unknown>[] | null {
-  if (!Array.isArray(value) || value.length === 0) return null;
-  const items = value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item));
-  return items.length > 0 ? items : null;
-}
-
-function optionalString(value: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    if (typeof value[key] === 'string') return value[key];
-  }
-  return null;
-}
-
-function countLines(value: string): number {
-  return splitLines(value).length;
-}
-
-function splitLines(value: string): string[] {
-  if (!value) return [];
-  return value.endsWith('\n') ? value.slice(0, -1).split('\n') : value.split('\n');
 }
 
 function toolPreview(name: string, args: Record<string, unknown> | null, rawResult: string | null | undefined): string | null {
@@ -292,25 +277,10 @@ function toolPreview(name: string, args: Record<string, unknown> | null, rawResu
     return replacements.length > 1 ? compact(`${firstPath || 'symbols'} +${replacements.length - 1} more`) : compact(firstPath);
   }
 
-  const path = stringValue(args.path) || stringValue(args.filePath) || stringValue(args.file_path) || stringValue(args.root);
+  const path = toolFilePath(args) || stringValue(args.root);
   if (path) return compact(path);
   const symbol = stringValue(args.symbol) || stringValue(args.pattern) || stringValue(args.action);
   return compact(symbol) ?? resultPreview(rawResult);
-}
-
-function parseObject(value: string | null | undefined): Record<string, unknown> | null {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-  try {
-    const parsed = JSON.parse(trimmed);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
 }
 
 function quote(value: string): string {
