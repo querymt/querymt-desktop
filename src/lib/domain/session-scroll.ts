@@ -53,8 +53,8 @@ export type FollowScrollScheduler = {
 export function createFollowScrollScheduler(
   pin: () => void,
   isFollowing: () => boolean,
-  requestFrame: typeof requestAnimationFrame = requestAnimationFrame,
-  cancelFrame: typeof cancelAnimationFrame = cancelAnimationFrame
+  requestFrame: typeof requestAnimationFrame = (callback) => requestAnimationFrame(callback),
+  cancelFrame: typeof cancelAnimationFrame = (handle) => cancelAnimationFrame(handle)
 ): FollowScrollScheduler {
   let frame: number | null = null;
 
