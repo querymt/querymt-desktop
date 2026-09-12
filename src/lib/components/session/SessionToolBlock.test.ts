@@ -1,13 +1,28 @@
 import '@testing-library/jest-dom/vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SessionToolBlock from './SessionToolBlock.svelte';
 
+const appCss = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
+
 const goto = vi.hoisted(() => vi.fn(async () => undefined));
+const loadSessionToolPatchDiff = vi.hoisted(() =>
+  vi.fn(async () => {
+    const { default: MockPatchDiff } = await import('./SessionToolPatchDiff.stub.svelte');
+    return { default: MockPatchDiff };
+  })
+);
 vi.mock('$app/navigation', () => ({ goto }));
 vi.mock('$app/state', () => ({
   page: { params: { agentId: 'agent-1' } }
 }));
+vi.mock('./session-tool-patch-diff', () => ({ loadSessionToolPatchDiff }));
+vi.mock('./SessionToolPatchDiff.svelte', async () => {
+  const { default: MockPatchDiff } = await import('./SessionToolPatchDiff.stub.svelte');
+  return { default: MockPatchDiff };
+});
 
 const writeText = vi.fn().mockResolvedValue(undefined);
 Object.assign(navigator, { clipboard: { writeText } });
@@ -16,6 +31,11 @@ afterEach(() => {
   cleanup();
   writeText.mockClear();
   goto.mockClear();
+  loadSessionToolPatchDiff.mockReset();
+  loadSessionToolPatchDiff.mockImplementation(async () => {
+    const { default: MockPatchDiff } = await import('./SessionToolPatchDiff.stub.svelte');
+    return { default: MockPatchDiff };
+  });
 });
 
 describe('SessionToolBlock', () => {
@@ -33,6 +53,7 @@ describe('SessionToolBlock', () => {
     expect(screen.getByText('Read file')).toBeInTheDocument();
     expect(screen.getByText('src/app.ts')).toBeInTheDocument();
     expect(screen.getByText('Completed')).toHaveClass('sr-only');
+    expect(screen.getByText('Read file').closest('details')).not.toHaveClass('session-tool-block-diff');
   });
 
   it('expands pretty-printed details and copies parameters', async () => {
@@ -48,8 +69,12 @@ describe('SessionToolBlock', () => {
 
     const toolGroup = screen.getByText('Run command').closest('details');
     expect(toolGroup).not.toBeNull();
+    expect(toolGroup).not.toHaveClass('session-tool-block-diff');
     await fireEvent.click(toolGroup!.querySelector('summary')!);
-    expect(screen.getByText(/"command": "bun"/)).toBeInTheDocument();
+    expect(await screen.findByText(/"command": "bun"/)).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Tool parameters' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show source data' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Hide source data' })).toBeNull();
     await fireEvent.click(screen.getByRole('button', { name: 'Copy parameters' }));
     expect(writeText).toHaveBeenCalledWith('{\n  "command": "bun",\n  "args": [\n    "run",\n    "check"\n  ]\n}');
   });
@@ -69,10 +94,168 @@ describe('SessionToolBlock', () => {
     const removed = screen.getByText('-2');
     expect(added).toHaveClass('session-tool-change-added');
     expect(removed).toHaveClass('session-tool-change-removed');
-    expect(screen.getByRole('group', { name: 'Edit file - src/app.ts +1 -2' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Edit file - src/app.ts +1 -2' })).toHaveClass('session-tool-block-diff');
   });
 
-  it('surfaces failed status and preserves error detail', () => {
+  it('keeps generated diffs and raw parameters collapsed until the tool row expands', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'edit-1',
+        title: 'Run edit',
+        kind: 'edit',
+        status: 'completed',
+        arguments: '{"path":"src/app.ts","oldString":"one\\ntwo\\nthree","newString":"one\\nfour"}',
+        result: 'OK src/app.ts updated'
+      }
+    });
+
+    const toolGroup = screen.getByText('Edit file').closest('details');
+    expect(toolGroup).not.toBeNull();
+    expect(toolGroup).not.toHaveAttribute('open');
+    expect(screen.queryByRole('region', { name: 'File diff' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+    expect(screen.queryByText(/"oldString"/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show source data' })).toBeNull();
+
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    expect(toolGroup).toHaveAttribute('open');
+    expect(toolGroup).toHaveClass('session-tool-block-diff');
+    expect(await screen.findByRole('region', { name: 'File diff' })).toBeInTheDocument();
+    expect(await screen.findByTestId('session-tool-diff')).toHaveAttribute('data-hide-file-header', 'true');
+    expect(screen.queryByText('Diff')).toBeNull();
+    expect(screen.queryByText('Diffs')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+
+    const showSource = screen.getByRole('button', { name: 'Show source data' });
+    expect(showSource).toHaveAttribute('aria-expanded', 'false');
+    expect(showSource.querySelector('.lucide-chevrons-left-right-ellipsis')).not.toBeNull();
+  });
+
+  it('reveals and hides raw source data for a completed edit diff', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'edit-1',
+        title: 'Run edit',
+        kind: 'edit',
+        status: 'completed',
+        arguments: '{"path":"src/app.ts","oldString":"one\\ntwo\\nthree","newString":"one\\nfour"}',
+        result: 'OK src/app.ts updated'
+      }
+    });
+
+    const toolGroup = screen.getByText('Edit file').closest('details');
+    expect(toolGroup).not.toBeNull();
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    expect(await screen.findByRole('region', { name: 'File diff' })).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Show source data' }));
+    const hideSource = screen.getByRole('button', { name: 'Hide source data' });
+    expect(hideSource).toHaveAttribute('aria-expanded', 'true');
+    expect(hideSource.querySelector('.lucide-chevrons-right-left')).not.toBeNull();
+    expect(screen.getByRole('region', { name: 'Tool parameters' })).toHaveTextContent(/"oldString": "one\\ntwo\\nthree"/);
+    expect(screen.getByRole('region', { name: 'Tool result' })).toHaveTextContent('OK src/app.ts updated');
+
+    await fireEvent.click(hideSource);
+    const showSource = screen.getByRole('button', { name: 'Show source data' });
+    expect(showSource).toHaveAttribute('aria-expanded', 'false');
+    expect(showSource.querySelector('.lucide-chevrons-left-right-ellipsis')).not.toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+  });
+
+  it('resets raw source data to hidden when the tool row is closed and reopened', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'edit-1',
+        title: 'Run edit',
+        kind: 'edit',
+        status: 'completed',
+        arguments: '{"path":"src/app.ts","oldString":"one\\ntwo\\nthree","newString":"one\\nfour"}',
+        result: 'OK src/app.ts updated'
+      }
+    });
+
+    const toolGroup = screen.getByText('Edit file').closest('details');
+    expect(toolGroup).not.toBeNull();
+    const summary = toolGroup!.querySelector('summary')!;
+    await fireEvent.click(summary);
+    expect(await screen.findByRole('region', { name: 'File diff' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Show source data' }));
+    expect(screen.getByRole('region', { name: 'Tool parameters' })).toBeInTheDocument();
+
+    await fireEvent.click(summary);
+    expect(toolGroup).not.toHaveAttribute('open');
+    await fireEvent(toolGroup!, new Event('toggle'));
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+
+    await fireEvent.click(summary);
+    expect(await screen.findByRole('region', { name: 'File diff' })).toBeInTheDocument();
+    const showSource = screen.getByRole('button', { name: 'Show source data' });
+    expect(showSource).toHaveAttribute('aria-expanded', 'false');
+    expect(showSource.querySelector('.lucide-chevrons-left-right-ellipsis')).not.toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+  });
+
+  it('shows a stable error when the diff preview fails to load', async () => {
+    loadSessionToolPatchDiff.mockRejectedValueOnce(new Error('Failed to fetch dynamically imported module'));
+
+    render(SessionToolBlock, {
+      tool: {
+        id: 'edit-1',
+        title: 'Run edit',
+        kind: 'edit',
+        status: 'completed',
+        arguments: '{"path":"src/app.ts","oldString":"one\\ntwo\\nthree","newString":"one\\nfour"}'
+      }
+    });
+
+    const toolGroup = screen.getByText('Edit file').closest('details');
+    expect(toolGroup).not.toBeNull();
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+
+    const error = await screen.findByText('Unable to load diff preview.');
+    expect(error).toHaveClass('session-tool-diff-error');
+    expect(screen.getByRole('region', { name: 'File diff' })).toBeInTheDocument();
+    expect(screen.queryByTestId('session-tool-diff')).toBeNull();
+  });
+
+  it('renders replace_symbol diffs only after expand', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'replace-1',
+        title: 'Run replace_symbol',
+        kind: 'replace_symbol',
+        status: 'completed',
+        arguments: JSON.stringify({
+          replacements: [
+            { path: 'src/a.ts', oldText: 'alpha', newText: 'beta' },
+            { path: 'src/b.ts', old_text: 'gamma', new_text: 'delta' }
+          ]
+        })
+      }
+    });
+
+    expect(screen.queryByRole('region', { name: 'File diff' })).toBeNull();
+    const toolGroup = screen.getByText('Replace symbol').closest('details');
+    expect(toolGroup).toHaveClass('session-tool-block-diff');
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    expect(await screen.findByRole('region', { name: 'File diff' })).toBeInTheDocument();
+    const stubs = await screen.findAllByTestId('session-tool-diff');
+    expect(stubs).toHaveLength(2);
+    expect(stubs[0]).toHaveAttribute('data-hide-file-header', 'false');
+    expect(stubs[1]).toHaveAttribute('data-hide-file-header', 'false');
+    expect(screen.queryByText('Diffs')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    const showSource = screen.getByRole('button', { name: 'Show source data' });
+    expect(showSource).toHaveAttribute('aria-expanded', 'false');
+    expect(showSource.querySelector('.lucide-chevrons-left-right-ellipsis')).not.toBeNull();
+  });
+
+  it('surfaces failed status and preserves error detail after expand', async () => {
     render(SessionToolBlock, {
       tool: {
         id: 'edit-1',
@@ -84,7 +267,14 @@ describe('SessionToolBlock', () => {
     });
 
     expect(screen.getByText('Failed')).toHaveClass('sr-only');
-    expect(screen.getByRole('region', { name: 'Tool result' })).toHaveTextContent('oldString not found');
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+    const toolGroup = screen.getByText('Edit file').closest('details');
+    expect(toolGroup).not.toHaveClass('session-tool-block-diff');
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    expect(await screen.findByRole('region', { name: 'Tool result' })).toHaveTextContent('oldString not found');
+    expect(screen.queryByRole('region', { name: 'File diff' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Show source data' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Hide source data' })).toBeNull();
   });
 
   it('opens the delegated child session without expanding the tool row', async () => {
@@ -119,5 +309,26 @@ describe('SessionToolBlock', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'Open linus session' })).toBeNull();
+  });
+});
+
+describe('session tool diff viewport', () => {
+  function cssRuleBody(selector: string) {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return appCss.match(new RegExp(`(?:^|\\n)${escaped} \\{([\\s\\S]*?)\\n\\}`))?.[1] ?? '';
+  }
+
+  const sessionToolDiffRule = cssRuleBody('.session-tool-diff');
+  const sessionToolDiffNoHeaderRule = cssRuleBody('.session-tool-diff-no-header');
+
+  it('shows up to 40 unwrapped code rows before the host scrolls', () => {
+    expect(sessionToolDiffRule).toContain('overflow: auto;');
+    expect(sessionToolDiffRule).toContain('--diffs-line-height: 18px;');
+    expect(sessionToolDiffRule).toContain('--session-tool-diff-chrome: 52px;');
+    expect(sessionToolDiffRule).toContain(
+      'max-height: calc(var(--diffs-line-height) * 40 + var(--session-tool-diff-chrome));'
+    );
+    expect(sessionToolDiffRule).not.toMatch(/^\s*height:/m);
+    expect(sessionToolDiffNoHeaderRule).toContain('--session-tool-diff-chrome: 18px;');
   });
 });
