@@ -161,6 +161,14 @@ interface AgentClientRecord {
   recentSessionUpdateKeys: string[];
 }
 
+interface ConnectFlight {
+  owner: AgentClientRecord;
+  promise: Promise<void>;
+  abort: () => void;
+}
+
+const CONNECT_ABORTED = Symbol('connect-aborted');
+
 const DEFAULT_AGENTS: AgentConfig[] = [
   {
     id: 'qmtcode-default',
@@ -174,6 +182,7 @@ const DEFAULT_AGENTS: AgentConfig[] = [
 
 export class AgentsStore {
   private clients = new Map<string, AgentClientRecord>();
+  private connectFlights = new Map<string, ConnectFlight>();
   private sessionRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectAttempts = new Map<string, number>();
@@ -709,7 +718,7 @@ export class AgentsStore {
     this.error = null;
     try {
       if (config.transport === 'websocket') {
-        await this.connectAgent(config.id, true);
+        await this.connectAgent(config.id);
         await this.refreshAgent(config);
       } else {
         const status = await startAgent(config);
@@ -790,17 +799,62 @@ export class AgentsStore {
   }
 
   async connectAgent(agentId: string, force = false) {
-    const config = this.configs.find((candidate) => candidate.id === agentId);
-    if (!config) {
-      return;
-    }
+    while (true) {
+      const config = this.configs.find((candidate) => candidate.id === agentId);
+      if (!config) {
+        return;
+      }
 
-    const existing = this.clients.get(agentId);
-    if (!force && existing?.connectionState === 'initialized' && existing.initializeResponse) {
-      return;
-    }
+      const inFlight = this.connectFlights.get(agentId);
+      if (inFlight) {
+        // Overlapping startup (webview reload) must not dispose a handshake
+        // that is still current, even when the other caller passed force.
+        await inFlight.promise;
+        const joined = this.clients.get(agentId);
+        if (joined?.initializeResponse) {
+          return;
+        }
+        continue;
+      }
 
-    const record = this.ensureClientRecord(agentId, force);
+      const existing = this.clients.get(agentId);
+      if (!force && existing?.initializeResponse) {
+        return;
+      }
+
+      const record = this.ensureClientRecord(agentId, force);
+      let abortConnect: () => void = () => {};
+      const aborted = new Promise<never>((_, reject) => {
+        abortConnect = () => reject(CONNECT_ABORTED);
+      });
+      aborted.catch(() => undefined);
+
+      const connectPromise = this.connectAgentUnlocked(agentId, config, record, aborted);
+      const flight: ConnectFlight = {
+        owner: record,
+        promise: connectPromise,
+        abort: abortConnect
+      };
+      this.connectFlights.set(agentId, flight);
+      try {
+        await connectPromise;
+      } finally {
+        if (this.connectFlights.get(agentId) === flight) {
+          this.connectFlights.delete(agentId);
+        }
+      }
+      if (this.clients.get(agentId) === record) {
+        return;
+      }
+    }
+  }
+
+  private async connectAgentUnlocked(
+    agentId: string,
+    config: AgentConfig,
+    record: AgentClientRecord,
+    aborted: Promise<never>
+  ) {
     record.connectionState = 'connecting';
     record.error = null;
 
@@ -808,7 +862,12 @@ export class AgentsStore {
       if (!record.unsubscribeInbox) {
         record.unsubscribeInbox = inboxStore.bindClient(record.client, config.id, config.name);
       }
-      record.initializeResponse = await record.client.connect();
+      const handshake = record.client.connect();
+      void handshake.catch(() => undefined);
+      record.initializeResponse = await Promise.race([handshake, aborted]);
+      if (this.clients.get(agentId) !== record) {
+        return;
+      }
       record.connectionState = 'initialized';
       this.cancelReconnect(agentId);
       this.reconnectAttempts.delete(agentId);
@@ -833,6 +892,9 @@ export class AgentsStore {
         void this.refreshDelegateAssignments(config.id, this.activeSessionId);
       }
     } catch (error) {
+      if (error === CONNECT_ABORTED || this.clients.get(agentId) !== record) {
+        return;
+      }
       record.error = error instanceof Error ? error.message : `Failed to initialize ${config.name}.`;
       record.connectionState = 'failed';
       this.connectionStates = {
@@ -937,9 +999,13 @@ export class AgentsStore {
       return;
     }
 
-    const record = this.ensureClientRecord(agentId);
-    if (record.connectionState === 'idle' || record.connectionState === 'failed') {
+    let record: AgentClientRecord | undefined = this.ensureClientRecord(agentId);
+    if (record.connectionState !== 'initialized' || !record.initializeResponse) {
       await this.connectAgent(agentId);
+      record = this.clients.get(agentId);
+    }
+    if (!record || record.connectionState !== 'initialized' || !record.initializeResponse) {
+      return;
     }
 
     record.connectionState = 'loading-sessions';
@@ -2129,6 +2195,11 @@ export class AgentsStore {
   private disposeClient(agentId: string) {
     const record = this.clients.get(agentId);
     if (!record) return;
+    const flight = this.connectFlights.get(agentId);
+    if (flight?.owner === record) {
+      this.connectFlights.delete(agentId);
+      flight.abort();
+    }
     record.unsubscribeSessionUpdates?.();
     record.unsubscribeExtensionNotifications?.();
     record.unsubscribeConnectionLoss?.();

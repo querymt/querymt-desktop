@@ -205,6 +205,11 @@ beforeEach(() => {
   mockListen.mockResolvedValue(() => undefined);
   mockListManagedProfiles.mockResolvedValue([]);
   mockClient.resetSessionUpdateHandler();
+  mockClient.connect.mockReset().mockImplementation(async (): Promise<InitializeResponse> => ({
+    protocolVersion: 1,
+    agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
+    authMethods: []
+  }));
   mockClient.listModels.mockResolvedValue([]);
   mockClient.refreshAndListModels.mockResolvedValue([]);
   mockClient.getModelInfo.mockResolvedValue({});
@@ -2567,6 +2572,227 @@ describe('AgentsStore prompt session start', () => {
     expect(mockClient.listSessions).toHaveBeenCalledWith(listSessionsRequest({ cursor: 'reconnect-page-2' }));
     expect(store.connectionStates['remote-agent']).toBe('initialized');
     vi.useRealTimers();
+  });
+
+  it('reuses a single in-flight connect for overlapping callers', async () => {
+    let releaseConnect: () => void = () => {};
+    mockClient.connect.mockImplementationOnce(
+      () =>
+        new Promise<InitializeResponse>((resolve) => {
+          releaseConnect = () =>
+            resolve({
+              protocolVersion: 1,
+              agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
+              authMethods: []
+            });
+        })
+    );
+    const store = createStore();
+
+    const first = store.connectAgent('agent-1');
+    const second = store.connectAgent('agent-1');
+    releaseConnect();
+    await Promise.all([first, second]);
+
+    expect(mockClient.connect).toHaveBeenCalledTimes(1);
+    expect(mockClient.disconnect).not.toHaveBeenCalled();
+    expect(store.connectionStates['agent-1']).toBe('initialized');
+  });
+
+  it('joins a live handshake instead of force-disconnecting it', async () => {
+    let releaseConnect: () => void = () => {};
+    mockClient.connect.mockImplementationOnce(
+      () =>
+        new Promise<InitializeResponse>((resolve) => {
+          releaseConnect = () =>
+            resolve({
+              protocolVersion: 1,
+              agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
+              authMethods: []
+            });
+        })
+    );
+    const store = createStore();
+
+    const first = store.connectAgent('agent-1');
+    const forced = store.connectAgent('agent-1', true);
+    releaseConnect();
+    await Promise.all([first, forced]);
+
+    expect(mockClient.connect).toHaveBeenCalledTimes(1);
+    expect(mockClient.disconnect).not.toHaveBeenCalled();
+    expect(store.connectionStates['agent-1']).toBe('initialized');
+  });
+
+  it('waits for connect before listing on a fresh reload when initialize starts first', async () => {
+    let releaseConnect: () => void = () => {};
+    let connectStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      connectStarted = resolve;
+    });
+    mockClient.connect.mockImplementationOnce(async () => {
+      connectStarted();
+      await new Promise<void>((resolve) => {
+        releaseConnect = resolve;
+      });
+      return {
+        protocolVersion: 1,
+        agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
+        authMethods: []
+      };
+    });
+    mockClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+    mockClient.listSessions.mockResolvedValue({ sessions: [] });
+    const store = createStore();
+    store.configs = [
+      {
+        id: 'remote-agent',
+        name: 'Remote QueryMT',
+        transport: 'websocket',
+        commandLine: '',
+        websocketUrl: '127.0.0.1:3030',
+        enabled: true,
+        autoStart: true
+      }
+    ];
+    expect(store.sessionsByAgent['remote-agent'] ?? []).toEqual([]);
+
+    const initializePromise = store.initialize();
+    await started;
+    const loadPromise = store.loadSession('remote-agent', 'session-1');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    releaseConnect();
+    await Promise.all([initializePromise, loadPromise]);
+
+    expect(mockClient.connect).toHaveBeenCalledTimes(1);
+    expect(mockClient.disconnect).not.toHaveBeenCalled();
+    expect(mockClient.listSessions).toHaveBeenCalled();
+    expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '/tmp/work');
+    expect(store.loading).toBe(false);
+    expect(store.connectionStates['remote-agent']).toBe('initialized');
+    expect(store.error).toBeNull();
+  });
+
+  it('waits for connect before listing on a fresh reload when loadSession starts first', async () => {
+    let releaseConnect: () => void = () => {};
+    let connectStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      connectStarted = resolve;
+    });
+    mockClient.connect.mockImplementationOnce(async () => {
+      connectStarted();
+      await new Promise<void>((resolve) => {
+        releaseConnect = resolve;
+      });
+      return {
+        protocolVersion: 1,
+        agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
+        authMethods: []
+      };
+    });
+    mockClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+    mockClient.listSessions.mockResolvedValue({ sessions: [] });
+    const store = createStore();
+    store.configs = [
+      {
+        id: 'remote-agent',
+        name: 'Remote QueryMT',
+        transport: 'websocket',
+        commandLine: '',
+        websocketUrl: '127.0.0.1:3030',
+        enabled: true,
+        autoStart: true
+      }
+    ];
+    expect(store.sessionsByAgent['remote-agent'] ?? []).toEqual([]);
+
+    const loadPromise = store.loadSession('remote-agent', 'session-1');
+    await started;
+    const initializePromise = store.initialize();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    releaseConnect();
+    await Promise.all([loadPromise, initializePromise]);
+
+    expect(mockClient.connect).toHaveBeenCalledTimes(1);
+    expect(mockClient.disconnect).not.toHaveBeenCalled();
+    expect(mockClient.listSessions).toHaveBeenCalled();
+    expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '/tmp/work');
+    expect(store.loading).toBe(false);
+    expect(store.connectionStates['remote-agent']).toBe('initialized');
+    expect(store.error).toBeNull();
+  });
+
+  it('wakes in-flight connect waiters after connection loss and starts a new handshake', async () => {
+    const initializeResponse: InitializeResponse = {
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
+      authMethods: []
+    };
+    const pendingResolvers: Array<(value: InitializeResponse) => void> = [];
+    let holdConnect = true;
+    mockClient.connect.mockImplementation(
+      () => {
+        if (!holdConnect) {
+          return Promise.resolve(initializeResponse);
+        }
+        return new Promise<InitializeResponse>((resolve) => {
+          pendingResolvers.push(resolve);
+        });
+      }
+    );
+    mockClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+    mockClient.listSessions.mockResolvedValue({ sessions: [] });
+    const store = createStore();
+    store.configs = [
+      {
+        id: 'remote-agent',
+        name: 'Remote QueryMT',
+        transport: 'websocket',
+        commandLine: '',
+        websocketUrl: '127.0.0.1:3030',
+        enabled: true,
+        autoStart: true
+      }
+    ];
+
+    const initializePromise = store.initialize();
+    await vi.waitFor(() => expect(pendingResolvers).toHaveLength(1));
+    const waiter = store.connectAgent('remote-agent');
+    expect(mockClient.connect).toHaveBeenCalledTimes(1);
+
+    mockClient.emitConnectionLoss('WebSocket closed (code 1006).');
+
+    await vi.waitFor(() => expect(pendingResolvers).toHaveLength(2));
+    expect(mockClient.disconnect).toHaveBeenCalled();
+    holdConnect = false;
+    pendingResolvers[1]?.(initializeResponse);
+
+    await Promise.all([initializePromise, waiter]);
+    expect(store.loading).toBe(false);
+    expect(store.connectionStates['remote-agent']).toBe('initialized');
+    expect(store.error).toBeNull();
+  });
+
+  it('still force-reconnects a websocket agent after the previous handshake has settled', async () => {
+    const store = createStore();
+    store.configs = [
+      {
+        id: 'remote-agent',
+        name: 'Remote QueryMT',
+        transport: 'websocket',
+        commandLine: '',
+        websocketUrl: '127.0.0.1:3030',
+        enabled: true,
+        autoStart: true
+      }
+    ];
+
+    await store.connectAgent('remote-agent');
+    await store.connectAgent('remote-agent', true);
+
+    expect(mockClient.connect).toHaveBeenCalledTimes(2);
+    expect(mockClient.disconnect).toHaveBeenCalledTimes(1);
+    expect(store.connectionStates['remote-agent']).toBe('initialized');
   });
 
   it('continues refreshing other agents when one session refresh fails', async () => {
