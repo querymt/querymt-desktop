@@ -3,6 +3,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { normalizeMarkdownCodeFences, renderMarkdownToHtml, splitStreamingMarkdown } from './markdown';
 
 describe('renderMarkdownToHtml', () => {
+  it('keeps mermaid fences as language-tagged code blocks', () => {
+    const html = renderMarkdownToHtml('```mermaid\nflowchart TD\n  A-->B\n```');
+
+    expect(html).toContain('code-block-shell');
+    expect(html).toContain('language-mermaid');
+    expect(html).toContain('flowchart TD');
+    expect(html).not.toContain('<svg');
+  });
+
   it('wraps fenced code in a constrained code-block shell', () => {
     const html = renderMarkdownToHtml('```ts\nconst value = "hello";\n```');
 

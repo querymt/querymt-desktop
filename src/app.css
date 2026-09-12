@@ -5134,6 +5134,17 @@ summary:focus-visible {
   text-transform: uppercase;
 }
 
+.code-block-header [data-mermaid-source-toggle] {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.18rem 0.3rem;
+}
+.code-block-header [data-mermaid-source-toggle] svg {
+  display: block;
+}
+
 .code-block-copy:hover {
   border-color: var(--border);
   background: var(--bg-card-hover);
@@ -5162,6 +5173,50 @@ summary:focus-visible {
 
 .markdown-body .code-block-shell .line {
   min-height: 1.45em;
+}
+
+.markdown-body .code-block-shell pre[hidden] {
+  display: none;
+}
+
+.markdown-body .code-block-shell pre.mermaid-source {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.markdown-body .code-block-shell[data-mermaid-view='source'] pre.mermaid-source {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: 0.85rem;
+  margin: 0;
+  overflow-x: auto;
+  clip: auto;
+  white-space: pre;
+  border: 0;
+}
+
+.markdown-body .code-block-shell[data-mermaid-view='source'] .mermaid-diagram {
+  display: none;
+}
+
+.markdown-body .code-block-shell .mermaid-diagram {
+  overflow-x: auto;
+  padding: 0.85rem;
+}
+
+.markdown-body .code-block-shell .mermaid-diagram svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-inline: auto;
 }
 
 :root:not([data-theme='dark']) .shiki,

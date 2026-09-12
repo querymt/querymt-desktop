@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import DOMPurify from 'isomorphic-dompurify';
 
 const lightTheme = 'github-light';
 const darkTheme = 'github-dark';
@@ -137,6 +138,361 @@ function languageFromCodeElement(code: HTMLElement) {
   return '';
 }
 
+function isMermaidLanguage(language: string) {
+  return language.trim().toLowerCase() === 'mermaid';
+}
+
+type MermaidLook = 'classic';
+
+type MermaidThemeVariables = {
+  primaryColor: string;
+  primaryTextColor: string;
+  primaryBorderColor: string;
+  secondaryColor: string;
+  tertiaryColor: string;
+  lineColor: string;
+  textColor: string;
+  titleColor: string;
+  mainBkg: string;
+  nodeBorder: string;
+  nodeBkg: string;
+  clusterBkg: string;
+  clusterBorder: string;
+  edgeLabelBackground: string;
+  labelTextColor: string;
+  actorBkg: string;
+  actorBorder: string;
+  actorTextColor: string;
+  signalTextColor: string;
+  labelBoxBkgColor: string;
+  activationBkgColor: string;
+  sequenceNumberColor: string;
+  noteBkgColor: string;
+  noteTextColor: string;
+  noteBorderColor: string;
+  classText: string;
+  useGradient: boolean;
+  dropShadow: string;
+};
+
+type MermaidApi = {
+  initialize: (config: {
+    startOnLoad: boolean;
+    securityLevel: 'strict';
+    htmlLabels: boolean;
+    theme: 'base';
+    look: MermaidLook;
+    themeVariables: MermaidThemeVariables;
+    flowchart: { look: MermaidLook };
+    sequence: { look: MermaidLook };
+    class: { look: MermaidLook };
+    state: { look: MermaidLook };
+    er: { look: MermaidLook };
+    requirement: { look: MermaidLook };
+    mindmap: { look: MermaidLook };
+    suppressErrorRendering: boolean;
+    logLevel: 'error';
+    secure: string[];
+  }) => void;
+  render: (id: string, text: string) => Promise<{ svg: string }>;
+};
+
+const MERMAID_PURIFY_CONFIG = {
+  USE_PROFILES: { svg: true, svgFilters: true },
+  FORBID_TAGS: ['script', 'foreignObject', 'iframe', 'object', 'embed', 'a'],
+  FORBID_ATTR: ['onerror', 'onload', 'onclick']
+};
+
+const MERMAID_DEFAULT_SECURE = [
+  'secure',
+  'securityLevel',
+  'startOnLoad',
+  'maxTextSize',
+  'suppressErrorRendering',
+  'maxEdges'
+];
+
+const MERMAID_SECURE = [
+  ...new Set([
+    ...MERMAID_DEFAULT_SECURE,
+    'theme',
+    'themeCSS',
+    'themeVariables',
+    'fontFamily',
+    'altFontFamily',
+    'look'
+  ])
+];
+
+let mermaidPromise: Promise<MermaidApi> | null = null;
+let mermaidRenderId = 0;
+let mermaidSourceId = 0;
+let mermaidTheme: 'dark' | 'light' | null = null;
+const mermaidRenderGenerations = new WeakMap<HTMLElement, number>();
+const mermaidRoots = new Set<HTMLElement>();
+let mermaidThemeObserver: MutationObserver | null = null;
+
+function resolvedColorScheme(): 'dark' | 'light' {
+  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+}
+
+function cssToken(name: string, fallback: string) {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+function mermaidConfig(theme: 'dark' | 'light') {
+  const dark = theme === 'dark';
+  const fill = cssToken(dark ? '--bg-panel-strong' : '--bg-card', dark ? '#272727' : '#ffffff');
+  const border = cssToken(dark ? '--border-strong' : '--border', dark ? '#505050' : '#deddda');
+  const text = cssToken('--text', dark ? '#f5f5f5' : '#241f31');
+  const muted = cssToken('--text-muted', dark ? '#c4c4c4' : '#5e5c64');
+  const look = 'classic' as const;
+  const themeVariables: MermaidThemeVariables = {
+    primaryColor: fill,
+    primaryTextColor: text,
+    primaryBorderColor: border,
+    secondaryColor: fill,
+    tertiaryColor: fill,
+    lineColor: muted,
+    textColor: text,
+    titleColor: text,
+    mainBkg: fill,
+    nodeBorder: border,
+    nodeBkg: fill,
+    clusterBkg: fill,
+    clusterBorder: border,
+    edgeLabelBackground: fill,
+    labelTextColor: text,
+    actorBkg: fill,
+    actorBorder: border,
+    actorTextColor: text,
+    signalTextColor: text,
+    labelBoxBkgColor: fill,
+    activationBkgColor: fill,
+    sequenceNumberColor: text,
+    noteBkgColor: fill,
+    noteTextColor: text,
+    noteBorderColor: border,
+    classText: text,
+    useGradient: false,
+    dropShadow: 'none'
+  };
+
+  return {
+    startOnLoad: false,
+    securityLevel: 'strict' as const,
+    htmlLabels: false,
+    theme: 'base' as const,
+    look,
+    themeVariables,
+    flowchart: { look },
+    sequence: { look },
+    class: { look },
+    state: { look },
+    er: { look },
+    requirement: { look },
+    mindmap: { look },
+    suppressErrorRendering: true,
+    logLevel: 'error' as const,
+    secure: [...MERMAID_SECURE]
+  };
+}
+
+async function getMermaid() {
+  mermaidPromise ??= import('mermaid').then(({ default: mermaid }) => mermaid as MermaidApi);
+  const mermaid = await mermaidPromise;
+  const theme = resolvedColorScheme();
+  if (mermaidTheme !== theme) {
+    mermaid.initialize(mermaidConfig(theme));
+    mermaidTheme = theme;
+  }
+  return { mermaid, theme };
+}
+
+function sanitizeMermaidSvg(svg: string) {
+  return DOMPurify.sanitize(svg, MERMAID_PURIFY_CONFIG);
+}
+
+async function svgForMermaid(source: string) {
+  const { mermaid, theme } = await getMermaid();
+  mermaidRenderId += 1;
+  const { svg } = await mermaid.render(`mermaidDiagram${mermaidRenderId}`, source);
+  return { svg: sanitizeMermaidSvg(svg), theme };
+}
+
+function mermaidSourceFromShell(shell: HTMLElement) {
+  return shell.querySelector('code')?.textContent?.trim() ?? '';
+}
+
+function hideMermaidSource(pre: HTMLElement, figure: HTMLElement) {
+  if (!pre.id) {
+    mermaidSourceId += 1;
+    pre.id = `mermaid-source-${mermaidSourceId}`;
+  }
+  pre.classList.add('mermaid-source');
+  pre.removeAttribute('hidden');
+  figure.setAttribute('aria-describedby', pre.id);
+}
+
+function ensureMermaidSourceToggle(shell: HTMLElement) {
+  const header = shell.querySelector('.code-block-header');
+  if (!(header instanceof HTMLElement)) return;
+  if (header.querySelector('[data-mermaid-source-toggle]')) return;
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'code-block-copy';
+  button.setAttribute('data-mermaid-source-toggle', '');
+  button.setAttribute('aria-pressed', 'false');
+  button.setAttribute('aria-label', 'Show source');
+  button.title = 'Show source';
+  button.innerHTML = MERMAID_CODE_ICON;
+
+  const copy = header.querySelector('[data-code-copy]');
+  if (copy) copy.before(button);
+  else header.append(button);
+
+  if (!shell.dataset.mermaidView) shell.dataset.mermaidView = 'diagram';
+}
+
+function toggleMermaidSourceView(shell: HTMLElement, button: HTMLButtonElement) {
+  const showingSource = shell.dataset.mermaidView === 'source';
+  const next = showingSource ? 'diagram' : 'source';
+  shell.dataset.mermaidView = next;
+  button.setAttribute('aria-pressed', next === 'source' ? 'true' : 'false');
+  const label = next === 'source' ? 'Show diagram' : 'Show source';
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  button.innerHTML = next === 'source' ? MERMAID_DIAGRAM_ICON : MERMAID_CODE_ICON;
+}
+
+async function paintMermaidDiagram(
+  shell: HTMLElement,
+  source: string,
+  observer?: MutationObserver,
+  root?: HTMLElement,
+  isActive?: () => boolean
+) {
+  const generation = (mermaidRenderGenerations.get(shell) ?? 0) + 1;
+  mermaidRenderGenerations.set(shell, generation);
+  const isSuperseded = () => mermaidRenderGenerations.get(shell) !== generation;
+  const shouldAbort = () => (isActive && !isActive()) || isSuperseded();
+
+  let svg = '';
+  let renderTheme: 'dark' | 'light';
+  do {
+    const rendered = await svgForMermaid(source);
+    if (shouldAbort()) return;
+    svg = rendered.svg;
+    renderTheme = rendered.theme;
+    if (!svg) throw new Error('Mermaid produced empty SVG');
+  } while (resolvedColorScheme() !== renderTheme);
+
+  if (shouldAbort()) return;
+
+  observer?.disconnect();
+  const pre = shell.querySelector('pre');
+  let figure = shell.querySelector<HTMLElement>('.mermaid-diagram');
+  if (!figure) {
+    figure = document.createElement('div');
+    figure.className = 'mermaid-diagram';
+    figure.setAttribute('role', 'img');
+    figure.setAttribute('aria-label', 'Mermaid diagram');
+    if (pre) pre.after(figure);
+    else shell.append(figure);
+  }
+  if (shouldAbort()) return;
+  figure.innerHTML = svg;
+  if (pre) hideMermaidSource(pre, figure);
+  if (observer && root && (!isActive || isActive())) {
+    observer.observe(root, { childList: true, subtree: true });
+  }
+
+  if (resolvedColorScheme() !== renderTheme) {
+    if (shouldAbort()) return;
+    await paintMermaidDiagram(shell, source, observer, root, isActive);
+    return;
+  }
+
+  if (shouldAbort()) return;
+
+  shell.dataset.mermaidState = 'rendered';
+  shell.dataset.mermaidTheme = renderTheme;
+  ensureMermaidSourceToggle(shell);
+}
+
+async function renderMermaidBlock(
+  code: HTMLElement,
+  observer?: MutationObserver,
+  root?: HTMLElement,
+  isActive?: () => boolean
+) {
+  const shell = code.closest('.code-block-shell');
+  if (!(shell instanceof HTMLElement)) return;
+  if (
+    shell.dataset.mermaidState === 'loading' ||
+    shell.dataset.mermaidState === 'rendered' ||
+    shell.dataset.mermaidState === 'error'
+  ) {
+    return;
+  }
+
+  const source = (code.textContent ?? '').trim();
+  if (!source) {
+    shell.dataset.mermaidState = 'empty';
+    return;
+  }
+
+  shell.dataset.mermaidState = 'loading';
+  if (root) watchMermaidTheme(root);
+  try {
+    await paintMermaidDiagram(shell, source, observer, root, isActive);
+  } catch (error) {
+    if (isActive && !isActive()) return;
+    console.warn('Failed to render mermaid diagram', error);
+    shell.dataset.mermaidState = 'error';
+  }
+}
+
+async function refreshMermaidDiagrams(root: HTMLElement, isActive?: () => boolean) {
+  const theme = resolvedColorScheme();
+  for (const shell of root.querySelectorAll<HTMLElement>('.code-block-shell[data-mermaid-state="rendered"]')) {
+    if (isActive && !isActive()) return;
+    if (shell.dataset.mermaidTheme === theme) continue;
+    const source = mermaidSourceFromShell(shell);
+    if (!source) continue;
+    try {
+      await paintMermaidDiagram(shell, source, undefined, undefined, isActive);
+    } catch (error) {
+      if (isActive && !isActive()) return;
+      console.warn('Failed to refresh mermaid diagram', error);
+    }
+  }
+}
+
+function watchMermaidTheme(root: HTMLElement) {
+  mermaidRoots.add(root);
+  if (mermaidThemeObserver || !browser) return;
+
+  mermaidThemeObserver = new MutationObserver(() => {
+    for (const host of mermaidRoots) {
+      void refreshMermaidDiagrams(host, () => mermaidRoots.has(host));
+    }
+  });
+  mermaidThemeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme']
+  });
+}
+
+function unwatchMermaidTheme(root: HTMLElement) {
+  mermaidRoots.delete(root);
+  if (mermaidRoots.size > 0 || !mermaidThemeObserver) return;
+  mermaidThemeObserver.disconnect();
+  mermaidThemeObserver = null;
+}
+
 async function highlightCodeBlock(code: HTMLElement, observer?: MutationObserver, root?: HTMLElement) {
   if (code.dataset.shikiState === 'highlighted' || code.dataset.shikiState === 'loading') return;
 
@@ -187,15 +543,25 @@ async function highlightCodeBlock(code: HTMLElement, observer?: MutationObserver
   }
 }
 
-function highlightCodeBlocks(node: HTMLElement, observer?: MutationObserver) {
+function highlightCodeBlocks(node: HTMLElement, observer?: MutationObserver, isActive?: () => boolean) {
   if (!browser) return;
 
   for (const code of node.querySelectorAll<HTMLElement>('.code-block-shell pre code')) {
+    if (isMermaidLanguage(languageFromCodeElement(code))) {
+      void renderMermaidBlock(code, observer, node, isActive);
+      continue;
+    }
     void highlightCodeBlock(code, observer, node);
   }
 }
 
 const TABLE_COPY_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+
+const MERMAID_CODE_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>';
+
+const MERMAID_DIAGRAM_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12c.552 0 1.005-.449.95-.998a10 10 0 0 0-8.953-8.951c-.55-.055-.998.398-.998.95v8a1 1 0 0 0 1 1z"/><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/></svg>';
 
 function tableToMarkdown(table: HTMLTableElement): string {
   const headerCells = Array.from(table.querySelectorAll<HTMLTableCellElement>('thead th, thead td'));
@@ -254,6 +620,9 @@ export function enhanceCodeBlocks(node: HTMLElement) {
     return {};
   }
 
+  let destroyed = false;
+  const isActive = () => !destroyed;
+
   async function handleClick(event: MouseEvent) {
     const target = event.target instanceof Element ? event.target : null;
 
@@ -272,6 +641,13 @@ export function enhanceCodeBlocks(node: HTMLElement) {
       return;
     }
 
+    const toggle = target?.closest<HTMLButtonElement>('[data-mermaid-source-toggle]');
+    if (toggle) {
+      const shell = toggle.closest('.code-block-shell');
+      if (shell instanceof HTMLElement) toggleMermaidSourceView(shell, toggle);
+      return;
+    }
+
     const button = target?.closest<HTMLButtonElement>('[data-code-copy]');
     if (!button) return;
 
@@ -286,19 +662,22 @@ export function enhanceCodeBlocks(node: HTMLElement) {
   }
 
   const observer = new MutationObserver(() => {
-    highlightCodeBlocks(node, observer);
+    if (!isActive()) return;
+    highlightCodeBlocks(node, observer, isActive);
     enhanceTables(node);
   });
 
   node.addEventListener('click', handleClick);
   enhanceTables(node);
-  highlightCodeBlocks(node, observer);
+  highlightCodeBlocks(node, observer, isActive);
   observer.observe(node, { childList: true, subtree: true });
 
   return {
     destroy() {
+      destroyed = true;
       observer.disconnect();
       node.removeEventListener('click', handleClick);
+      unwatchMermaidTheme(node);
     }
   };
 }
