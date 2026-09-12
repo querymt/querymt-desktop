@@ -138,8 +138,18 @@ describe('session follow pin', () => {
     try {
       expect(() => createFollowScrollScheduler(() => undefined, () => true)).not.toThrow();
     } finally {
-      globalThis.requestAnimationFrame = originalRequest;
-      globalThis.cancelAnimationFrame = originalCancel;
+      if (originalRequest === undefined) {
+        // @ts-expect-error -- restore a missing rAF global as absent
+        delete globalThis.requestAnimationFrame;
+      } else {
+        globalThis.requestAnimationFrame = originalRequest;
+      }
+      if (originalCancel === undefined) {
+        // @ts-expect-error -- restore a missing rAF global as absent
+        delete globalThis.cancelAnimationFrame;
+      } else {
+        globalThis.cancelAnimationFrame = originalCancel;
+      }
     }
   });
 
