@@ -91,6 +91,7 @@
 <details
   bind:open
   class={`details-reset session-tool-block session-tool-block-${tool.status}`}
+  class:session-tool-block-diff={diffs.length > 0}
   aria-label={summaryLabel}
   ontoggle={handleDetailsToggle}
 >
@@ -175,7 +176,7 @@
         <section class="session-tool-detail" aria-label="File diff">
           {#await loadSessionToolPatchDiff() then { default: SessionToolPatchDiff }}
             {#each diffs as file (file.path)}
-              <SessionToolPatchDiff patch={file.patch} />
+              <SessionToolPatchDiff patch={file.patch} hideFileHeader={diffs.length === 1} />
             {/each}
           {:catch}
             <p class="session-tool-diff-error">Unable to load diff preview.</p>

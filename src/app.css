@@ -6832,6 +6832,25 @@ summary:focus-visible {
   padding: 0.2rem 0 0.1rem 0.85rem;
 }
 
+.session-tool-block-diff[open] > .session-tool-summary {
+  position: relative;
+  z-index: 1;
+  border: 1px solid color-mix(in srgb, var(--border), transparent 20%);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  background: color-mix(in srgb, var(--bg-card), transparent 12%);
+}
+
+.session-tool-block-diff[open] > .session-tool-summary:hover {
+  background: color-mix(in srgb, var(--bg-card-hover), transparent 45%);
+}
+
+.session-tool-block-diff[open] > .session-tool-content {
+  margin: -1px 0 0.6rem;
+  border-left: 0;
+  padding: 0;
+}
+
 .session-tool-detail {
   display: grid;
   min-width: 0;
@@ -6890,15 +6909,27 @@ summary:focus-visible {
 }
 
 .session-tool-diff {
+  --session-tool-diff-chrome: 52px;
   min-width: 0;
   overflow: auto;
-  /* 40 code rows plus Pierre's file header, bottom padding, and host border. */
-  max-height: calc(var(--diffs-line-height) * 40 + 52px);
+  /* 40 code rows plus Pierre chrome (header or restored padding) and host border. */
+  max-height: calc(var(--diffs-line-height) * 40 + var(--session-tool-diff-chrome));
   border: 1px solid color-mix(in srgb, var(--border), transparent 20%);
   border-radius: var(--radius-control);
   background: color-mix(in srgb, var(--bg-card), transparent 12%);
   --diffs-font-size: 12px;
   --diffs-line-height: 18px;
+}
+
+.session-tool-diff-no-header {
+  --session-tool-diff-chrome: 18px;
+}
+
+.session-tool-block-diff[open] > .session-tool-content > .session-tool-detail:first-child .session-tool-diff:first-child {
+  /* Overlap the shared 1px edge instead of dropping the host top border so
+     border-box max-height still reserves both borders for a 40-row cap. */
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 .session-tool-diff-container {

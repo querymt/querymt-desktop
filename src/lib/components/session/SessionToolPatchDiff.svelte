@@ -2,7 +2,7 @@
   import { FileDiff, getSingularPatch } from '@pierre/diffs';
   import { appearanceStore } from '$lib/stores/appearance.svelte';
 
-  let { patch }: { patch: string } = $props();
+  let { patch, hideFileHeader = false }: { patch: string; hideFileHeader?: boolean } = $props();
 
   let host: HTMLDivElement | undefined = $state();
   let errorMessage = $state<string | null>(null);
@@ -16,7 +16,8 @@
     overflow: 'wrap' as const,
     disableLineNumbers: false,
     useCSSClasses: true,
-    disableBackground: true
+    disableBackground: true,
+    disableFileHeader: hideFileHeader
   });
 
   $effect(() => {
@@ -49,7 +50,12 @@
   });
 </script>
 
-<div class="session-tool-diff" data-testid="session-tool-diff" bind:this={host}></div>
+<div
+  class="session-tool-diff"
+  class:session-tool-diff-no-header={hideFileHeader}
+  data-testid="session-tool-diff"
+  bind:this={host}
+></div>
 {#if errorMessage}
   <p class="session-tool-diff-error">{errorMessage}</p>
 {/if}

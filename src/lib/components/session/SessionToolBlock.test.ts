@@ -53,6 +53,7 @@ describe('SessionToolBlock', () => {
     expect(screen.getByText('Read file')).toBeInTheDocument();
     expect(screen.getByText('src/app.ts')).toBeInTheDocument();
     expect(screen.getByText('Completed')).toHaveClass('sr-only');
+    expect(screen.getByText('Read file').closest('details')).not.toHaveClass('session-tool-block-diff');
   });
 
   it('expands pretty-printed details and copies parameters', async () => {
@@ -68,6 +69,7 @@ describe('SessionToolBlock', () => {
 
     const toolGroup = screen.getByText('Run command').closest('details');
     expect(toolGroup).not.toBeNull();
+    expect(toolGroup).not.toHaveClass('session-tool-block-diff');
     await fireEvent.click(toolGroup!.querySelector('summary')!);
     expect(await screen.findByText(/"command": "bun"/)).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Tool parameters' })).toBeInTheDocument();
@@ -92,7 +94,7 @@ describe('SessionToolBlock', () => {
     const removed = screen.getByText('-2');
     expect(added).toHaveClass('session-tool-change-added');
     expect(removed).toHaveClass('session-tool-change-removed');
-    expect(screen.getByRole('group', { name: 'Edit file - src/app.ts +1 -2' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Edit file - src/app.ts +1 -2' })).toHaveClass('session-tool-block-diff');
   });
 
   it('keeps generated diffs and raw parameters collapsed until the tool row expands', async () => {
@@ -118,7 +120,9 @@ describe('SessionToolBlock', () => {
 
     await fireEvent.click(toolGroup!.querySelector('summary')!);
     expect(toolGroup).toHaveAttribute('open');
+    expect(toolGroup).toHaveClass('session-tool-block-diff');
     expect(await screen.findByRole('region', { name: 'File diff' })).toBeInTheDocument();
+    expect(await screen.findByTestId('session-tool-diff')).toHaveAttribute('data-hide-file-header', 'true');
     expect(screen.queryByText('Diff')).toBeNull();
     expect(screen.queryByText('Diffs')).toBeNull();
     expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
@@ -237,8 +241,13 @@ describe('SessionToolBlock', () => {
 
     expect(screen.queryByRole('region', { name: 'File diff' })).toBeNull();
     const toolGroup = screen.getByText('Replace symbol').closest('details');
+    expect(toolGroup).toHaveClass('session-tool-block-diff');
     await fireEvent.click(toolGroup!.querySelector('summary')!);
     expect(await screen.findByRole('region', { name: 'File diff' })).toBeInTheDocument();
+    const stubs = await screen.findAllByTestId('session-tool-diff');
+    expect(stubs).toHaveLength(2);
+    expect(stubs[0]).toHaveAttribute('data-hide-file-header', 'false');
+    expect(stubs[1]).toHaveAttribute('data-hide-file-header', 'false');
     expect(screen.queryByText('Diffs')).toBeNull();
     expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
     const showSource = screen.getByRole('button', { name: 'Show source data' });
@@ -260,6 +269,7 @@ describe('SessionToolBlock', () => {
     expect(screen.getByText('Failed')).toHaveClass('sr-only');
     expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
     const toolGroup = screen.getByText('Edit file').closest('details');
+    expect(toolGroup).not.toHaveClass('session-tool-block-diff');
     await fireEvent.click(toolGroup!.querySelector('summary')!);
     expect(await screen.findByRole('region', { name: 'Tool result' })).toHaveTextContent('oldString not found');
     expect(screen.queryByRole('region', { name: 'File diff' })).toBeNull();
@@ -303,12 +313,22 @@ describe('SessionToolBlock', () => {
 });
 
 describe('session tool diff viewport', () => {
-  const sessionToolDiffRule = appCss.match(/^\.session-tool-diff \{([\s\S]*?)\n\}/m)?.[1] ?? '';
+  function cssRuleBody(selector: string) {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return appCss.match(new RegExp(`(?:^|\\n)${escaped} \\{([\\s\\S]*?)\\n\\}`))?.[1] ?? '';
+  }
+
+  const sessionToolDiffRule = cssRuleBody('.session-tool-diff');
+  const sessionToolDiffNoHeaderRule = cssRuleBody('.session-tool-diff-no-header');
 
   it('shows up to 40 unwrapped code rows before the host scrolls', () => {
     expect(sessionToolDiffRule).toContain('overflow: auto;');
     expect(sessionToolDiffRule).toContain('--diffs-line-height: 18px;');
-    expect(sessionToolDiffRule).toContain('max-height: calc(var(--diffs-line-height) * 40 + 52px);');
+    expect(sessionToolDiffRule).toContain('--session-tool-diff-chrome: 52px;');
+    expect(sessionToolDiffRule).toContain(
+      'max-height: calc(var(--diffs-line-height) * 40 + var(--session-tool-diff-chrome));'
+    );
     expect(sessionToolDiffRule).not.toMatch(/^\s*height:/m);
+    expect(sessionToolDiffNoHeaderRule).toContain('--session-tool-diff-chrome: 18px;');
   });
 });
