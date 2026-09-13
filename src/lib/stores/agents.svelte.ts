@@ -184,6 +184,12 @@ export class AgentsStore {
   private clients = new Map<string, AgentClientRecord>();
   private connectFlights = new Map<string, ConnectFlight>();
   private connectGenerations = new Map<string, number>();
+  // Monotonic per-agent mesh refresh tokens. The key is kept after
+  // deleteConfig (like connectGenerations): deleting it would restart the
+  // token at the initial value and let a pre-delete request pass the token
+  // check against a post-recreate refresh. One number per agent id is
+  // negligible next to the retained connectGenerations entry.
+  private meshRefreshGenerations = new Map<string, number>();
   private sessionRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectAttempts = new Map<string, number>();
@@ -396,6 +402,17 @@ export class AgentsStore {
         controlState === 'degraded'
       );
     });
+  }
+
+  get meshNodeCount(): number {
+    const distinctNodeIds = new Set<string>();
+    for (const config of this.configs) {
+      if (!config.enabled || !isOnlineConnectionState(this.connectionStates[config.id])) continue;
+      for (const node of this.meshNodesByAgent[config.id]?.nodes ?? []) {
+        distinctNodeIds.add(node.id);
+      }
+    }
+    return distinctNodeIds.size;
   }
 
   canDeleteSession(agentId: string): boolean {
@@ -630,6 +647,7 @@ export class AgentsStore {
       this.cancelReconnect(agentId);
       this.invalidateConnectGeneration(agentId);
       this.disposeClient(agentId);
+      this.clearMeshStateForAgent(agentId);
     }
     this.configs = this.configs.map((config) =>
       config.id === agentId
@@ -733,7 +751,6 @@ export class AgentsStore {
       if (this.connectGeneration(agentId) !== generation) return;
       await Promise.allSettled([
         this.refreshSessionsForAgent(config.id, true),
-        this.refreshMeshForAgent(config.id),
         this.refreshAuthProviders(config.id)
       ]);
       if (config.transport === 'stdio') {
@@ -758,12 +775,17 @@ export class AgentsStore {
       } else {
         const status = await stopAgent(agentId);
         this.statuses = { ...this.statuses, [config.id]: status };
+        // Stopping the sidecar kills the child without any loss callback on
+        // the stdio transport; drop the client so the next start connects
+        // fresh instead of reusing a zombie (mirrors the websocket branch).
+        this.disposeClient(agentId);
       }
       this.sessionsByAgent = { ...this.sessionsByAgent, [config.id]: [] };
       this.completedWorkspaceDiscoveries.delete(config.id);
       this.invalidateWorkspaceSources(config.id);
       this.workspaceSessionSources = { ...this.workspaceSessionSources, [config.id]: {} };
       this.connectionStates = { ...this.connectionStates, [config.id]: 'idle' };
+      this.clearMeshStateForAgent(config.id);
       if (this.activeAgentId === config.id) {
         this.activeAgentId = null;
         this.activeSessionId = null;
@@ -786,18 +808,19 @@ export class AgentsStore {
     try {
       if (config.transport === 'websocket') {
         this.disposeClient(agentId);
+        this.clearMeshStateForAgent(agentId);
         await this.connectAgent(config.id, true);
         if (this.connectGeneration(agentId) !== generation) return;
         await this.refreshAgent(config);
       } else {
         const status = await restartAgent(config);
         this.statuses = { ...this.statuses, [config.id]: status };
+        this.clearMeshStateForAgent(agentId);
         await this.connectAgent(config.id, true);
       }
       if (this.connectGeneration(agentId) !== generation) return;
       await Promise.allSettled([
         this.refreshSessionsForAgent(config.id, true),
-        this.refreshMeshForAgent(config.id),
         this.refreshAuthProviders(config.id)
       ]);
       if (config.transport === 'stdio') {
@@ -920,6 +943,7 @@ export class AgentsStore {
         ...this.agentErrors,
         [config.id]: null
       };
+      void this.refreshMeshAvailability(config.id);
       void this.loadInitialModelsForAgent(config.id, 6);
       if (this.activeAgentId === config.id && this.activeSessionId) {
         void this.refreshDelegateAssignments(config.id, this.activeSessionId);
@@ -2257,6 +2281,16 @@ export class AgentsStore {
     this.connectGenerations.set(agentId, this.connectGeneration(agentId) + 1);
   }
 
+  private bumpMeshRefreshGeneration(agentId: string): number {
+    const generation = (this.meshRefreshGenerations.get(agentId) ?? 0) + 1;
+    this.meshRefreshGenerations.set(agentId, generation);
+    return generation;
+  }
+
+  private isMeshRefreshCurrent(agentId: string, generation: number, record: AgentClientRecord): boolean {
+    return this.meshRefreshGenerations.get(agentId) === generation && this.clients.get(agentId) === record;
+  }
+
   private disposeClient(agentId: string) {
     const record = this.clients.get(agentId);
     if (!record) return;
@@ -2325,7 +2359,7 @@ export class AgentsStore {
           notification.method === 'querymt/mesh/joined' ||
           notification.method === 'querymt/mesh/peerExpired'
         ) {
-          void this.refreshMeshForAgent(agentId);
+          void this.refreshMeshAvailability(agentId);
         }
         if (notification.method.startsWith('querymt/auth/')) {
           void this.refreshAuthProviders(agentId);
@@ -2561,16 +2595,27 @@ export class AgentsStore {
     return result;
   }
 
-  async refreshMeshForAgent(agentId: string) {
-    const record = await this.connectInitializedRecord(agentId);
-    if (!record) {
-      throw new Error('Failed to connect to the agent.');
-    }
+  private clearMeshStateForAgent(agentId: string) {
+    // Invalidate first: pending refresh commits and catches owned by older
+    // tokens must be suppressed by the ownership check, not resurrect or
+    // clobber this explicit invalidation.
+    this.bumpMeshRefreshGeneration(agentId);
+    this.meshStatusByAgent = { ...this.meshStatusByAgent, [agentId]: null };
+    this.meshNodesByAgent = { ...this.meshNodesByAgent, [agentId]: null };
+    this.meshInvitesByAgent = { ...this.meshInvitesByAgent, [agentId]: null };
+  }
+
+  private async refreshMeshForRecord(agentId: string, generation: number, record: AgentClientRecord) {
     const [meshStatus, meshNodes, meshInvites] = await Promise.all([
       record.client.listMeshStatus(),
       record.client.listMeshNodes(),
       record.client.listMeshInvites().catch(() => null)
     ]);
+    // A stop/restart/reconnect or a newer refresh owns this slot now; a stale
+    // response must not overwrite newer mesh state.
+    if (!this.isMeshRefreshCurrent(agentId, generation, record)) {
+      return null;
+    }
     this.meshStatusByAgent = {
       ...this.meshStatusByAgent,
       [agentId]: meshStatus
@@ -2584,6 +2629,43 @@ export class AgentsStore {
       [agentId]: meshInvites
     };
     return { meshStatus, meshNodes, meshInvites };
+  }
+
+  private async refreshMeshAvailability(agentId: string) {
+    // Mesh is an optional extension: an agent without the capability (or a
+    // transient RPC failure) simply reports no available nodes, matching how
+    // optional mesh data is handled elsewhere. Availability must never break
+    // the connection itself and must never connect as a side effect, so this
+    // only refreshes an already initialized client and absorbs rejections.
+    // A rejection owned by an older generation/record is swallowed without
+    // clearing newer data; clearMeshStateForAgent bumps the token itself,
+    // which is why the check must happen before clearing.
+    const record = this.initializedClientRecord(agentId);
+    if (!record) return;
+    const generation = this.bumpMeshRefreshGeneration(agentId);
+    try {
+      await this.refreshMeshForRecord(agentId, generation, record);
+    } catch {
+      if (this.isMeshRefreshCurrent(agentId, generation, record)) {
+        this.clearMeshStateForAgent(agentId);
+      }
+    }
+  }
+
+  async refreshMeshForAgent(agentId: string) {
+    // Manual refresh for the mesh page and invite flows: unlike
+    // refreshMeshAvailability it may connect and it rejects on failure. It
+    // may resolve without writing state when superseded. The generation token
+    // is claimed only after the connection completes: the connection itself
+    // triggers the automatic refreshMeshAvailability hook which bumps and
+    // consumes the token, so claiming first would strand the manual refresh
+    // with an already-stale token whose success gets suppressed.
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) {
+      throw new Error('Failed to connect to the agent.');
+    }
+    const generation = this.bumpMeshRefreshGeneration(agentId);
+    return this.refreshMeshForRecord(agentId, generation, record);
   }
 
   async createMeshInvite(agentId: string, request: CreateMeshInviteRequest = {}) {
@@ -3366,6 +3448,7 @@ export class AgentsStore {
     this.connectionStates = { ...this.connectionStates, [agentId]: 'failed' };
     this.agentErrors = { ...this.agentErrors, [agentId]: reason };
     this.statuses = { ...this.statuses, [agentId]: websocketStatus(config, 'failed') };
+    this.clearMeshStateForAgent(agentId);
     this.disposeClient(agentId);
     this.scheduleReconnect(agentId);
   }
@@ -3399,7 +3482,6 @@ export class AgentsStore {
     if (record?.connectionState === 'initialized') {
       await Promise.allSettled([
         this.refreshSessionsForAgent(agentId, true),
-        this.refreshMeshForAgent(agentId),
         this.refreshAuthProviders(agentId)
       ]);
       await this.refreshAgent(config);
@@ -3512,13 +3594,17 @@ function reconnectDelayMs(attempt: number): number {
   return Math.min(250 * 2 ** Math.min(attempt, 5), WEBSOCKET_RECONNECT_MAX_DELAY_MS);
 }
 
+function isOnlineConnectionState(connectionState: AgentConnectionState | undefined): boolean {
+  return connectionState === 'initialized' || connectionState === 'loading-sessions';
+}
+
 function websocketStatus(
   config: AgentConfig,
   connectionState: AgentConnectionState,
   reconnectAttempt?: number,
   reconnectDelayMs?: number
 ): AgentRuntimeStatus {
-  const connected = connectionState === 'initialized' || connectionState === 'loading-sessions';
+  const connected = isOnlineConnectionState(connectionState);
   const reconnecting = connectionState === 'reconnecting';
   const failed = connectionState === 'failed';
   return {

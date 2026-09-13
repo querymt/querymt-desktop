@@ -72,6 +72,7 @@
   const configuredAgentCount = $derived(agentsStore.configs.length);
   const agentAttentionCount = $derived(agentsStore.agentsNeedingAttention.length);
   const inboxActionCount = $derived(inboxStore.actionableItems.length);
+  const meshNodeCount = $derived(agentsStore.meshNodeCount);
   const actionRequiredSessionKeys = $derived(
     inboxStore.actionableItems.flatMap((item) =>
       item.agentId && item.sessionId ? [`${item.agentId}:${item.sessionId}`] : []
@@ -130,6 +131,9 @@
     if (section === 'Inbox' && inboxActionCount > 0) {
       return `Inbox, ${inboxActionCount} ${inboxActionCount === 1 ? 'action' : 'actions'} required`;
     }
+    if (section === 'Mesh' && meshNodeCount > 0) {
+      return `Mesh, ${meshNodeCount} ${meshNodeCount === 1 ? 'node' : 'nodes'}`;
+    }
     if (section !== 'Agents') return section;
     return getAgentsAccessibleName();
   }
@@ -161,6 +165,9 @@
 {#snippet navIndicator(section: SectionName)}
   {#if section === 'Agents' && compact && onlineAgentCount > 0}
     <span class="app-icon-agent-count" aria-hidden="true">{onlineAgentCount}</span>
+  {/if}
+  {#if section === 'Mesh' && compact && meshNodeCount > 0}
+    <span class="app-icon-agent-count" aria-hidden="true">{meshNodeCount}</span>
   {/if}
   {#if section === 'Agents' && agentAttentionCount > 0}<SidebarAttentionDot />{/if}
   {#if section === 'Inbox' && inboxActionCount > 0}<SidebarAttentionDot />{/if}
@@ -212,6 +219,7 @@
           <span class="app-sidebar-link-icon"><Icon size={16} />{@render navIndicator(section)}</span>
           <span>{section}</span>
           {#if section === 'Inbox' && inboxActionCount > 0}<small>{inboxActionCount}</small>{/if}
+          {#if section === 'Mesh' && meshNodeCount > 0}<small>{meshNodeCount}</small>{/if}
         </a>
       {/if}
     {/each}

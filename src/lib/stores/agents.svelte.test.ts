@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
-import type { ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
+import type { AgentConfig, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
+import { QMT_METHOD_MESH_NODES, QMT_METHOD_MESH_STATUS } from '$lib/querymt/querymt-extensions';
 import {
   DelegateAssignmentSource,
   DelegateReasoningEffort,
   type AuthProviderEntry,
   type DelegateAssignmentsInfo,
+  type MeshInviteListInfo,
+  type MeshNodesInfo,
+  type MeshStatusInfo,
   type SetDelegateModelRequest,
   type SetDelegateModelResponse
 } from '$lib/querymt/generated/types';
@@ -28,9 +32,12 @@ const mockListen = vi.hoisted(() => vi.fn());
 const mockDrainAgentSessionUpdates = vi.hoisted(() => vi.fn(async () => [] as SessionNotification[]));
 
 const mockClient = vi.hoisted(() => {
-  let sessionUpdateHandler: ((notification: SessionNotification) => void) | null = null;
-  let connectionLossHandler: ((reason: string) => void) | null = null;
-  let extensionNotificationHandler: ((notification: { method: string; params: unknown }) => void) | null = null;
+  // Registries instead of single slots: dispose paths unsubscribe their own
+  // handler, and a late registration from a prior test's floating cleanup
+  // must never swallow another test's emitted notification or loss event.
+  const sessionUpdateHandlers: Array<(notification: SessionNotification) => void> = [];
+  const connectionLossHandlers: Array<(reason: string) => void> = [];
+  const extensionNotificationHandlers: Array<(notification: { method: string; params: unknown }) => void> = [];
   let permissionUnsubscribe = vi.fn();
   let elicitationUnsubscribe = vi.fn();
 
@@ -104,36 +111,60 @@ const mockClient = vi.hoisted(() => {
       durable: true
     })),
     onConnectionLost: vi.fn((handler: (reason: string) => void) => {
-      connectionLossHandler = handler;
+      connectionLossHandlers.push(handler);
       return () => {
-        connectionLossHandler = null;
+        const index = connectionLossHandlers.indexOf(handler);
+        if (index >= 0) connectionLossHandlers.splice(index, 1);
       };
     }),
-    emitConnectionLoss: (reason: string) => connectionLossHandler?.(reason),
+    emitConnectionLoss: (reason: string) => {
+      for (const handler of [...connectionLossHandlers]) handler(reason);
+    },
     disconnect: vi.fn(async () => undefined),
     onSessionUpdate: vi.fn((handler: (notification: SessionNotification) => void) => {
-      sessionUpdateHandler = handler;
+      sessionUpdateHandlers.push(handler);
+      return () => {
+        const index = sessionUpdateHandlers.indexOf(handler);
+        if (index >= 0) sessionUpdateHandlers.splice(index, 1);
+      };
     }),
-    emitSessionUpdate: (notification: SessionNotification) => sessionUpdateHandler?.(notification),
+    emitSessionUpdate: (notification: SessionNotification) => {
+      for (const handler of [...sessionUpdateHandlers]) handler(notification);
+    },
     resetSessionUpdateHandler: () => {
-      sessionUpdateHandler = null;
-      extensionNotificationHandler = null;
+      sessionUpdateHandlers.length = 0;
+      connectionLossHandlers.length = 0;
+      extensionNotificationHandlers.length = 0;
       permissionUnsubscribe = vi.fn();
       elicitationUnsubscribe = vi.fn();
     },
     permissionUnsubscribe: () => permissionUnsubscribe,
     elicitationUnsubscribe: () => elicitationUnsubscribe,
     onExtensionNotification: vi.fn((handler: (notification: { method: string; params: unknown }) => void) => {
-      extensionNotificationHandler = handler;
+      extensionNotificationHandlers.push(handler);
       return () => {
-        extensionNotificationHandler = null;
+        const index = extensionNotificationHandlers.indexOf(handler);
+        if (index >= 0) extensionNotificationHandlers.splice(index, 1);
       };
     }),
-    emitExtensionNotification: (notification: { method: string; params: unknown }) => extensionNotificationHandler?.(notification),
+    emitExtensionNotification: (notification: { method: string; params: unknown }) => {
+      for (const handler of [...extensionNotificationHandlers]) handler(notification);
+    },
     onPermissionRequest: vi.fn(() => permissionUnsubscribe),
     onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
     setSessionConfigOption: vi.fn(async (_request: SetSessionConfigOptionRequest): Promise<SessionConfigOption[]> => []),
     listRemoteSessions: vi.fn(async (request: { node_id: string }) => ({ node_id: request.node_id, sessions: [], total_count: 0 })),
+    listMeshStatus: vi.fn(async (): Promise<MeshStatusInfo> => ({
+      enabled: true,
+      peer_id: '12D3KooWQmtLocalAgentPeer00000000000000',
+      transport: 'quic',
+      known_peer_count: 0,
+      has_invite_store: true,
+      has_mesh_state_store: true,
+      scopes: []
+    })),
+    listMeshNodes: vi.fn(async (): Promise<MeshNodesInfo> => ({ nodes: [] })),
+    listMeshInvites: vi.fn(async (): Promise<MeshInviteListInfo> => ({ invites: [] })),
     attachRemoteSession: vi.fn(async () => ({
       session_id: 'remote-session-1',
       node_id: 'node-1',
@@ -172,8 +203,21 @@ vi.mock('$lib/querymt/sidecar', () => ({
   validateWorkspaceDirectory: vi.fn(async () => true)
 }));
 
+function meshNodes(ids: string[]): MeshNodesInfo {
+  return {
+    nodes: ids.map((id) => ({
+      id,
+      label: `mesh-node-${id.slice(-5).toLowerCase()}`,
+      capabilities: ['remote-sessions'],
+      active_sessions: 0,
+      transport: 'quic'
+    }))
+  };
+}
+
 function createDistinctMockClient() {
   let connectionLossHandler: ((reason: string) => void) | null = null;
+  let extensionNotificationHandler: ((notification: { method: string; params: unknown }) => void) | null = null;
 
   return {
     connect: vi.fn(async (): Promise<InitializeResponse> => ({
@@ -187,6 +231,16 @@ function createDistinctMockClient() {
     })),
     listModels: vi.fn(async (): Promise<ModelEntry[]> => []),
     listAuthProviders: vi.fn(async (): Promise<AuthProviderEntry[]> => []),
+    listMeshStatus: vi.fn(async (): Promise<MeshStatusInfo> => ({
+      enabled: false,
+      known_peer_count: 0,
+      has_invite_store: false,
+      has_mesh_state_store: false,
+      scopes: []
+    })),
+    listMeshNodes: vi.fn(async (): Promise<MeshNodesInfo> => ({ nodes: [] })),
+    listMeshInvites: vi.fn(async (): Promise<MeshInviteListInfo> => ({ invites: [] })),
+    getModelInfo: vi.fn(async () => ({})),
     supportsQuerymtFeature: vi.fn((_feature: string) => false),
     getControlCapabilities: vi.fn(() => null),
     getControlHealth: vi.fn(() => ({ state: 'unknown', summary: 'unknown', missingMethods: [], missingFeatures: [] })),
@@ -198,7 +252,13 @@ function createDistinctMockClient() {
     }),
     emitConnectionLoss: (reason: string) => connectionLossHandler?.(reason),
     onSessionUpdate: vi.fn(() => () => undefined),
-    onExtensionNotification: vi.fn(() => () => undefined),
+    onExtensionNotification: vi.fn((handler: (notification: { method: string; params: unknown }) => void) => {
+      extensionNotificationHandler = handler;
+      return () => {
+        extensionNotificationHandler = null;
+      };
+    }),
+    emitExtensionNotification: (notification: { method: string; params: unknown }) => extensionNotificationHandler?.(notification),
     onPermissionRequest: vi.fn(() => vi.fn()),
     onElicitationRequest: vi.fn(() => vi.fn())
   };
@@ -251,6 +311,17 @@ beforeEach(() => {
   mockClient.listModels.mockResolvedValue([]);
   mockClient.refreshAndListModels.mockResolvedValue([]);
   mockClient.getModelInfo.mockResolvedValue({});
+  mockClient.listMeshStatus.mockResolvedValue({
+    enabled: true,
+    peer_id: '12D3KooWQmtLocalAgentPeer00000000000000',
+    transport: 'quic',
+    known_peer_count: 0,
+    has_invite_store: true,
+    has_mesh_state_store: true,
+    scopes: []
+  });
+  mockClient.listMeshNodes.mockResolvedValue({ nodes: [] });
+  mockClient.listMeshInvites.mockResolvedValue({ invites: [] });
   mockClient.getDelegateModels.mockReset().mockImplementation(async (request: { session_id: string }) => ({
     version: 1,
     reasoning_effort_supported: true,
@@ -1704,6 +1775,419 @@ describe('AgentsStore agent availability', () => {
     store.connectionStates = { 'agent-disconnected': 'failed' };
 
     expect(store.connectedAgents.map((config) => config.id)).toEqual(['agent-1']);
+  });
+});
+
+describe('AgentsStore mesh node availability', () => {
+  const NODE_ALPHA = '12D3KooWQmtDesktopNodeAlpha11111111111111';
+  const NODE_BRAVO = '12D3KooWQmtDesktopNodeBravo11111111111111';
+  const NODE_CHARLIE = '12D3KooWQmtDesktopNodeCharlie111111111111';
+
+  function websocketConfig(id: string): AgentConfig {
+    return {
+      id,
+      name: 'Remote QueryMT',
+      transport: 'websocket',
+      commandLine: '',
+      websocketUrl: '127.0.0.1:3030',
+      enabled: true,
+      autoStart: true
+    };
+  }
+
+  it('populates the mesh node count from a successful connection', async () => {
+    const store = createStore();
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA, NODE_BRAVO]));
+
+    await store.connectAgent('agent-1');
+    await tick();
+
+    expect(store.connectionStates['agent-1']).toBe('initialized');
+    expect(store.meshNodesByAgent['agent-1']?.nodes.map((node) => node.id)).toEqual([NODE_ALPHA, NODE_BRAVO]);
+    expect(store.meshNodeCount).toBe(2);
+  });
+
+  it('deduplicates the same remote node reported by multiple connected agents', async () => {
+    const store = createStore();
+    store.configs = [
+      ...store.configs,
+      {
+        id: 'agent-2',
+        name: 'Second QMTCODE',
+        transport: 'stdio',
+        commandLine: '/usr/local/bin/qmtcode-2 --acp',
+        enabled: true,
+        autoStart: true
+      }
+    ];
+    store.statuses = {
+      ...store.statuses,
+      'agent-2': { ...store.statuses['agent-1'], agentId: 'agent-2' }
+    };
+    // Peers of the same mesh: both agents report the same remote nodes, so a
+    // naive per-agent sum would double-count every stable node id.
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA, NODE_BRAVO]));
+
+    await store.connectAgent('agent-1');
+    await store.connectAgent('agent-2');
+    await tick();
+
+    expect(store.meshNodeCount).toBe(2);
+  });
+
+  it('ignores cached nodes for agents that are disconnected or disabled', () => {
+    const store = createStore();
+    store.configs = [...store.configs, websocketConfig('agent-offline'), { ...websocketConfig('agent-disabled'), transport: 'stdio', websocketUrl: undefined, enabled: false }];
+    store.connectionStates = {
+      'agent-1': 'initialized',
+      'agent-offline': 'failed',
+      'agent-disabled': 'initialized'
+    };
+    store.meshNodesByAgent = {
+      'agent-1': meshNodes([NODE_ALPHA, NODE_BRAVO]),
+      'agent-offline': meshNodes([NODE_CHARLIE]),
+      'agent-disabled': meshNodes([NODE_CHARLIE])
+    };
+
+    expect(store.meshNodeCount).toBe(2);
+  });
+
+  it('drops the mesh node count when the agent is stopped', async () => {
+    const store = createStore();
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA]));
+
+    await store.connectAgent('agent-1');
+    await tick();
+    expect(store.meshNodeCount).toBe(1);
+
+    await store.stopConfiguredAgent('agent-1');
+
+    expect(store.meshNodesByAgent['agent-1']).toBeNull();
+    expect(store.meshNodeCount).toBe(0);
+  });
+
+  it('clears the mesh node count on unexpected loss and repopulates it after reconnecting', async () => {
+    vi.useFakeTimers();
+    const store = createStore();
+    store.configs = [websocketConfig('remote-agent')];
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA, NODE_BRAVO]));
+
+    await store.connectAgent('remote-agent');
+    await tick();
+    expect(store.meshNodeCount).toBe(2);
+
+    mockClient.emitConnectionLoss('WebSocket closed (code 1006).');
+
+    expect(store.connectionStates['remote-agent']).toBe('reconnecting');
+    expect(store.meshNodesByAgent['remote-agent']).toBeNull();
+    expect(store.meshNodeCount).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(250);
+    await tick();
+
+    expect(store.connectionStates['remote-agent']).toBe('initialized');
+    expect(store.meshNodeCount).toBe(2);
+  });
+
+  it('drops the mesh node count when the websocket config is disabled or its transport changes', async () => {
+    const store = createStore();
+    store.configs = [websocketConfig('remote-agent')];
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA]));
+
+    await store.connectAgent('remote-agent');
+    await tick();
+    expect(store.meshNodeCount).toBe(1);
+
+    store.updateConfig('remote-agent', { enabled: false });
+
+    expect(store.meshNodesByAgent['remote-agent']).toBeNull();
+    expect(store.meshNodeCount).toBe(0);
+
+    store.updateConfig('remote-agent', { enabled: true, transport: 'stdio' });
+
+    expect(store.meshNodesByAgent['remote-agent']).toBeNull();
+    expect(store.meshNodeCount).toBe(0);
+  });
+
+  it('keeps the connection healthy when the agent lacks the mesh extension', async () => {
+    const store = createStore();
+    mockClient.listMeshStatus.mockRejectedValue(new Error(`Agent is missing required capability ${QMT_METHOD_MESH_STATUS}.`));
+    mockClient.listMeshNodes.mockRejectedValue(new Error(`Agent is missing required capability ${QMT_METHOD_MESH_NODES}.`));
+
+    await store.connectAgent('agent-1');
+    await tick();
+
+    expect(store.connectionStates['agent-1']).toBe('initialized');
+    expect(store.agentErrors['agent-1']).toBeNull();
+    expect(store.error).toBeNull();
+    expect(store.meshNodesByAgent['agent-1']).toBeNull();
+    expect(store.meshNodeCount).toBe(0);
+  });
+
+  it('reconnects with a fresh client after stopping a stdio agent and repopulates mesh nodes', async () => {
+    const store = createStore();
+    const firstClient = createDistinctMockClient();
+    const secondClient = createDistinctMockClient();
+    const pendingClients = [firstClient, secondClient];
+    vi.mocked(DesktopAcpClient).mockImplementation(function () {
+      const next = pendingClients.shift();
+      if (!next) throw new Error('unexpected extra DesktopAcpClient construction');
+      return next as never;
+    });
+    firstClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA, NODE_BRAVO]));
+    secondClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA, NODE_CHARLIE]));
+    // Non-empty models let the connect-time model chain finish in one
+    // attempt; pending retries would outlive the test and touch shared
+    // mock state from later tests.
+    firstClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+    secondClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+
+    await store.startConfiguredAgent('agent-1');
+    await vi.waitFor(() => expect(store.meshNodeCount).toBe(2));
+    expect(firstClient.connect).toHaveBeenCalledTimes(1);
+
+    await store.stopConfiguredAgent('agent-1');
+    // The stdio sidecar has no loss callback, so the stop path itself must
+    // dispose the client instead of leaving a zombie for the next start.
+    expect(firstClient.disconnect).toHaveBeenCalledTimes(1);
+    expect(store.meshNodesByAgent['agent-1']).toBeNull();
+    expect(store.meshNodeCount).toBe(0);
+
+    await store.startConfiguredAgent('agent-1');
+    await vi.waitFor(() => {
+      expect(secondClient.connect).toHaveBeenCalledTimes(1);
+      expect(store.meshNodesByAgent['agent-1']?.nodes.map((node) => node.id)).toEqual([NODE_ALPHA, NODE_CHARLIE]);
+    });
+    expect(store.meshNodeCount).toBe(2);
+  });
+
+  it('does not resurrect mesh nodes when a pending refresh settles after a stop', async () => {
+    const store = createStore();
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA]));
+    mockClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+    await store.connectAgent('agent-1');
+    await tick();
+    expect(store.meshNodeCount).toBe(1);
+
+    let resolveStaleNodes!: (value: MeshNodesInfo) => void;
+    const staleNodes = new Promise<MeshNodesInfo>((resolve) => {
+      resolveStaleNodes = resolve;
+    });
+    mockClient.listMeshNodes.mockImplementationOnce(() => staleNodes);
+    mockClient.emitExtensionNotification({ method: 'querymt/mesh/nodesChanged', params: {} });
+    await vi.waitFor(() => expect(mockClient.listMeshNodes).toHaveBeenCalledTimes(2));
+
+    await store.stopConfiguredAgent('agent-1');
+    resolveStaleNodes(meshNodes([NODE_ALPHA, NODE_BRAVO, NODE_CHARLIE]));
+    await tick();
+    await tick();
+
+    expect(store.meshNodesByAgent['agent-1']).toBeNull();
+    expect(store.meshNodeCount).toBe(0);
+  });
+
+  it('keeps restarted mesh nodes when the pre-restart refresh settles afterwards', async () => {
+    const store = createStore();
+    const firstClient = createDistinctMockClient();
+    const secondClient = createDistinctMockClient();
+    const pendingClients = [firstClient, secondClient];
+    vi.mocked(DesktopAcpClient).mockImplementation(function () {
+      const next = pendingClients.shift();
+      if (!next) throw new Error('unexpected extra DesktopAcpClient construction');
+      return next as never;
+    });
+    firstClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA]));
+    secondClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA, NODE_BRAVO]));
+    firstClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+    secondClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+
+    await store.startConfiguredAgent('agent-1');
+    await vi.waitFor(() => expect(store.meshNodeCount).toBe(1));
+
+    let resolveStaleNodes!: (value: MeshNodesInfo) => void;
+    const staleNodes = new Promise<MeshNodesInfo>((resolve) => {
+      resolveStaleNodes = resolve;
+    });
+    firstClient.listMeshNodes.mockImplementationOnce(() => staleNodes);
+    firstClient.emitExtensionNotification({ method: 'querymt/mesh/nodesChanged', params: {} });
+    await vi.waitFor(() => expect(firstClient.listMeshNodes).toHaveBeenCalledTimes(2));
+
+    await store.restartConfiguredAgent('agent-1');
+    await vi.waitFor(() => {
+      expect(secondClient.connect).toHaveBeenCalledTimes(1);
+      expect(store.meshNodesByAgent['agent-1']?.nodes.map((node) => node.id)).toEqual([NODE_ALPHA, NODE_BRAVO]);
+    });
+    expect(store.meshNodeCount).toBe(2);
+
+    resolveStaleNodes(meshNodes([NODE_ALPHA, NODE_CHARLIE]));
+    await tick();
+    await tick();
+
+    expect(store.meshNodesByAgent['agent-1']?.nodes.map((node) => node.id)).toEqual([NODE_ALPHA, NODE_BRAVO]);
+    expect(store.meshNodeCount).toBe(2);
+  });
+
+  it('lets a newer same-record refresh win when the older request settles later', async () => {
+    const store = createStore();
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA]));
+    mockClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+    await store.connectAgent('agent-1');
+    await tick();
+    expect(store.meshNodeCount).toBe(1);
+
+    let resolveOlderNodes!: (value: MeshNodesInfo) => void;
+    const olderNodes = new Promise<MeshNodesInfo>((resolve) => {
+      resolveOlderNodes = resolve;
+    });
+    mockClient.listMeshNodes.mockImplementationOnce(() => olderNodes);
+    mockClient.emitExtensionNotification({ method: 'querymt/mesh/nodesChanged', params: {} });
+    await vi.waitFor(() => expect(mockClient.listMeshNodes).toHaveBeenCalledTimes(2));
+
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA, NODE_BRAVO]));
+    mockClient.emitExtensionNotification({ method: 'querymt/mesh/joined', params: {} });
+    await vi.waitFor(() => {
+      expect(mockClient.listMeshNodes).toHaveBeenCalledTimes(3);
+      expect(store.meshNodesByAgent['agent-1']?.nodes.map((node) => node.id)).toEqual([NODE_ALPHA, NODE_BRAVO]);
+    });
+    expect(store.meshNodeCount).toBe(2);
+
+    resolveOlderNodes(meshNodes([NODE_ALPHA, NODE_CHARLIE]));
+    await tick();
+    await tick();
+
+    expect(store.meshNodesByAgent['agent-1']?.nodes.map((node) => node.id)).toEqual([NODE_ALPHA, NODE_BRAVO]);
+    expect(store.meshNodeCount).toBe(2);
+  });
+
+  it('clears availability when a notification-driven refresh fails but keeps the connection healthy', async () => {
+    const store = createStore();
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA, NODE_BRAVO]));
+    mockClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+    await store.connectAgent('agent-1');
+    await tick();
+    expect(store.meshNodeCount).toBe(2);
+
+    mockClient.listMeshStatus.mockRejectedValueOnce(new Error('mesh status failed'));
+    mockClient.emitExtensionNotification({ method: 'querymt/mesh/peerExpired', params: {} });
+
+    await vi.waitFor(() => expect(store.meshNodesByAgent['agent-1']).toBeNull());
+
+    expect(store.meshNodeCount).toBe(0);
+    expect(store.connectionStates['agent-1']).toBe('initialized');
+    expect(store.agentErrors['agent-1']).toBeNull();
+    expect(store.error).toBeNull();
+  });
+
+  it('keeps newer mesh data when a superseded request rejects afterwards', async () => {
+    const store = createStore();
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA]));
+    mockClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+    await store.connectAgent('agent-1');
+    await tick();
+    expect(store.meshNodeCount).toBe(1);
+
+    let rejectOlderNodes!: (error: Error) => void;
+    const olderNodes = new Promise<MeshNodesInfo>((_resolve, reject) => {
+      rejectOlderNodes = reject;
+    });
+    mockClient.listMeshNodes.mockImplementationOnce(() => olderNodes);
+    mockClient.emitExtensionNotification({ method: 'querymt/mesh/nodesChanged', params: {} });
+    await vi.waitFor(() => expect(mockClient.listMeshNodes).toHaveBeenCalledTimes(2));
+
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA, NODE_BRAVO]));
+    mockClient.emitExtensionNotification({ method: 'querymt/mesh/nodesChanged', params: {} });
+    await vi.waitFor(() => {
+      expect(mockClient.listMeshNodes).toHaveBeenCalledTimes(3);
+      expect(store.meshNodesByAgent['agent-1']?.nodes.map((node) => node.id)).toEqual([NODE_ALPHA, NODE_BRAVO]);
+    });
+
+    // The stale rejection is absorbed by the availability wrapper without
+    // clearing the newer data (an unhandled rejection would fail the run).
+    rejectOlderNodes(new Error('stale request failed'));
+    await tick();
+    await tick();
+
+    expect(store.meshNodesByAgent['agent-1']?.nodes.map((node) => node.id)).toEqual([NODE_ALPHA, NODE_BRAVO]);
+    expect(store.meshNodeCount).toBe(2);
+    expect(store.error).toBeNull();
+    expect(store.agentErrors['agent-1']).toBeNull();
+  });
+
+  it('ignores a pending notification refresh that settles after an unexpected loss', async () => {
+    const store = createStore();
+    store.configs = [{ ...websocketConfig('remote-agent'), autoStart: false }];
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA, NODE_BRAVO]));
+    mockClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+
+    await store.connectAgent('remote-agent');
+    await tick();
+    expect(store.meshNodeCount).toBe(2);
+
+    let resolveStaleNodes!: (value: MeshNodesInfo) => void;
+    const staleNodes = new Promise<MeshNodesInfo>((resolve) => {
+      resolveStaleNodes = resolve;
+    });
+    mockClient.listMeshNodes.mockImplementationOnce(() => staleNodes);
+    mockClient.emitExtensionNotification({ method: 'querymt/mesh/nodesChanged', params: {} });
+    await vi.waitFor(() => expect(mockClient.listMeshNodes).toHaveBeenCalledTimes(2));
+
+    mockClient.emitConnectionLoss('WebSocket closed (code 1006).');
+    expect(store.meshNodesByAgent['remote-agent']).toBeNull();
+    expect(store.meshNodeCount).toBe(0);
+
+    resolveStaleNodes(meshNodes([NODE_ALPHA, NODE_BRAVO, NODE_CHARLIE]));
+    await tick();
+    await tick();
+
+    expect(store.meshNodesByAgent['remote-agent']).toBeNull();
+    expect(store.meshNodeCount).toBe(0);
+  });
+
+  it('rejects a manual mesh refresh when the current RPC fails', async () => {
+    const store = createStore();
+    mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA]));
+    mockClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+    await store.connectAgent('agent-1');
+    await tick();
+    expect(store.meshNodeCount).toBe(1);
+
+    mockClient.listMeshStatus.mockRejectedValueOnce(new Error('mesh down'));
+    await expect(store.refreshMeshForAgent('agent-1')).rejects.toThrow('mesh down');
+
+    // A manual failure still rejects for the mesh page but leaves the last
+    // known availability untouched.
+    expect(store.meshNodesByAgent['agent-1']?.nodes.map((node) => node.id)).toEqual([NODE_ALPHA]);
+    expect(store.meshNodeCount).toBe(1);
+    expect(store.connectionStates['agent-1']).toBe('initialized');
+  });
+
+  it('lets a manual refresh started while disconnected win after the connection-ready automatic refresh fails', async () => {
+    const store = createStore();
+    // Call ordering is deterministic: the connection-ready hook issues its
+    // listMeshNodes synchronously during the connect, while the manual
+    // refresh can only issue its RPC after connectAgent resolves. The first
+    // call is therefore the automatic one (fails) and the second the manual
+    // one (succeeds).
+    mockClient.listMeshNodes
+      .mockRejectedValueOnce(new Error('mesh nodes failed'))
+      .mockResolvedValueOnce(meshNodes([NODE_ALPHA, NODE_BRAVO]));
+    mockClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+
+    // Begin the public manual refresh while the agent has no client at all:
+    // connecting is part of the manual refresh's job.
+    const manual = store.refreshMeshForAgent('agent-1');
+    await vi.waitFor(() => expect(mockClient.listMeshNodes).toHaveBeenCalledTimes(2));
+    const result = await manual;
+    await tick();
+    await tick();
+
+    expect(store.connectionStates['agent-1']).toBe('initialized');
+    expect(result?.meshNodes.nodes.map((node) => node.id)).toEqual([NODE_ALPHA, NODE_BRAVO]);
+    expect(store.meshNodesByAgent['agent-1']?.nodes.map((node) => node.id)).toEqual([NODE_ALPHA, NODE_BRAVO]);
+    expect(store.meshNodeCount).toBe(2);
+    // The automatic failure is absorbed and never surfaces as a store error.
+    expect(store.error).toBeNull();
+    expect(store.agentErrors['agent-1']).toBeNull();
   });
 });
 
