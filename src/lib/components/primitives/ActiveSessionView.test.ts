@@ -376,6 +376,17 @@ async function flushNavFrames() {
   await tick();
 }
 
+async function flushIdleSettle() {
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+  });
+  await tick();
+}
+
 describe('ActiveSessionView turn navigation', () => {
   it('hides the rail when the conversation is empty', () => {
     const empty = createEmptyActiveSession();
@@ -512,6 +523,152 @@ describe('ActiveSessionView turn navigation', () => {
     expect(scrollTopOf(scroller.scrollTo.mock.calls[0][0])).toBe(122);
     shell.remove();
     header.remove();
+  });
+
+  it('keeps programmatic navigation open until the mounted jump settles', async () => {
+    const onManualNavigate = vi.fn();
+    const onManualNavigateComplete = vi.fn();
+    stubScroller(document.documentElement);
+    render(ActiveSessionView, {
+      session: longStreamingSession(2),
+      onManualNavigate,
+      onManualNavigateComplete
+    });
+    await tick();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 1 of 2' }));
+    expect(onManualNavigate).toHaveBeenCalledOnce();
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new Event('scrollend'));
+    await tick();
+    expect(onManualNavigateComplete).toHaveBeenCalledOnce();
+  });
+
+  it('does not complete a two-phase jump until the exact phase settles', async () => {
+    const onManualNavigate = vi.fn();
+    const onManualNavigateComplete = vi.fn();
+    const scroller = stubScroller(document.documentElement);
+    const header = document.createElement('header');
+    header.className = 'session-header';
+    document.body.append(header);
+
+    const turnIndex = 5;
+    const turnStart = turnIndex * (SESSION_TURN_DEFAULT_HEIGHT + SESSION_TURN_GAP);
+    const requestHeight = 400;
+    const responseLayoutTop = turnStart + requestHeight;
+    const headerBottom = 72;
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const scrollTop = document.documentElement.scrollTop;
+      if (this === document.documentElement) return makeRect({ top: 0, height: 200 });
+      if (this === header) return makeRect({ top: 0, bottom: headerBottom, height: headerBottom });
+      if (this.classList.contains('session-conversation-window')) {
+        return makeRect({ top: -scrollTop, height: 4000 });
+      }
+      const partId = this.dataset.turnPartId;
+      if (partId === `turn-user-${turnIndex}:response`) {
+        return makeRect({ top: responseLayoutTop - scrollTop, height: 80 });
+      }
+      if (partId === `turn-user-${turnIndex}:request`) {
+        return makeRect({ top: turnStart - scrollTop, height: requestHeight });
+      }
+      const turnId = this.dataset.turnId;
+      if (turnId === `turn-user-${turnIndex}`) {
+        return makeRect({ top: turnStart - scrollTop, height: requestHeight + 80 });
+      }
+      return originalRect.call(this);
+    });
+
+    render(ActiveSessionView, {
+      session: longStreamingSession(12),
+      onManualNavigate,
+      onManualNavigateComplete
+    });
+    await tick();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 6 of 12' }));
+    expect(onManualNavigate).toHaveBeenCalledOnce();
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+    expect(scroller.scrollTo).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new Event('scrollend'));
+    await tick();
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+
+    await flushNavFrames();
+    await vi.waitFor(() => expect(scroller.scrollTo).toHaveBeenCalledTimes(2));
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new Event('scrollend'));
+    await tick();
+    expect(onManualNavigateComplete).toHaveBeenCalledOnce();
+    header.remove();
+  });
+
+  it('completes the previous jump when a replacement navigation starts', async () => {
+    const onManualNavigate = vi.fn();
+    const onManualNavigateComplete = vi.fn();
+    stubScroller(document.documentElement);
+    render(ActiveSessionView, {
+      session: longStreamingSession(2),
+      onManualNavigate,
+      onManualNavigateComplete
+    });
+    await tick();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 1 of 2' }));
+    expect(onManualNavigate).toHaveBeenCalledOnce();
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 2 of 2' }));
+    expect(onManualNavigate).toHaveBeenCalledTimes(2);
+    expect(onManualNavigateComplete).toHaveBeenCalledOnce();
+
+    window.dispatchEvent(new Event('scrollend'));
+    await tick();
+    expect(onManualNavigateComplete).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels an in-flight jump on session change without completing it', async () => {
+    const onManualNavigate = vi.fn();
+    const onManualNavigateComplete = vi.fn();
+    stubScroller(document.documentElement);
+    const { rerender } = render(ActiveSessionView, {
+      session: longStreamingSession(2),
+      onManualNavigate,
+      onManualNavigateComplete
+    });
+    await tick();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 1 of 2' }));
+    expect(onManualNavigate).toHaveBeenCalledOnce();
+
+    const nextSession = longStreamingSession(2);
+    nextSession.sessionId = 'session-other';
+    await rerender({ session: nextSession, onManualNavigate, onManualNavigateComplete });
+    await tick();
+
+    window.dispatchEvent(new Event('scrollend'));
+    await tick();
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+  });
+
+  it('clears programmatic navigation after idle frames when scrollend never fires', async () => {
+    const onManualNavigateComplete = vi.fn();
+    stubScroller(document.documentElement);
+    render(ActiveSessionView, {
+      session: longStreamingSession(2),
+      onManualNavigateComplete
+    });
+    await tick();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 1 of 2' }));
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+
+    await flushIdleSettle();
+    expect(onManualNavigateComplete).toHaveBeenCalledOnce();
   });
 
   it('keeps previous and next non-operational when no agent responses exist', async () => {

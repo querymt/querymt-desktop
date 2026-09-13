@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import Conversation from '$lib/components/ai-elements/conversation.svelte';
   import SessionTurn from '$lib/components/session/SessionTurn.svelte';
   import SessionTurnNavigationRail from '$lib/components/session/SessionTurnNavigationRail.svelte';
@@ -27,6 +27,7 @@
     type SessionTurnHeightMap,
     type SessionTurnWindowViewport
   } from '$lib/domain/session-turn-window';
+  import { observeScrollSettle } from '$lib/domain/session-scroll';
   import type { PromptFailure } from '$lib/domain/prompt-errors';
   import type { ActiveSessionViewModel, SessionImageBlock, SessionImageGalleryItem } from '$lib/domain/types';
 
@@ -43,7 +44,8 @@
     onRedo,
     onFork,
     onDisclosureChange,
-    onManualNavigate
+    onManualNavigate,
+    onManualNavigateComplete
   }: {
     session: ActiveSessionViewModel;
     undoSupported?: boolean;
@@ -58,6 +60,7 @@
     onFork?: (messageId: string) => void;
     onDisclosureChange?: (anchor: HTMLElement, expanded: boolean) => void;
     onManualNavigate?: (() => void) | null;
+    onManualNavigateComplete?: (() => void) | null;
   } = $props();
 
   function imageName(block: SessionImageBlock, index: number): string {
@@ -80,6 +83,8 @@
   let heightSessionId: string | null = null;
   let pendingNavId: string | null = null;
   let pendingNavToken = 0;
+  let navInFlight = false;
+  let cancelNavSettle: (() => void) | null = null;
 
   function handleImageFailure(key: string) {
     if (failedImageKeys.has(key)) return;
@@ -138,6 +143,7 @@
     activeReadY = 0;
     pendingNavId = null;
     pendingNavToken += 1;
+    cancelManualNavigate();
   });
 
   function resolveScrollViewport(): {
@@ -227,6 +233,41 @@
     measureVisibleTurns();
   }
 
+  function abortNavSettle() {
+    cancelNavSettle?.();
+    cancelNavSettle = null;
+  }
+
+  function beginManualNavigate() {
+    completeManualNavigate();
+    navInFlight = true;
+    onManualNavigate?.();
+  }
+
+  function completeManualNavigate() {
+    abortNavSettle();
+    if (!navInFlight) return;
+    navInFlight = false;
+    onManualNavigateComplete?.();
+  }
+
+  function cancelManualNavigate() {
+    abortNavSettle();
+    navInFlight = false;
+  }
+
+  function watchNavSettle(token: number) {
+    abortNavSettle();
+    const { eventTarget } = resolveScrollViewport();
+    cancelNavSettle = observeScrollSettle(eventTarget, () => {
+      cancelNavSettle = null;
+      if (token !== pendingNavToken) return;
+      completeManualNavigate();
+    });
+  }
+
+  onMount(() => () => cancelManualNavigate());
+
   function scrollToMountedPart(
     element: HTMLElement,
     origin: number,
@@ -267,18 +308,22 @@
     pendingNavToken += 1;
     const token = pendingNavToken;
     pendingNavId = id;
-    onManualNavigate?.();
+    beginManualNavigate();
 
     const mounted = findTurnPartNode(id);
     if (mounted) {
+      if (token !== pendingNavToken) return;
+      pendingNavId = null;
+      watchNavSettle(token);
       scrollToMountedPart(element, origin, mounted, finalBehavior);
-      if (token === pendingNavToken) pendingNavId = null;
       return;
     }
 
     const rough = sessionTurnNavRoughOffset(navItems, navRanges, id);
     if (rough == null) {
-      if (token === pendingNavToken) pendingNavId = null;
+      if (token !== pendingNavToken) return;
+      pendingNavId = null;
+      completeManualNavigate();
       return;
     }
     scrollToEstimatedOffset(element, origin, rough, 'auto');
@@ -291,13 +336,21 @@
         const latestOrigin = viewportOrigin(latestElement, latestCustom);
         measureVisibleTurns();
         syncViewport();
+        if (token !== pendingNavToken || pendingNavId !== id) return;
+        pendingNavId = null;
         const node = findTurnPartNode(id);
-        if (node) scrollToMountedPart(latestElement, latestOrigin, node, finalBehavior);
-        else {
-          const exact = sessionTurnNavTargetOffset(navRanges, id);
-          if (exact != null) scrollToEstimatedOffset(latestElement, latestOrigin, exact, finalBehavior);
+        if (node) {
+          watchNavSettle(token);
+          scrollToMountedPart(latestElement, latestOrigin, node, finalBehavior);
+          return;
         }
-        if (token === pendingNavToken) pendingNavId = null;
+        const exact = sessionTurnNavTargetOffset(navRanges, id);
+        if (exact == null) {
+          completeManualNavigate();
+          return;
+        }
+        watchNavSettle(token);
+        scrollToEstimatedOffset(latestElement, latestOrigin, exact, finalBehavior);
       });
     });
   }
