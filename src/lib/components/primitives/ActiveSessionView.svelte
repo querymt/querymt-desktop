@@ -1,9 +1,25 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import Conversation from '$lib/components/ai-elements/conversation.svelte';
   import SessionTurn from '$lib/components/session/SessionTurn.svelte';
+  import SessionTurnNavigationRail from '$lib/components/session/SessionTurnNavigationRail.svelte';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { getForkTarget } from '$lib/domain/session-fork';
   import { canUndoToMessage, isTurnReverted } from '$lib/domain/session-undo';
+  import {
+    SESSION_TURN_NAV_VISIBLE_GAP,
+    absoluteContentOffset,
+    activeSessionTurnNavId,
+    adjacentResponseNavId,
+    alignedScrollTop,
+    buildSessionTurnNavigation,
+    estimateSessionTurnNavRanges,
+    scrollViewportOriginTop,
+    sessionTurnNavRoughOffset,
+    sessionTurnNavTargetOffset,
+    visibleContentInset,
+    type SessionTurnPartHeightMap
+  } from '$lib/domain/session-turn-navigation';
   import {
     SESSION_TURN_GAP,
     getConversationViewport,
@@ -26,7 +42,8 @@
     onUndo,
     onRedo,
     onFork,
-    onDisclosureChange
+    onDisclosureChange,
+    onManualNavigate
   }: {
     session: ActiveSessionViewModel;
     undoSupported?: boolean;
@@ -40,6 +57,7 @@
     onRedo?: () => void | Promise<void>;
     onFork?: (messageId: string) => void;
     onDisclosureChange?: (anchor: HTMLElement, expanded: boolean) => void;
+    onManualNavigate?: (() => void) | null;
   } = $props();
 
   function imageName(block: SessionImageBlock, index: number): string {
@@ -55,8 +73,13 @@
   let failureSessionId: string | null = null;
   let conversationRoot: HTMLElement | null = $state(null);
   let turnHeights = $state<SessionTurnHeightMap>({});
+  let partHeights = $state<SessionTurnPartHeightMap>({});
   let viewport = $state<SessionTurnWindowViewport>({ top: 0, height: 0 });
+  let visibleInset = $state(SESSION_TURN_NAV_VISIBLE_GAP);
+  let activeReadY = $state(0);
   let heightSessionId: string | null = null;
+  let pendingNavId: string | null = null;
+  let pendingNavToken = 0;
 
   function handleImageFailure(key: string) {
     if (failedImageKeys.has(key)) return;
@@ -65,6 +88,13 @@
 
   const turns = $derived(buildSessionConversation(session));
   const windowedTurns = $derived(windowSessionTurns(turns, viewport, turnHeights, { gap: SESSION_TURN_GAP }));
+  const navItems = $derived(buildSessionTurnNavigation(turns));
+  const navRanges = $derived(
+    estimateSessionTurnNavRanges(navItems, turnHeights, partHeights, { gap: SESSION_TURN_GAP })
+  );
+  const activeNavId = $derived(activeSessionTurnNavId(navRanges, activeReadY));
+  const previousResponseId = $derived(adjacentResponseNavId(navItems, activeNavId, 'previous'));
+  const nextResponseId = $derived(adjacentResponseNavId(navItems, activeNavId, 'next'));
   const imageGallery = $derived.by(() => {
     const items: SessionImageGalleryItem[] = [];
     for (const turn of turns) {
@@ -102,40 +132,174 @@
     if (sessionId === heightSessionId) return;
     heightSessionId = sessionId;
     turnHeights = {};
+    partHeights = {};
     viewport = { top: 0, height: 0 };
+    visibleInset = SESSION_TURN_NAV_VISIBLE_GAP;
+    activeReadY = 0;
+    pendingNavId = null;
+    pendingNavToken += 1;
   });
 
-  function resolveScrollViewport(): { element: HTMLElement; eventTarget: HTMLElement | Window } {
+  function resolveScrollViewport(): {
+    element: HTMLElement;
+    eventTarget: HTMLElement | Window;
+    custom: boolean;
+  } {
     const customShell = conversationRoot?.closest<HTMLElement>('.app-shell-custom-titlebar');
-    if (customShell) return { element: customShell, eventTarget: customShell };
+    if (customShell) return { element: customShell, eventTarget: customShell, custom: true };
     const element = document.scrollingElement instanceof HTMLElement ? document.scrollingElement : document.documentElement;
-    return { element, eventTarget: window };
+    return { element, eventTarget: window, custom: false };
+  }
+
+  function viewportOrigin(element: HTMLElement, custom: boolean): number {
+    return scrollViewportOriginTop(element.getBoundingClientRect().top, custom);
+  }
+
+  function measureVisibleInset(origin: number): number {
+    const header =
+      conversationRoot?.closest('.session-page')?.querySelector('.session-header') ??
+      document.querySelector('.session-header');
+    return visibleContentInset(header?.getBoundingClientRect().bottom, origin);
+  }
+
+  function conversationContentOffset(element: HTMLElement, origin: number): number {
+    if (!conversationRoot) return 0;
+    return absoluteContentOffset(
+      element.scrollTop,
+      conversationRoot.getBoundingClientRect().top,
+      origin
+    );
   }
 
   function syncViewport() {
     if (!conversationRoot) return;
-    const { element } = resolveScrollViewport();
-    viewport = getConversationViewport(
-      conversationRoot.getBoundingClientRect().top + element.scrollTop,
-      element.scrollTop,
-      element.clientHeight
-    );
+    const { element, custom } = resolveScrollViewport();
+    const origin = viewportOrigin(element, custom);
+    visibleInset = measureVisibleInset(origin);
+    const contentOffset = conversationContentOffset(element, origin);
+    viewport = getConversationViewport(contentOffset, element.scrollTop, element.clientHeight);
+    activeReadY = Math.max(0, element.scrollTop + visibleInset - contentOffset);
   }
 
   function measureVisibleTurns() {
     if (!conversationRoot) return;
-    const next = { ...turnHeights };
-    let changed = false;
+    const nextTurns = { ...turnHeights };
+    const nextParts = { ...partHeights };
+    let turnsChanged = false;
+    let partsChanged = false;
     for (const node of conversationRoot.querySelectorAll<HTMLElement>('[data-turn-id]')) {
       const id = node.dataset.turnId;
       if (!id) continue;
       const height = Math.round(node.getBoundingClientRect().height);
-      if (height > 0 && next[id] !== height) {
-        next[id] = height;
-        changed = true;
+      if (height > 0 && nextTurns[id] !== height) {
+        nextTurns[id] = height;
+        turnsChanged = true;
       }
     }
-    if (changed) turnHeights = next;
+    for (const node of conversationRoot.querySelectorAll<HTMLElement>('[data-turn-part-id]')) {
+      const id = node.dataset.turnPartId;
+      if (!id) continue;
+      const height = Math.round(node.getBoundingClientRect().height);
+      if (height > 0 && nextParts[id] !== height) {
+        nextParts[id] = height;
+        partsChanged = true;
+      }
+    }
+    if (turnsChanged) turnHeights = nextTurns;
+    if (partsChanged) partHeights = nextParts;
+  }
+
+  function prefersReducedMotion(): boolean {
+    return typeof window !== 'undefined' && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  function findTurnPartNode(id: string): HTMLElement | null {
+    if (!conversationRoot) return null;
+    for (const node of conversationRoot.querySelectorAll<HTMLElement>('[data-turn-part-id]')) {
+      if (node.dataset.turnPartId === id) return node;
+    }
+    return null;
+  }
+
+  function applyNavScroll(element: HTMLElement, top: number, behavior: ScrollBehavior) {
+    element.scrollTo({ top, behavior });
+    syncViewport();
+    measureVisibleTurns();
+  }
+
+  function scrollToMountedPart(
+    element: HTMLElement,
+    origin: number,
+    node: HTMLElement,
+    behavior: ScrollBehavior
+  ) {
+    applyNavScroll(
+      element,
+      alignedScrollTop(
+        absoluteContentOffset(element.scrollTop, node.getBoundingClientRect().top, origin),
+        measureVisibleInset(origin)
+      ),
+      behavior
+    );
+  }
+
+  function scrollToEstimatedOffset(
+    element: HTMLElement,
+    origin: number,
+    conversationOffset: number,
+    behavior: ScrollBehavior
+  ) {
+    applyNavScroll(
+      element,
+      alignedScrollTop(
+        conversationContentOffset(element, origin) + conversationOffset,
+        measureVisibleInset(origin)
+      ),
+      behavior
+    );
+  }
+
+  function navigateToNavItem(id: string) {
+    if (!conversationRoot) return;
+    const { element, custom } = resolveScrollViewport();
+    const origin = viewportOrigin(element, custom);
+    const finalBehavior: ScrollBehavior = prefersReducedMotion() ? 'auto' : 'smooth';
+    pendingNavToken += 1;
+    const token = pendingNavToken;
+    pendingNavId = id;
+    onManualNavigate?.();
+
+    const mounted = findTurnPartNode(id);
+    if (mounted) {
+      scrollToMountedPart(element, origin, mounted, finalBehavior);
+      if (token === pendingNavToken) pendingNavId = null;
+      return;
+    }
+
+    const rough = sessionTurnNavRoughOffset(navItems, navRanges, id);
+    if (rough == null) {
+      if (token === pendingNavToken) pendingNavId = null;
+      return;
+    }
+    scrollToEstimatedOffset(element, origin, rough, 'auto');
+
+    void tick().then(() => {
+      if (token !== pendingNavToken || pendingNavId !== id) return;
+      requestAnimationFrame(() => {
+        if (token !== pendingNavToken || pendingNavId !== id) return;
+        const { element: latestElement, custom: latestCustom } = resolveScrollViewport();
+        const latestOrigin = viewportOrigin(latestElement, latestCustom);
+        measureVisibleTurns();
+        syncViewport();
+        const node = findTurnPartNode(id);
+        if (node) scrollToMountedPart(latestElement, latestOrigin, node, finalBehavior);
+        else {
+          const exact = sessionTurnNavTargetOffset(navRanges, id);
+          if (exact != null) scrollToEstimatedOffset(latestElement, latestOrigin, exact, finalBehavior);
+        }
+        if (token === pendingNavToken) pendingNavId = null;
+      });
+    });
   }
 
   // Conversation unmounts this root while the session is empty, so bind
@@ -267,4 +431,14 @@
       </div>
     </Conversation>
   </section>
+  {#if navItems.length > 0}
+    <SessionTurnNavigationRail
+      items={navItems}
+      activeId={activeNavId}
+      {previousResponseId}
+      {nextResponseId}
+      {visibleInset}
+      onNavigate={navigateToNavItem}
+    />
+  {/if}
 </div>

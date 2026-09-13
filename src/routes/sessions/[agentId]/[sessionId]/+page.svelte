@@ -556,6 +556,7 @@
       onRedo={() => void agentsStore.redoActiveSession()}
       onFork={openForkDialog}
       onDisclosureChange={preserveDisclosureAnchor}
+      onManualNavigate={() => setScrollMode('free', scrollViewport ? getDistanceFromBottom(scrollViewport) : 0)}
     />
 
     {#if pendingElicitations.length > 0}
