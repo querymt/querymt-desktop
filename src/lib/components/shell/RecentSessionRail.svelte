@@ -56,6 +56,11 @@
     Mesh: '/mesh',
     Settings: '/settings'
   };
+  // Bits UI 2.19 attaches aria-describedby itself, but its popper layer never applies the
+  // content id, so the trigger ends up with an empty, invalid aria-describedby while open.
+  // Point at a persistent visually hidden description instead; it must not collide with the
+  // expanded and collapsed rails because only one renders at a time.
+  const AGENTS_STATUS_DESCRIPTION_ID = 'app-sidebar-agents-status-description';
   const workSections: SectionName[] = ['Inbox', 'Sessions', 'Workspaces'];
   const manageSections: SectionName[] = ['Agents', 'Automations', 'Mesh'];
   const SettingsIcon = sectionIcons.Settings;
@@ -64,6 +69,7 @@
   let sessionIconLimit = $state(MAX_SESSION_ICONS);
   const compact = $derived(collapsed);
   const onlineAgentCount = $derived(agentsStore.connectedAgents.length);
+  const configuredAgentCount = $derived(agentsStore.configs.length);
   const agentAttentionCount = $derived(agentsStore.agentsNeedingAttention.length);
   const inboxActionCount = $derived(inboxStore.actionableItems.length);
   const actionRequiredSessionKeys = $derived(
@@ -110,16 +116,27 @@
     return `/sessions/${encodeURIComponent(session.agentId)}/${encodeURIComponent(session.sessionId)}`;
   }
 
+  function getAgentsAccessibleName(): string {
+    return agentAttentionCount > 0 ? `Agents, ${agentAttentionCount} need attention` : 'Agents';
+  }
+
+  function getAgentsStatus(): string {
+    const active = `${onlineAgentCount} ${onlineAgentCount === 1 ? 'agent' : 'agents'} active`;
+    const available = `${configuredAgentCount} ${configuredAgentCount === 1 ? 'agent' : 'agents'} available`;
+    return `${active}, ${available}`;
+  }
+
   function getSectionLabel(section: SectionName): string {
     if (section === 'Inbox' && inboxActionCount > 0) {
       return `Inbox, ${inboxActionCount} ${inboxActionCount === 1 ? 'action' : 'actions'} required`;
     }
     if (section !== 'Agents') return section;
+    return getAgentsAccessibleName();
+  }
 
-    const details: string[] = [];
-    if (onlineAgentCount > 0) details.push(`${onlineAgentCount} online`);
-    if (agentAttentionCount > 0) details.push(`${agentAttentionCount} need attention`);
-    return details.length > 0 ? `Agents, ${details.join(', ')}` : 'Agents';
+  function getSectionTooltip(section: SectionName): string {
+    if (section === 'Agents' && configuredAgentCount > 0) return `Agents, ${getAgentsStatus()}`;
+    return getSectionLabel(section);
   }
 
   function getSessionShortcutLabel(index: number): string {
@@ -142,7 +159,7 @@
 </script>
 
 {#snippet navIndicator(section: SectionName)}
-  {#if section === 'Agents' && onlineAgentCount > 0}
+  {#if section === 'Agents' && compact && onlineAgentCount > 0}
     <span class="app-icon-agent-count" aria-hidden="true">{onlineAgentCount}</span>
   {/if}
   {#if section === 'Agents' && agentAttentionCount > 0}<SidebarAttentionDot />{/if}
@@ -154,17 +171,49 @@
     <div class="app-sidebar-group-label">{label}</div>
     {#each sections as section}
       {@const Icon = sectionIcons[section]}
-      <a
-        class={`app-sidebar-link ${current === section ? 'app-sidebar-link-current' : ''}`}
-        href={routeMap[section]}
-        aria-current={current === section ? 'page' : undefined}
-        aria-label={getSectionLabel(section)}
-      >
-        <span class="app-sidebar-link-icon"><Icon size={16} />{@render navIndicator(section)}</span>
-        <span>{section}</span>
-        {#if section === 'Inbox' && inboxActionCount > 0}<small>{inboxActionCount}</small>{/if}
-        {#if section === 'Agents' && onlineAgentCount > 0}<small>{onlineAgentCount}</small>{/if}
-      </a>
+      {#if section === 'Agents' && configuredAgentCount > 0}
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            {#snippet child({ props })}
+              <a
+                {...props}
+                class={`app-sidebar-link ${current === 'Agents' ? 'app-sidebar-link-current' : ''}`}
+                href={routeMap.Agents}
+                aria-current={current === 'Agents' ? 'page' : undefined}
+                aria-label={getSectionLabel('Agents')}
+                aria-describedby={AGENTS_STATUS_DESCRIPTION_ID}
+              >
+                <span class="app-sidebar-link-icon"><Icon size={16} />{@render navIndicator('Agents')}</span>
+                <span>Agents</span>
+                <small
+                  class={`app-sidebar-agents-count ${onlineAgentCount > 0 ? 'app-sidebar-agents-count-active' : ''}`}
+                  aria-hidden="true"
+                >
+                  <span class="app-sidebar-agents-count-n">{onlineAgentCount}</span> / {configuredAgentCount}
+                </small>
+              </a>
+            {/snippet}
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content class="app-icon-tooltip" side="right" sideOffset={10}>
+              {getAgentsStatus()}
+              <Tooltip.Arrow class="app-icon-tooltip-arrow" />
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+        <span class="sr-only" id={AGENTS_STATUS_DESCRIPTION_ID}>{getAgentsStatus()}</span>
+      {:else}
+        <a
+          class={`app-sidebar-link ${current === section ? 'app-sidebar-link-current' : ''}`}
+          href={routeMap[section]}
+          aria-current={current === section ? 'page' : undefined}
+          aria-label={getSectionLabel(section)}
+        >
+          <span class="app-sidebar-link-icon"><Icon size={16} />{@render navIndicator(section)}</span>
+          <span>{section}</span>
+          {#if section === 'Inbox' && inboxActionCount > 0}<small>{inboxActionCount}</small>{/if}
+        </a>
+      {/if}
     {/each}
   </div>
 {/snippet}
@@ -190,14 +239,24 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 {#snippet child({ props })}
-                  <a {...props} class={`app-icon-link app-nav-icon-link ${current === section ? 'app-icon-link-current' : ''}`} href={routeMap[section]} aria-current={current === section ? 'page' : undefined} aria-label={getSectionLabel(section)}>
+                  <a
+                    {...props}
+                    class={`app-icon-link app-nav-icon-link ${current === section ? 'app-icon-link-current' : ''}`}
+                    href={routeMap[section]}
+                    aria-current={current === section ? 'page' : undefined}
+                    aria-label={getSectionLabel(section)}
+                    aria-describedby={section === 'Agents' && configuredAgentCount > 0 ? AGENTS_STATUS_DESCRIPTION_ID : undefined}
+                  >
                     <span class="app-icon-activity-pill" aria-hidden="true"></span>
                     <span class="app-nav-icon-surface" aria-hidden="true"><Icon size={16} />{@render navIndicator(section)}</span>
                   </a>
                 {/snippet}
               </Tooltip.Trigger>
-              <Tooltip.Portal><Tooltip.Content class="app-icon-tooltip" side="right" sideOffset={10}>{getSectionLabel(section)}<Tooltip.Arrow class="app-icon-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal>
+              <Tooltip.Portal><Tooltip.Content class="app-icon-tooltip" side="right" sideOffset={10}>{getSectionTooltip(section)}<Tooltip.Arrow class="app-icon-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal>
             </Tooltip.Root>
+            {#if section === 'Agents' && configuredAgentCount > 0}
+              <span class="sr-only" id={AGENTS_STATUS_DESCRIPTION_ID}>{getAgentsStatus()}</span>
+            {/if}
           {/each}
         </div>
         <div class="app-icon-divider" role="separator" aria-label="Recent sessions"></div>

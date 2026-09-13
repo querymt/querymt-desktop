@@ -49,6 +49,9 @@
   --status-muted: #5e5c64;
   --status-muted-bg: rgba(94, 92, 100, 0.08);
   --status-muted-border: rgba(94, 92, 100, 0.18);
+  /* Dedicated AA foreground for the sidebar agents active-count numerator; darker than
+     --status-success so it passes 4.5:1 on the hover and current sidebar rows too. */
+  --agents-active-text: #15703d;
   --inline-code-bg: rgba(94, 92, 100, 0.1);
   --inline-code-text: #3d3846;
   --amber: #fb923c;
@@ -134,6 +137,7 @@
   --status-muted: #b8b8b8;
   --status-muted-bg: rgba(255, 255, 255, 0.045);
   --status-muted-border: rgba(255, 255, 255, 0.13);
+  --agents-active-text: var(--status-success);
   --inline-code-bg: rgba(255, 255, 255, 0.075);
   --inline-code-text: #e5e5e5;
   --body-bg-base: #1b1b1b;
@@ -7377,6 +7381,29 @@ summary:focus-visible {
 .app-sidebar-link small {
   color: var(--muted);
   font-size: 0.65rem;
+}
+
+/* Shared visually-hidden utility. Markup already uses it for accessible-only text
+   (dialog descriptions, status labels); this gives it the canonical definition. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.app-sidebar-agents-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.app-sidebar-agents-count-active .app-sidebar-agents-count-n {
+  color: var(--agents-active-text);
+  font-weight: 700;
 }
 
 .app-sidebar-recent {
