@@ -11,7 +11,8 @@ class ResizeObserverMock {
 const agentsStore = vi.hoisted(() => ({
   configs: [] as unknown[],
   connectedAgents: [] as unknown[],
-  agentsNeedingAttention: [] as unknown[]
+  agentsNeedingAttention: [] as unknown[],
+  meshNodeCount: 0
 }));
 const inboxStore = vi.hoisted(() => ({ actionableItems: [] as Array<Record<string, unknown>> }));
 
@@ -39,6 +40,7 @@ beforeEach(() => {
   agentsStore.configs = [];
   agentsStore.connectedAgents = [];
   agentsStore.agentsNeedingAttention = [];
+  agentsStore.meshNodeCount = 0;
   inboxStore.actionableItems = [];
 });
 
@@ -262,5 +264,47 @@ describe('RecentSessionRail agents count', () => {
     expect(agentsLink.querySelector('.app-sidebar-agents-count')).toBeNull();
     expect(agentsLink.getAttribute('aria-describedby')).toBeNull();
     expect(document.getElementById(statusDescriptionId)).toBeNull();
+  });
+});
+
+describe('RecentSessionRail Mesh node count', () => {
+  it('labels the expanded Mesh link with a trailing node count and no icon badge', () => {
+    agentsStore.meshNodeCount = 3;
+
+    render(RecentSessionRail, { current: 'Today', sessions: [activeSession] });
+
+    const meshLink = screen.getByRole('link', { name: 'Mesh, 3 nodes' });
+    expect(meshLink.querySelector('small')).toHaveTextContent('3');
+    expect(meshLink.querySelector('.app-icon-agent-count')).toBeNull();
+  });
+
+  it('shows the node count as a badge on the collapsed Mesh icon only', () => {
+    agentsStore.meshNodeCount = 2;
+
+    render(RecentSessionRail, { current: 'Today', sessions: [activeSession], collapsed: true });
+
+    const meshLink = screen.getByRole('link', { name: 'Mesh, 2 nodes' });
+    const count = meshLink.querySelector('.app-icon-agent-count');
+    expect(count).not.toBeNull();
+    expect(count).toHaveTextContent('2');
+    expect(count).toHaveAttribute('aria-hidden', 'true');
+    expect(count?.parentElement).toHaveClass('app-nav-icon-surface');
+    expect(meshLink.querySelector('small')).toBeNull();
+  });
+
+  it('keeps the singular label for one mesh node', () => {
+    agentsStore.meshNodeCount = 1;
+
+    render(RecentSessionRail, { current: 'Today', sessions: [activeSession] });
+
+    expect(screen.getByRole('link', { name: 'Mesh, 1 node' })).toBeInTheDocument();
+  });
+
+  it('omits the count badge and suffix when no mesh nodes are available', () => {
+    render(RecentSessionRail, { current: 'Today', sessions: [activeSession] });
+
+    const meshLink = screen.getByRole('link', { name: 'Mesh' });
+    expect(meshLink.querySelector('small')).toBeNull();
+    expect(meshLink.querySelector('.app-icon-agent-count')).toBeNull();
   });
 });
