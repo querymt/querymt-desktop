@@ -150,6 +150,7 @@ const mockClient = vi.hoisted(() => {
     emitExtensionNotification: (notification: { method: string; params: unknown }) => {
       for (const handler of [...extensionNotificationHandlers]) handler(notification);
     },
+    /** Reports active extension listeners so disposal tests can detect leaks. */
     activeExtensionNotificationHandlerCount: () => extensionNotificationHandlers.length,
     onPermissionRequest: vi.fn(() => permissionUnsubscribe),
     onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
@@ -1279,6 +1280,7 @@ describe('AgentsStore delegate model assignments', () => {
     store.activeSession.sessionId = 'session-1';
   }
 
+  /** Creates a listed session fixture for delegation load tests. */
   function sessionSummary(sessionId: string) {
     return {
       agentId: 'agent-1',
@@ -1294,6 +1296,7 @@ describe('AgentsStore delegate model assignments', () => {
     };
   }
 
+  /** Creates a requested-state delegation notification fixture. */
   function requestedDelegationUpdate(sessionId: string) {
     return {
       method: 'querymt/session/delegationUpdate',
@@ -1311,6 +1314,7 @@ describe('AgentsStore delegate model assignments', () => {
     };
   }
 
+  /** Creates a forked-state delegation notification with configurable linkage. */
   function forkedDelegationUpdate(
     sessionId: string,
     toolCallId = 'call_051b11680c804b03a8243580',
@@ -1335,6 +1339,7 @@ describe('AgentsStore delegate model assignments', () => {
     };
   }
 
+  /** Creates the ACP tool-call notification paired with a delegation update. */
   function delegationToolCall(sessionId: string): SessionNotification {
     return {
       sessionId,
@@ -1348,6 +1353,7 @@ describe('AgentsStore delegate model assignments', () => {
     };
   }
 
+  /** Exposes session-scoped delegation overlays for lifecycle assertions. */
   function delegationOverlays(store: AgentsStore) {
     return (store as unknown as {
       delegationChildSessionsBySession: Map<string, Map<string, string>>;

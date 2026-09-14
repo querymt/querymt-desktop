@@ -57,6 +57,7 @@ export interface SnapshotProviderChange {
 
 const TOOL_TERMINAL_EVENT_TYPES = new Set(['assistant_message_stored', 'llm_request_end']);
 
+/** Reconstructs an active-session view from persisted QueryMT session-load metadata. */
 export function activeSessionFromLoadResponse(sessionId: string, response: unknown): ActiveSessionViewModel {
   const session = createEmptyActiveSession();
   session.sessionId = sessionId;

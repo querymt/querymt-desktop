@@ -135,6 +135,7 @@ const MAX_DELEGATION_LINKS_PER_SESSION = 64;
 const AGENT_LOG_EVENT = 'querymt://agent/log';
 const PROMPT_ACTIVE_RUN_STATES = new Set<SessionRunState>(['thinking', 'streaming', 'tool-running']);
 
+/** Returns trimmed non-empty text while preserving absence as undefined. */
 function readPresentString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed || undefined;
@@ -466,6 +467,7 @@ export class AgentsStore {
     this.attentionSessionKeys = this.attentionSessionKeys.filter((candidate) => candidate !== key);
   }
 
+  /** Permanently disposes the store, aborting connections and preventing later resurrection. */
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
@@ -754,6 +756,7 @@ export class AgentsStore {
     this.agentErrors = { ...this.agentErrors, [config.id]: this.agentErrors[config.id] ?? null };
   }
 
+  /** Starts or connects a configured agent and refreshes its initial state. */
   async startConfiguredAgent(agentId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
@@ -783,6 +786,7 @@ export class AgentsStore {
     }
   }
 
+  /** Stops an agent and clears its connection-scoped session state. */
   async stopConfiguredAgent(agentId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
@@ -820,6 +824,7 @@ export class AgentsStore {
     }
   }
 
+  /** Restarts an agent connection without accepting stale generation results. */
   async restartConfiguredAgent(agentId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
@@ -854,6 +859,7 @@ export class AgentsStore {
     }
   }
 
+  /** Establishes or joins one generation-guarded agent connection unless the store is disposed. */
   async connectAgent(agentId: string, force = false) {
     if (this.disposed) return;
     const generation = this.connectGeneration(agentId);
@@ -1436,6 +1442,7 @@ export class AgentsStore {
     };
   }
 
+  /** Deletes a session remotely, removes it from visible session, attention, and delegation state, and clears active selection when applicable. */
   async deleteSession(agentId: string, sessionId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) {
@@ -1716,6 +1723,7 @@ export class AgentsStore {
     }
   }
 
+  /** Loads session history while preserving newer live updates and delegation linkage. */
   async loadSession(agentId: string, sessionId: string, pendingOperation: 'undo' | 'redo' | null = null) {
     const sessionKey = buildSessionKey(agentId, sessionId);
     if (
@@ -2321,6 +2329,7 @@ export class AgentsStore {
     return this.meshRefreshGenerations.get(agentId) === generation && this.clients.get(agentId) === record;
   }
 
+  /** Aborts and unsubscribes both active and in-flight client records for an agent. */
   private disposeClient(agentId: string) {
     const records = new Set<AgentClientRecord>();
     const record = this.clients.get(agentId);
@@ -2359,6 +2368,7 @@ export class AgentsStore {
     }
   }
 
+  /** Subscribes once to canonicalized QueryMT extension notifications for a client record. */
   private ensureExtensionNotificationSubscription(agentId: string, record: AgentClientRecord) {
     if (!record.unsubscribeExtensionNotifications) {
       record.unsubscribeExtensionNotifications = record.client.onExtensionNotification((notification) => {
@@ -3204,6 +3214,7 @@ export class AgentsStore {
     return this.activeAgentId === agentId && this.activeSessionId === sessionId;
   }
 
+  /** Appends a local prompt projection and returns its conversation event index. */
   private addOptimisticUserPrompt(
     sessionId: string,
     prompt: string,
@@ -3367,6 +3378,7 @@ export class AgentsStore {
     this.reconcileDelegationOverlay();
   }
 
+  /** Evicts the oldest inactive overlays to enforce the session cap without dropping the active one. */
   private trimDelegationSessionOverlays() {
     const activeKey = this.activeAgentId && this.activeSessionId
       ? buildSessionKey(this.activeAgentId, this.activeSessionId)
@@ -3441,6 +3453,7 @@ export class AgentsStore {
     }
   }
 
+  /** Removes every retained delegation overlay owned by an agent. */
   private clearDelegationLinksForAgent(agentId: string) {
     const prefix = `${agentId}:`;
     for (const key of this.delegationChildSessionsBySession.keys()) {
@@ -3448,6 +3461,7 @@ export class AgentsStore {
     }
   }
 
+  /** Applies one deduplicated live session update and restores any buffered delegation link. */
   private applySessionNotificationNow(
     agentId: string,
     notification: SessionNotification,
@@ -3539,6 +3553,7 @@ export class AgentsStore {
     this.scheduleReconnect(agentId);
   }
 
+  /** Schedules bounded-backoff reconnection only while the store and agent remain eligible. */
   private scheduleReconnect(agentId: string) {
     this.cancelReconnect(agentId);
     if (this.disposed) return;
@@ -3557,6 +3572,7 @@ export class AgentsStore {
     this.reconnectTimers.set(agentId, timer);
   }
 
+  /** Reconnects an eligible agent without reviving a disposed store or stale generation. */
   private async reconnectAgent(agentId: string) {
     if (this.disposed) return;
     const config = this.configs.find((candidate) => candidate.id === agentId);

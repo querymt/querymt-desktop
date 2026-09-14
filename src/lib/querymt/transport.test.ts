@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DesktopAcpClient } from './acp-client';
 import { createWebSocketAcpStream } from './transport';
 
+/** Provides a controllable in-memory WebSocket for transport contract tests. */
 class MockWebSocket extends EventTarget {
   static OPEN = 1;
   static instances: MockWebSocket[] = [];
@@ -9,6 +10,7 @@ class MockWebSocket extends EventTarget {
   readyState = 0;
   sent: string[] = [];
 
+  /** Opens asynchronously to mirror the browser WebSocket lifecycle. */
   constructor(readonly url: string) {
     super();
     MockWebSocket.instances.push(this);
@@ -18,16 +20,19 @@ class MockWebSocket extends EventTarget {
     });
   }
 
+  /** Records an outgoing frame and forwards it to the configured test responder. */
   send(message: string) {
     this.sent.push(message);
     MockWebSocket.respond?.(this, message);
   }
 
+  /** Transitions the mock socket to closed and emits its close event. */
   close() {
     this.readyState = 3;
     this.dispatchEvent(new Event('close'));
   }
 
+  /** Delivers a raw incoming frame to WebSocket message listeners. */
   receive(message: string) {
     this.dispatchEvent(new MessageEvent('message', { data: message }));
   }

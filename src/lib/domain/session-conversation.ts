@@ -99,6 +99,7 @@ type ConversationCache = {
 const BUSY_RUN_STATES = new Set(['submitting', 'thinking', 'streaming', 'tool-running']);
 let conversationCache: ConversationCache | null = null;
 
+/** Builds the conversation cache revision from fields expected to affect the projected conversation. */
 function conversationRevision(session: ActiveSessionViewModel): string {
   const lastTranscript = session.transcript.at(-1);
   const lastTool = session.toolCalls.at(-1);
@@ -212,6 +213,7 @@ function sameBlocks(left?: SessionContentBlock[], right?: SessionContentBlock[])
   return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
 }
 
+/** Reuses a settled turn only when all rendered user, assistant, reasoning, and tool data still match. */
 function canReuseSettledTurn(previous: SessionConversationTurn, draft: DraftTurn, settled: boolean): boolean {
   if (!settled || !previous.settled) return false;
   if (previous.id !== draft.id) return false;
