@@ -16,7 +16,7 @@ import {
 } from '$lib/querymt/generated/types';
 import { tick } from 'svelte';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
-import { startAgent } from '$lib/querymt/sidecar';
+import { getAgentLogs, startAgent, stopAgent } from '$lib/querymt/sidecar';
 import { AgentsStore } from './agents.svelte';
 import { buildSessionKey, DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
 
@@ -414,6 +414,54 @@ describe('AgentsStore connections', () => {
     expect(mockClient.onElicitationRequest).toHaveBeenCalledTimes(1);
     expect(mockClient.permissionUnsubscribe()).not.toHaveBeenCalled();
     expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
+  });
+
+  it('stops a stdio sidecar that finishes starting after store disposal', async () => {
+    const store = createStore();
+    store.statuses = {};
+    const connectAgent = vi.spyOn(store, 'connectAgent');
+    const refreshSessions = vi.spyOn(store, 'refreshSessionsForAgent');
+    const refreshAuthProviders = vi.spyOn(store, 'refreshAuthProviders');
+    const { promise: startPromise, resolve: resolveStart } = Promise.withResolvers<
+      Awaited<ReturnType<typeof startAgent>>
+    >();
+    vi.mocked(startAgent).mockReturnValueOnce(startPromise);
+    vi.mocked(stopAgent).mockRejectedValueOnce(new Error('sidecar already exited'));
+
+    const starting = store.startConfiguredAgent('agent-1');
+    expect(startAgent).toHaveBeenCalledTimes(1);
+    store.dispose();
+    resolveStart({
+      agentId: 'agent-1',
+      state: 'running',
+      commandLine: '/usr/local/bin/qmtcode --acp',
+      pid: 1234,
+      version: '1.0.0',
+      message: 'Running',
+      lastError: null
+    });
+    await starting;
+
+    expect(stopAgent).toHaveBeenCalledOnce();
+    expect(stopAgent).toHaveBeenCalledWith('agent-1');
+    expect(DesktopAcpClient).not.toHaveBeenCalled();
+    expect(connectAgent).not.toHaveBeenCalled();
+    expect(mockClient.connect).not.toHaveBeenCalled();
+    expect(refreshSessions).not.toHaveBeenCalled();
+    expect(refreshAuthProviders).not.toHaveBeenCalled();
+    expect(getAgentLogs).not.toHaveBeenCalled();
+    expect(store.statuses['agent-1']).toBeUndefined();
+    expect(store.connectionStates['agent-1']).toBeUndefined();
+    expect(store.activeAgentId).toBeNull();
+    expect(store.activeSessionId).toBeNull();
+    expect((store as unknown as {
+      delegationChildSessionsBySession: Map<string, Map<string, string>>;
+    }).delegationChildSessionsBySession.size).toBe(0);
+    expect(store.error).toBeNull();
+
+    await store.startConfiguredAgent('agent-1');
+    expect(startAgent).toHaveBeenCalledTimes(1);
+    expect(stopAgent).toHaveBeenCalledTimes(1);
   });
 
   it('loads a session without unbinding inbox handlers', async () => {

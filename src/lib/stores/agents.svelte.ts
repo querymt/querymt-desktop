@@ -763,6 +763,7 @@ export class AgentsStore {
 
   /** Starts or connects a configured agent and refreshes its initial state. */
   async startConfiguredAgent(agentId: string) {
+    if (this.disposed) return;
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
@@ -775,6 +776,14 @@ export class AgentsStore {
         await this.refreshAgent(config);
       } else {
         const status = await startAgent(config);
+        if (this.disposed) {
+          try {
+            await stopAgent(agentId);
+          } catch {
+            // Disposal is terminal, so sidecar cleanup remains best-effort.
+          }
+          return;
+        }
         this.statuses = { ...this.statuses, [config.id]: status };
         await this.connectAgent(config.id);
       }
@@ -787,7 +796,9 @@ export class AgentsStore {
         this.logsByAgent = { ...this.logsByAgent, [config.id]: await getAgentLogs(config.id) };
       }
     } catch (error) {
-      this.error = error instanceof Error ? error.message : `Failed to connect ${config.name}.`;
+      if (!this.disposed) {
+        this.error = error instanceof Error ? error.message : `Failed to connect ${config.name}.`;
+      }
     }
   }
 
