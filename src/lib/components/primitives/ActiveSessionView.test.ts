@@ -287,7 +287,10 @@ function longStreamingSession(turnCount: number): ActiveSessionViewModel {
   return session;
 }
 
-describe('ActiveSessionView turn window', () => {
+describe('ActiveSessionView turn window', registerActiveSessionViewTurnWindowTests);
+
+/** Registers ActiveSessionView turn window tests. */
+function registerActiveSessionViewTurnWindowTests() {
   it('keeps the live turn mounted while replacing offscreen settled turns with spacers', async () => {
     Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 200 });
     Object.defineProperty(document.documentElement, 'scrollTop', { configurable: true, value: 0 });
@@ -345,7 +348,7 @@ describe('ActiveSessionView turn window', () => {
     expect(screen.getByText('Live answer 2')).toBeInTheDocument();
     expect(screen.getByText('Prompt 0')).toBeInTheDocument();
   });
-});
+}
 
 describe('ActiveSessionView turn action settle hold', () => {
   afterEach(() => {

@@ -58,7 +58,10 @@ describe('getSnapshotProviderChange', () => {
   });
 });
 
-describe('activeSessionFromLoadResponse', () => {
+describe('activeSessionFromLoadResponse', registerActiveSessionFromLoadResponseTests);
+
+/** Registers activeSessionFromLoadResponse tests. */
+function registerActiveSessionFromLoadResponseTests() {
   it('prefers structured v1 user prompts and restores native/resource attachments', () => {
     const session = activeSessionFromLoadResponse('session-structured', {
       _meta: {
@@ -694,4 +697,4 @@ describe('activeSessionFromLoadResponse', () => {
       arguments: '{"command":"echo hi"}'
     });
   });
-});
+}

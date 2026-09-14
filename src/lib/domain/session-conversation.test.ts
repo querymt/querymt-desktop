@@ -72,7 +72,10 @@ describe('turn durations', () => {
   });
 });
 
-describe('buildSessionConversation', () => {
+describe('buildSessionConversation', registerBuildSessionConversationTests);
+
+/** Registers buildSessionConversation tests. */
+function registerBuildSessionConversationTests() {
   it('interleaves reasoning, tools, and assistant output by event order', () => {
     const session = baseSession();
     session.transcript = [
@@ -634,4 +637,4 @@ describe('buildSessionConversation', () => {
       isError: true
     });
   });
-});
+}
