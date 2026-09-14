@@ -72,8 +72,7 @@ describe('turn durations', () => {
   });
 });
 
-describe('buildSessionConversation',
-  /** Registers conversation projection tests. */ () => {
+describe('buildSessionConversation', () => {
   it('interleaves reasoning, tools, and assistant output by event order', () => {
     const session = baseSession();
     session.transcript = [
@@ -565,7 +564,7 @@ describe('buildSessionConversation',
       { id: 'u1', kind: 'user_message_chunk', text: 'delegate', messageId: 'u1', eventIndex: 0 }
     ];
     session.toolCalls = [{
-      id: 'call_051b11680c804b03a8243580',
+      id: 'delegate-1',
       title: 'Run delegate',
       status: 'in_progress',
       kind: 'delegate',
@@ -574,17 +573,18 @@ describe('buildSessionConversation',
     const first = buildSessionConversation(session);
     const linked = {
       ...session,
-      toolCalls: [{ ...session.toolCalls[0], childSessionId: '01a09d9c-86f2-7271-8913-a6392ce6fd34' }]
+      toolCalls: [{ ...session.toolCalls[0], childSessionId: 'child-session-1' }]
     };
 
     const second = buildSessionConversation(linked);
-    const tool = second[0].content.find((item) => item.type === 'tool');
+    const firstTool = first[0].content.find((item) => item.type === 'tool')?.tool;
+    const secondTool = second[0].content.find((item) => item.type === 'tool')?.tool;
 
     expect(second).not.toBe(first);
-    expect(tool?.tool).not.toBe(first[0].content.find((item) => item.type === 'tool')?.tool);
-    expect(tool?.tool).toMatchObject({
+    expect(secondTool).not.toBe(firstTool);
+    expect(secondTool).toMatchObject({
       status: 'in_progress',
-      childSessionId: '01a09d9c-86f2-7271-8913-a6392ce6fd34'
+      childSessionId: 'child-session-1'
     });
   });
 
@@ -594,14 +594,21 @@ describe('buildSessionConversation',
       { id: 'u1', kind: 'user_message_chunk', text: 'delegate', messageId: 'u1', eventIndex: 0 },
       { id: 'a1', kind: 'agent_message_chunk', text: 'Done', messageId: 'a1', eventIndex: 2 }
     ];
-    session.toolCalls = [{ id: 'call-1', title: 'Run delegate', status: 'completed', kind: 'delegate', eventIndex: 1 }];
+    session.toolCalls = [{
+      id: 'delegate-1',
+      title: 'Run delegate',
+      status: 'completed',
+      kind: 'delegate',
+      eventIndex: 1,
+      childSessionId: 'child-session-old'
+    }];
     const first = buildSessionConversation(session);
-    session.toolCalls = [{ ...session.toolCalls[0], childSessionId: 'child-session-1' }];
+    session.toolCalls = [{ ...session.toolCalls[0], childSessionId: 'child-session-new' }];
 
     const second = buildSessionConversation(session, first);
 
     expect(second[0]).not.toBe(first[0]);
-    expect(second[0].content.find((item) => item.type === 'tool')?.tool.childSessionId).toBe('child-session-1');
+    expect(second[0].content.find((item) => item.type === 'tool')?.tool.childSessionId).toBe('child-session-new');
   });
 
   it('rebuilds without previousTurns after an in-place last-tool metadata change', () => {

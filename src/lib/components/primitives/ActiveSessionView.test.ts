@@ -287,8 +287,7 @@ function longStreamingSession(turnCount: number): ActiveSessionViewModel {
   return session;
 }
 
-describe('ActiveSessionView turn window',
-  /** Registers turn-window component tests. */ () => {
+describe('ActiveSessionView turn window', () => {
   it('keeps the live turn mounted while replacing offscreen settled turns with spacers', async () => {
     Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 200 });
     Object.defineProperty(document.documentElement, 'scrollTop', { configurable: true, value: 0 });
@@ -300,11 +299,11 @@ describe('ActiveSessionView turn window',
     expect(document.querySelector('.session-turn-spacer')).toBeInTheDocument();
   });
 
-  it('rerenders an in-progress delegation pill when the child link arrives', async () => {
+  it('shows a running delegation link when the child session arrives', async () => {
     const session = createEmptyActiveSession();
     session.sessionId = 'session-delegate';
     session.runState = 'tool-running';
-    session.activeToolCallId = 'call_051b11680c804b03a8243580';
+    session.activeToolCallId = 'delegate-1';
     session.transcript = [{
       id: 'user-1',
       kind: 'user_message_chunk',
@@ -313,7 +312,7 @@ describe('ActiveSessionView turn window',
       eventIndex: 1
     }];
     session.toolCalls = [{
-      id: 'call_051b11680c804b03a8243580',
+      id: 'delegate-1',
       title: 'Run delegate',
       status: 'in_progress',
       kind: 'delegate',
@@ -323,11 +322,12 @@ describe('ActiveSessionView turn window',
     const { rerender } = render(ActiveSessionView, { session });
     expect(screen.queryByRole('button', { name: 'Open linus session' })).toBeNull();
 
-    const linked = {
-      ...session,
-      toolCalls: [{ ...session.toolCalls[0], childSessionId: '01a09d9c-86f2-7271-8913-a6392ce6fd34' }]
-    };
-    await rerender({ session: linked });
+    await rerender({
+      session: {
+        ...session,
+        toolCalls: [{ ...session.toolCalls[0], childSessionId: 'child-session-1' }]
+      }
+    });
 
     expect(screen.getByRole('button', { name: 'Open linus session' })).toBeInTheDocument();
     expect(screen.getByText('Running')).toHaveClass('sr-only');

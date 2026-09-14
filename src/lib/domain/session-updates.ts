@@ -540,52 +540,28 @@ function stringifyToolContent(value: unknown): string | null {
   return stringifyOptional(value);
 }
 
-/**
- * Attaches a delegation child session id to the matching tool call.
- * Returns the input unchanged (same reference) when ids are missing, the
- * session does not match, or the tool already carries the child id.
- */
 export function applyDelegationChildSession(
   current: ActiveSessionViewModel,
   update: {
     sessionId?: string | null;
+    session_id?: string | null;
     toolCallId?: string | null;
+    tool_call_id?: string | null;
     childSessionId?: string | null;
+    child_session_id?: string | null;
   }
 ): ActiveSessionViewModel {
-  const sessionId = readNonEmptyString(update.sessionId);
-  const toolCallId = readNonEmptyString(update.toolCallId);
-  const childSessionId = readNonEmptyString(update.childSessionId);
+  const sessionId = readNonEmptyString(update.sessionId) ?? readNonEmptyString(update.session_id);
+  const toolCallId = readNonEmptyString(update.toolCallId) ?? readNonEmptyString(update.tool_call_id);
+  const childSessionId = readNonEmptyString(update.childSessionId) ?? readNonEmptyString(update.child_session_id);
   if (!toolCallId || !childSessionId) return current;
   if (sessionId && current.sessionId && sessionId !== current.sessionId) return current;
 
-  return reconcileDelegationChildSessions(current, new Map([[toolCallId, childSessionId]]));
-}
-
-/**
- * Delegation links and tool calls arrive on independent streams. Reconcile
- * every known tool-to-child link after live updates and history replacements;
- * re-attaching a link already present on the tool is a no-op.
- */
-export function reconcileDelegationChildSessions(
-  current: ActiveSessionViewModel,
-  overlay: ReadonlyMap<string, string>
-): ActiveSessionViewModel {
-  if (overlay.size === 0 || current.toolCalls.length === 0) return current;
-
-  const toolIndexes = new Map<string, number>();
-  current.toolCalls.forEach((tool, index) => {
-    if (!toolIndexes.has(tool.id)) toolIndexes.set(tool.id, index);
-  });
-  let toolCalls: SessionToolCallItem[] | null = null;
-  for (const [toolCallId, childSessionId] of overlay) {
-    const index = toolIndexes.get(toolCallId);
-    if (index === undefined || current.toolCalls[index].childSessionId === childSessionId) continue;
-    toolCalls ??= current.toolCalls.slice();
-    toolCalls[index] = { ...current.toolCalls[index], childSessionId };
-  }
-
-  return toolCalls ? { ...current, toolCalls } : current;
+  const next = cloneSession(current);
+  const target = canonicalizeToolCall(next.toolCalls, toolCallId);
+  if (!target || target.childSessionId === childSessionId) return current;
+  target.childSessionId = childSessionId;
+  return next;
 }
 
 function readNonEmptyString(value: unknown): string | null {

@@ -16,9 +16,9 @@ import {
 } from '$lib/querymt/generated/types';
 import { tick } from 'svelte';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
-import { getAgentLogs, startAgent, stopAgent } from '$lib/querymt/sidecar';
+import { startAgent } from '$lib/querymt/sidecar';
 import { AgentsStore } from './agents.svelte';
-import { buildSessionKey, DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
+import { DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
 
 function listSessionsRequest(input: { cwd?: string; cursor?: string } = {}) {
   return {
@@ -31,7 +31,6 @@ const mockListManagedProfiles = vi.hoisted(() => vi.fn(async () => []));
 const mockListen = vi.hoisted(() => vi.fn());
 const mockDrainAgentSessionUpdates = vi.hoisted(() => vi.fn(async () => [] as SessionNotification[]));
 
-/** Builds the shared ACP client mock and its independently disposable listener registries. */
 const mockClient = vi.hoisted(() => {
   // Registries instead of single slots: dispose paths unsubscribe their own
   // handler, and a late registration from a prior test's floating cleanup
@@ -151,8 +150,6 @@ const mockClient = vi.hoisted(() => {
     emitExtensionNotification: (notification: { method: string; params: unknown }) => {
       for (const handler of [...extensionNotificationHandlers]) handler(notification);
     },
-    /** Reports active extension listeners so disposal tests can detect leaks. */
-    activeExtensionNotificationHandlerCount: () => extensionNotificationHandlers.length,
     onPermissionRequest: vi.fn(() => permissionUnsubscribe),
     onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
     setSessionConfigOption: vi.fn(async (_request: SetSessionConfigOptionRequest): Promise<SessionConfigOption[]> => []),
@@ -414,54 +411,6 @@ describe('AgentsStore connections', () => {
     expect(mockClient.onElicitationRequest).toHaveBeenCalledTimes(1);
     expect(mockClient.permissionUnsubscribe()).not.toHaveBeenCalled();
     expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
-  });
-
-  it('stops a stdio sidecar that finishes starting after store disposal', async () => {
-    const store = createStore();
-    store.statuses = {};
-    const connectAgent = vi.spyOn(store, 'connectAgent');
-    const refreshSessions = vi.spyOn(store, 'refreshSessionsForAgent');
-    const refreshAuthProviders = vi.spyOn(store, 'refreshAuthProviders');
-    const { promise: startPromise, resolve: resolveStart } = Promise.withResolvers<
-      Awaited<ReturnType<typeof startAgent>>
-    >();
-    vi.mocked(startAgent).mockReturnValueOnce(startPromise);
-    vi.mocked(stopAgent).mockRejectedValueOnce(new Error('sidecar already exited'));
-
-    const starting = store.startConfiguredAgent('agent-1');
-    expect(startAgent).toHaveBeenCalledTimes(1);
-    store.dispose();
-    resolveStart({
-      agentId: 'agent-1',
-      state: 'running',
-      commandLine: '/usr/local/bin/qmtcode --acp',
-      pid: 1234,
-      version: '1.0.0',
-      message: 'Running',
-      lastError: null
-    });
-    await starting;
-
-    expect(stopAgent).toHaveBeenCalledOnce();
-    expect(stopAgent).toHaveBeenCalledWith('agent-1');
-    expect(DesktopAcpClient).not.toHaveBeenCalled();
-    expect(connectAgent).not.toHaveBeenCalled();
-    expect(mockClient.connect).not.toHaveBeenCalled();
-    expect(refreshSessions).not.toHaveBeenCalled();
-    expect(refreshAuthProviders).not.toHaveBeenCalled();
-    expect(getAgentLogs).not.toHaveBeenCalled();
-    expect(store.statuses['agent-1']).toBeUndefined();
-    expect(store.connectionStates['agent-1']).toBeUndefined();
-    expect(store.activeAgentId).toBeNull();
-    expect(store.activeSessionId).toBeNull();
-    expect((store as unknown as {
-      delegationChildSessionsBySession: Map<string, Map<string, string>>;
-    }).delegationChildSessionsBySession.size).toBe(0);
-    expect(store.error).toBeNull();
-
-    await store.startConfiguredAgent('agent-1');
-    expect(startAgent).toHaveBeenCalledTimes(1);
-    expect(stopAgent).toHaveBeenCalledTimes(1);
   });
 
   it('loads a session without unbinding inbox handlers', async () => {
@@ -1329,108 +1278,6 @@ describe('AgentsStore delegate model assignments', () => {
     store.activeSession.sessionId = 'session-1';
   }
 
-  /**
-   * Creates a listed session fixture for delegation load tests.
-   * @param sessionId - Session identifier assigned to the fixture.
-   * @returns A listed session associated with the test agent.
-   */
-  function sessionSummary(sessionId: string) {
-    return {
-      agentId: 'agent-1',
-      agentName: 'QMTCODE',
-      sessionId,
-      title: `Session ${sessionId}`,
-      cwd: '/tmp/work',
-      updatedAt: '2026-07-18T17:00:00Z',
-      runtimeId: 'agent-1',
-      runtimeName: 'QMTCODE',
-      source: 'acp' as const,
-      status: 'idle' as const
-    };
-  }
-
-  /**
-   * Creates a requested-state delegation notification fixture.
-   * @param sessionId - Parent session receiving the delegation update.
-   * @returns A requested delegation extension notification.
-   */
-  function requestedDelegationUpdate(sessionId: string) {
-    return {
-      method: 'querymt/session/delegationUpdate',
-      params: {
-        version: 1,
-        sessionId,
-        delegationId: 'delegation-1',
-        toolCallId: 'call_051b11680c804b03a8243580',
-        state: 'requested',
-        targetAgentId: 'linus',
-        objective: 'Review the current bearer-auth diff',
-        requestedAt: 1789350676,
-        updatedAt: 1789350676
-      }
-    };
-  }
-
-  /**
-   * Creates a forked-state delegation notification with configurable linkage.
-   * @param sessionId - Parent session receiving the delegation update.
-   * @param toolCallId - Tool call linked to the child session.
-   * @param childSessionId - Child session created for the delegation.
-   * @returns A forked delegation extension notification.
-   */
-  function forkedDelegationUpdate(
-    sessionId: string,
-    toolCallId = 'call_051b11680c804b03a8243580',
-    childSessionId = 'child-session-1'
-  ) {
-    return {
-      method: 'querymt/session/delegationUpdate',
-      params: {
-        version: 1,
-        sessionId,
-        delegationId: `delegation-${toolCallId}`,
-        toolCallId,
-        state: 'forked',
-        targetAgentId: 'linus',
-        objective: 'Review the current bearer-auth diff',
-        childSessionId,
-        selectedModelId: 'codex/gpt-5.6-sol',
-        requestedAt: 1789350676,
-        forkedAt: 1789350677,
-        updatedAt: 1789350677
-      }
-    };
-  }
-
-  /**
-   * Creates the ACP tool-call notification paired with a delegation update.
-   * @param sessionId - Session receiving the tool call.
-   * @returns An in-progress delegation tool-call notification.
-   */
-  function delegationToolCall(sessionId: string): SessionNotification {
-    return {
-      sessionId,
-      update: {
-        sessionUpdate: 'tool_call',
-        toolCallId: 'call_051b11680c804b03a8243580',
-        title: 'Run delegate',
-        status: 'in_progress',
-        rawInput: { target_agent_id: 'linus', objective: 'Review the current bearer-auth diff' }
-      }
-    };
-  }
-
-  /**
-   * Exposes session-scoped delegation overlays for lifecycle assertions.
-   * @param store - Store whose retained overlays are inspected.
-   * @returns The store's session-keyed delegation overlays.
-   */
-  function delegationOverlays(store: AgentsStore) {
-    return (store as unknown as {
-      delegationChildSessionsBySession: Map<string, Map<string, string>>;
-    }).delegationChildSessionsBySession;
-  }
-
   it('exposes routing only when the current session has delegate roles', async () => {
     const store = createStore();
     selectSession(store);
@@ -1834,287 +1681,32 @@ describe('AgentsStore delegate model assignments', () => {
     expect(store.activeDelegateAssignments).toEqual(assignmentState);
   });
 
-  it('attaches the cumulative forked projection emitted by the current runtime', async () => {
+  it('attaches child session ids from live delegation updates', async () => {
     const store = createStore();
     selectSession(store);
     store.activeSession.toolCalls = [{
-      id: 'call_051b11680c804b03a8243580',
+      id: 'delegate-1',
       title: 'Run delegate',
       status: 'in_progress',
       kind: 'delegate',
       arguments: '{"target_agent_id":"linus","objective":"Review the current bearer-auth diff"}'
     }];
-    const unlinkedTool = store.activeSession.toolCalls[0];
     await store.connectAgent('agent-1');
 
-    mockClient.emitExtensionNotification(forkedDelegationUpdate('session-1'));
-
-    expect(store.activeSession.toolCalls[0]).not.toBe(unlinkedTool);
-    expect(store.activeSession.toolCalls[0]).toMatchObject({
-      id: 'call_051b11680c804b03a8243580',
-      status: 'in_progress',
-      childSessionId: 'child-session-1'
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/delegationUpdate',
+      params: {
+        version: 1,
+        sessionId: 'session-1',
+        toolCallId: 'delegate-1',
+        childSessionId: 'child-session-1',
+        state: 'forked',
+        targetAgentId: 'linus',
+        objective: 'Review the current bearer-auth diff'
+      }
     });
-  });
-
-  it('handles requested then cumulative forked projections', async () => {
-    const store = createStore();
-    selectSession(store);
-    await store.connectAgent('agent-1');
-    mockClient.emitSessionUpdate(delegationToolCall('session-1'));
-
-    mockClient.emitExtensionNotification(requestedDelegationUpdate('session-1'));
-    expect(store.activeSession.toolCalls[0]?.childSessionId).toBeUndefined();
-    mockClient.emitExtensionNotification(forkedDelegationUpdate('session-1'));
-
-    expect(store.activeSession.toolCalls[0]).toMatchObject({
-      id: 'call_051b11680c804b03a8243580',
-      status: 'in_progress',
-      childSessionId: 'child-session-1'
-    });
-    expect(delegationOverlays(store).get('7:agent-1session-1')?.size).toBe(1);
-  });
-
-  it('keeps a cumulative forked link after a later requested projection', async () => {
-    const store = createStore();
-    selectSession(store);
-    await store.connectAgent('agent-1');
-    mockClient.emitSessionUpdate(delegationToolCall('session-1'));
-
-    mockClient.emitExtensionNotification(forkedDelegationUpdate('session-1'));
-    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
-    mockClient.emitExtensionNotification(requestedDelegationUpdate('session-1'));
-
-    expect(store.activeSession.toolCalls[0]).toMatchObject({
-      id: 'call_051b11680c804b03a8243580',
-      status: 'in_progress',
-      childSessionId: 'child-session-1'
-    });
-  });
-
-  it('keeps preselection lifecycle updates for the session selected by load', async () => {
-    const store = createStore();
-    store.sessionsByAgent = { 'agent-1': [sessionSummary('session-1')] };
-    await store.connectAgent('agent-1');
-
-    mockClient.emitExtensionNotification(requestedDelegationUpdate('session-1'));
-    mockClient.emitExtensionNotification(forkedDelegationUpdate('session-1'));
-    expect(store.activeSessionId).toBeNull();
-    mockClient.loadSession.mockResolvedValueOnce({
-      response: { configOptions: [] },
-      replay: [delegationToolCall('session-1')]
-    });
-
-    await store.loadSession('agent-1', 'session-1');
-
-    expect(store.activeSession.toolCalls[0]).toMatchObject({
-      id: 'call_051b11680c804b03a8243580',
-      childSessionId: 'child-session-1'
-    });
-  });
-
-  it('preserves lifecycle state across a same-session reset and replay replacement', async () => {
-    const store = createStore();
-    store.sessionsByAgent = { 'agent-1': [sessionSummary('session-1')] };
-    selectSession(store);
-    await store.connectAgent('agent-1');
-    mockClient.emitExtensionNotification(requestedDelegationUpdate('session-1'));
-    mockClient.emitExtensionNotification(forkedDelegationUpdate('session-1'));
-    mockClient.loadSession.mockResolvedValueOnce({
-      response: { configOptions: [] },
-      replay: [delegationToolCall('session-1')]
-    });
-
-    await store.loadSession('agent-1', 'session-1');
 
     expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
-    expect(delegationOverlays(store).get('7:agent-1session-1')?.size).toBe(1);
-  });
-
-  it('scopes delegation links by agent and session without cross-session leakage', async () => {
-    const store = createStore();
-    store.sessionsByAgent = {
-      'agent-1': [sessionSummary('session-a'), sessionSummary('session-b')]
-    };
-    await store.connectAgent('agent-1');
-    mockClient.emitExtensionNotification(requestedDelegationUpdate('session-a'));
-    mockClient.emitExtensionNotification(forkedDelegationUpdate('session-a'));
-
-    mockClient.loadSession.mockResolvedValueOnce({
-      response: { configOptions: [] },
-      replay: [delegationToolCall('session-b')]
-    });
-    await store.loadSession('agent-1', 'session-b');
-    expect(store.activeSession.toolCalls[0]?.childSessionId).toBeUndefined();
-
-    mockClient.loadSession.mockResolvedValueOnce({
-      response: { configOptions: [] },
-      replay: [delegationToolCall('session-a')]
-    });
-    await store.loadSession('agent-1', 'session-a');
-    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
-  });
-
-  it('isolates colon-containing delegation keys and clears only the stopped agent overlays', async () => {
-    const firstClient = createDistinctMockClient();
-    const secondClient = createDistinctMockClient();
-    firstClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
-    secondClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
-    const pendingClients = [firstClient, secondClient];
-    vi.mocked(DesktopAcpClient).mockImplementation(function () {
-      const next = pendingClients.shift();
-      if (!next) throw new Error('unexpected extra DesktopAcpClient construction');
-      return next as never;
-    });
-    const store = createStore();
-    const baseConfig = store.configs[0];
-    store.configs = [
-      { ...baseConfig, id: 'a:b', name: 'Colon agent' },
-      { ...baseConfig, id: 'a', name: 'Prefix agent' }
-    ];
-    await store.connectAgent('a:b');
-    await store.connectAgent('a');
-
-    store.activeAgentId = 'a:b';
-    store.activeSessionId = 'c';
-    store.activeSession.sessionId = 'c';
-    store.activeSession.toolCalls = [{
-      id: 'shared-tool', title: 'Delegate left', status: 'in_progress', kind: 'delegate', arguments: '{}'
-    }];
-    firstClient.emitExtensionNotification(forkedDelegationUpdate('c', 'shared-tool', 'left-child'));
-    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('left-child');
-
-    store.activeAgentId = 'a';
-    store.activeSessionId = 'b:c';
-    store.activeSession.sessionId = 'b:c';
-    store.activeSession.toolCalls = [{
-      id: 'shared-tool', title: 'Delegate right', status: 'in_progress', kind: 'delegate', arguments: '{}'
-    }];
-    secondClient.emitExtensionNotification(forkedDelegationUpdate('b:c', 'shared-tool', 'right-child'));
-    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('right-child');
-
-    const overlays = delegationOverlays(store);
-    const [leftKey, rightKey] = overlays.keys();
-    expect(buildSessionKey('a:b', 'c')).toBe(buildSessionKey('a', 'b:c'));
-    expect(leftKey).toBe('3:a:bc');
-    expect(rightKey).toBe('1:ab:c');
-    expect(leftKey).not.toBe(rightKey);
-    expect(overlays.get(leftKey)?.get('shared-tool')).toBe('left-child');
-    expect(overlays.get(rightKey)?.get('shared-tool')).toBe('right-child');
-
-    store.activeAgentId = 'a:b';
-    store.activeSessionId = 'c';
-    store.activeSession.sessionId = 'c';
-    store.activeSession.toolCalls = [{
-      id: 'shared-tool', title: 'Delegate left', status: 'in_progress', kind: 'delegate', arguments: '{}'
-    }];
-    firstClient.emitExtensionNotification(requestedDelegationUpdate('c'));
-    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('left-child');
-
-    await store.stopConfiguredAgent('a:b');
-    expect(overlays.has(leftKey)).toBe(false);
-    expect(overlays.get(rightKey)?.get('shared-tool')).toBe('right-child');
-  });
-
-  it('bounds delegation links retained for one session', async () => {
-    const store = createStore();
-    await store.connectAgent('agent-1');
-
-    for (let index = 0; index < 65; index += 1) {
-      mockClient.emitExtensionNotification(
-        forkedDelegationUpdate('session-1', `tool-${index}`, `child-${index}`)
-      );
-    }
-
-    const overlay = delegationOverlays(store).get('7:agent-1session-1');
-    expect(overlay?.size).toBe(64);
-    expect(overlay?.has('tool-0')).toBe(false);
-    expect(overlay?.get('tool-64')).toBe('child-64');
-  });
-
-  it('bounds session overlays while retaining the active session when possible', async () => {
-    const store = createStore();
-    store.activeAgentId = 'agent-1';
-    store.activeSessionId = 'session-active';
-    store.activeSession.sessionId = 'session-active';
-    await store.connectAgent('agent-1');
-    mockClient.emitExtensionNotification(
-      forkedDelegationUpdate('session-active', 'active-tool', 'active-child')
-    );
-
-    for (let index = 0; index < 32; index += 1) {
-      mockClient.emitExtensionNotification(
-        forkedDelegationUpdate(`session-${index}`, `tool-${index}`, `child-${index}`)
-      );
-    }
-
-    const overlays = delegationOverlays(store);
-    expect(overlays.size).toBe(32);
-    expect(overlays.get('7:agent-1session-active')?.get('active-tool')).toBe('active-child');
-    expect(overlays.has('7:agent-1session-0')).toBe(false);
-    expect(overlays.has('7:agent-1session-31')).toBe(true);
-  });
-
-  it('clears scoped delegation lifecycle state on stop, delete, and dispose', async () => {
-    const store = createStore();
-    store.sessionsByAgent = { 'agent-1': [sessionSummary('session-1')] };
-    selectSession(store);
-    mockClient.connect.mockImplementation(async (): Promise<InitializeResponse> => ({
-      protocolVersion: 1,
-      agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {}, delete: {} } },
-      authMethods: []
-    }));
-    await store.connectAgent('agent-1');
-    mockClient.emitExtensionNotification(forkedDelegationUpdate('session-1'));
-    expect(delegationOverlays(store).size).toBe(1);
-
-    await store.deleteSession('agent-1', 'session-1');
-    expect(delegationOverlays(store).size).toBe(0);
-
-    mockClient.emitExtensionNotification(forkedDelegationUpdate('session-1'));
-    await store.stopConfiguredAgent('agent-1');
-    expect(delegationOverlays(store).size).toBe(0);
-
-    await store.connectAgent('agent-1');
-    mockClient.emitExtensionNotification(forkedDelegationUpdate('session-1'));
-    expect(delegationOverlays(store).size).toBe(1);
-    store.dispose();
-    mockClient.emitExtensionNotification(
-      forkedDelegationUpdate('session-1', 'post-dispose-tool', 'post-dispose-child')
-    );
-    expect(delegationOverlays(store).size).toBe(0);
-  });
-
-  it('does not resurrect a client or delegation overlay when disposed during connection', async () => {
-    const store = createStore();
-    /** Releases the pending mock connection with a controlled initialization response. */
-    let releaseConnect!: (response: InitializeResponse) => void;
-    mockClient.connect.mockImplementationOnce(
-      () => new Promise<InitializeResponse>((resolve) => { releaseConnect = resolve; })
-    );
-
-    const connecting = store.connectAgent('agent-1');
-    expect(mockClient.connect).toHaveBeenCalledTimes(1);
-    expect(DesktopAcpClient).toHaveBeenCalledTimes(1);
-    expect(mockClient.activeExtensionNotificationHandlerCount()).toBe(1);
-
-    store.dispose();
-    expect(mockClient.activeExtensionNotificationHandlerCount()).toBe(0);
-    releaseConnect({
-      protocolVersion: 1,
-      agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {} } },
-      authMethods: []
-    });
-    await connecting;
-
-    expect(DesktopAcpClient).toHaveBeenCalledTimes(1);
-    expect(mockClient.connect).toHaveBeenCalledTimes(1);
-    expect(mockClient.onExtensionNotification).toHaveBeenCalledTimes(1);
-    expect(mockClient.activeExtensionNotificationHandlerCount()).toBe(0);
-    mockClient.emitExtensionNotification(
-      forkedDelegationUpdate('session-1', 'post-dispose-tool', 'post-dispose-child')
-    );
-    expect(delegationOverlays(store).size).toBe(0);
   });
 
   it('exposes unavailable and orphaned assignments without altering them on read', async () => {

@@ -11,12 +11,12 @@ import type {
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { tick } from 'svelte';
 import { normalizePromptError, type PromptFailure } from '$lib/domain/prompt-errors';
-import { activeSessionFromLoadResponse, getSnapshotDelegationUpdates, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
 import {
   createEmptyActiveSession,
   applySessionNotification,
-  reconcileDelegationChildSessions,
+  applyDelegationChildSession,
   reduceSessionReplay,
   beginSessionWork,
   endSessionWork,
@@ -64,7 +64,6 @@ import type {
   DelegateAssignmentsInfo,
   DelegateModelsChangedNotification,
   DelegateModelOverride,
-  DelegationUpdateNotification,
   DelegateReasoningEffort,
   MeshInviteCreatedInfo,
   MeshInviteListInfo,
@@ -100,9 +99,7 @@ import {
   QMT_METHOD_SESSION_REDO,
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
-  QMT_METHOD_SESSION_UNDO_STACK,
-  QMT_NOTIFICATION_SESSION_DELEGATION_UPDATE,
-  parseDelegationUpdateNotification
+  QMT_METHOD_SESSION_UNDO_STACK
 } from '$lib/querymt/querymt-extensions';
 import { sendDesktopNotification } from '$lib/querymt/notifications';
 import {
@@ -130,21 +127,8 @@ const RECENT_WORKSPACES_LIMIT = 8;
 const WEBSOCKET_RECONNECT_MAX_DELAY_MS = 8_000;
 const WORKSPACE_SESSION_PAGE_SIZE = 10;
 const MAX_AGENT_LOG_ENTRIES = 200;
-const MAX_DELEGATION_SESSION_OVERLAYS = 32;
-const MAX_DELEGATION_LINKS_PER_SESSION = 64;
 const AGENT_LOG_EVENT = 'querymt://agent/log';
 const PROMPT_ACTIVE_RUN_STATES = new Set<SessionRunState>(['thinking', 'streaming', 'tool-running']);
-
-/** Returns trimmed non-empty text while preserving absence as undefined. */
-function readPresentString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
-
-/** Encodes an agent/session pair without delimiter collisions. */
-function buildDelegationSessionKey(agentId: string, sessionId: string): string {
-  return `${agentId.length}:${agentId}${sessionId}`;
-}
 
 // TODO: Replace these desktop defaults with agent-provided launch config metadata once the server exposes it before session/new.
 export const LAUNCH_MODE_OPTIONS: ComposerOption[] = [
@@ -197,7 +181,6 @@ const DEFAULT_AGENTS: AgentConfig[] = [
 ];
 
 export class AgentsStore {
-  private disposed = false;
   private clients = new Map<string, AgentClientRecord>();
   private connectFlights = new Map<string, ConnectFlight>();
   private connectGenerations = new Map<string, number>();
@@ -235,9 +218,6 @@ export class AgentsStore {
     record: AgentClientRecord;
   }> = [];
   private pendingSessionNotificationFrame: number | null = null;
-  // QueryMT reports delegation links independently from ACP tool updates.
-  // Scope them by session so preselection notifications survive without leaking.
-  private delegationChildSessionsBySession = new Map<string, Map<string, string>>();
 
   configs = $state<AgentConfig[]>(loadInitialAgents());
   statuses = $state<Record<string, AgentRuntimeStatus>>({});
@@ -472,17 +452,8 @@ export class AgentsStore {
     this.attentionSessionKeys = this.attentionSessionKeys.filter((candidate) => candidate !== key);
   }
 
-  /** Permanently disposes the store, aborting connections and preventing later resurrection. */
   dispose() {
-    if (this.disposed) return;
-    this.disposed = true;
     this.cancelPendingSessionNotifications();
-    this.delegationChildSessionsBySession.clear();
-    const connectedAgentIds = new Set([...this.clients.keys(), ...this.connectFlights.keys()]);
-    for (const agentId of connectedAgentIds) {
-      this.invalidateConnectGeneration(agentId);
-      this.disposeClient(agentId);
-    }
     for (const agentId of [...this.sessionRefreshTimers.keys()]) {
       this.clearScheduledSessionRefresh(agentId);
     }
@@ -761,9 +732,7 @@ export class AgentsStore {
     this.agentErrors = { ...this.agentErrors, [config.id]: this.agentErrors[config.id] ?? null };
   }
 
-  /** Starts or connects a configured agent and refreshes its initial state. */
-  async startConfiguredAgent(agentId: string) {
-    if (this.disposed) return;
+    async startConfiguredAgent(agentId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
@@ -776,14 +745,6 @@ export class AgentsStore {
         await this.refreshAgent(config);
       } else {
         const status = await startAgent(config);
-        if (this.disposed) {
-          try {
-            await stopAgent(agentId);
-          } catch {
-            // Disposal is terminal, so sidecar cleanup remains best-effort.
-          }
-          return;
-        }
         this.statuses = { ...this.statuses, [config.id]: status };
         await this.connectAgent(config.id);
       }
@@ -796,14 +757,11 @@ export class AgentsStore {
         this.logsByAgent = { ...this.logsByAgent, [config.id]: await getAgentLogs(config.id) };
       }
     } catch (error) {
-      if (!this.disposed) {
-        this.error = error instanceof Error ? error.message : `Failed to connect ${config.name}.`;
-      }
+      this.error = error instanceof Error ? error.message : `Failed to connect ${config.name}.`;
     }
   }
 
-  /** Stops an agent and clears its connection-scoped session state. */
-  async stopConfiguredAgent(agentId: string) {
+    async stopConfiguredAgent(agentId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
@@ -833,15 +791,13 @@ export class AgentsStore {
         this.activeSessionId = null;
         this.activeSession = createEmptyActiveSession();
       }
-      this.clearDelegationLinksForAgent(config.id);
       this.clearDelegateAssignmentsForAgent(config.id);
     } catch (error) {
       this.error = error instanceof Error ? error.message : `Failed to disconnect ${config.name}.`;
     }
   }
 
-  /** Restarts an agent connection without accepting stale generation results. */
-  async restartConfiguredAgent(agentId: string) {
+    async restartConfiguredAgent(agentId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
@@ -875,12 +831,10 @@ export class AgentsStore {
     }
   }
 
-  /** Establishes or joins one generation-guarded agent connection unless the store is disposed. */
   async connectAgent(agentId: string, force = false) {
-    if (this.disposed) return;
     const generation = this.connectGeneration(agentId);
     while (true) {
-      if (this.disposed || this.connectGeneration(agentId) !== generation) {
+      if (this.connectGeneration(agentId) !== generation) {
         return;
       }
 
@@ -1458,7 +1412,6 @@ export class AgentsStore {
     };
   }
 
-  /** Deletes a session remotely, removes it from visible session, attention, and delegation state, and clears active selection when applicable. */
   async deleteSession(agentId: string, sessionId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) {
@@ -1488,7 +1441,6 @@ export class AgentsStore {
       });
     }
     this.acknowledgeSession(agentId, sessionId);
-    this.delegationChildSessionsBySession.delete(buildDelegationSessionKey(agentId, sessionId));
     const key = buildSessionKey(agentId, sessionId);
     delete this.delegateAssignmentsBySession[key];
     delete this.delegateAssignmentsLoadingBySession[key];
@@ -1739,7 +1691,6 @@ export class AgentsStore {
     }
   }
 
-  /** Loads session history while preserving newer live updates and delegation linkage. */
   async loadSession(agentId: string, sessionId: string, pendingOperation: 'undo' | 'redo' | null = null) {
     const sessionKey = buildSessionKey(agentId, sessionId);
     if (
@@ -1856,7 +1807,6 @@ export class AgentsStore {
       const replaySession = reduceSessionReplay(sessionId, replay);
       this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
       const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
-      this.bufferDelegationUpdates(agentId, getSnapshotDelegationUpdates(loadedSession));
       checkpoint('frontend.snapshot_transform');
       const liveSession = this.activeSession;
       const liveHasVisibleHistory =
@@ -1871,10 +1821,6 @@ export class AgentsStore {
           : liveHasVisibleHistory
             ? liveSession
             : replaySession;
-      // Wholesale replacement rebuilt the tool calls without extension data;
-      // restore any observed delegation linkage immediately (before queued
-      // updates drain) so the pill survives load/replay ordering.
-      this.reconcileDelegationOverlay();
       this.activeLoadMeasurement?.increment('historyAssignments');
       const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
       checkpoint('frontend.queued_replay');
@@ -2345,26 +2291,20 @@ export class AgentsStore {
     return this.meshRefreshGenerations.get(agentId) === generation && this.clients.get(agentId) === record;
   }
 
-  /** Aborts and unsubscribes both active and in-flight client records for an agent. */
   private disposeClient(agentId: string) {
-    const records = new Set<AgentClientRecord>();
     const record = this.clients.get(agentId);
-    if (record) records.add(record);
+    if (!record) return;
     const flight = this.connectFlights.get(agentId);
-    if (flight) {
-      records.add(flight.owner);
+    if (flight?.owner === record) {
       this.connectFlights.delete(agentId);
       flight.abort();
     }
-    if (records.size === 0) return;
-    for (const candidate of records) {
-      candidate.unsubscribeSessionUpdates?.();
-      candidate.unsubscribeExtensionNotifications?.();
-      candidate.unsubscribeConnectionLoss?.();
-      candidate.unsubscribeInbox?.();
-      void candidate.client.disconnect();
-    }
+    record.unsubscribeSessionUpdates?.();
+    record.unsubscribeExtensionNotifications?.();
+    record.unsubscribeConnectionLoss?.();
+    record.unsubscribeInbox?.();
     inboxStore.disconnectAgent(agentId);
+    void record.client.disconnect();
     this.clients.delete(agentId);
   }
 
@@ -2384,11 +2324,9 @@ export class AgentsStore {
     }
   }
 
-  /** Subscribes once to canonicalized QueryMT extension notifications for a client record. */
   private ensureExtensionNotificationSubscription(agentId: string, record: AgentClientRecord) {
     if (!record.unsubscribeExtensionNotifications) {
       record.unsubscribeExtensionNotifications = record.client.onExtensionNotification((notification) => {
-        if (this.disposed) return;
         if (notification.method === 'querymt/models/changed') {
           void this.loadInitialModelsForAgent(agentId, 1);
         }
@@ -2398,9 +2336,19 @@ export class AgentsStore {
             void this.refreshDelegateAssignments(agentId, params.session_id);
           }
         }
-        if (notification.method === QMT_NOTIFICATION_SESSION_DELEGATION_UPDATE) {
-          const update = parseDelegationUpdateNotification(notification.params);
-          if (update) this.bufferDelegationUpdates(agentId, [update]);
+        if (notification.method === 'querymt/session/delegationUpdate') {
+          const params = (notification.params ?? {}) as {
+            sessionId?: string;
+            session_id?: string;
+            toolCallId?: string;
+            tool_call_id?: string;
+            childSessionId?: string;
+            child_session_id?: string;
+          };
+          const sessionId = params.sessionId ?? params.session_id;
+          if (sessionId && this.isSelectedSession(agentId, sessionId)) {
+            this.activeSession = applyDelegationChildSession(this.activeSession, params);
+          }
         }
         if (notification.method === 'querymt/schedules/changed') {
           const params = notification.params as { node_id?: string };
@@ -3178,11 +3126,7 @@ export class AgentsStore {
     this.modelInfoByAgent = projected;
   }
 
-  /**
-   * Replaces the active view without discarding session-scoped delegation
-   * links that may have arrived before selection or during a same-session load.
-   */
-  private resetActiveSession(agentId: string, sessionId: string) {
+    private resetActiveSession(agentId: string, sessionId: string) {
     this.activeAgentId = agentId;
     this.activeSessionId = sessionId;
     this.activeSession = createEmptyActiveSession();
@@ -3230,8 +3174,7 @@ export class AgentsStore {
     return this.activeAgentId === agentId && this.activeSessionId === sessionId;
   }
 
-  /** Appends a local prompt projection and returns its conversation event index. */
-  private addOptimisticUserPrompt(
+      private addOptimisticUserPrompt(
     sessionId: string,
     prompt: string,
     attachments: PromptAttachment[],
@@ -3371,55 +3314,6 @@ export class AgentsStore {
     if (updated) this.upsertWorkspaceSessions(agentId, [updated]);
   }
 
-  /** Buffers cumulative forked projections for their parent session. */
-  private bufferDelegationUpdates(agentId: string, updates: DelegationUpdateNotification[]) {
-    for (const update of updates) {
-      const toolCallId = readPresentString(update.toolCallId);
-      const childSessionId = readPresentString(update.childSessionId);
-      if (!toolCallId || !childSessionId) continue;
-      const sessionKey = buildDelegationSessionKey(agentId, update.sessionId);
-      let overlay = this.delegationChildSessionsBySession.get(sessionKey);
-      if (!overlay) {
-        overlay = new Map();
-        this.delegationChildSessionsBySession.set(sessionKey, overlay);
-        this.trimDelegationSessionOverlays();
-      }
-      overlay.set(toolCallId, childSessionId);
-      while (overlay.size > MAX_DELEGATION_LINKS_PER_SESSION) {
-        const oldestToolCallId = overlay.keys().next().value;
-        if (oldestToolCallId === undefined) break;
-        overlay.delete(oldestToolCallId);
-      }
-    }
-    this.reconcileDelegationOverlay();
-  }
-
-  /** Evicts the oldest inactive overlays to enforce the session cap without dropping the active one. */
-  private trimDelegationSessionOverlays() {
-    const activeKey = this.activeAgentId && this.activeSessionId
-      ? buildDelegationSessionKey(this.activeAgentId, this.activeSessionId)
-      : null;
-    while (this.delegationChildSessionsBySession.size > MAX_DELEGATION_SESSION_OVERLAYS) {
-      const oldestInactiveKey = [...this.delegationChildSessionsBySession.keys()]
-        .find((key) => key !== activeKey);
-      if (!oldestInactiveKey) break;
-      this.delegationChildSessionsBySession.delete(oldestInactiveKey);
-    }
-  }
-
-  /** Re-attaches known child links after any active-session tool rebuild. */
-  private reconcileDelegationOverlay() {
-    if (!this.activeAgentId || !this.activeSessionId) return;
-    const overlay = this.delegationChildSessionsBySession.get(
-      buildDelegationSessionKey(this.activeAgentId, this.activeSessionId)
-    );
-    if (!overlay || overlay.size === 0) return;
-    const session = reconcileDelegationChildSessions(this.activeSession, overlay);
-    if (session !== this.activeSession) {
-      this.activeSession = session;
-    }
-  }
-
   private handleSessionNotification(
     agentId: string,
     notification: SessionNotification,
@@ -3469,15 +3363,6 @@ export class AgentsStore {
     }
   }
 
-  /** Removes every retained delegation overlay owned by an agent. */
-  private clearDelegationLinksForAgent(agentId: string) {
-    const prefix = buildDelegationSessionKey(agentId, '');
-    for (const key of this.delegationChildSessionsBySession.keys()) {
-      if (key.startsWith(prefix)) this.delegationChildSessionsBySession.delete(key);
-    }
-  }
-
-  /** Applies one deduplicated live session update and restores any buffered delegation link. */
   private applySessionNotificationNow(
     agentId: string,
     notification: SessionNotification,
@@ -3519,7 +3404,6 @@ export class AgentsStore {
     const beforeEvents = this.activeSession.events.length;
     const previousMode = getCurrentModeId(this.activeSession.configOptions);
     this.activeSession = applySessionNotification(this.activeSession, notification, optimisticEventIndex);
-    this.reconcileDelegationOverlay();
     if (notification.update.sessionUpdate === 'config_option_update') {
       const key = buildSessionKey(agentId, notification.sessionId);
       const configOptions = notification.update.configOptions;
@@ -3569,10 +3453,8 @@ export class AgentsStore {
     this.scheduleReconnect(agentId);
   }
 
-  /** Schedules bounded-backoff reconnection only while the store and agent remain eligible. */
   private scheduleReconnect(agentId: string) {
     this.cancelReconnect(agentId);
-    if (this.disposed) return;
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config || config.transport !== 'websocket' || !config.enabled || !config.autoStart) return;
 
@@ -3588,9 +3470,7 @@ export class AgentsStore {
     this.reconnectTimers.set(agentId, timer);
   }
 
-  /** Reconnects an eligible agent without reviving a disposed store or stale generation. */
   private async reconnectAgent(agentId: string) {
-    if (this.disposed) return;
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config || config.transport !== 'websocket' || !config.enabled || !config.autoStart) return;
 

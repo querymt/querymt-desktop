@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ActiveSessionViewModel } from './types';
 import { buildSessionConversation } from './session-conversation';
-import {
-  activeSessionFromLoadResponse,
-  getSnapshotDelegationUpdates,
-  getSnapshotProviderChange,
-  normalizeHistoricalSession
-} from './session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHistoricalSession } from './session-snapshot';
 
 describe('getSnapshotProviderChange', () => {
   it('returns the last valid provider change including its mesh node', () => {
@@ -58,8 +53,7 @@ describe('getSnapshotProviderChange', () => {
   });
 });
 
-describe('activeSessionFromLoadResponse',
-  /** Registers session snapshot hydration tests. */ () => {
+describe('activeSessionFromLoadResponse', () => {
   it('prefers structured v1 user prompts and restores native/resource attachments', () => {
     const session = activeSessionFromLoadResponse('session-structured', {
       _meta: {
@@ -423,78 +417,6 @@ describe('activeSessionFromLoadResponse',
     });
 
     expect(session.toolCalls[0]?.childSessionId).toBe('child-session-1');
-  });
-
-  it('attaches the exact cumulative delegation projection returned by the current runtime', () => {
-    const response = {
-      _meta: {
-        'querymt/sessionLoadSnapshot.v1': {
-          audit: {
-            events: [{
-              seq: 2229145,
-              timestamp: 1789350676,
-              kind: {
-                type: 'tool_call_start',
-                data: {
-                  tool_call_id: 'call_051b11680c804b03a8243580',
-                  tool_name: 'delegate',
-                  arguments: '{"target_agent_id":"linus","objective":"Say hi and nothing else."}'
-                }
-              }
-            }]
-          },
-          delegationUpdates: [{
-            version: 1,
-            sessionId: 'session-1',
-            delegationId: '01a09d9c-86c0-7491-8e8a-df5b03399af5',
-            toolCallId: 'call_051b11680c804b03a8243580',
-            state: 'forked',
-            targetAgentId: 'linus',
-            objective: 'Say hi and nothing else.',
-            childSessionId: '01a09d9c-86f2-7271-8913-a6392ce6fd34',
-            selectedModelId: 'codex/gpt-5.6-sol',
-            requestedAt: 1789350676,
-            forkedAt: 1789350676,
-            updatedAt: 1789350676
-          }]
-        }
-      }
-    };
-
-    expect(getSnapshotDelegationUpdates(response)).toHaveLength(1);
-    expect(activeSessionFromLoadResponse('session-1', response).toolCalls[0]).toMatchObject({
-      id: 'call_051b11680c804b03a8243580',
-      status: 'in_progress',
-      childSessionId: '01a09d9c-86f2-7271-8913-a6392ce6fd34'
-    });
-  });
-
-  it('does not fabricate a tool call for an unmatched delegation projection', () => {
-    const response = {
-      _meta: {
-        'querymt/sessionLoadSnapshot.v1': {
-          audit: { events: [] },
-          delegationUpdates: [{
-            version: 1,
-            sessionId: 'session-1',
-            delegationId: 'delegation-1',
-            toolCallId: 'missing-tool-call',
-            state: 'forked',
-            targetAgentId: 'linus',
-            objective: 'Review the patch',
-            childSessionId: 'child-session-1',
-            requestedAt: 1789350676,
-            forkedAt: 1789350677,
-            updatedAt: 1789350677
-          }]
-        }
-      }
-    };
-
-    expect(getSnapshotDelegationUpdates(response)).toHaveLength(1);
-    const session = activeSessionFromLoadResponse('session-1', response);
-    expect(session.toolCalls).toEqual([]);
-    expect(buildSessionConversation(session)).toEqual([]);
   });
 
   it('hydrates stored assistant thinking as reasoning from QueryMT load snapshots', () => {

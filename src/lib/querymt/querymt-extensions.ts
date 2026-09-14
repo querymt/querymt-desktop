@@ -29,7 +29,6 @@ import type {
   DelegateAssignmentsInfo,
   DelegateModelsChangedNotification,
   DelegateModelsRequest,
-  DelegationUpdateNotification,
   SetDelegateModelRequest,
   SetDelegateModelResponse,
   ModelsChangedNotification,
@@ -48,7 +47,6 @@ export type QuerymtWireMethod = QuerymtLogicalMethod | `_${QuerymtLogicalMethod}
 export type QuerymtExtensionNotification =
   | { method: 'querymt/models/changed'; params: ModelsChangedNotification }
   | { method: 'querymt/session/delegateModelsChanged'; params: DelegateModelsChangedNotification }
-  | { method: 'querymt/session/delegationUpdate'; params: DelegationUpdateNotification }
   | { method: 'querymt/mesh/joined'; params: MeshJoinedNotification }
   | { method: 'querymt/mesh/nodesChanged'; params: MeshNodesChangedNotification }
   | { method: 'querymt/mesh/peerExpired'; params: MeshPeerExpiredNotification }
@@ -91,38 +89,6 @@ export const QMT_METHOD_SESSION_UNDO = 'querymt/session/undo';
 export const QMT_METHOD_SESSION_REDO = 'querymt/session/redo';
 export const QMT_METHOD_SESSION_DELEGATE_MODELS = 'querymt/session/delegateModels';
 export const QMT_METHOD_SESSION_SET_DELEGATE_MODEL = 'querymt/session/setDelegateModel';
-export const QMT_NOTIFICATION_SESSION_DELEGATION_UPDATE = 'querymt/session/delegationUpdate';
-
-/** Validates the version-one delegation lifecycle payload emitted by QueryMT. */
-export function parseDelegationUpdateNotification(value: unknown): DelegationUpdateNotification | null {
-  if (!value || typeof value !== 'object') return null;
-  const update = value as Record<string, unknown>;
-  const optionalStringKeys = [
-    'toolCallId',
-    'childSessionId',
-    'selectedModelId',
-    'selectedProviderNodeId',
-    'resultSummary',
-    'error'
-  ] as const;
-  const optionalNumberKeys = ['forkedAt', 'finishedAt'] as const;
-  if (
-    update.version !== 1 ||
-    typeof update.sessionId !== 'string' || !update.sessionId ||
-    typeof update.delegationId !== 'string' || !update.delegationId ||
-    typeof update.state !== 'string' ||
-    !['requested', 'forked', 'completed', 'failed', 'cancelled'].includes(update.state) ||
-    typeof update.targetAgentId !== 'string' ||
-    typeof update.objective !== 'string' ||
-    typeof update.requestedAt !== 'number' || !Number.isFinite(update.requestedAt) ||
-    typeof update.updatedAt !== 'number' || !Number.isFinite(update.updatedAt) ||
-    optionalStringKeys.some((key) => update[key] !== undefined && typeof update[key] !== 'string') ||
-    optionalNumberKeys.some((key) => update[key] !== undefined && (typeof update[key] !== 'number' || !Number.isFinite(update[key])))
-  ) {
-    return null;
-  }
-  return value as DelegationUpdateNotification;
-}
 
 export interface QuerymtModelsResponse {
   models: ModelEntry[];
