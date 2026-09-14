@@ -16,7 +16,7 @@ import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from 
 import {
   createEmptyActiveSession,
   applySessionNotification,
-  applyDelegationChildSession,
+  reconcileDelegationChildSessions,
   reduceSessionReplay,
   beginSessionWork,
   endSessionWork,
@@ -218,6 +218,13 @@ export class AgentsStore {
     record: AgentClientRecord;
   }> = [];
   private pendingSessionNotificationFrame: number | null = null;
+  // Session-scoped overlay of delegation linkage (toolCallId -> childSessionId)
+  // for the selected session. Extension notifications have no shared ordering
+  // with session/update events, and wholesale history replacements (load
+  // replay, load snapshots) rebuild tool calls without extension data, so
+  // entries are retained until the active-session lifecycle ends (session
+  // reset, stop, delete, dispose) rather than dropped once applied.
+  private delegationChildSessionsByToolCallId = new Map<string, string>();
 
   configs = $state<AgentConfig[]>(loadInitialAgents());
   statuses = $state<Record<string, AgentRuntimeStatus>>({});
@@ -454,6 +461,7 @@ export class AgentsStore {
 
   dispose() {
     this.cancelPendingSessionNotifications();
+    this.delegationChildSessionsByToolCallId.clear();
     for (const agentId of [...this.sessionRefreshTimers.keys()]) {
       this.clearScheduledSessionRefresh(agentId);
     }
@@ -790,6 +798,7 @@ export class AgentsStore {
         this.activeAgentId = null;
         this.activeSessionId = null;
         this.activeSession = createEmptyActiveSession();
+        this.delegationChildSessionsByToolCallId.clear();
       }
       this.clearDelegateAssignmentsForAgent(config.id);
     } catch (error) {
@@ -1457,6 +1466,7 @@ export class AgentsStore {
       this.activeAgentId = null;
       this.activeSessionId = null;
       this.activeSession = createEmptyActiveSession();
+      this.delegationChildSessionsByToolCallId.clear();
     }
   }
 
@@ -1821,6 +1831,10 @@ export class AgentsStore {
           : liveHasVisibleHistory
             ? liveSession
             : replaySession;
+      // Wholesale replacement rebuilt the tool calls without extension data;
+      // restore any observed delegation linkage immediately (before queued
+      // updates drain) so the pill survives load/replay ordering.
+      this.reconcileDelegationOverlay();
       this.activeLoadMeasurement?.increment('historyAssignments');
       const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
       checkpoint('frontend.queued_replay');
@@ -2346,8 +2360,18 @@ export class AgentsStore {
             child_session_id?: string;
           };
           const sessionId = params.sessionId ?? params.session_id;
+          const toolCallId = params.toolCallId ?? params.tool_call_id;
+          const childSessionId = params.childSessionId ?? params.child_session_id;
           if (sessionId && this.isSelectedSession(agentId, sessionId)) {
-            this.activeSession = applyDelegationChildSession(this.activeSession, params);
+            if (toolCallId && childSessionId) {
+              // Keyed by toolCallId, so a duplicate delegationUpdate is
+              // idempotent: duplicate or satisfied records cannot accumulate.
+              this.delegationChildSessionsByToolCallId.set(toolCallId, childSessionId);
+            }
+            // Attach immediately when the tool call already exists; otherwise
+            // the overlay retains the linkage until the tool is materialized
+            // by a live update or a load replay/snapshot replacement.
+            this.reconcileDelegationOverlay();
           }
         }
         if (notification.method === 'querymt/schedules/changed') {
@@ -3131,6 +3155,7 @@ export class AgentsStore {
     this.activeSessionId = sessionId;
     this.activeSession = createEmptyActiveSession();
     this.activeSession.sessionId = sessionId;
+    this.delegationChildSessionsByToolCallId.clear();
     this.promptFailure = null;
 
     const record = this.ensureClientRecord(agentId);
@@ -3314,6 +3339,22 @@ export class AgentsStore {
     if (updated) this.upsertWorkspaceSessions(agentId, [updated]);
   }
 
+  // Re-applies the session-scoped delegation overlay onto the current active
+  // session. Must run after every point that can (re)build tool calls: live
+  // and drained session/update application, and wholesale active-session
+  // replacements (load replay/snapshot assignment). Attaching is idempotent —
+  // a tool that already carries the child session id is left untouched.
+  private reconcileDelegationOverlay() {
+    if (this.delegationChildSessionsByToolCallId.size === 0) return;
+    const session = reconcileDelegationChildSessions(
+      this.activeSession,
+      this.delegationChildSessionsByToolCallId
+    );
+    if (session !== this.activeSession) {
+      this.activeSession = session;
+    }
+  }
+
   private handleSessionNotification(
     agentId: string,
     notification: SessionNotification,
@@ -3404,6 +3445,7 @@ export class AgentsStore {
     const beforeEvents = this.activeSession.events.length;
     const previousMode = getCurrentModeId(this.activeSession.configOptions);
     this.activeSession = applySessionNotification(this.activeSession, notification, optimisticEventIndex);
+    this.reconcileDelegationOverlay();
     if (notification.update.sessionUpdate === 'config_option_update') {
       const key = buildSessionKey(agentId, notification.sessionId);
       const configOptions = notification.update.configOptions;

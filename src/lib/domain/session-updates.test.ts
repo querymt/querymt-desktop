@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SessionNotification } from '@agentclientprotocol/sdk';
 import {
   applyDelegationChildSession,
+  reconcileDelegationChildSessions,
   applySessionNotification,
   beginSessionWork,
   createEmptyActiveSession,
@@ -286,6 +287,45 @@ describe('applySessionNotification tool calls', () => {
       sessionId: 'session-1',
       toolCallId: 'delegate-1'
     })).toBe(session);
+  });
+
+  it('retains delegation linkage until the tool call exists, then attaches it', () => {
+    const session = createEmptyActiveSession();
+    session.sessionId = 'session-1';
+    const overlay = new Map([['delegate-1', 'child-session-1']]);
+
+    // Unknown tool call: nothing to attach, so the same session is returned.
+    expect(reconcileDelegationChildSessions(session, overlay)).toBe(session);
+
+    session.toolCalls = [{
+      id: 'delegate-1',
+      title: 'Run delegate',
+      status: 'in_progress',
+      kind: 'delegate'
+    }];
+
+    const next = reconcileDelegationChildSessions(session, overlay);
+    expect(next).not.toBe(session);
+    expect(next.toolCalls[0]?.childSessionId).toBe('child-session-1');
+    expect(session.toolCalls[0]?.childSessionId).toBeUndefined();
+  });
+
+  it('returns the same session once overlay entries are already attached', () => {
+    const session = createEmptyActiveSession();
+    session.sessionId = 'session-1';
+    session.toolCalls = [{
+      id: 'delegate-1',
+      title: 'Run delegate',
+      status: 'in_progress',
+      kind: 'delegate',
+      childSessionId: 'child-session-1'
+    }];
+
+    // The overlay is durable: satisfied entries stay in place so replay
+    // replacements can re-attach, and re-running reconciliation is a no-op
+    // that returns the identical session without cloning it.
+    const next = reconcileDelegationChildSessions(session, new Map([['delegate-1', 'child-session-1']]));
+    expect(next).toBe(session);
   });
 });
 

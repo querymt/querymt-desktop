@@ -557,11 +557,38 @@ export function applyDelegationChildSession(
   if (!toolCallId || !childSessionId) return current;
   if (sessionId && current.sessionId && sessionId !== current.sessionId) return current;
 
+  // Reconciliation re-runs this after every session notification, so skip the
+  // clone when the matching tool already carries the requested id. This check
+  // must not go through canonicalizeToolCall, which mutates the given array.
+  const existing = current.toolCalls.find((tool) => tool.id === toolCallId);
+  if (!existing || existing.childSessionId === childSessionId) return current;
+
   const next = cloneSession(current);
   const target = canonicalizeToolCall(next.toolCalls, toolCallId);
   if (!target || target.childSessionId === childSessionId) return current;
   target.childSessionId = childSessionId;
   return next;
+}
+
+// Delegation child session ids arrive on the extension notification channel
+// and have no shared ordering with the session/update events that materialize
+// tool calls — which may happen through live updates or wholesale load
+// replay/snapshot replacements. The store keeps a session-scoped
+// toolCallId -> childSessionId overlay and re-runs this reconciliation after
+// every point that can (re)build tool calls. The overlay is durable for the
+// active-session lifecycle: entries stay until the store clears it on
+// reset/stop/delete/dispose, so replay replacements can re-attach the
+// linkage; re-attaching an already-carrying tool is a no-op.
+export function reconcileDelegationChildSessions(
+  current: ActiveSessionViewModel,
+  overlay: ReadonlyMap<string, string>
+): ActiveSessionViewModel {
+  if (overlay.size === 0) return current;
+  let session = current;
+  for (const [toolCallId, childSessionId] of overlay) {
+    session = applyDelegationChildSession(session, { toolCallId, childSessionId });
+  }
+  return session;
 }
 
 function readNonEmptyString(value: unknown): string | null {

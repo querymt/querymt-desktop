@@ -1278,6 +1278,56 @@ describe('AgentsStore delegate model assignments', () => {
     store.activeSession.sessionId = 'session-1';
   }
 
+  function sessionSummary(sessionId: string) {
+    return {
+      agentId: 'agent-1',
+      agentName: 'QMTCODE',
+      sessionId,
+      title: `Session ${sessionId}`,
+      cwd: '/tmp/work',
+      updatedAt: '2026-07-18T17:00:00Z',
+      runtimeId: 'agent-1',
+      runtimeName: 'QMTCODE',
+      source: 'acp' as const,
+      status: 'idle' as const
+    };
+  }
+
+  function delegationUpdate(sessionId: string) {
+    return {
+      method: 'querymt/session/delegationUpdate',
+      params: {
+        version: 1,
+        sessionId,
+        toolCallId: 'delegate-1',
+        childSessionId: 'child-session-1',
+        state: 'forked',
+        targetAgentId: 'linus',
+        objective: 'Review the current bearer-auth diff'
+      }
+    };
+  }
+
+  function delegationToolCall(sessionId: string): SessionNotification {
+    return {
+      sessionId,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'delegate-1',
+        title: 'Run delegate',
+        status: 'in_progress',
+        rawInput: { target_agent_id: 'linus', objective: 'Review the current bearer-auth diff' }
+      }
+    };
+  }
+
+  function delegationOverlay(store: AgentsStore): Map<string, string> {
+    // Test-only peek at the session-scoped overlay; `private` is compile-time
+    // only. Used to assert the durable overlay stays bounded at one entry.
+    return (store as unknown as { delegationChildSessionsByToolCallId: Map<string, string> })
+      .delegationChildSessionsByToolCallId;
+  }
+
   it('exposes routing only when the current session has delegate roles', async () => {
     const store = createStore();
     selectSession(store);
@@ -1707,6 +1757,190 @@ describe('AgentsStore delegate model assignments', () => {
     });
 
     expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
+  });
+
+  it('attaches a pending child session id once the delegation tool call arrives', async () => {
+    const store = createStore();
+    selectSession(store);
+    await store.connectAgent('agent-1');
+
+    // Regression for #158: the delegationUpdate extension notification can
+    // arrive before the session/update stream materializes the tool call.
+    // The child session id must be remembered and attached as soon as the
+    // tool call shows up, so the pill appears while the delegation runs.
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/delegationUpdate',
+      params: {
+        version: 1,
+        sessionId: 'session-1',
+        toolCallId: 'delegate-1',
+        childSessionId: 'child-session-1',
+        state: 'forked',
+        targetAgentId: 'linus',
+        objective: 'Review the current bearer-auth diff'
+      }
+    });
+
+    expect(store.activeSession.toolCalls).toHaveLength(0);
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'delegate-1',
+        title: 'Run delegate',
+        status: 'in_progress',
+        rawInput: { target_agent_id: 'linus', objective: 'Review the current bearer-auth diff' }
+      }
+    });
+
+    expect(store.activeSession.toolCalls[0]?.status).toBe('in_progress');
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
+  });
+
+  it('attaches a buffered child session id when load replay materializes the tool call', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [sessionSummary('session-1')] };
+    selectSession(store);
+    await store.connectAgent('agent-1');
+
+    // Regression for #158 (load order): the delegationUpdate can arrive while
+    // a session load is in flight, and the tool call may only ever be
+    // materialized by the wholesale replay replacement — no live session/update
+    // follows. The overlay must be reconciled right after that replacement.
+    mockClient.loadSession.mockImplementationOnce(async (sessionId?: string) => {
+      mockClient.emitExtensionNotification(delegationUpdate(sessionId ?? 'session-1'));
+      return {
+        response: { configOptions: [] },
+        replay: [delegationToolCall(sessionId ?? 'session-1')]
+      };
+    });
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activeSession.toolCalls).toHaveLength(1);
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
+  });
+
+  it('keeps the child session id when a load replay wholesale-replaces the session after a live attach', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [sessionSummary('session-1')] };
+    selectSession(store);
+    await store.connectAgent('agent-1');
+
+    mockClient.emitExtensionNotification(delegationUpdate('session-1'));
+    mockClient.emitSessionUpdate(delegationToolCall('session-1'));
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
+
+    // Regression for #158 (replay order): the linkage was already applied to
+    // live state, but reloading the same session wholesale-replaces the active
+    // session with replay data that cannot carry extension-derived child ids.
+    // The retained overlay must restore the linkage after the replacement.
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [] },
+      replay: [delegationToolCall('session-1')]
+    });
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activeSession.toolCalls).toHaveLength(1);
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
+  });
+
+  it('keeps duplicate delegation updates idempotent with the durable overlay bounded at one entry', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [sessionSummary('session-1')] };
+    selectSession(store);
+    await store.connectAgent('agent-1');
+
+    mockClient.emitExtensionNotification(delegationUpdate('session-1'));
+    mockClient.emitExtensionNotification(delegationUpdate('session-1'));
+    expect(delegationOverlay(store).size).toBe(1);
+
+    mockClient.emitSessionUpdate(delegationToolCall('session-1'));
+    expect(store.activeSession.toolCalls).toHaveLength(1);
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
+
+    // A duplicate arriving after the tool exists only refreshes the existing
+    // entry: the overlay stays bounded at one entry.
+    mockClient.emitExtensionNotification(delegationUpdate('session-1'));
+    expect(store.activeSession.toolCalls).toHaveLength(1);
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
+    expect(delegationOverlay(store).size).toBe(1);
+  });
+
+  it('drops buffered delegation linkage when switching sessions', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [sessionSummary('session-a'), sessionSummary('session-b')]
+    };
+    await store.connectAgent('agent-1');
+    await store.loadSession('agent-1', 'session-a');
+
+    mockClient.emitExtensionNotification(delegationUpdate('session-a'));
+    expect(delegationOverlay(store).size).toBe(1);
+
+    // Switching resets the active-session lifecycle: the overlay must be
+    // cleared so session-a linkage can never leak into session-b tools.
+    await store.loadSession('agent-1', 'session-b');
+    mockClient.emitSessionUpdate(delegationToolCall('session-b'));
+    expect(store.activeSession.toolCalls).toHaveLength(1);
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBeUndefined();
+    expect(delegationOverlay(store).size).toBe(0);
+
+    // Re-selecting the original session starts a fresh lifecycle: the stale
+    // linkage must not resurrect.
+    await store.loadSession('agent-1', 'session-a');
+    mockClient.emitSessionUpdate(delegationToolCall('session-a'));
+    expect(store.activeSession.toolCalls).toHaveLength(1);
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBeUndefined();
+  });
+
+  it('clears delegation linkage when the agent backing the selected session stops', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [sessionSummary('session-1')] };
+    selectSession(store);
+    await store.connectAgent('agent-1');
+
+    mockClient.emitExtensionNotification(delegationUpdate('session-1'));
+    expect(delegationOverlay(store).size).toBe(1);
+
+    await store.stopConfiguredAgent('agent-1');
+
+    expect(store.activeSessionId).toBeNull();
+    expect(delegationOverlay(store).size).toBe(0);
+  });
+
+  it('clears delegation linkage when the selected session is deleted', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [sessionSummary('session-1')] };
+    selectSession(store);
+    mockClient.connect.mockImplementation(async (): Promise<InitializeResponse> => ({
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {}, delete: {} } },
+      authMethods: []
+    }));
+    await store.connectAgent('agent-1');
+
+    mockClient.emitExtensionNotification(delegationUpdate('session-1'));
+    expect(delegationOverlay(store).size).toBe(1);
+
+    await store.deleteSession('agent-1', 'session-1');
+
+    expect(store.activeSessionId).toBeNull();
+    expect(delegationOverlay(store).size).toBe(0);
+  });
+
+  it('clears delegation linkage on store dispose', async () => {
+    const store = createStore();
+    selectSession(store);
+    await store.connectAgent('agent-1');
+
+    mockClient.emitExtensionNotification(delegationUpdate('session-1'));
+    expect(delegationOverlay(store).size).toBe(1);
+
+    store.dispose();
+
+    expect(delegationOverlay(store).size).toBe(0);
   });
 
   it('exposes unavailable and orphaned assignments without altering them on read', async () => {
