@@ -31,6 +31,7 @@ const mockListManagedProfiles = vi.hoisted(() => vi.fn(async () => []));
 const mockListen = vi.hoisted(() => vi.fn());
 const mockDrainAgentSessionUpdates = vi.hoisted(() => vi.fn(async () => [] as SessionNotification[]));
 
+/** Builds the shared ACP client mock and its independently disposable listener registries. */
 const mockClient = vi.hoisted(() => {
   // Registries instead of single slots: dispose paths unsubscribe their own
   // handler, and a late registration from a prior test's floating cleanup
@@ -1955,6 +1956,7 @@ describe('AgentsStore delegate model assignments', () => {
 
   it('does not resurrect a client or delegation overlay when disposed during connection', async () => {
     const store = createStore();
+    /** Releases the pending mock connection with a controlled initialization response. */
     let releaseConnect!: (response: InitializeResponse) => void;
     mockClient.connect.mockImplementationOnce(
       () => new Promise<InitializeResponse>((resolve) => { releaseConnect = resolve; })

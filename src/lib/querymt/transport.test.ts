@@ -6,6 +6,7 @@ import { createWebSocketAcpStream } from './transport';
 class MockWebSocket extends EventTarget {
   static OPEN = 1;
   static instances: MockWebSocket[] = [];
+  /** Holds the optional responder used to drive request-response handshakes. */
   static respond: ((socket: MockWebSocket, message: string) => void) | null = null;
   readyState = 0;
   sent: string[] = [];
@@ -38,6 +39,7 @@ class MockWebSocket extends EventTarget {
   }
 }
 
+/** Resets shared socket state and browser-global stubs between transport tests. */
 afterEach(() => {
   MockWebSocket.instances = [];
   MockWebSocket.respond = null;
@@ -106,6 +108,7 @@ describe('createWebSocketAcpStream', () => {
     });
     const callback = vi.fn();
     client.onExtensionNotification(callback);
+    /** Answers handshake requests while leaving notification delivery under test control. */
     MockWebSocket.respond = (socket, raw) => {
       const request = JSON.parse(raw) as { id: number; method: string };
       if (request.method === 'initialize') {
