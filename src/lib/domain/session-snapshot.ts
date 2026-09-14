@@ -1,5 +1,7 @@
 import { createEmptyActiveSession, normalizeContentBlocks, stringifyOptional, summarizeContentBlocks } from '$lib/domain/session-updates';
 import type { ActiveSessionViewModel, SessionToolCallItem } from '$lib/domain/types';
+import type { DelegationUpdateNotification } from '$lib/querymt/generated/types';
+import { parseDelegationUpdateNotification } from '$lib/querymt/querymt-extensions';
 
 type SnapshotEvent = {
   seq?: number;
@@ -44,6 +46,7 @@ type SessionLoadSnapshot = {
   user_prompt_records?: StructuredPromptRecord[];
   structuredUserPrompts?: StructuredPromptRecord[];
   structured_user_prompts?: StructuredPromptRecord[];
+  delegationUpdates?: unknown[];
 };
 
 export interface SnapshotProviderChange {
@@ -247,8 +250,27 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
     );
   }
 
+  for (const update of getSnapshotDelegationUpdates(response)) {
+    if (
+      update.sessionId !== sessionId ||
+      !update.toolCallId ||
+      !update.childSessionId ||
+      !toolCallsById.has(update.toolCallId)
+    ) continue;
+    mergeHistoricalToolCall(toolCallsById, update.toolCallId, { childSessionId: update.childSessionId });
+  }
+
   session.toolCalls = finalizeHistoricalToolCalls(Array.from(toolCallsById.values()), snapshot.audit?.events ?? []);
   return normalizeHistoricalSession(session);
+}
+
+/** Reads valid version-one delegation projections from QueryMT session-load metadata. */
+export function getSnapshotDelegationUpdates(response: unknown): DelegationUpdateNotification[] {
+  const updates = readSnapshot(response)?.delegationUpdates;
+  if (!Array.isArray(updates)) return [];
+  return updates
+    .map(parseDelegationUpdateNotification)
+    .filter((update): update is DelegationUpdateNotification => update !== null);
 }
 
 export function getSnapshotProviderChange(response: unknown): SnapshotProviderChange | null {

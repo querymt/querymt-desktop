@@ -310,6 +310,36 @@ describe('applySessionNotification tool calls', () => {
     expect(session.toolCalls[0]?.childSessionId).toBeUndefined();
   });
 
+  it('attaches multiple links with one shallow session update', () => {
+    const session = createEmptyActiveSession();
+    session.sessionId = 'session-1';
+    session.toolCalls = [
+      { id: 'delegate-1', title: 'First delegate', status: 'in_progress', kind: 'delegate' },
+      { id: 'other-tool', title: 'Read file', status: 'completed', kind: 'read' },
+      { id: 'delegate-2', title: 'Second delegate', status: 'in_progress', kind: 'delegate' }
+    ];
+    const inputTools = session.toolCalls.slice();
+
+    const next = reconcileDelegationChildSessions(session, new Map([
+      ['delegate-1', 'child-session-1'],
+      ['delegate-2', 'child-session-2']
+    ]));
+
+    expect(next).not.toBe(session);
+    expect(next.toolCalls).not.toBe(session.toolCalls);
+    expect(next.transcript).toBe(session.transcript);
+    expect(next.events).toBe(session.events);
+    expect(next.configOptions).toBe(session.configOptions);
+    expect(next.toolCalls).toEqual([
+      { ...inputTools[0], childSessionId: 'child-session-1' },
+      inputTools[1],
+      { ...inputTools[2], childSessionId: 'child-session-2' }
+    ]);
+    expect(next.toolCalls[1]).toBe(inputTools[1]);
+    expect(session.toolCalls).toEqual(inputTools);
+    expect(session.toolCalls.every((tool) => tool.childSessionId === undefined)).toBe(true);
+  });
+
   it('returns the same session once overlay entries are already attached', () => {
     const session = createEmptyActiveSession();
     session.sessionId = 'session-1';

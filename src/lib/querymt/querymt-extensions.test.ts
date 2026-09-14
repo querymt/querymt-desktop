@@ -12,7 +12,9 @@ import {
   QuerymtExtensions,
   normalizeQuerymtModelInfoResponse,
   normalizeQuerymtModelsResponse,
-  toAcpExtensionMethod
+  parseDelegationUpdateNotification,
+  toAcpExtensionMethod,
+  toLogicalQuerymtMethod
 } from './querymt-extensions';
 
 const model = {
@@ -22,9 +24,51 @@ const model = {
   label: 'Claude Sonnet 4'
 };
 
-describe('toAcpExtensionMethod', () => {
-  it('uses the desktop ACP extension method prefix', () => {
+describe('QueryMT extension wire contract', () => {
+  it('normalizes prefixed and unprefixed QueryMT wire methods', () => {
     expect(toAcpExtensionMethod('querymt/models')).toBe('_querymt/models');
+    expect(toLogicalQuerymtMethod('_querymt/session/delegationUpdate')).toBe('querymt/session/delegationUpdate');
+    expect(toLogicalQuerymtMethod('querymt/session/delegationUpdate')).toBe('querymt/session/delegationUpdate');
+  });
+
+  it('accepts the exact current runtime delegation projection', () => {
+    const params = {
+      version: 1,
+      sessionId: '01a09d9a-db58-77a7-a6eb-ff2a56693bf6',
+      delegationId: '01a09d9c-86c0-7491-8e8a-df5b03399af5',
+      toolCallId: 'call_051b11680c804b03a8243580',
+      state: 'forked',
+      targetAgentId: 'linus',
+      objective: 'Say hi and nothing else.',
+      childSessionId: '01a09d9c-86f2-7271-8913-a6392ce6fd34',
+      selectedModelId: 'codex/gpt-5.6-sol',
+      requestedAt: 1789350676,
+      forkedAt: 1789350676,
+      updatedAt: 1789350676
+    };
+
+    expect(parseDelegationUpdateNotification(params)).toEqual(params);
+  });
+
+  it('rejects unusable versions, timestamps, and optional field types', () => {
+    const requested = {
+      version: 1,
+      sessionId: 'session-1',
+      delegationId: 'delegation-1',
+      toolCallId: 'call-1',
+      state: 'requested',
+      targetAgentId: 'coder',
+      objective: 'Implement it',
+      requestedAt: 1789350676,
+      updatedAt: 1789350676
+    };
+
+    expect(parseDelegationUpdateNotification({ ...requested, version: 2 })).toBeNull();
+    expect(parseDelegationUpdateNotification({ ...requested, requestedAt: '2026-09-14T01:51:16Z' })).toBeNull();
+    expect(parseDelegationUpdateNotification({ ...requested, childSessionId: null })).toBeNull();
+    expect(parseDelegationUpdateNotification({ ...requested, state: ['requested'] })).toBeNull();
+    expect(parseDelegationUpdateNotification({ ...requested, state: { value: 'requested' } })).toBeNull();
+    expect(parseDelegationUpdateNotification({ ...requested, state: null })).toBeNull();
   });
 });
 

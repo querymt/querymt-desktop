@@ -11,7 +11,7 @@ import type {
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { tick } from 'svelte';
 import { normalizePromptError, type PromptFailure } from '$lib/domain/prompt-errors';
-import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotDelegationUpdates, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
 import {
   createEmptyActiveSession,
@@ -64,6 +64,7 @@ import type {
   DelegateAssignmentsInfo,
   DelegateModelsChangedNotification,
   DelegateModelOverride,
+  DelegationUpdateNotification,
   DelegateReasoningEffort,
   MeshInviteCreatedInfo,
   MeshInviteListInfo,
@@ -99,7 +100,9 @@ import {
   QMT_METHOD_SESSION_REDO,
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
-  QMT_METHOD_SESSION_UNDO_STACK
+  QMT_METHOD_SESSION_UNDO_STACK,
+  QMT_NOTIFICATION_SESSION_DELEGATION_UPDATE,
+  parseDelegationUpdateNotification
 } from '$lib/querymt/querymt-extensions';
 import { sendDesktopNotification } from '$lib/querymt/notifications';
 import {
@@ -127,8 +130,15 @@ const RECENT_WORKSPACES_LIMIT = 8;
 const WEBSOCKET_RECONNECT_MAX_DELAY_MS = 8_000;
 const WORKSPACE_SESSION_PAGE_SIZE = 10;
 const MAX_AGENT_LOG_ENTRIES = 200;
+const MAX_DELEGATION_SESSION_OVERLAYS = 32;
+const MAX_DELEGATION_LINKS_PER_SESSION = 64;
 const AGENT_LOG_EVENT = 'querymt://agent/log';
 const PROMPT_ACTIVE_RUN_STATES = new Set<SessionRunState>(['thinking', 'streaming', 'tool-running']);
+
+function readPresentString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
 
 // TODO: Replace these desktop defaults with agent-provided launch config metadata once the server exposes it before session/new.
 export const LAUNCH_MODE_OPTIONS: ComposerOption[] = [
@@ -181,6 +191,7 @@ const DEFAULT_AGENTS: AgentConfig[] = [
 ];
 
 export class AgentsStore {
+  private disposed = false;
   private clients = new Map<string, AgentClientRecord>();
   private connectFlights = new Map<string, ConnectFlight>();
   private connectGenerations = new Map<string, number>();
@@ -218,13 +229,9 @@ export class AgentsStore {
     record: AgentClientRecord;
   }> = [];
   private pendingSessionNotificationFrame: number | null = null;
-  // Session-scoped overlay of delegation linkage (toolCallId -> childSessionId)
-  // for the selected session. Extension notifications have no shared ordering
-  // with session/update events, and wholesale history replacements (load
-  // replay, load snapshots) rebuild tool calls without extension data, so
-  // entries are retained until the active-session lifecycle ends (session
-  // reset, stop, delete, dispose) rather than dropped once applied.
-  private delegationChildSessionsByToolCallId = new Map<string, string>();
+  // QueryMT reports delegation links independently from ACP tool updates.
+  // Scope them by session so preselection notifications survive without leaking.
+  private delegationChildSessionsBySession = new Map<string, Map<string, string>>();
 
   configs = $state<AgentConfig[]>(loadInitialAgents());
   statuses = $state<Record<string, AgentRuntimeStatus>>({});
@@ -460,8 +467,15 @@ export class AgentsStore {
   }
 
   dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
     this.cancelPendingSessionNotifications();
-    this.delegationChildSessionsByToolCallId.clear();
+    this.delegationChildSessionsBySession.clear();
+    const connectedAgentIds = new Set([...this.clients.keys(), ...this.connectFlights.keys()]);
+    for (const agentId of connectedAgentIds) {
+      this.invalidateConnectGeneration(agentId);
+      this.disposeClient(agentId);
+    }
     for (const agentId of [...this.sessionRefreshTimers.keys()]) {
       this.clearScheduledSessionRefresh(agentId);
     }
@@ -740,7 +754,7 @@ export class AgentsStore {
     this.agentErrors = { ...this.agentErrors, [config.id]: this.agentErrors[config.id] ?? null };
   }
 
-    async startConfiguredAgent(agentId: string) {
+  async startConfiguredAgent(agentId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
@@ -769,7 +783,7 @@ export class AgentsStore {
     }
   }
 
-    async stopConfiguredAgent(agentId: string) {
+  async stopConfiguredAgent(agentId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
@@ -798,15 +812,15 @@ export class AgentsStore {
         this.activeAgentId = null;
         this.activeSessionId = null;
         this.activeSession = createEmptyActiveSession();
-        this.delegationChildSessionsByToolCallId.clear();
       }
+      this.clearDelegationLinksForAgent(config.id);
       this.clearDelegateAssignmentsForAgent(config.id);
     } catch (error) {
       this.error = error instanceof Error ? error.message : `Failed to disconnect ${config.name}.`;
     }
   }
 
-    async restartConfiguredAgent(agentId: string) {
+  async restartConfiguredAgent(agentId: string) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return;
 
@@ -841,9 +855,10 @@ export class AgentsStore {
   }
 
   async connectAgent(agentId: string, force = false) {
+    if (this.disposed) return;
     const generation = this.connectGeneration(agentId);
     while (true) {
-      if (this.connectGeneration(agentId) !== generation) {
+      if (this.disposed || this.connectGeneration(agentId) !== generation) {
         return;
       }
 
@@ -1451,6 +1466,7 @@ export class AgentsStore {
     }
     this.acknowledgeSession(agentId, sessionId);
     const key = buildSessionKey(agentId, sessionId);
+    this.delegationChildSessionsBySession.delete(key);
     delete this.delegateAssignmentsBySession[key];
     delete this.delegateAssignmentsLoadingBySession[key];
     delete this.delegateAssignmentsErrorBySession[key];
@@ -1466,7 +1482,6 @@ export class AgentsStore {
       this.activeAgentId = null;
       this.activeSessionId = null;
       this.activeSession = createEmptyActiveSession();
-      this.delegationChildSessionsByToolCallId.clear();
     }
   }
 
@@ -1817,6 +1832,7 @@ export class AgentsStore {
       const replaySession = reduceSessionReplay(sessionId, replay);
       this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
       const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
+      this.bufferDelegationUpdates(agentId, getSnapshotDelegationUpdates(loadedSession));
       checkpoint('frontend.snapshot_transform');
       const liveSession = this.activeSession;
       const liveHasVisibleHistory =
@@ -2306,19 +2322,24 @@ export class AgentsStore {
   }
 
   private disposeClient(agentId: string) {
+    const records = new Set<AgentClientRecord>();
     const record = this.clients.get(agentId);
-    if (!record) return;
+    if (record) records.add(record);
     const flight = this.connectFlights.get(agentId);
-    if (flight?.owner === record) {
+    if (flight) {
+      records.add(flight.owner);
       this.connectFlights.delete(agentId);
       flight.abort();
     }
-    record.unsubscribeSessionUpdates?.();
-    record.unsubscribeExtensionNotifications?.();
-    record.unsubscribeConnectionLoss?.();
-    record.unsubscribeInbox?.();
+    if (records.size === 0) return;
+    for (const candidate of records) {
+      candidate.unsubscribeSessionUpdates?.();
+      candidate.unsubscribeExtensionNotifications?.();
+      candidate.unsubscribeConnectionLoss?.();
+      candidate.unsubscribeInbox?.();
+      void candidate.client.disconnect();
+    }
     inboxStore.disconnectAgent(agentId);
-    void record.client.disconnect();
     this.clients.delete(agentId);
   }
 
@@ -2341,6 +2362,7 @@ export class AgentsStore {
   private ensureExtensionNotificationSubscription(agentId: string, record: AgentClientRecord) {
     if (!record.unsubscribeExtensionNotifications) {
       record.unsubscribeExtensionNotifications = record.client.onExtensionNotification((notification) => {
+        if (this.disposed) return;
         if (notification.method === 'querymt/models/changed') {
           void this.loadInitialModelsForAgent(agentId, 1);
         }
@@ -2350,29 +2372,9 @@ export class AgentsStore {
             void this.refreshDelegateAssignments(agentId, params.session_id);
           }
         }
-        if (notification.method === 'querymt/session/delegationUpdate') {
-          const params = (notification.params ?? {}) as {
-            sessionId?: string;
-            session_id?: string;
-            toolCallId?: string;
-            tool_call_id?: string;
-            childSessionId?: string;
-            child_session_id?: string;
-          };
-          const sessionId = params.sessionId ?? params.session_id;
-          const toolCallId = params.toolCallId ?? params.tool_call_id;
-          const childSessionId = params.childSessionId ?? params.child_session_id;
-          if (sessionId && this.isSelectedSession(agentId, sessionId)) {
-            if (toolCallId && childSessionId) {
-              // Keyed by toolCallId, so a duplicate delegationUpdate is
-              // idempotent: duplicate or satisfied records cannot accumulate.
-              this.delegationChildSessionsByToolCallId.set(toolCallId, childSessionId);
-            }
-            // Attach immediately when the tool call already exists; otherwise
-            // the overlay retains the linkage until the tool is materialized
-            // by a live update or a load replay/snapshot replacement.
-            this.reconcileDelegationOverlay();
-          }
+        if (notification.method === QMT_NOTIFICATION_SESSION_DELEGATION_UPDATE) {
+          const update = parseDelegationUpdateNotification(notification.params);
+          if (update) this.bufferDelegationUpdates(agentId, [update]);
         }
         if (notification.method === 'querymt/schedules/changed') {
           const params = notification.params as { node_id?: string };
@@ -3150,12 +3152,15 @@ export class AgentsStore {
     this.modelInfoByAgent = projected;
   }
 
-    private resetActiveSession(agentId: string, sessionId: string) {
+  /**
+   * Replaces the active view without discarding session-scoped delegation
+   * links that may have arrived before selection or during a same-session load.
+   */
+  private resetActiveSession(agentId: string, sessionId: string) {
     this.activeAgentId = agentId;
     this.activeSessionId = sessionId;
     this.activeSession = createEmptyActiveSession();
     this.activeSession.sessionId = sessionId;
-    this.delegationChildSessionsByToolCallId.clear();
     this.promptFailure = null;
 
     const record = this.ensureClientRecord(agentId);
@@ -3199,7 +3204,7 @@ export class AgentsStore {
     return this.activeAgentId === agentId && this.activeSessionId === sessionId;
   }
 
-      private addOptimisticUserPrompt(
+  private addOptimisticUserPrompt(
     sessionId: string,
     prompt: string,
     attachments: PromptAttachment[],
@@ -3339,17 +3344,49 @@ export class AgentsStore {
     if (updated) this.upsertWorkspaceSessions(agentId, [updated]);
   }
 
-  // Re-applies the session-scoped delegation overlay onto the current active
-  // session. Must run after every point that can (re)build tool calls: live
-  // and drained session/update application, and wholesale active-session
-  // replacements (load replay/snapshot assignment). Attaching is idempotent —
-  // a tool that already carries the child session id is left untouched.
+  /** Buffers cumulative forked projections for their parent session. */
+  private bufferDelegationUpdates(agentId: string, updates: DelegationUpdateNotification[]) {
+    for (const update of updates) {
+      const toolCallId = readPresentString(update.toolCallId);
+      const childSessionId = readPresentString(update.childSessionId);
+      if (!toolCallId || !childSessionId) continue;
+      const sessionKey = buildSessionKey(agentId, update.sessionId);
+      let overlay = this.delegationChildSessionsBySession.get(sessionKey);
+      if (!overlay) {
+        overlay = new Map();
+        this.delegationChildSessionsBySession.set(sessionKey, overlay);
+        this.trimDelegationSessionOverlays();
+      }
+      overlay.set(toolCallId, childSessionId);
+      while (overlay.size > MAX_DELEGATION_LINKS_PER_SESSION) {
+        const oldestToolCallId = overlay.keys().next().value;
+        if (oldestToolCallId === undefined) break;
+        overlay.delete(oldestToolCallId);
+      }
+    }
+    this.reconcileDelegationOverlay();
+  }
+
+  private trimDelegationSessionOverlays() {
+    const activeKey = this.activeAgentId && this.activeSessionId
+      ? buildSessionKey(this.activeAgentId, this.activeSessionId)
+      : null;
+    while (this.delegationChildSessionsBySession.size > MAX_DELEGATION_SESSION_OVERLAYS) {
+      const oldestInactiveKey = [...this.delegationChildSessionsBySession.keys()]
+        .find((key) => key !== activeKey);
+      if (!oldestInactiveKey) break;
+      this.delegationChildSessionsBySession.delete(oldestInactiveKey);
+    }
+  }
+
+  /** Re-attaches known child links after any active-session tool rebuild. */
   private reconcileDelegationOverlay() {
-    if (this.delegationChildSessionsByToolCallId.size === 0) return;
-    const session = reconcileDelegationChildSessions(
-      this.activeSession,
-      this.delegationChildSessionsByToolCallId
+    if (!this.activeAgentId || !this.activeSessionId) return;
+    const overlay = this.delegationChildSessionsBySession.get(
+      buildSessionKey(this.activeAgentId, this.activeSessionId)
     );
+    if (!overlay || overlay.size === 0) return;
+    const session = reconcileDelegationChildSessions(this.activeSession, overlay);
     if (session !== this.activeSession) {
       this.activeSession = session;
     }
@@ -3401,6 +3438,13 @@ export class AgentsStore {
     this.pendingSessionNotifications = [];
     for (const item of queued) {
       this.applySessionNotificationNow(item.agentId, item.notification, item.record);
+    }
+  }
+
+  private clearDelegationLinksForAgent(agentId: string) {
+    const prefix = `${agentId}:`;
+    for (const key of this.delegationChildSessionsBySession.keys()) {
+      if (key.startsWith(prefix)) this.delegationChildSessionsBySession.delete(key);
     }
   }
 
@@ -3497,6 +3541,7 @@ export class AgentsStore {
 
   private scheduleReconnect(agentId: string) {
     this.cancelReconnect(agentId);
+    if (this.disposed) return;
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config || config.transport !== 'websocket' || !config.enabled || !config.autoStart) return;
 
@@ -3513,6 +3558,7 @@ export class AgentsStore {
   }
 
   private async reconnectAgent(agentId: string) {
+    if (this.disposed) return;
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config || config.transport !== 'websocket' || !config.enabled || !config.autoStart) return;
 

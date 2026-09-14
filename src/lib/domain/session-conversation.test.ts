@@ -557,6 +557,52 @@ describe('buildSessionConversation', () => {
     });
   });
 
+  it('invalidates cached tool content when a child session link arrives', () => {
+    const session = baseSession();
+    session.runState = 'tool-running';
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'delegate', messageId: 'u1', eventIndex: 0 }
+    ];
+    session.toolCalls = [{
+      id: 'call_051b11680c804b03a8243580',
+      title: 'Run delegate',
+      status: 'in_progress',
+      kind: 'delegate',
+      eventIndex: 1
+    }];
+    const first = buildSessionConversation(session);
+    const linked = {
+      ...session,
+      toolCalls: [{ ...session.toolCalls[0], childSessionId: '01a09d9c-86f2-7271-8913-a6392ce6fd34' }]
+    };
+
+    const second = buildSessionConversation(linked);
+    const tool = second[0].content.find((item) => item.type === 'tool');
+
+    expect(second).not.toBe(first);
+    expect(tool?.tool).not.toBe(first[0].content.find((item) => item.type === 'tool')?.tool);
+    expect(tool?.tool).toMatchObject({
+      status: 'in_progress',
+      childSessionId: '01a09d9c-86f2-7271-8913-a6392ce6fd34'
+    });
+  });
+
+  it('does not reuse a settled turn when only its child session link changes', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'delegate', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Done', messageId: 'a1', eventIndex: 2 }
+    ];
+    session.toolCalls = [{ id: 'call-1', title: 'Run delegate', status: 'completed', kind: 'delegate', eventIndex: 1 }];
+    const first = buildSessionConversation(session);
+    session.toolCalls = [{ ...session.toolCalls[0], childSessionId: 'child-session-1' }];
+
+    const second = buildSessionConversation(session, first);
+
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].content.find((item) => item.type === 'tool')?.tool.childSessionId).toBe('child-session-1');
+  });
+
   it('rebuilds without previousTurns after an in-place last-tool metadata change', () => {
     const session = baseSession();
     session.transcript = [

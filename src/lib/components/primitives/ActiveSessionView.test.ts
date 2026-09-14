@@ -9,6 +9,10 @@ import { calculateImageFit } from '$lib/components/session/SessionAttachmentPrev
 import { createEmptyActiveSession } from '$lib/domain/session-updates';
 import ActiveSessionView from './ActiveSessionView.svelte';
 
+vi.mock('$app/state', () => ({
+  page: { params: { agentId: 'agent-1' } }
+}));
+
 const appCss = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
 
 let resizeCallback: ResizeObserverCallback | null = null;
@@ -293,6 +297,39 @@ describe('ActiveSessionView turn window', () => {
     expect(screen.getByText('Live answer 11')).toBeInTheDocument();
     expect(screen.queryByText('Prompt 10')).not.toBeInTheDocument();
     expect(document.querySelector('.session-turn-spacer')).toBeInTheDocument();
+  });
+
+  it('rerenders an in-progress delegation pill when the child link arrives', async () => {
+    const session = createEmptyActiveSession();
+    session.sessionId = 'session-delegate';
+    session.runState = 'tool-running';
+    session.activeToolCallId = 'call_051b11680c804b03a8243580';
+    session.transcript = [{
+      id: 'user-1',
+      kind: 'user_message_chunk',
+      text: 'Delegate this review',
+      messageId: 'user-message-1',
+      eventIndex: 1
+    }];
+    session.toolCalls = [{
+      id: 'call_051b11680c804b03a8243580',
+      title: 'Run delegate',
+      status: 'in_progress',
+      kind: 'delegate',
+      arguments: '{"target_agent_id":"linus","objective":"Review the diff"}',
+      eventIndex: 2
+    }];
+    const { rerender } = render(ActiveSessionView, { session });
+    expect(screen.queryByRole('button', { name: 'Open linus session' })).toBeNull();
+
+    const linked = {
+      ...session,
+      toolCalls: [{ ...session.toolCalls[0], childSessionId: '01a09d9c-86f2-7271-8913-a6392ce6fd34' }]
+    };
+    await rerender({ session: linked });
+
+    expect(screen.getByRole('button', { name: 'Open linus session' })).toBeInTheDocument();
+    expect(screen.getByText('Running')).toHaveClass('sr-only');
   });
 
   it('mounts transcript after an empty first load without waiting for resize', async () => {

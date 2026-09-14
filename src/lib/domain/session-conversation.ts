@@ -113,6 +113,7 @@ function conversationRevision(session: ActiveSessionViewModel): string {
     JSON.stringify(lastTranscript?.blocks ?? []),
     String(lastTranscript?.eventIndex ?? ''),
     String(session.toolCalls.length),
+    session.toolCalls.map((tool) => `${tool.id}:${tool.childSessionId ?? ''}`).join(','),
     lastTool?.id ?? '',
     lastTool?.status ?? '',
     lastTool?.title ?? '',
@@ -239,6 +240,7 @@ function canReuseSettledTurn(previous: SessionConversationTurn, draft: DraftTurn
         item.tool.kind === next.tool.kind &&
         item.tool.arguments === next.tool.arguments &&
         item.tool.messageId === next.tool.messageId &&
+        item.tool.childSessionId === next.tool.childSessionId &&
         item.tool.isError === next.tool.isError
       );
     }
