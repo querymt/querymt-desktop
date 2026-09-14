@@ -64,6 +64,7 @@ import {
   QMT_METHOD_MESH_NODES,
   QMT_METHOD_MESH_REVOKE_INVITE,
   QMT_METHOD_MESH_STATUS,
+  QMT_METHOD_PROFILES,
   QMT_METHOD_REMOTE_ATTACH_SESSION,
   QMT_METHOD_REMOTE_CREATE_SESSION,
   QMT_METHOD_REMOTE_DISMISS_SESSION,
@@ -83,6 +84,7 @@ import {
   type QuerymtAuthResult,
   type QuerymtAuthStartResponse,
   type QuerymtPluginUpdateResponse,
+  type QuerymtProfilesResponse,
   type QuerymtRedoResponse,
   type QuerymtUndoResponse,
   type QuerymtUndoStackResponse,
@@ -92,6 +94,8 @@ import {
 } from '$lib/querymt/querymt-extensions';
 import { createTauriAcpStream, createWebSocketAcpStream } from '$lib/querymt/transport';
 import type { Stream } from '@agentclientprotocol/sdk';
+import { isEmbedded } from '$lib/platform/runtime';
+import { normalizeAcpWebSocketUrl } from '$lib/querymt/websocket-url';
 
 const PROTOCOL_VERSION = 1;
 const CONNECT_CANCELLED_MESSAGE = 'ACP connection cancelled.';
@@ -166,7 +170,7 @@ export class DesktopAcpClient {
     const request: InitializeRequest = {
       protocolVersion: PROTOCOL_VERSION,
       clientInfo: {
-        name: 'QueryMT Desktop',
+        name: isEmbedded ? 'QueryMT Embedded' : 'QueryMT Desktop',
         version: '0.1.0'
       },
       clientCapabilities: buildClientCapabilities()
@@ -370,6 +374,14 @@ export class DesktopAcpClient {
     }
     this.assertQuerymtMethod(QMT_METHOD_SESSION_SET_DELEGATE_MODEL);
     return this.querymtExtensions!.setDelegateModel(request);
+  }
+
+  async listProfiles(): Promise<QuerymtProfilesResponse> {
+    if (!this.querymtExtensions) {
+      await this.connect();
+    }
+    this.assertQuerymtMethod(QMT_METHOD_PROFILES);
+    return this.querymtExtensions!.profiles();
   }
 
   async listModels(): Promise<ModelEntry[]> {
@@ -791,11 +803,11 @@ function buildAttachmentUri(attachment: PromptAttachment): string {
 }
 
 function requireWebSocketUrl(config: AgentConfig): string {
-  const url = config.websocketUrl?.trim();
+  const url = normalizeAcpWebSocketUrl(config.websocketUrl ?? '');
   if (!url) {
     throw new Error(`WebSocket URL is required for ${config.name}.`);
   }
-  return `ws://${url.replace(/^wss?:\/\//i, '').replace(/\/ws\/?$/i, '').replace(/\/$/, '')}/ws`;
+  return url;
 }
 
 function buildClientCapabilities(): ClientCapabilities {

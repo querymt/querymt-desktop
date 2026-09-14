@@ -7,10 +7,20 @@
   import type { WorkspaceItem } from '$lib/domain/types';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { workspacesStore } from '$lib/stores/workspaces.svelte';
+  import { isEmbedded } from '$lib/platform/runtime';
+
+  let workspacePath = $state('');
 
   async function useWorkspace(item: WorkspaceItem) {
     agentsStore.setComposerCwd(item.path);
     await goto('/sessions');
+  }
+
+  function addServerWorkspace() {
+    const path = workspacePath.trim();
+    if (!path) return;
+    workspacesStore.addWorkspacePath(path);
+    workspacePath = '';
   }
 </script>
 
@@ -18,25 +28,37 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Workspaces"
-      description="Folders available as context when starting a session."
+      description={isEmbedded ? 'Server paths available as context when starting a session.' : 'Folders available as context when starting a session.'}
     />
-    <IconTooltipButton
-      label={workspacesStore.loading ? 'Opening folder picker' : 'Pick folder'}
-      icon={workspacesStore.loading ? LoaderCircle : FolderPlus}
-      iconClass={workspacesStore.loading ? 'animate-spin' : ''}
-      size={16}
-      disabled={workspacesStore.loading}
-      onclick={() => workspacesStore.addWorkspaceFromDialog()}
-    />
+    {#if !isEmbedded}
+      <IconTooltipButton
+        label={workspacesStore.loading ? 'Opening folder picker' : 'Pick folder'}
+        icon={workspacesStore.loading ? LoaderCircle : FolderPlus}
+        iconClass={workspacesStore.loading ? 'animate-spin' : ''}
+        size={16}
+        disabled={workspacesStore.loading}
+        onclick={() => workspacesStore.addWorkspaceFromDialog()}
+      />
+    {/if}
   </div>
 
   <div class="settings-unified-panel">
+    {#if isEmbedded}
+      <form class="settings-section" onsubmit={(event) => { event.preventDefault(); addServerWorkspace(); }}>
+        <label class="app-dialog-field">
+          <span class="app-dialog-field-label">Workspace path on qmtcode server</span>
+          <input class="input-shell w-full" placeholder="/path/on/qmtcode/server" bind:value={workspacePath} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} />
+        </label>
+        <div><button class="action-btn action-btn-primary" type="submit" disabled={!workspacePath.trim()}>Add server path</button></div>
+      </form>
+    {/if}
     <WorkspaceList
       items={workspacesStore.items}
       loading={workspacesStore.loading}
       error={workspacesStore.error}
-      onAddWorkspace={() => workspacesStore.addWorkspaceFromDialog()}
-      onRetry={() => workspacesStore.addWorkspaceFromDialog()}
+      emptyDescription={isEmbedded ? 'Add an absolute path from the qmtcode server to use it when starting a session.' : 'Add a folder to use it as context when starting a session.'}
+      onAddWorkspace={isEmbedded ? null : () => workspacesStore.addWorkspaceFromDialog()}
+      onRetry={isEmbedded ? null : () => workspacesStore.addWorkspaceFromDialog()}
       onUseWorkspace={(item) => useWorkspace(item)}
       onRemoveWorkspace={(item) => workspacesStore.removeWorkspace(item.id)}
     />

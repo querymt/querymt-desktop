@@ -1,7 +1,8 @@
 <script lang="ts">
   import { FolderSearch } from '@lucide/svelte';
-  import { suggestWorkspacePaths } from '$lib/querymt/sidecar';
+  import { suggestWorkspacePaths } from '$native';
   import type { WorkspaceSuggestion } from '$lib/domain/types';
+  import { isEmbedded, platformCapabilities } from '$lib/platform/runtime';
 
   const RECENT_PREFIX = '__recent__:';
 
@@ -31,6 +32,13 @@
       suggestions = recentPaths.map((path) => ({ path, name: `${RECENT_PREFIX}${path}` }));
       open = suggestions.length > 0;
       highlightedIndex = 0;
+      loading = false;
+      return;
+    }
+
+    if (!platformCapabilities.workspacePathSuggestions) {
+      suggestions = [];
+      open = false;
       loading = false;
       return;
     }
@@ -109,7 +117,7 @@
     <FolderSearch size={15} />
     <input
       class="workspace-input"
-      placeholder="/absolute/path/to/workspace"
+      placeholder={isEmbedded ? '/path/on/qmtcode/server' : '/absolute/path/to/workspace'}
       value={value}
       disabled={disabled}
       oninput={handleInput}
@@ -122,6 +130,9 @@
     {/if}
 
   </div>
+  {#if isEmbedded}
+    <p class="muted mt-1 px-1 text-xs">Use an absolute path on the qmtcode server.</p>
+  {/if}
 
   {#if open && suggestions.length > 0}
     <div class="workspace-suggestion-popover">

@@ -8,6 +8,8 @@
     items,
     loading = false,
     error = null,
+    emptyDescription = 'Add a folder to use it as context when starting a session.',
+    addLabel = 'Pick folder',
     onAddWorkspace = null,
     onRetry = null,
     onUseWorkspace = null,
@@ -16,6 +18,8 @@
     items: WorkspaceItem[];
     loading?: boolean;
     error?: string | null;
+    emptyDescription?: string;
+    addLabel?: string;
     onAddWorkspace?: (() => void | Promise<void>) | null;
     onRetry?: (() => void | Promise<void>) | null;
     onUseWorkspace?: ((item: WorkspaceItem) => void | Promise<void>) | null;
@@ -58,9 +62,9 @@
       <span class="state-panel-icon"><FolderOpen size={17} /></span>
       <div class="state-panel-copy">
         <strong>No workspace folders yet</strong>
-        <p>Add a folder to use it as context when starting a session.</p>
+        <p>{emptyDescription}</p>
       </div>
-      {#if onAddWorkspace}<button class="action-btn action-btn-primary" type="button" onclick={onAddWorkspace}>Pick folder</button>{/if}
+      {#if onAddWorkspace}<button class="action-btn action-btn-primary" type="button" onclick={onAddWorkspace}>{addLabel}</button>{/if}
     </div>
   {:else}
     {#if error}

@@ -25,6 +25,7 @@
   import SidecarLogList from '$lib/components/primitives/SidecarLogList.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import type { AgentConfig } from '$lib/domain/types';
+  import { isEmbedded } from '$lib/platform/runtime';
 
   type AgentDialogMode = 'add' | 'edit' | null;
   type AgentMessageTone = 'error' | 'warning';
@@ -342,7 +343,7 @@
   <div class="page-toolbar">
     <SectionHeader
       title="Agents"
-      description="Configure connections, inspect status, and control agent runtimes."
+      description={isEmbedded ? 'Inspect and reconnect the qmtcode instance serving this interface.' : 'Configure connections, inspect status, and control agent runtimes.'}
     />
 
     <div class="compact-toolbar">
@@ -354,7 +355,9 @@
         disabled={agentsStore.loading}
         onclick={() => refreshAgents()}
       />
-      <IconTooltipButton label="Add agent" icon={CirclePlus} size={16} onclick={() => openAddDialog()} />
+      {#if !isEmbedded}
+        <IconTooltipButton label="Add agent" icon={CirclePlus} size={16} onclick={() => openAddDialog()} />
+      {/if}
     </div>
   </div>
 
@@ -384,9 +387,9 @@
           <span class="state-panel-icon"><Bot size={17} /></span>
           <div class="state-panel-copy">
             <strong>No agents configured</strong>
-            <p>Add a local ACP command or connect to an ACP WebSocket endpoint.</p>
+            <p>{isEmbedded ? 'The embedded qmtcode connection is unavailable.' : 'Add a local ACP command or connect to an ACP WebSocket endpoint.'}</p>
           </div>
-          <button class="action-btn action-btn-primary" type="button" onclick={openAddDialog}>Add agent</button>
+          {#if !isEmbedded}<button class="action-btn action-btn-primary" type="button" onclick={openAddDialog}>Add agent</button>{/if}
         </div>
       {:else}
         {#if agentsStore.error}
@@ -408,7 +411,9 @@
                     <div class="flex flex-wrap items-center gap-2">
                       <div class="truncate text-sm font-medium">{card.config.name}</div>
                       <span class="badge">{statusLabel(card.config)}</span>
-                      {#if card.config.autoStart}
+                      {#if isEmbedded}
+                        <span class="badge">host managed</span>
+                      {:else if card.config.autoStart}
                         <span class="badge">auto-start</span>
                       {/if}
                       {#if isAttentionCard(card)}
@@ -423,19 +428,21 @@
 
                 <div class="compact-toolbar">
                   <IconTooltipButton label={`Details for ${card.config.name}`} icon={Info} onclick={() => openDetails(card.config.id)} />
-                  <IconTooltipButton label={`Edit ${card.config.name}`} icon={Pencil} onclick={() => openEditDialog(card)} />
+                  {#if !isEmbedded}<IconTooltipButton label={`Edit ${card.config.name}`} icon={Pencil} onclick={() => openEditDialog(card)} />{/if}
                   {#if isConnected(card.config)}
                     <IconTooltipButton label={card.config.transport === 'websocket' ? 'Disconnect' : 'Stop'} icon={Square} onclick={() => agentsStore.stopConfiguredAgent(card.config.id)} />
                     <IconTooltipButton label={card.config.transport === 'websocket' ? 'Reconnect' : 'Restart'} icon={RotateCcw} onclick={() => agentsStore.restartConfiguredAgent(card.config.id)} />
                   {:else}
                     <IconTooltipButton label={card.config.transport === 'websocket' ? 'Connect' : 'Start'} icon={Play} onclick={() => agentsStore.startConfiguredAgent(card.config.id)} />
                   {/if}
-                  <IconTooltipButton
-                    label={card.config.autoStart ? 'Disable auto-start' : 'Enable auto-start'}
-                    icon={card.config.autoStart ? ToggleRight : ToggleLeft}
-                    onclick={() => agentsStore.updateConfig(card.config.id, { autoStart: !card.config.autoStart })}
-                  />
-                  <IconTooltipButton label={`Delete ${card.config.name}`} icon={Trash2} tone="danger" onclick={() => (pendingDeleteAgentId = card.config.id)} />
+                  {#if !isEmbedded}
+                    <IconTooltipButton
+                      label={card.config.autoStart ? 'Disable auto-start' : 'Enable auto-start'}
+                      icon={card.config.autoStart ? ToggleRight : ToggleLeft}
+                      onclick={() => agentsStore.updateConfig(card.config.id, { autoStart: !card.config.autoStart })}
+                    />
+                    <IconTooltipButton label={`Delete ${card.config.name}`} icon={Trash2} tone="danger" onclick={() => (pendingDeleteAgentId = card.config.id)} />
+                  {/if}
                 </div>
               </div>
             </article>
@@ -477,7 +484,7 @@
     {/if}
   </div>
 
-  {#if agentDialogMode}
+  {#if agentDialogMode && !isEmbedded}
     <AppDialog
       open={true}
       title={agentDialogMode === 'add' ? 'Add agent' : 'Edit agent'}
@@ -524,7 +531,7 @@
     </AppDialog>
   {/if}
 
-  {#if pendingDeleteAgentId}
+  {#if pendingDeleteAgentId && !isEmbedded}
     {@const pendingDeleteAgent = agentCards.find((card) => card.config.id === pendingDeleteAgentId)?.config}
     <AppConfirmDialog
       open={true}
@@ -602,8 +609,12 @@
                   <div><dt>Process ID</dt><dd class="agent-details-mono">{selectedCard.status?.pid ?? 'Unavailable'}</dd></div>
                   <div><dt>Version</dt><dd class="agent-details-mono">{selectedCard.status?.version ?? 'Unavailable'}</dd></div>
                 {/if}
-                <div><dt>Enabled</dt><dd>{selectedCard.config.enabled ? 'Yes' : 'No'}</dd></div>
-                <div><dt>Auto start</dt><dd>{selectedCard.config.autoStart ? 'On' : 'Off'}</dd></div>
+                {#if isEmbedded}
+                  <div><dt>Management</dt><dd>Serving qmtcode instance</dd></div>
+                {:else}
+                  <div><dt>Enabled</dt><dd>{selectedCard.config.enabled ? 'Yes' : 'No'}</dd></div>
+                  <div><dt>Auto start</dt><dd>{selectedCard.config.autoStart ? 'On' : 'Off'}</dd></div>
+                {/if}
               </dl>
             </section>
 

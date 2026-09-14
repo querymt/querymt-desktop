@@ -1,4 +1,3 @@
-import { open } from '@tauri-apps/plugin-shell';
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,6 +13,8 @@ const chatPreferencesStore = vi.hoisted(() => ({
   setImageSendMode: vi.fn(),
   setDeveloperMode: vi.fn()
 }));
+
+const openExternalUrl = vi.hoisted(() => vi.fn(async () => {}));
 
 const agentsStore = vi.hoisted(() => ({
   configs: [{ id: 'agent-1', name: 'QMTCODE' }],
@@ -76,8 +77,9 @@ const agentsStore = vi.hoisted(() => ({
   refreshManagedProfiles: vi.fn(async () => {})
 }));
 
-vi.mock('@tauri-apps/plugin-shell', () => ({
-  open: vi.fn(async () => {})
+vi.mock('$native', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$native')>()),
+  openExternalUrl
 }));
 
 vi.mock('$lib/stores/agents.svelte', () => ({ agentsStore }));
@@ -503,9 +505,9 @@ describe('Settings controls', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Sign in with OAuth' }));
 
-    expect(open).not.toHaveBeenCalled();
+    expect(openExternalUrl).not.toHaveBeenCalled();
     await fireEvent.click(await screen.findByRole('button', { name: 'Open in browser' }));
-    expect(open).toHaveBeenCalledWith('https://example.com/oauth');
+    expect(openExternalUrl).toHaveBeenCalledWith('https://example.com/oauth');
 
     const textarea = screen.getByPlaceholderText('https://... or pasted code');
     await fireEvent.input(textarea, { target: { value: 'manual-code' } });

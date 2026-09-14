@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }));
+vi.mock('$native', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$native')>()),
+  pickWorkspaceDirectory: vi.fn()
+}));
 
 const storageKey = 'querymt-desktop.workspaces';
 const workspace = {

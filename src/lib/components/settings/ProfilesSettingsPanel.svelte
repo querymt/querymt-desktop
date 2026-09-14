@@ -2,7 +2,7 @@
   import { Info, RefreshCw, WandSparkles } from '@lucide/svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import ProfileTemplateRow from './ProfileTemplateRow.svelte';
-  import { enableProfileTemplate, listProfileTemplates, type ProfileTemplateInfo } from '$lib/querymt/profile-templates';
+  import { enableProfileTemplate, listProfileTemplates, type ProfileTemplateInfo } from '$native';
   import { agentsStore } from '$lib/stores/agents.svelte';
 
   let templates = $state<ProfileTemplateInfo[]>([]);

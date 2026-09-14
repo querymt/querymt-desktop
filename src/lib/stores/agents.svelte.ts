@@ -8,7 +8,6 @@ import type {
   SessionInfo,
   SessionNotification
 } from '@agentclientprotocol/sdk';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { tick } from 'svelte';
 import { normalizePromptError, type PromptFailure } from '$lib/domain/prompt-errors';
 import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
@@ -95,6 +94,7 @@ import {
 } from '$lib/querymt/config-options';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
 import {
+  QMT_METHOD_PROFILES,
   QMT_METHOD_SESSION_DELEGATE_MODELS,
   QMT_METHOD_SESSION_REDO,
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
@@ -110,14 +110,25 @@ import {
 } from '$lib/perf/session-load-metrics';
 import {
   checkpointSessionLoadTelemetry,
+  drainAgentSessionUpdates,
   finishSessionLoadTelemetry,
+  getAgentLogs,
+  getAgentStatus,
   heartbeatSessionLoadTelemetry,
-  startSessionLoadTelemetry
-} from '$lib/querymt/session-load-telemetry';
-import { listManagedProfiles } from '$lib/querymt/profile-templates';
-import { getAgentLogs, getAgentStatus, restartAgent, startAgent, stopAgent, validateWorkspaceDirectory, type AgentLogEntry } from '$lib/querymt/sidecar';
+  listManagedProfiles,
+  listenAgentLogs,
+  restartAgent,
+  startAgent,
+  startSessionLoadTelemetry,
+  stopAgent,
+  validateWorkspaceDirectory,
+  type AgentLogEntry
+} from '$native';
 import { inboxStore } from '$lib/stores/inbox.svelte';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
+import { createEmbeddedAgentConfig, EMBEDDED_AGENT_ID } from '$lib/platform/embedded-agent';
+import { isEmbedded, platformCapabilities } from '$lib/platform/runtime';
+import { normalizeAcpWebSocketUrl } from '$lib/querymt/websocket-url';
 
 const AGENTS_STORAGE_KEY = 'querymt-desktop.agents';
 const RECENT_MODELS_STORAGE_KEY = 'querymt-desktop.recent-models';
@@ -127,7 +138,6 @@ const RECENT_WORKSPACES_LIMIT = 8;
 const WEBSOCKET_RECONNECT_MAX_DELAY_MS = 8_000;
 const WORKSPACE_SESSION_PAGE_SIZE = 10;
 const MAX_AGENT_LOG_ENTRIES = 200;
-const AGENT_LOG_EVENT = 'querymt://agent/log';
 const PROMPT_ACTIVE_RUN_STATES = new Set<SessionRunState>(['thinking', 'streaming', 'tool-running']);
 
 // TODO: Replace these desktop defaults with agent-provided launch config metadata once the server exposes it before session/new.
@@ -148,6 +158,8 @@ interface AgentLogEvent {
   agentId: string;
   entry: AgentLogEntry;
 }
+
+type UnlistenFn = () => void;
 
 interface AgentClientRecord {
   client: DesktopAcpClient;
@@ -463,6 +475,9 @@ export class AgentsStore {
   }
 
   async initialize() {
+    if (isEmbedded && typeof window !== 'undefined') {
+      this.configs = [createEmbeddedAgentConfig(window.location)];
+    }
     this.loading = true;
     this.error = null;
 
@@ -491,11 +506,11 @@ export class AgentsStore {
   }
 
   private async ensureAgentLogSubscription() {
-    if (this.unlistenAgentLogs || this.agentLogSubscriptionPending || typeof window === 'undefined') return;
+    if (!platformCapabilities.nativeAgentLogs || this.unlistenAgentLogs || this.agentLogSubscriptionPending || typeof window === 'undefined') return;
 
     this.agentLogSubscriptionPending = true;
     try {
-      this.unlistenAgentLogs = await listen<AgentLogEvent>(AGENT_LOG_EVENT, ({ payload }) => {
+      this.unlistenAgentLogs = await listenAgentLogs<AgentLogEvent>((payload) => {
         const current = this.logsByAgent[payload.agentId] ?? [];
         const next = [...current, payload.entry].slice(-MAX_AGENT_LOG_ENTRIES);
         this.logsByAgent = { ...this.logsByAgent, [payload.agentId]: next };
@@ -566,6 +581,25 @@ export class AgentsStore {
   }
 
   async refreshManagedProfiles() {
+    if (!platformCapabilities.nativeProfileTemplates) {
+      const embeddedAgent = this.configs.find((config) => config.id === EMBEDDED_AGENT_ID);
+      if (!embeddedAgent) {
+        this.managedProfileOptions = [];
+        return;
+      }
+      const record = await this.connectInitializedRecord(embeddedAgent.id);
+      if (!record?.client.supportsQuerymtMethod(QMT_METHOD_PROFILES)) {
+        this.managedProfileOptions = [];
+        return;
+      }
+      const response = await record.client.listProfiles();
+      this.managedProfileOptions = response.profiles.map((profile) => ({
+        id: profile.id,
+        label: profile.name,
+        description: profile.description ?? null
+      }));
+      return;
+    }
     const profiles = await listManagedProfiles();
     this.managedProfileOptions = profiles.map((profile) => ({
       id: profile.id,
@@ -590,7 +624,9 @@ export class AgentsStore {
   }
 
   getTargetOptions(agentId: string | null): ComposerOption[] {
-    const targets: ComposerOption[] = [{ id: 'local', label: 'Local', description: 'Create the session on this machine.' }];
+    const targets: ComposerOption[] = [isEmbedded
+      ? { id: 'local', label: 'qmtcode server', description: 'Create the session on the serving qmtcode instance.' }
+      : { id: 'local', label: 'Local', description: 'Create the session on this machine.' }];
     if (!agentId) {
       return targets;
     }
@@ -631,6 +667,7 @@ export class AgentsStore {
   }
 
   saveConfig(input: AgentConfig) {
+    if (isEmbedded) return;
     const existingIndex = this.configs.findIndex((config) => config.id === input.id);
     if (existingIndex === -1) {
       this.configs = [input, ...this.configs];
@@ -642,8 +679,12 @@ export class AgentsStore {
   }
 
   updateConfig(agentId: string, updates: Partial<Omit<AgentConfig, 'id'>>) {
+    if (isEmbedded && agentId === EMBEDDED_AGENT_ID) return;
+    const normalizedUpdates = updates.websocketUrl
+      ? { ...updates, websocketUrl: normalizeAcpWebSocketUrl(updates.websocketUrl) }
+      : updates;
     const current = this.configs.find((config) => config.id === agentId);
-    if (current?.transport === 'websocket' && (updates.transport || updates.websocketUrl !== undefined || updates.enabled === false)) {
+    if (current?.transport === 'websocket' && (normalizedUpdates.transport || normalizedUpdates.websocketUrl !== undefined || normalizedUpdates.enabled === false)) {
       this.cancelReconnect(agentId);
       this.invalidateConnectGeneration(agentId);
       this.disposeClient(agentId);
@@ -653,7 +694,7 @@ export class AgentsStore {
       config.id === agentId
         ? {
             ...config,
-            ...updates
+            ...normalizedUpdates
           }
         : config
     );
@@ -661,6 +702,7 @@ export class AgentsStore {
   }
 
   async deleteConfig(agentId: string) {
+    if (isEmbedded && agentId === EMBEDDED_AGENT_ID) return;
     this.invalidateConnectGeneration(agentId);
     await this.stopConfiguredAgent(agentId);
     this.configs = this.configs.filter((config) => config.id !== agentId);
@@ -696,12 +738,15 @@ export class AgentsStore {
   }
 
   createConfig(name: string, transport: AgentConfig['transport'], endpoint: string): AgentConfig {
+    if (isEmbedded) {
+      throw new Error('Embedded qmtcode manages its agent connection.');
+    }
     return {
       id: slugify(`${name}-${Date.now()}`),
       name,
       transport,
       commandLine: transport === 'stdio' ? endpoint : '',
-      websocketUrl: transport === 'websocket' ? normalizeAcpWebSocketEndpoint(endpoint) : undefined,
+      websocketUrl: transport === 'websocket' ? normalizeAcpWebSocketUrl(endpoint) : undefined,
       enabled: true,
       autoStart: true
     };
@@ -1467,7 +1512,7 @@ export class AgentsStore {
       throw new Error('Working directory is required to create a session.');
     }
 
-    if (config.transport === 'stdio') {
+    if (config.transport === 'stdio' && platformCapabilities.managesAgents) {
       const isDirectory = await validateWorkspaceDirectory(normalizedCwd).catch(() => false);
       if (!isDirectory) {
         throw new Error('Workspace must point to an existing directory.');
@@ -2818,7 +2863,7 @@ export class AgentsStore {
   }
 
   private async drainQueuedSessionUpdates(agentId: string, sessionId: string): Promise<number> {
-    const { drainAgentSessionUpdates } = await import('$lib/querymt/sidecar');
+    if (!platformCapabilities.managesAgents) return 0;
     try {
       const queued = await drainAgentSessionUpdates(agentId, sessionId);
       this.activeLoadMeasurement?.increment('drainedNotifications', queued.length);
@@ -3624,21 +3669,7 @@ function websocketStatus(
   };
 }
 
-export function normalizeAcpWebSocketEndpoint(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  const url = new URL(/^wss?:\/\//i.test(trimmed) ? trimmed : `ws://${trimmed}`);
-  if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
-    throw new Error('Enter an ACP host and port.');
-  }
-  if (url.pathname !== '/' && url.pathname !== '/ws') {
-    throw new Error('The ACP WebSocket path is fixed and must not be configured.');
-  }
-  if (url.search || url.hash) {
-    throw new Error('WebSocket query parameters and fragments are not supported.');
-  }
-  return url.host;
-}
+export const normalizeAcpWebSocketEndpoint = normalizeAcpWebSocketUrl;
 
 function normalizeAgentConfig(config: AgentConfig): AgentConfig {
   const transport = config.transport === 'websocket' ? 'websocket' : 'stdio';
@@ -3646,11 +3677,14 @@ function normalizeAgentConfig(config: AgentConfig): AgentConfig {
     ...config,
     transport,
     commandLine: config.commandLine ?? '',
-    websocketUrl: transport === 'websocket' ? normalizeAcpWebSocketEndpoint(config.websocketUrl ?? '') : undefined
+    websocketUrl: transport === 'websocket' ? normalizeAcpWebSocketUrl(config.websocketUrl ?? '') : undefined
   };
 }
 
 function loadInitialAgents(): AgentConfig[] {
+  if (isEmbedded) {
+    return typeof window === 'undefined' ? [] : [createEmbeddedAgentConfig(window.location)];
+  }
   if (typeof localStorage === 'undefined') {
     return DEFAULT_AGENTS;
   }
@@ -3662,14 +3696,21 @@ function loadInitialAgents(): AgentConfig[] {
     }
 
     const parsed = JSON.parse(raw) as AgentConfig[];
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed.map(normalizeAgentConfig) : DEFAULT_AGENTS;
+    if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_AGENTS;
+    const normalized = parsed.map(normalizeAgentConfig);
+    try {
+      localStorage.setItem(AGENTS_STORAGE_KEY, JSON.stringify(normalized));
+    } catch {
+      // Keep migrated settings in memory when browser storage is unavailable.
+    }
+    return normalized;
   } catch {
     return DEFAULT_AGENTS;
   }
 }
 
 function persistAgents(agents: AgentConfig[]) {
-  if (typeof localStorage === 'undefined') {
+  if (isEmbedded || typeof localStorage === 'undefined') {
     return;
   }
 

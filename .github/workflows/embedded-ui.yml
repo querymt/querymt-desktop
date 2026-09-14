@@ -1,0 +1,47 @@
+name: embedded-ui
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - run: npm run test:embedded
+      - run: npm run build:embedded
+        env:
+          QUERYMT_UI_REVISION: ${{ github.sha }}
+      - name: Verify embedded artifact
+        run: |
+          test -f build-embedded/index.html
+          test -f build-embedded/querymt-ui.json
+          grep -q '"target": "embedded"' build-embedded/querymt-ui.json
+          grep -q '"acpWebSocketPath": "/acp/ws"' build-embedded/querymt-ui.json
+          if grep -R -E '@tauri-apps|/ui/ws|querymt_agent_|querymt_profile_templates|querymt_session_load_start|querymt_workspace_suggest_paths' build-embedded/_app; then
+            echo 'Embedded UI contains desktop-native or legacy transport code.' >&2
+            exit 1
+          fi
+      - name: Package embedded artifact
+        run: |
+          tar -czf querymt-embedded-ui.tar.gz -C build-embedded .
+          sha256sum querymt-embedded-ui.tar.gz > querymt-embedded-ui.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: querymt-embedded-ui
+          path: |
+            build-embedded/
+            querymt-embedded-ui.tar.gz
+            querymt-embedded-ui.tar.gz.sha256
+          if-no-files-found: error

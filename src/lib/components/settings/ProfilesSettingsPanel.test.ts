@@ -9,7 +9,8 @@ const { listProfileTemplates, enableProfileTemplate, refreshManagedProfiles } = 
   refreshManagedProfiles: vi.fn(async () => undefined)
 }));
 
-vi.mock('$lib/querymt/profile-templates', () => ({
+vi.mock('$native', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$native')>()),
   listProfileTemplates,
   enableProfileTemplate
 }));

@@ -23,7 +23,8 @@
     providerAuthCapabilitiesFromAgent
   } from '$lib/domain/provider-auth';
   import { AuthMethod, OAuthFlowKindTs, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
-  import { open } from '@tauri-apps/plugin-shell';
+  import { openExternalUrl } from '$native';
+  import { platformCapabilities } from '$lib/platform/runtime';
 
   let selectedAgentId = $state('');
   let actionLoading = $state<string | null>(null);
@@ -96,7 +97,11 @@
 
   onMount(() => {
     const section = new URL(window.location.href).searchParams.get('section');
-    if (section === 'appearance' || section === 'general' || section === 'keybindings' || section === 'profiles' || section === 'providers') selectedSection = section;
+    if (section === 'profiles' && !platformCapabilities.nativeProfileTemplates) {
+      selectedSection = 'general';
+    } else if (section === 'appearance' || section === 'general' || section === 'keybindings' || section === 'profiles' || section === 'providers') {
+      selectedSection = section;
+    }
   });
 
   function selectSection(section: SettingsSectionId) {
@@ -229,7 +234,7 @@
 
   async function openManualOAuthAuthorizationUrl() {
     if (!manualOAuthAuthorizationUrl || !manualOAuthProvider) return;
-    await open(manualOAuthAuthorizationUrl);
+    await openExternalUrl(manualOAuthAuthorizationUrl);
     pageError = null;
     pageMessage = `Opened sign-in for ${manualOAuthProvider.display_name}.`;
   }
@@ -559,7 +564,11 @@
   </div>
 
   <div class="settings-layout">
-    <SettingsSubnav selected={selectedSection} onSelect={selectSection} />
+    <SettingsSubnav
+      selected={selectedSection}
+      showProfiles={platformCapabilities.nativeProfileTemplates}
+      onSelect={selectSection}
+    />
 
     <div class="settings-content">
       {#if selectedSection === 'appearance'}
@@ -568,7 +577,7 @@
         <GeneralSettingsPanel />
       {:else if selectedSection === 'keybindings'}
         <KeybindingsSettingsPanel />
-      {:else if selectedSection === 'profiles'}
+      {:else if selectedSection === 'profiles' && platformCapabilities.nativeProfileTemplates}
         <ProfilesSettingsPanel />
       {:else}
     {#if authAgents.length === 0}

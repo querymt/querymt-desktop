@@ -4,6 +4,7 @@ import {
   QMT_METHOD_AUTH_CLEAR_API_TOKEN,
   QMT_METHOD_AUTH_SET_API_TOKEN,
   QMT_METHOD_AUTH_SET_METHOD,
+  QMT_METHOD_PROFILES,
   QMT_METHOD_SESSION_DELEGATE_MODELS,
   QMT_METHOD_SESSION_REDO,
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
@@ -25,6 +26,19 @@ const model = {
 describe('toAcpExtensionMethod', () => {
   it('uses the desktop ACP extension method prefix', () => {
     expect(toAcpExtensionMethod('querymt/models')).toBe('_querymt/models');
+  });
+});
+
+describe('QuerymtExtensions profiles', () => {
+  it('lists profiles over the QueryMT ACP extension', async () => {
+    const extMethod = vi.fn(async () => ({ profiles: [{ id: 'review', name: 'Review' }], active_profile_id: 'review' }));
+    const extensions = new QuerymtExtensions({ extMethod } as never);
+
+    await expect(extensions.profiles()).resolves.toEqual({
+      profiles: [{ id: 'review', name: 'Review' }],
+      active_profile_id: 'review'
+    });
+    expect(extMethod).toHaveBeenCalledWith(toAcpExtensionMethod(QMT_METHOD_PROFILES), {});
   });
 });
 

@@ -1,4 +1,6 @@
 import { browser } from '$app/environment';
+import { setWindowDecorationMode } from '$native';
+import { isTauriRuntime } from '$lib/platform/runtime';
 
 export type WindowDecorationMode = 'os' | 'custom';
 
@@ -24,7 +26,7 @@ class WindowDecorationsStore {
       this.mode = savedMode;
     }
 
-    this.supported = Boolean('__TAURI_INTERNALS__' in window);
+    this.supported = isTauriRuntime();
     this.initialized = true;
 
     if (this.supported) {
@@ -51,13 +53,7 @@ class WindowDecorationsStore {
 
   private async applyMode() {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const currentWindow = getCurrentWindow();
-      const useOsDecorations = this.mode === 'os';
-      if ((await currentWindow.isDecorated()) !== useOsDecorations) {
-        await currentWindow.setDecorations(useOsDecorations);
-      }
-      await currentWindow.setShadow(true);
+      await setWindowDecorationMode(this.mode === 'os');
     } catch (error) {
       this.error = error instanceof Error ? error.message : 'Failed to update window decorations.';
     }
