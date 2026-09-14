@@ -1281,7 +1281,11 @@ describe('AgentsStore delegate model assignments', () => {
     store.activeSession.sessionId = 'session-1';
   }
 
-  /** Creates a listed session fixture for delegation load tests. */
+  /**
+   * Creates a listed session fixture for delegation load tests.
+   * @param sessionId - Session identifier assigned to the fixture.
+   * @returns A listed session associated with the test agent.
+   */
   function sessionSummary(sessionId: string) {
     return {
       agentId: 'agent-1',
@@ -1297,7 +1301,11 @@ describe('AgentsStore delegate model assignments', () => {
     };
   }
 
-  /** Creates a requested-state delegation notification fixture. */
+  /**
+   * Creates a requested-state delegation notification fixture.
+   * @param sessionId - Parent session receiving the delegation update.
+   * @returns A requested delegation extension notification.
+   */
   function requestedDelegationUpdate(sessionId: string) {
     return {
       method: 'querymt/session/delegationUpdate',
@@ -1315,7 +1323,13 @@ describe('AgentsStore delegate model assignments', () => {
     };
   }
 
-  /** Creates a forked-state delegation notification with configurable linkage. */
+  /**
+   * Creates a forked-state delegation notification with configurable linkage.
+   * @param sessionId - Parent session receiving the delegation update.
+   * @param toolCallId - Tool call linked to the child session.
+   * @param childSessionId - Child session created for the delegation.
+   * @returns A forked delegation extension notification.
+   */
   function forkedDelegationUpdate(
     sessionId: string,
     toolCallId = 'call_051b11680c804b03a8243580',
@@ -1340,7 +1354,11 @@ describe('AgentsStore delegate model assignments', () => {
     };
   }
 
-  /** Creates the ACP tool-call notification paired with a delegation update. */
+  /**
+   * Creates the ACP tool-call notification paired with a delegation update.
+   * @param sessionId - Session receiving the tool call.
+   * @returns An in-progress delegation tool-call notification.
+   */
   function delegationToolCall(sessionId: string): SessionNotification {
     return {
       sessionId,
@@ -1354,7 +1372,11 @@ describe('AgentsStore delegate model assignments', () => {
     };
   }
 
-  /** Exposes session-scoped delegation overlays for lifecycle assertions. */
+  /**
+   * Exposes session-scoped delegation overlays for lifecycle assertions.
+   * @param store - Store whose retained overlays are inspected.
+   * @returns The store's session-keyed delegation overlays.
+   */
   function delegationOverlays(store: AgentsStore) {
     return (store as unknown as {
       delegationChildSessionsBySession: Map<string, Map<string, string>>;
