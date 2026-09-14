@@ -24,10 +24,8 @@ const model = {
   label: 'Claude Sonnet 4'
 };
 
-describe('QueryMT extension wire contract', registerQuerymtExtensionWireContractTests);
-
-/** Registers QueryMT extension wire contract tests. */
-function registerQuerymtExtensionWireContractTests() {
+describe('QueryMT extension wire contract',
+  /** Registers QueryMT wire-contract tests. */ () => {
   it('normalizes prefixed and unprefixed QueryMT wire methods', () => {
     expect(toAcpExtensionMethod('querymt/models')).toBe('_querymt/models');
     expect(toLogicalQuerymtMethod('_querymt/session/delegationUpdate')).toBe('querymt/session/delegationUpdate');
@@ -73,7 +71,7 @@ function registerQuerymtExtensionWireContractTests() {
     expect(parseDelegationUpdateNotification({ ...requested, state: { value: 'requested' } })).toBeNull();
     expect(parseDelegationUpdateNotification({ ...requested, state: null })).toBeNull();
   });
-}
+});
 
 describe('QuerymtExtensions undo and redo', () => {
   it('calls the desktop extension methods with session and message ids', async () => {

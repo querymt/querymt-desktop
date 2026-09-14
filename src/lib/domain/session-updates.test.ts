@@ -172,10 +172,8 @@ describe('session usage updates', () => {
   });
 });
 
-describe('applySessionNotification tool calls', registerApplySessionNotificationToolCallTests);
-
-/** Registers applySessionNotification tool call tests. */
-function registerApplySessionNotificationToolCallTests() {
+describe('applySessionNotification tool calls',
+  /** Registers tool-call notification tests. */ () => {
   it('merges repeated tool starts by tool call ID', () => {
     const start = notification({
       sessionUpdate: 'tool_call',
@@ -360,7 +358,7 @@ function registerApplySessionNotificationToolCallTests() {
     const next = reconcileDelegationChildSessions(session, new Map([['delegate-1', 'child-session-1']]));
     expect(next).toBe(session);
   });
-}
+});
 
 describe('applySessionNotification stream coalescing', () => {
   it('appends consecutive agent thought chunks onto the last transcript item', () => {

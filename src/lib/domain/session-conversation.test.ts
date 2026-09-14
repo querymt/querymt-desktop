@@ -72,10 +72,8 @@ describe('turn durations', () => {
   });
 });
 
-describe('buildSessionConversation', registerBuildSessionConversationTests);
-
-/** Registers buildSessionConversation tests. */
-function registerBuildSessionConversationTests() {
+describe('buildSessionConversation',
+  /** Registers conversation projection tests. */ () => {
   it('interleaves reasoning, tools, and assistant output by event order', () => {
     const session = baseSession();
     session.transcript = [
@@ -637,4 +635,4 @@ function registerBuildSessionConversationTests() {
       isError: true
     });
   });
-}
+});
