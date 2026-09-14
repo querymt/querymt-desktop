@@ -9,6 +9,10 @@ import { calculateImageFit } from '$lib/components/session/SessionAttachmentPrev
 import { createEmptyActiveSession } from '$lib/domain/session-updates';
 import ActiveSessionView from './ActiveSessionView.svelte';
 
+vi.mock('$app/state', () => ({
+  page: { params: { agentId: 'agent-1' } }
+}));
+
 const appCss = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
 
 let resizeCallback: ResizeObserverCallback | null = null;
@@ -293,6 +297,40 @@ describe('ActiveSessionView turn window', () => {
     expect(screen.getByText('Live answer 11')).toBeInTheDocument();
     expect(screen.queryByText('Prompt 10')).not.toBeInTheDocument();
     expect(document.querySelector('.session-turn-spacer')).toBeInTheDocument();
+  });
+
+  it('shows a running delegation link when the child session arrives', async () => {
+    const session = createEmptyActiveSession();
+    session.sessionId = 'session-delegate';
+    session.runState = 'tool-running';
+    session.activeToolCallId = 'delegate-1';
+    session.transcript = [{
+      id: 'user-1',
+      kind: 'user_message_chunk',
+      text: 'Delegate this review',
+      messageId: 'user-message-1',
+      eventIndex: 1
+    }];
+    session.toolCalls = [{
+      id: 'delegate-1',
+      title: 'Run delegate',
+      status: 'in_progress',
+      kind: 'delegate',
+      arguments: '{"target_agent_id":"linus","objective":"Review the diff"}',
+      eventIndex: 2
+    }];
+    const { rerender } = render(ActiveSessionView, { session });
+    expect(screen.queryByRole('button', { name: 'Open linus session' })).toBeNull();
+
+    await rerender({
+      session: {
+        ...session,
+        toolCalls: [{ ...session.toolCalls[0], childSessionId: 'child-session-1' }]
+      }
+    });
+
+    expect(screen.getByRole('button', { name: 'Open linus session' })).toBeInTheDocument();
+    expect(screen.getByText('Running')).toHaveClass('sr-only');
   });
 
   it('mounts transcript after an empty first load without waiting for resize', async () => {

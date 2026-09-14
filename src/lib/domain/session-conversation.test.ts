@@ -557,6 +557,60 @@ describe('buildSessionConversation', () => {
     });
   });
 
+  it('invalidates cached tool content when a child session link arrives', () => {
+    const session = baseSession();
+    session.runState = 'tool-running';
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'delegate', messageId: 'u1', eventIndex: 0 }
+    ];
+    session.toolCalls = [{
+      id: 'delegate-1',
+      title: 'Run delegate',
+      status: 'in_progress',
+      kind: 'delegate',
+      eventIndex: 1
+    }];
+    const first = buildSessionConversation(session);
+    const linked = {
+      ...session,
+      toolCalls: [{ ...session.toolCalls[0], childSessionId: 'child-session-1' }]
+    };
+
+    const second = buildSessionConversation(linked);
+    const firstTool = first[0].content.find((item) => item.type === 'tool')?.tool;
+    const secondTool = second[0].content.find((item) => item.type === 'tool')?.tool;
+
+    expect(second).not.toBe(first);
+    expect(secondTool).not.toBe(firstTool);
+    expect(secondTool).toMatchObject({
+      status: 'in_progress',
+      childSessionId: 'child-session-1'
+    });
+  });
+
+  it('does not reuse a settled turn when only its child session link changes', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'delegate', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'Done', messageId: 'a1', eventIndex: 2 }
+    ];
+    session.toolCalls = [{
+      id: 'delegate-1',
+      title: 'Run delegate',
+      status: 'completed',
+      kind: 'delegate',
+      eventIndex: 1,
+      childSessionId: 'child-session-old'
+    }];
+    const first = buildSessionConversation(session);
+    session.toolCalls = [{ ...session.toolCalls[0], childSessionId: 'child-session-new' }];
+
+    const second = buildSessionConversation(session, first);
+
+    expect(second[0]).not.toBe(first[0]);
+    expect(second[0].content.find((item) => item.type === 'tool')?.tool.childSessionId).toBe('child-session-new');
+  });
+
   it('rebuilds without previousTurns after an in-place last-tool metadata change', () => {
     const session = baseSession();
     session.transcript = [
