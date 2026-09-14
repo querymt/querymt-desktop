@@ -18,7 +18,7 @@ import { tick } from 'svelte';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
 import { startAgent } from '$lib/querymt/sidecar';
 import { AgentsStore } from './agents.svelte';
-import { DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
+import { buildSessionKey, DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
 
 function listSessionsRequest(input: { cwd?: string; cursor?: string } = {}) {
   return {
@@ -1824,7 +1824,7 @@ describe('AgentsStore delegate model assignments', () => {
       status: 'in_progress',
       childSessionId: 'child-session-1'
     });
-    expect(delegationOverlays(store).get('agent-1:session-1')?.size).toBe(1);
+    expect(delegationOverlays(store).get('7:agent-1session-1')?.size).toBe(1);
   });
 
   it('keeps a cumulative forked link after a later requested projection', async () => {
@@ -1880,7 +1880,7 @@ describe('AgentsStore delegate model assignments', () => {
     await store.loadSession('agent-1', 'session-1');
 
     expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
-    expect(delegationOverlays(store).get('agent-1:session-1')?.size).toBe(1);
+    expect(delegationOverlays(store).get('7:agent-1session-1')?.size).toBe(1);
   });
 
   it('scopes delegation links by agent and session without cross-session leakage', async () => {
@@ -1907,6 +1907,67 @@ describe('AgentsStore delegate model assignments', () => {
     expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child-session-1');
   });
 
+  it('isolates colon-containing delegation keys and clears only the stopped agent overlays', async () => {
+    const firstClient = createDistinctMockClient();
+    const secondClient = createDistinctMockClient();
+    firstClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+    secondClient.listModels.mockResolvedValue([{ id: 'model-1', provider: 'test', model: 'model-1' }]);
+    const pendingClients = [firstClient, secondClient];
+    vi.mocked(DesktopAcpClient).mockImplementation(function () {
+      const next = pendingClients.shift();
+      if (!next) throw new Error('unexpected extra DesktopAcpClient construction');
+      return next as never;
+    });
+    const store = createStore();
+    const baseConfig = store.configs[0];
+    store.configs = [
+      { ...baseConfig, id: 'a:b', name: 'Colon agent' },
+      { ...baseConfig, id: 'a', name: 'Prefix agent' }
+    ];
+    await store.connectAgent('a:b');
+    await store.connectAgent('a');
+
+    store.activeAgentId = 'a:b';
+    store.activeSessionId = 'c';
+    store.activeSession.sessionId = 'c';
+    store.activeSession.toolCalls = [{
+      id: 'shared-tool', title: 'Delegate left', status: 'in_progress', kind: 'delegate', arguments: '{}'
+    }];
+    firstClient.emitExtensionNotification(forkedDelegationUpdate('c', 'shared-tool', 'left-child'));
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('left-child');
+
+    store.activeAgentId = 'a';
+    store.activeSessionId = 'b:c';
+    store.activeSession.sessionId = 'b:c';
+    store.activeSession.toolCalls = [{
+      id: 'shared-tool', title: 'Delegate right', status: 'in_progress', kind: 'delegate', arguments: '{}'
+    }];
+    secondClient.emitExtensionNotification(forkedDelegationUpdate('b:c', 'shared-tool', 'right-child'));
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('right-child');
+
+    const overlays = delegationOverlays(store);
+    const [leftKey, rightKey] = overlays.keys();
+    expect(buildSessionKey('a:b', 'c')).toBe(buildSessionKey('a', 'b:c'));
+    expect(leftKey).toBe('3:a:bc');
+    expect(rightKey).toBe('1:ab:c');
+    expect(leftKey).not.toBe(rightKey);
+    expect(overlays.get(leftKey)?.get('shared-tool')).toBe('left-child');
+    expect(overlays.get(rightKey)?.get('shared-tool')).toBe('right-child');
+
+    store.activeAgentId = 'a:b';
+    store.activeSessionId = 'c';
+    store.activeSession.sessionId = 'c';
+    store.activeSession.toolCalls = [{
+      id: 'shared-tool', title: 'Delegate left', status: 'in_progress', kind: 'delegate', arguments: '{}'
+    }];
+    firstClient.emitExtensionNotification(requestedDelegationUpdate('c'));
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('left-child');
+
+    await store.stopConfiguredAgent('a:b');
+    expect(overlays.has(leftKey)).toBe(false);
+    expect(overlays.get(rightKey)?.get('shared-tool')).toBe('right-child');
+  });
+
   it('bounds delegation links retained for one session', async () => {
     const store = createStore();
     await store.connectAgent('agent-1');
@@ -1917,7 +1978,7 @@ describe('AgentsStore delegate model assignments', () => {
       );
     }
 
-    const overlay = delegationOverlays(store).get('agent-1:session-1');
+    const overlay = delegationOverlays(store).get('7:agent-1session-1');
     expect(overlay?.size).toBe(64);
     expect(overlay?.has('tool-0')).toBe(false);
     expect(overlay?.get('tool-64')).toBe('child-64');
@@ -1941,9 +2002,9 @@ describe('AgentsStore delegate model assignments', () => {
 
     const overlays = delegationOverlays(store);
     expect(overlays.size).toBe(32);
-    expect(overlays.get('agent-1:session-active')?.get('active-tool')).toBe('active-child');
-    expect(overlays.has('agent-1:session-0')).toBe(false);
-    expect(overlays.has('agent-1:session-31')).toBe(true);
+    expect(overlays.get('7:agent-1session-active')?.get('active-tool')).toBe('active-child');
+    expect(overlays.has('7:agent-1session-0')).toBe(false);
+    expect(overlays.has('7:agent-1session-31')).toBe(true);
   });
 
   it('clears scoped delegation lifecycle state on stop, delete, and dispose', async () => {

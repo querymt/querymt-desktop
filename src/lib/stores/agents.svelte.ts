@@ -141,6 +141,11 @@ function readPresentString(value: string | undefined): string | undefined {
   return trimmed || undefined;
 }
 
+/** Encodes an agent/session pair without delimiter collisions. */
+function buildDelegationSessionKey(agentId: string, sessionId: string): string {
+  return `${agentId.length}:${agentId}${sessionId}`;
+}
+
 // TODO: Replace these desktop defaults with agent-provided launch config metadata once the server exposes it before session/new.
 export const LAUNCH_MODE_OPTIONS: ComposerOption[] = [
   { id: 'build', label: 'Build', description: 'Full read and write access.' },
@@ -1472,8 +1477,8 @@ export class AgentsStore {
       });
     }
     this.acknowledgeSession(agentId, sessionId);
+    this.delegationChildSessionsBySession.delete(buildDelegationSessionKey(agentId, sessionId));
     const key = buildSessionKey(agentId, sessionId);
-    this.delegationChildSessionsBySession.delete(key);
     delete this.delegateAssignmentsBySession[key];
     delete this.delegateAssignmentsLoadingBySession[key];
     delete this.delegateAssignmentsErrorBySession[key];
@@ -3361,7 +3366,7 @@ export class AgentsStore {
       const toolCallId = readPresentString(update.toolCallId);
       const childSessionId = readPresentString(update.childSessionId);
       if (!toolCallId || !childSessionId) continue;
-      const sessionKey = buildSessionKey(agentId, update.sessionId);
+      const sessionKey = buildDelegationSessionKey(agentId, update.sessionId);
       let overlay = this.delegationChildSessionsBySession.get(sessionKey);
       if (!overlay) {
         overlay = new Map();
@@ -3381,7 +3386,7 @@ export class AgentsStore {
   /** Evicts the oldest inactive overlays to enforce the session cap without dropping the active one. */
   private trimDelegationSessionOverlays() {
     const activeKey = this.activeAgentId && this.activeSessionId
-      ? buildSessionKey(this.activeAgentId, this.activeSessionId)
+      ? buildDelegationSessionKey(this.activeAgentId, this.activeSessionId)
       : null;
     while (this.delegationChildSessionsBySession.size > MAX_DELEGATION_SESSION_OVERLAYS) {
       const oldestInactiveKey = [...this.delegationChildSessionsBySession.keys()]
@@ -3395,7 +3400,7 @@ export class AgentsStore {
   private reconcileDelegationOverlay() {
     if (!this.activeAgentId || !this.activeSessionId) return;
     const overlay = this.delegationChildSessionsBySession.get(
-      buildSessionKey(this.activeAgentId, this.activeSessionId)
+      buildDelegationSessionKey(this.activeAgentId, this.activeSessionId)
     );
     if (!overlay || overlay.size === 0) return;
     const session = reconcileDelegationChildSessions(this.activeSession, overlay);
@@ -3455,7 +3460,7 @@ export class AgentsStore {
 
   /** Removes every retained delegation overlay owned by an agent. */
   private clearDelegationLinksForAgent(agentId: string) {
-    const prefix = `${agentId}:`;
+    const prefix = buildDelegationSessionKey(agentId, '');
     for (const key of this.delegationChildSessionsBySession.keys()) {
       if (key.startsWith(prefix)) this.delegationChildSessionsBySession.delete(key);
     }
