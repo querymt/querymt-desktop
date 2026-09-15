@@ -3,8 +3,9 @@ import { embeddedAcpWebSocketUrl, normalizeAcpWebSocketUrl } from './websocket-u
 
 describe('normalizeAcpWebSocketUrl', () => {
   it.each([
-    ['127.0.0.1:3030', 'ws://127.0.0.1:3030/ws'],
-    ['ws://127.0.0.1:3030', 'ws://127.0.0.1:3030/ws'],
+    ['127.0.0.1:3030', 'ws://127.0.0.1:3030/acp/ws'],
+    ['ws://127.0.0.1:3030', 'ws://127.0.0.1:3030/acp/ws'],
+    ['ws://127.0.0.1:3030/ws', 'ws://127.0.0.1:3030/acp/ws'],
     ['wss://agent.example/acp/ws', 'wss://agent.example/acp/ws'],
     ['ws://[::1]:3030/acp/ws', 'ws://[::1]:3030/acp/ws']
   ])('normalizes %s', (input, expected) => {
@@ -13,9 +14,9 @@ describe('normalizeAcpWebSocketUrl', () => {
 
   it.each([
     'https://agent.example/acp/ws',
-    'ws://user:secret@agent.example/ws',
-    'ws://agent.example/ws?token=secret',
-    'ws://agent.example/ws#fragment'
+    'ws://user:secret@agent.example/acp/ws',
+    'ws://agent.example/acp/ws?token=secret',
+    'ws://agent.example/acp/ws#fragment'
   ])('rejects unsupported or unsafe URL %s', (input) => {
     expect(() => normalizeAcpWebSocketUrl(input)).toThrow();
   });

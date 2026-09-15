@@ -3657,7 +3657,7 @@ describe('AgentsStore prompt session start', () => {
 
     expect(vi.mocked(DesktopAcpClient)).toHaveBeenCalledTimes(1);
     expect(clientB.connect).not.toHaveBeenCalled();
-    expect(store.configs.find((config) => config.id === 'remote-agent')?.websocketUrl).toBe('ws://127.0.0.1:4040/ws');
+    expect(store.configs.find((config) => config.id === 'remote-agent')?.websocketUrl).toBe('ws://127.0.0.1:4040/acp/ws');
 
     await store.startConfiguredAgent('remote-agent');
 

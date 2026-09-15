@@ -16,8 +16,8 @@ export function normalizeAcpWebSocketUrl(value: string): string {
     throw new Error('WebSocket URL query parameters and fragments are not supported.');
   }
 
-  if (url.pathname === '/' || url.pathname === '') {
-    url.pathname = '/ws';
+  if (url.pathname === '/' || url.pathname === '' || url.pathname === '/ws') {
+    url.pathname = '/acp/ws';
   }
   return url.toString();
 }

@@ -34,7 +34,7 @@ describe('createWebSocketAcpStream', () => {
   it('reports an unexpected socket close once', async () => {
     vi.stubGlobal('WebSocket', MockWebSocket);
     const onDisconnect = vi.fn();
-    await createWebSocketAcpStream('ws://127.0.0.1:3030/ws', onDisconnect);
+    await createWebSocketAcpStream('ws://127.0.0.1:3030/acp/ws', onDisconnect);
     const socket = MockWebSocket.instances.at(-1)!;
 
     socket.close();
@@ -46,7 +46,7 @@ describe('createWebSocketAcpStream', () => {
 
   it('forwards backend-wire mixed prompt payloads without transforming blocks or metadata', async () => {
     vi.stubGlobal('WebSocket', MockWebSocket);
-    const stream = await createWebSocketAcpStream('ws://127.0.0.1:3030/ws');
+    const stream = await createWebSocketAcpStream('ws://127.0.0.1:3030/acp/ws');
     const socket = MockWebSocket.instances.at(-1)!;
     const payload = {
       jsonrpc: '2.0' as const,
@@ -81,7 +81,7 @@ describe('createWebSocketAcpStream', () => {
 
   it('sends JSON-RPC messages and exposes incoming frames', async () => {
     vi.stubGlobal('WebSocket', MockWebSocket);
-    const stream = await createWebSocketAcpStream('ws://127.0.0.1:3030/ws');
+    const stream = await createWebSocketAcpStream('ws://127.0.0.1:3030/acp/ws');
     const socket = MockWebSocket.instances.at(-1)!;
 
     const writer = stream.writable.getWriter();
