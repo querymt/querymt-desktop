@@ -62,6 +62,12 @@ describe('renderMarkdownToHtml', () => {
     expect(html).toContain('bar');
   });
 
+  it('renders markdown links as anchors', () => {
+    const html = renderMarkdownToHtml('See [QueryMT](https://querymt.com) for details.');
+
+    expect(html).toContain('<a href="https://querymt.com">QueryMT</a>');
+  });
+
   it('parses identical sources only once', () => {
     const source = `**hello** ${Date.now()}`;
     const spy = vi.spyOn(marked, 'parse');
