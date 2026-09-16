@@ -56,11 +56,22 @@ npm run test:embedded
 QUERYMT_UI_REVISION=$(git rev-parse HEAD) npm run build:embedded
 ```
 
-The artifact is written to `build-embedded/`. It contains an `index.html` SPA fallback and `querymt-ui.json` build metadata. QueryMT can consume this directory through its existing `QMT_UI_DIST` build input:
+The artifact is written to `build-embedded/`. It contains an `index.html` SPA fallback and `querymt-ui.json` build metadata.
+
+Tagged `v*.*.*` desktop releases also publish:
+
+- `querymt-embedded-ui-<tag>.tar.gz`
+- `querymt-embedded-ui-<tag>.tar.gz.sha256`
+
+QueryMT consumes the unpacked directory through `QMT_DASHBOARD_NG_DIST` and the `dashboard-ng` feature. `QMT_UI_DIST` is the legacy React dashboard prebuild and is not this artifact.
 
 ```bash
-QMT_UI_DIST=/absolute/path/to/querymt-desktop/build-embedded \
-  cargo build -p querymt-agent --features dashboard
+gh release download v0.1.0 --repo querymt/querymt-desktop \
+  --pattern 'querymt-embedded-ui-*.tar.gz*'
+mkdir -p /tmp/querymt-embedded-ui
+tar -xzf querymt-embedded-ui-v0.1.0.tar.gz -C /tmp/querymt-embedded-ui
+QMT_DASHBOARD_NG_DIST=/tmp/querymt-embedded-ui \
+  cargo build -p querymt-agent --features dashboard-ng --example qmtcode
 ```
 
 The initial embedded contract assumes root hosting and same-origin `/acp/ws`. It does not support a configurable agent endpoint, local subprocess management, native logs, native profile-template installation, or native directory browsing. The browser must be served from a trusted `qmtcode` origin; authentication and Origin enforcement remain responsibilities of the serving backend.

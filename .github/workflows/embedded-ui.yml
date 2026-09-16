@@ -3,6 +3,7 @@ name: embedded-ui
 on:
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
