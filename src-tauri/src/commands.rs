@@ -363,6 +363,11 @@ pub fn querymt_agent_attach_stdout(
 }
 
 #[tauri::command]
+pub fn querymt_agent_detach_stdout(agents: State<'_, AcpAgentManager>, agent_id: String) {
+    agents.detach_stdout_channel(agent_id);
+}
+
+#[tauri::command]
 pub fn querymt_agent_drain_session_updates(
     agents: State<'_, AcpAgentManager>,
     request: AgentSessionDrainRequest,

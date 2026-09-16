@@ -232,6 +232,7 @@ impl AcpAgentManager {
         reconcile_child_state(process);
 
         let Some(mut child) = process.child.take() else {
+            process.stdout_channel = None;
             process.state.state = AgentState::Stopped;
             process.state.message = "Agent is not running.".to_string();
             process.state.pid = None;
@@ -239,6 +240,7 @@ impl AcpAgentManager {
         };
 
         process.stdin = None;
+        process.stdout_channel = None;
         process.state.state = AgentState::Stopping;
         process.state.message = "Stopping ACP stdio agent...".to_string();
 
@@ -275,6 +277,7 @@ impl AcpAgentManager {
 
             let Some(mut child) = process.child.take() else {
                 process.stdin = None;
+                process.stdout_channel = None;
                 process.session_updates.clear();
                 process.state.state = AgentState::Stopped;
                 process.state.pid = None;
@@ -283,6 +286,7 @@ impl AcpAgentManager {
             };
 
             process.stdin = None;
+            process.stdout_channel = None;
             process.state.state = AgentState::Stopping;
             process.state.message = "Stopping ACP stdio agent during app shutdown...".to_string();
 
@@ -316,6 +320,13 @@ impl AcpAgentManager {
             .entry(agent_id.clone())
             .or_insert_with(|| ManagedAgentProcess::new(&agent_id, String::new()));
         process.stdout_channel = Some(channel);
+    }
+
+    pub fn detach_stdout_channel(&self, agent_id: String) {
+        let mut inner = self.inner.lock().expect("agent manager lock poisoned");
+        if let Some(process) = inner.get_mut(&agent_id) {
+            process.stdout_channel = None;
+        }
     }
 
     pub fn drain_session_updates(
@@ -719,6 +730,7 @@ fn reconcile_child_state(process: &mut ManagedAgentProcess) {
             );
             process.child = None;
             process.stdin = None;
+            process.stdout_channel = None;
             process.session_updates.clear();
             close_pending_requests(process, "agent_exited");
             process.state.pid = None;
@@ -994,5 +1006,11 @@ mod tests {
         let line = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}"#;
         assert!(recovery_session_update(line, true).is_none());
         assert!(recovery_session_update(line, false).is_some());
+    }
+
+    #[test]
+    fn detach_stdout_channel_is_idempotent() {
+        let manager = AcpAgentManager::default();
+        manager.detach_stdout_channel("missing".to_string());
     }
 }

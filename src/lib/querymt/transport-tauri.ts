@@ -9,6 +9,17 @@ export async function createTauriAcpStream(agentId: string): Promise<Stream> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
+  const detachStdout = async () => {
+    closed = true;
+    stdoutChannel = null;
+    pendingOutput = '';
+    try {
+      await invoke('querymt_agent_detach_stdout', { agentId });
+    } catch {
+      // Teardown still completes if the backend process is already gone.
+    }
+  };
+
   const input = new ReadableStream<Uint8Array>({
     async start(controller) {
       stdoutChannel = new Channel<string>((line) => {
@@ -17,9 +28,8 @@ export async function createTauriAcpStream(agentId: string): Promise<Stream> {
       });
       await invoke('querymt_agent_attach_stdout', { agentId, channel: stdoutChannel });
     },
-    cancel() {
-      closed = true;
-      stdoutChannel = null;
+    async cancel() {
+      await detachStdout();
     }
   });
 
@@ -42,17 +52,16 @@ export async function createTauriAcpStream(agentId: string): Promise<Stream> {
     },
     async close() {
       const tail = pendingOutput.trim();
-      if (tail) {
-        await invoke('querymt_agent_write_acp_line', { request: { agentId, line: tail } });
+      try {
+        if (tail) {
+          await invoke('querymt_agent_write_acp_line', { request: { agentId, line: tail } });
+        }
+      } finally {
+        await detachStdout();
       }
-      closed = true;
-      stdoutChannel = null;
-      pendingOutput = '';
     },
-    abort() {
-      closed = true;
-      stdoutChannel = null;
-      pendingOutput = '';
+    async abort() {
+      await detachStdout();
     }
   });
 
