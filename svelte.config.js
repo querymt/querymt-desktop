@@ -1,6 +1,9 @@
 import adapter from '@sveltejs/adapter-static';
 
-const embedded = process.argv.includes('embedded');
+const syncing = process.argv.includes('sync');
+const embedded =
+  process.argv.includes('embedded') ||
+  (!syncing && process.env.npm_lifecycle_event?.endsWith(':embedded'));
 const outputDirectory = embedded ? 'build-embedded' : 'build';
 
 /** @type {import('@sveltejs/kit').Config} */
