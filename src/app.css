@@ -4978,6 +4978,16 @@ summary:focus-visible {
   font-weight: 700;
 }
 
+.markdown-body a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 0.15rem;
+}
+
+.markdown-body a:hover {
+  color: var(--accent-hover);
+}
+
 .markdown-body blockquote {
   border-left: 3px solid var(--border-strong);
   color: var(--muted);
