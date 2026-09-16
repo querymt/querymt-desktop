@@ -59,6 +59,7 @@ export const QMT_METHOD_CAPABILITIES = 'querymt/capabilities';
 export const QMT_METHOD_MODELS = 'querymt/models';
 export const QMT_METHOD_REFRESH_MODELS = 'querymt/refreshModels';
 export const QMT_METHOD_MODEL_INFO = 'querymt/modelInfo';
+export const QMT_METHOD_PROFILES = 'querymt/profiles';
 export const QMT_METHOD_MESH_STATUS = 'querymt/mesh/status';
 export const QMT_METHOD_MESH_JOIN = 'querymt/mesh/join';
 export const QMT_METHOD_MESH_NODES = 'querymt/mesh/nodes';
@@ -89,6 +90,21 @@ export const QMT_METHOD_SESSION_UNDO = 'querymt/session/undo';
 export const QMT_METHOD_SESSION_REDO = 'querymt/session/redo';
 export const QMT_METHOD_SESSION_DELEGATE_MODELS = 'querymt/session/delegateModels';
 export const QMT_METHOD_SESSION_SET_DELEGATE_MODEL = 'querymt/session/setDelegateModel';
+
+export interface QuerymtProfileInfo {
+  id: string;
+  name: string;
+  description?: string | null;
+  tags?: string[];
+  config_kind?: string | null;
+  source?: string | null;
+  fingerprint?: string | null;
+}
+
+export interface QuerymtProfilesResponse {
+  profiles: QuerymtProfileInfo[];
+  active_profile_id?: string | null;
+}
 
 export interface QuerymtModelsResponse {
   models: ModelEntry[];
@@ -256,6 +272,11 @@ export class QuerymtExtensions {
   async modelInfo(models: Array<{ provider: string; model: string }>): Promise<QuerymtModelInfoResponse> {
     const response = await this.call<QuerymtModelInfoWireResponse>(QMT_METHOD_MODEL_INFO, { models });
     return normalizeQuerymtModelInfoResponse(response);
+  }
+
+  async profiles(): Promise<QuerymtProfilesResponse> {
+    const response = await this.call<QuerymtProfilesResponse>(QMT_METHOD_PROFILES);
+    return { ...response, profiles: response.profiles ?? [] };
   }
 
   async meshStatus(): Promise<MeshStatusInfo> {

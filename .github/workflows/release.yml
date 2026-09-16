@@ -10,6 +10,57 @@ permissions:
   contents: write
 
 jobs:
+  embedded-ui:
+    name: Embedded UI
+    uses: ./.github/workflows/embedded-ui.yml
+    permissions:
+      contents: read
+
+  publish-embedded-ui:
+    name: Publish Embedded UI
+    needs: embedded-ui
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download embedded UI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: querymt-embedded-ui
+          path: embedded-ui
+
+      - name: Name versioned release assets
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test -f embedded-ui/querymt-embedded-ui.tar.gz
+          test -f embedded-ui/build-embedded/index.html
+          test -f embedded-ui/build-embedded/querymt-ui.json
+          grep -q '"target": "embedded"' embedded-ui/build-embedded/querymt-ui.json
+          grep -q '"acpWebSocketPath": "/acp/ws"' embedded-ui/build-embedded/querymt-ui.json
+
+          cp embedded-ui/querymt-embedded-ui.tar.gz "querymt-embedded-ui-${RELEASE_TAG}.tar.gz"
+          sha256sum "querymt-embedded-ui-${RELEASE_TAG}.tar.gz" > "querymt-embedded-ui-${RELEASE_TAG}.tar.gz.sha256"
+
+      - name: Upload embedded UI to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --title "QueryMT Desktop ${RELEASE_TAG}" \
+              --notes "Desktop release for QueryMT Desktop." \
+              || true
+          fi
+          gh release upload "$RELEASE_TAG" \
+            "querymt-embedded-ui-${RELEASE_TAG}.tar.gz" \
+            "querymt-embedded-ui-${RELEASE_TAG}.tar.gz.sha256" \
+            --clobber
+
   release:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.platform }}

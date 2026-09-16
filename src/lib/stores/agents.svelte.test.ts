@@ -16,7 +16,7 @@ import {
 } from '$lib/querymt/generated/types';
 import { tick } from 'svelte';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
-import { startAgent } from '$lib/querymt/sidecar';
+import { startAgent } from '$native';
 import { AgentsStore } from './agents.svelte';
 import { DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
 
@@ -179,28 +179,26 @@ const mockClient = vi.hoisted(() => {
   };
 });
 
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: mockListen
-}));
-
-vi.mock('$lib/querymt/profile-templates', () => ({
-  listManagedProfiles: mockListManagedProfiles
-}));
+vi.mock('$native', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$native')>();
+  return {
+    ...actual,
+    drainAgentSessionUpdates: mockDrainAgentSessionUpdates,
+    getAgentLogs: vi.fn(async () => []),
+    getAgentStatus: vi.fn(async () => ({ state: 'running' })),
+    listManagedProfiles: mockListManagedProfiles,
+    listenAgentLogs: vi.fn(async (handler: (payload: unknown) => void) => mockListen('querymt://agent/log', ({ payload }: { payload: unknown }) => handler(payload))),
+    restartAgent: vi.fn(async () => ({ state: 'running' })),
+    startAgent: vi.fn(async () => ({ state: 'running' })),
+    stopAgent: vi.fn(async () => ({ state: 'stopped' })),
+    validateWorkspaceDirectory: vi.fn(async () => true)
+  };
+});
 
 vi.mock('$lib/querymt/acp-client', () => ({
   DesktopAcpClient: vi.fn(function () {
     return mockClient;
   })
-}));
-
-vi.mock('$lib/querymt/sidecar', () => ({
-  drainAgentSessionUpdates: mockDrainAgentSessionUpdates,
-  getAgentLogs: vi.fn(async () => []),
-  getAgentStatus: vi.fn(async () => ({ state: 'running' })),
-  restartAgent: vi.fn(async () => ({ state: 'running' })),
-  startAgent: vi.fn(async () => ({ state: 'running' })),
-  stopAgent: vi.fn(async () => ({ state: 'stopped' })),
-  validateWorkspaceDirectory: vi.fn(async () => true)
 }));
 
 function meshNodes(ids: string[]): MeshNodesInfo {
@@ -3659,7 +3657,7 @@ describe('AgentsStore prompt session start', () => {
 
     expect(vi.mocked(DesktopAcpClient)).toHaveBeenCalledTimes(1);
     expect(clientB.connect).not.toHaveBeenCalled();
-    expect(store.configs.find((config) => config.id === 'remote-agent')?.websocketUrl).toBe('127.0.0.1:4040');
+    expect(store.configs.find((config) => config.id === 'remote-agent')?.websocketUrl).toBe('ws://127.0.0.1:4040/acp/ws');
 
     await store.startConfiguredAgent('remote-agent');
 

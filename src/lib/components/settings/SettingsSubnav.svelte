@@ -6,19 +6,22 @@
 
   let {
     selected,
+    showProfiles = true,
     onSelect
   }: {
     selected: SettingsSectionId;
+    showProfiles?: boolean;
     onSelect: (section: SettingsSectionId) => void;
   } = $props();
 
-  const sections = [
+  const allSections = [
     { id: 'general', label: 'General', description: 'Appearance and chat behavior', icon: SlidersHorizontal },
     { id: 'appearance', label: 'Appearance', description: 'Theme and accent color', icon: Palette },
     { id: 'keybindings', label: 'Keybindings', description: 'Keyboard shortcuts', icon: Keyboard },
     { id: 'profiles', label: 'Profiles', description: 'Ready-made agent configurations', icon: WandSparkles },
     { id: 'providers', label: 'Providers', description: 'Authentication and maintenance', icon: Bot }
   ] satisfies Array<{ id: SettingsSectionId; label: string; description: string; icon: typeof SlidersHorizontal }>;
+  const sections = $derived(allSections.filter((section) => showProfiles || section.id !== 'profiles'));
 </script>
 
 <nav class="settings-subnav" aria-label="Settings sections">

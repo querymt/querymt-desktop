@@ -17,6 +17,8 @@
   import type { SectionName } from '$lib/design/tokens';
   import type { SessionRailItem } from '$lib/domain/sessions';
   import type { SessionRunState } from '$lib/domain/types';
+  import { getAppRuntime, getNativeWindow, type WindowResizeDirection } from '$native';
+  import { isEmbedded, isTauriRuntime } from '$lib/platform/runtime';
   import type { Snippet } from 'svelte';
 
   const ESC_CANCEL_WINDOW_MS = 700;
@@ -110,13 +112,12 @@
       unlistenResize = undefined;
       unlistenFocus = undefined;
     };
-    const isDesktopRuntime = '__TAURI_INTERNALS__' in window;
+    const isDesktopRuntime = isTauriRuntime();
     if (isDesktopRuntime) {
       void (async () => {
         await windowDecorationsStore.initialize();
-        const appWindow = await currentWindow();
-        const { invoke } = await import('@tauri-apps/api/core');
-        const appRuntime = await invoke<string>('app_runtime');
+        const appWindow = await getNativeWindow();
+        const appRuntime = await getAppRuntime();
         if (disposed) {
           return;
         }
@@ -247,35 +248,34 @@
     return null;
   }
 
-  async function currentWindow() {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    return getCurrentWindow();
-  }
-
   async function minimizeWindow() {
-    await (await currentWindow()).minimize();
+    await (await getNativeWindow()).minimize();
   }
 
   async function toggleMaximizeWindow() {
-    const appWindow = await currentWindow();
+    const appWindow = await getNativeWindow();
     await appWindow.toggleMaximize();
     windowMaximized = await appWindow.isMaximized();
   }
 
   async function closeWindow() {
-    await (await currentWindow()).close();
+    await (await getNativeWindow()).close();
   }
 
-  async function startResizeDrag(direction: Parameters<Awaited<ReturnType<typeof currentWindow>>['startResizeDragging']>[0], event: PointerEvent) {
+  async function startResizeDrag(direction: WindowResizeDirection, event: PointerEvent) {
     if (event.button !== 0 || windowMaximized) {
       return;
     }
 
     event.preventDefault();
     event.stopPropagation();
-    await (await currentWindow()).startResizeDragging(direction);
+    await (await getNativeWindow()).startResizeDragging(direction);
   }
 </script>
+
+<svelte:head>
+  <title>{isEmbedded ? 'QueryMT' : 'QueryMT Desktop'}</title>
+</svelte:head>
 
 {#if windowDecorationsStore.usesCustomTitlebar}
   <div

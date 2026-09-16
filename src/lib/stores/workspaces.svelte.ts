@@ -1,5 +1,6 @@
-import { open } from '@tauri-apps/plugin-dialog';
 import type { WorkspaceItem } from '$lib/domain/types';
+import { pickWorkspaceDirectory } from '$native';
+import { platformCapabilities } from '$lib/platform/runtime';
 
 const WORKSPACES_STORAGE_KEY = 'querymt-desktop.workspaces';
 
@@ -16,21 +17,22 @@ class WorkspacesStore {
     persistUserWorkspaces(this.items);
   }
 
+  addWorkspacePath(path: string) {
+    this.error = null;
+    this.addWorkspace(path);
+  }
+
   async addWorkspaceFromDialog() {
+    if (!platformCapabilities.nativeWorkspacePicker) {
+      this.error = 'Enter a workspace path on the qmtcode server.';
+      return;
+    }
     this.loading = true;
     this.error = null;
 
     try {
-      const selection = await open({
-        directory: true,
-        multiple: false,
-        title: 'Choose a workspace folder'
-      });
-
-      if (!selection || Array.isArray(selection)) {
-        return;
-      }
-
+      const selection = await pickWorkspaceDirectory();
+      if (!selection) return;
       this.addWorkspace(selection);
     } catch (error) {
       this.error = error instanceof Error ? error.message : 'Failed to open workspace picker.';

@@ -63,6 +63,7 @@ pub fn run() {
             commands::querymt_agent_restart,
             commands::querymt_agent_logs,
             commands::querymt_agent_attach_stdout,
+            commands::querymt_agent_detach_stdout,
             commands::querymt_agent_drain_session_updates,
             commands::querymt_agent_write_acp_line,
             commands::querymt_session_load_start,

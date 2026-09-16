@@ -66,6 +66,7 @@ struct ManagedAgentProcess {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     stdout_channel: Option<Channel<String>>,
+    stdout_generation: u64,
     logs: VecDeque<AgentLogEntry>,
     session_updates: VecDeque<serde_json::Value>,
     pending_requests: HashMap<String, PendingAcpRequest>,
@@ -122,6 +123,7 @@ impl ManagedAgentProcess {
             child: None,
             stdin: None,
             stdout_channel: None,
+            stdout_generation: 0,
             logs: VecDeque::new(),
             session_updates: VecDeque::new(),
             pending_requests: HashMap::new(),
@@ -232,6 +234,7 @@ impl AcpAgentManager {
         reconcile_child_state(process);
 
         let Some(mut child) = process.child.take() else {
+            process.stdout_channel = None;
             process.state.state = AgentState::Stopped;
             process.state.message = "Agent is not running.".to_string();
             process.state.pid = None;
@@ -239,6 +242,7 @@ impl AcpAgentManager {
         };
 
         process.stdin = None;
+        process.stdout_channel = None;
         process.state.state = AgentState::Stopping;
         process.state.message = "Stopping ACP stdio agent...".to_string();
 
@@ -275,6 +279,7 @@ impl AcpAgentManager {
 
             let Some(mut child) = process.child.take() else {
                 process.stdin = None;
+                process.stdout_channel = None;
                 process.session_updates.clear();
                 process.state.state = AgentState::Stopped;
                 process.state.pid = None;
@@ -283,6 +288,7 @@ impl AcpAgentManager {
             };
 
             process.stdin = None;
+            process.stdout_channel = None;
             process.state.state = AgentState::Stopping;
             process.state.message = "Stopping ACP stdio agent during app shutdown...".to_string();
 
@@ -310,12 +316,26 @@ impl AcpAgentManager {
             .unwrap_or_default()
     }
 
-    pub fn attach_stdout_channel(&self, agent_id: String, channel: Channel<String>) {
+    pub fn attach_stdout_channel(&self, agent_id: String, channel: Channel<String>) -> u64 {
         let mut inner = self.inner.lock().expect("agent manager lock poisoned");
         let process = inner
             .entry(agent_id.clone())
             .or_insert_with(|| ManagedAgentProcess::new(&agent_id, String::new()));
+        process.stdout_generation = next_stdout_generation(process.stdout_generation);
         process.stdout_channel = Some(channel);
+        process.stdout_generation
+    }
+
+    pub fn detach_stdout_channel(&self, agent_id: String, generation: Option<u64>) {
+        let Some(expected) = generation else {
+            return;
+        };
+        let mut inner = self.inner.lock().expect("agent manager lock poisoned");
+        if let Some(process) = inner.get_mut(&agent_id) {
+            if stdout_generation_matches(process.stdout_generation, expected) {
+                process.stdout_channel = None;
+            }
+        }
     }
 
     pub fn drain_session_updates(
@@ -719,6 +739,7 @@ fn reconcile_child_state(process: &mut ManagedAgentProcess) {
             );
             process.child = None;
             process.stdin = None;
+            process.stdout_channel = None;
             process.session_updates.clear();
             close_pending_requests(process, "agent_exited");
             process.state.pid = None;
@@ -930,6 +951,14 @@ fn unix_timestamp() -> String {
         .unwrap_or_else(|_| "0".to_string())
 }
 
+fn next_stdout_generation(current: u64) -> u64 {
+    current.wrapping_add(1).max(1)
+}
+
+fn stdout_generation_matches(current: u64, expected: u64) -> bool {
+    current != 0 && current == expected
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -994,5 +1023,54 @@ mod tests {
         let line = r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}"#;
         assert!(recovery_session_update(line, true).is_none());
         assert!(recovery_session_update(line, false).is_some());
+    }
+
+    #[test]
+    fn stdout_generation_skips_zero_after_wrap() {
+        assert_eq!(next_stdout_generation(0), 1);
+        assert_eq!(next_stdout_generation(1), 2);
+        assert_eq!(next_stdout_generation(u64::MAX), 1);
+        assert!(!stdout_generation_matches(0, 0));
+        assert!(stdout_generation_matches(2, 2));
+        assert!(!stdout_generation_matches(2, 1));
+    }
+
+    #[test]
+    fn detach_stdout_channel_is_idempotent() {
+        let manager = AcpAgentManager::default();
+        manager.detach_stdout_channel("missing".to_string(), Some(1));
+        manager.detach_stdout_channel("missing".to_string(), None);
+    }
+
+    #[test]
+    fn stale_detach_does_not_clear_replacement_stdout_channel() {
+        let manager = AcpAgentManager::default();
+        let first = dummy_stdout_channel();
+        let second = dummy_stdout_channel();
+
+        let first_generation = manager.attach_stdout_channel("agent-1".to_string(), first);
+        let second_generation = manager.attach_stdout_channel("agent-1".to_string(), second);
+        assert_ne!(first_generation, second_generation);
+
+        manager.detach_stdout_channel("agent-1".to_string(), None);
+        manager.detach_stdout_channel("agent-1".to_string(), Some(first_generation));
+        {
+            let inner = manager.inner.lock().expect("agent manager lock poisoned");
+            let process = inner.get("agent-1").expect("agent process");
+            assert!(process.stdout_channel.is_some());
+            assert_eq!(process.stdout_generation, second_generation);
+        }
+
+        manager.detach_stdout_channel("agent-1".to_string(), Some(second_generation));
+        {
+            let inner = manager.inner.lock().expect("agent manager lock poisoned");
+            let process = inner.get("agent-1").expect("agent process");
+            assert!(process.stdout_channel.is_none());
+            assert_eq!(process.stdout_generation, second_generation);
+        }
+    }
+
+    fn dummy_stdout_channel() -> Channel<String> {
+        Channel::new(|_| Ok(()))
     }
 }

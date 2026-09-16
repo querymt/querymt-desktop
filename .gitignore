@@ -1,7 +1,9 @@
 # Node / SvelteKit
 node_modules/
 .svelte-kit/
+.svelte-kit-embedded/
 build/
+build-embedded/
 .vercel/
 .vite/
 
