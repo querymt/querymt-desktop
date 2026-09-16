@@ -1,20 +1,22 @@
 import { ndJsonStream, type Stream } from '@agentclientprotocol/sdk';
-import type { Channel } from '@tauri-apps/api/core';
 
 export async function createTauriAcpStream(agentId: string): Promise<Stream> {
   const { Channel, invoke } = await import('@tauri-apps/api/core');
   let pendingOutput = '';
   let closed = false;
-  let stdoutChannel: Channel<string> | null = null;
+  let stdoutGeneration: number | null = null;
+  let attachPromise: Promise<number> | null = null;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
   const detachStdout = async () => {
     closed = true;
-    stdoutChannel = null;
     pendingOutput = '';
     try {
-      await invoke('querymt_agent_detach_stdout', { agentId });
+      const generation = stdoutGeneration ?? (attachPromise ? await attachPromise : null);
+      if (generation == null) return;
+      stdoutGeneration = generation;
+      await invoke('querymt_agent_detach_stdout', { agentId, generation });
     } catch {
       // Teardown still completes if the backend process is already gone.
     }
@@ -22,11 +24,19 @@ export async function createTauriAcpStream(agentId: string): Promise<Stream> {
 
   const input = new ReadableStream<Uint8Array>({
     async start(controller) {
-      stdoutChannel = new Channel<string>((line) => {
+      if (closed) return;
+      const channel = new Channel<string>((line) => {
         if (closed) return;
         controller.enqueue(encoder.encode(`${line}\n`));
       });
-      await invoke('querymt_agent_attach_stdout', { agentId, channel: stdoutChannel });
+      attachPromise = invoke<number>('querymt_agent_attach_stdout', {
+        agentId,
+        channel
+      });
+      stdoutGeneration = await attachPromise;
+      if (closed) {
+        await detachStdout();
+      }
     },
     async cancel() {
       await detachStdout();

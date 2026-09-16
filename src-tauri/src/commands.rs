@@ -358,13 +358,17 @@ pub fn querymt_agent_attach_stdout(
     agents: State<'_, AcpAgentManager>,
     agent_id: String,
     channel: Channel<String>,
-) {
-    agents.attach_stdout_channel(agent_id, channel);
+) -> u64 {
+    agents.attach_stdout_channel(agent_id, channel)
 }
 
 #[tauri::command]
-pub fn querymt_agent_detach_stdout(agents: State<'_, AcpAgentManager>, agent_id: String) {
-    agents.detach_stdout_channel(agent_id);
+pub fn querymt_agent_detach_stdout(
+    agents: State<'_, AcpAgentManager>,
+    agent_id: String,
+    generation: Option<u64>,
+) {
+    agents.detach_stdout_channel(agent_id, generation);
 }
 
 #[tauri::command]
