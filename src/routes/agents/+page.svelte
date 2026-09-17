@@ -46,6 +46,7 @@
   let draftTransport = $state<AgentConfig['transport']>('stdio');
   let draftCommandLine = $state('');
   let draftWebSocketUrl = $state('');
+  let agentDialogError = $state<string | null>(null);
 
   const transportOptions = [
     { value: 'stdio', label: 'Local process' },
@@ -230,6 +231,7 @@
   }
 
   function openAddDialog() {
+    agentDialogError = null;
     agentDialogMode = 'add';
     editingAgentId = null;
     draftName = '';
@@ -239,6 +241,7 @@
   }
 
   function openEditDialog(card: (typeof agentCards)[number]) {
+    agentDialogError = null;
     agentDialogMode = 'edit';
     editingAgentId = card.config.id;
     selectedAgentId = null;
@@ -259,6 +262,7 @@
     draftTransport = 'stdio';
     draftCommandLine = '';
     draftWebSocketUrl = '';
+    agentDialogError = null;
   }
 
   function openDetails(agentId: string) {
@@ -316,25 +320,30 @@
     const name = draftName.trim();
     const endpoint = draftTransport === 'websocket' ? draftWebSocketUrl.trim() : draftCommandLine.trim();
     if (!name || !endpoint) return;
+    agentDialogError = null;
 
-    if (agentDialogMode === 'add') {
-      const config = agentsStore.createConfig(name, draftTransport, endpoint);
-      agentsStore.saveConfig(config);
-      closeAgentDialog();
-      await agentsStore.refreshAgent(config);
-      if (config.autoStart) await agentsStore.startConfiguredAgent(config.id);
-      return;
-    }
+    try {
+      if (agentDialogMode === 'add') {
+        const config = agentsStore.createConfig(name, draftTransport, endpoint);
+        agentsStore.saveConfig(config);
+        closeAgentDialog();
+        await agentsStore.refreshAgent(config);
+        if (config.autoStart) await agentsStore.startConfiguredAgent(config.id);
+        return;
+      }
 
-    if (agentDialogMode === 'edit' && editingCard) {
-      const config = editingCard.config;
-      const updates =
-        draftTransport === 'websocket'
-          ? { name, transport: draftTransport, commandLine: '', websocketUrl: endpoint }
-          : { name, transport: draftTransport, commandLine: endpoint, websocketUrl: undefined, websocketSecure: undefined };
-      agentsStore.updateConfig(config.id, updates);
-      closeAgentDialog();
-      await agentsStore.refreshAgent({ ...config, ...updates });
+      if (agentDialogMode === 'edit' && editingCard) {
+        const config = editingCard.config;
+        const updates =
+          draftTransport === 'websocket'
+            ? { name, transport: draftTransport, commandLine: '', websocketUrl: endpoint }
+            : { name, transport: draftTransport, commandLine: endpoint, websocketUrl: undefined, websocketSecure: undefined };
+        agentsStore.updateConfig(config.id, updates);
+        closeAgentDialog();
+        await agentsStore.refreshAgent({ ...config, ...updates });
+      }
+    } catch (error) {
+      agentDialogError = error instanceof Error ? error.message : 'Unable to save this agent.';
     }
   }
 
@@ -504,7 +513,7 @@
       portalTarget={overlayPortalTarget}
       onDismiss={closeAgentDialog}
     >
-      <form id="agent-dialog-form" class="app-dialog-form" onsubmit={(event) => { event.preventDefault(); saveAgentDialog(); }}>
+      <form id="agent-dialog-form" class="app-dialog-form" onsubmit={(event) => { event.preventDefault(); void saveAgentDialog(); }}>
         <label class="app-dialog-field">
           <span class="app-dialog-field-label">Agent name</span>
           <input class="input-shell w-full" placeholder="Agent name" bind:value={draftName} />
@@ -526,8 +535,20 @@
         {:else}
           <label class="app-dialog-field">
             <span class="app-dialog-field-label">Agent address</span>
-            <input class="input-shell w-full" placeholder="127.0.0.1:3030" bind:value={draftWebSocketUrl} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="text" />
+            <input
+              class="input-shell w-full"
+              placeholder="127.0.0.1:3030"
+              bind:value={draftWebSocketUrl}
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck={false}
+              inputmode="text"
+              aria-invalid={agentDialogError ? 'true' : undefined}
+              aria-describedby={agentDialogError ? 'agent-address-error' : undefined}
+            />
             <span class="app-dialog-field-help">Host and port for an independently running ACP WebSocket server.</span>
+            {#if agentDialogError}<span id="agent-address-error" class="app-dialog-field-error" role="alert">{agentDialogError}</span>{/if}
           </label>
         {/if}
       </form>

@@ -246,6 +246,33 @@ describe('Agents page', () => {
     });
   });
 
+  it('shows address validation errors and keeps the agent dialog open', async () => {
+    agentsStore.createConfig.mockImplementationOnce(() => {
+      throw new Error('Enter only the server host and port.');
+    });
+    render(AgentsPage);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Add agent' }));
+    await fireEvent.input(screen.getByPlaceholderText('Agent name'), { target: { value: 'Remote QueryMT' } });
+    const connectionTypeSelect = screen.getByRole('button', { name: 'Agent connection type' });
+    Object.defineProperties(connectionTypeSelect, {
+      hasPointerCapture: { value: () => false },
+      releasePointerCapture: { value: () => undefined }
+    });
+    await fireEvent.pointerDown(connectionTypeSelect, { button: 0, pointerType: 'mouse' });
+    const websocketOption = await screen.findByRole('option', { name: 'WebSocket endpoint' });
+    await fireEvent.pointerDown(websocketOption, { button: 0, pointerType: 'mouse' });
+    await fireEvent.pointerUp(websocketOption, { button: 0, pointerType: 'mouse' });
+    const addressInput = screen.getByPlaceholderText('127.0.0.1:3030');
+    await fireEvent.input(addressInput, { target: { value: 'ws://agent.example/custom/path' } });
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Add agent' })[1]);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Enter only the server host and port.');
+    expect(screen.getByRole('dialog', { name: 'Add agent' })).toBeInTheDocument();
+    expect(addressInput).toHaveAttribute('aria-invalid', 'true');
+    expect(agentsStore.saveConfig).not.toHaveBeenCalled();
+  });
+
   it('shows unique actionable diagnostics when ACP control is failing', async () => {
     agentsStore.statuses['agent-1'] = {
       ...agentsStore.statuses['agent-1'],

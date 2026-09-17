@@ -3879,6 +3879,12 @@ summary:focus-visible {
   line-height: 1.4;
 }
 
+.app-dialog-field-error {
+  color: var(--danger);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
 .app-dialog-inline-status {
   display: flex;
   align-items: center;

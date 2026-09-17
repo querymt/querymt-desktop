@@ -38,9 +38,11 @@ impl AcpWebSocketManager {
         events: Channel<AcpWebSocketEvent>,
     ) -> Result<String, String> {
         let url = validated_acp_url(&url)?;
-        let (socket, _) = connect_async(url)
-            .await
-            .map_err(|error| format!("Unable to connect to the ACP server: {error}"))?;
+        let (socket, _) =
+            tokio::time::timeout(std::time::Duration::from_secs(15), connect_async(url))
+                .await
+                .map_err(|_| "Timed out while connecting to the ACP server.".to_string())?
+                .map_err(|error| format!("Unable to connect to the ACP server: {error}"))?;
         let connection_id = format!(
             "acp-websocket-{}",
             self.next_id.fetch_add(1, Ordering::Relaxed)
@@ -91,7 +93,10 @@ impl AcpWebSocketManager {
                             break;
                         }
                         Some(Ok(Message::Ping(payload))) => {
-                            if writer.send(Message::Pong(payload)).await.is_err() {
+                            if let Err(error) = writer.send(Message::Pong(payload)).await {
+                                let _ = events.send(AcpWebSocketEvent::Error {
+                                    message: format!("ACP WebSocket Pong failed: {error}"),
+                                });
                                 break;
                             }
                         }
