@@ -1,6 +1,7 @@
 use crate::{
     session_load_telemetry::{SessionLoadCounters, SessionLoadTelemetry},
     sidecar::{AcpAgentManager, AgentLogEntry, AgentRuntimeStatus},
+    websocket::{AcpWebSocketEvent, AcpWebSocketManager},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -36,6 +37,25 @@ pub struct AgentSessionDrainRequest {
 pub struct AgentWriteRequest {
     pub agent_id: String,
     pub line: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSocketConnectRequest {
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSocketSendRequest {
+    pub connection_id: String,
+    pub data: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSocketCloseRequest {
+    pub connection_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -440,6 +460,31 @@ pub fn querymt_agent_write_acp_line(
         .as_deref()
         .and_then(|operation_id| telemetry.context(operation_id));
     agents.write_acp_line(request.agent_id, request.line, parent)
+}
+
+#[tauri::command]
+pub async fn querymt_websocket_connect(
+    websockets: State<'_, AcpWebSocketManager>,
+    request: WebSocketConnectRequest,
+    events: Channel<AcpWebSocketEvent>,
+) -> Result<String, String> {
+    websockets.connect(request.url, events).await
+}
+
+#[tauri::command]
+pub fn querymt_websocket_send(
+    websockets: State<'_, AcpWebSocketManager>,
+    request: WebSocketSendRequest,
+) -> Result<(), String> {
+    websockets.send(&request.connection_id, request.data)
+}
+
+#[tauri::command]
+pub fn querymt_websocket_close(
+    websockets: State<'_, AcpWebSocketManager>,
+    request: WebSocketCloseRequest,
+) {
+    websockets.close(&request.connection_id);
 }
 
 #[tauri::command]

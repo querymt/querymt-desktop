@@ -10,6 +10,11 @@ export async function createWebSocketAcpStream(
   url: string,
   onDisconnect?: (reason: string) => void
 ): Promise<Stream> {
+  const { createNativeWebSocketAcpStream } = await import('$native');
+  if ('__TAURI_INTERNALS__' in globalThis) {
+    return createNativeWebSocketAcpStream(url, onDisconnect);
+  }
+
   const socket = await openWebSocket(url);
   let closed = false;
   let notified = false;

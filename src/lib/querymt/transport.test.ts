@@ -1,5 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createWebSocketAcpStream } from './transport';
+
+const createNativeWebSocketAcpStream = vi.hoisted(() => vi.fn());
+vi.mock('$native', () => ({
+  createNativeWebSocketAcpStream,
+  createTauriAcpStream: vi.fn()
+}));
 
 class MockWebSocket extends EventTarget {
   static OPEN = 1;
@@ -31,6 +37,28 @@ class MockWebSocket extends EventTarget {
 }
 
 describe('createWebSocketAcpStream', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('uses the native transport in the desktop app', async () => {
+    const stream = {
+      readable: new ReadableStream(),
+      writable: new WritableStream()
+    };
+    const onDisconnect = vi.fn();
+    vi.stubGlobal('__TAURI_INTERNALS__', {});
+    createNativeWebSocketAcpStream.mockResolvedValueOnce(stream);
+
+    await expect(createWebSocketAcpStream('ws://127.0.0.1:42069/acp/ws', onDisconnect)).resolves.toBe(stream);
+
+    expect(createNativeWebSocketAcpStream).toHaveBeenCalledWith(
+      'ws://127.0.0.1:42069/acp/ws',
+      onDisconnect
+    );
+    expect(MockWebSocket.instances).toHaveLength(0);
+  });
+
   it('reports an unexpected socket close once', async () => {
     vi.stubGlobal('WebSocket', MockWebSocket);
     const onDisconnect = vi.fn();

@@ -128,7 +128,7 @@ import { inboxStore } from '$lib/stores/inbox.svelte';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import { createEmbeddedAgentConfig, EMBEDDED_AGENT_ID } from '$lib/platform/embedded-agent';
 import { isEmbedded, platformCapabilities } from '$lib/platform/runtime';
-import { normalizeAcpWebSocketUrl } from '$lib/querymt/websocket-url';
+import { normalizeAcpWebSocketEndpoint, usesSecureWebSocket } from '$lib/querymt/websocket-url';
 
 const AGENTS_STORAGE_KEY = 'querymt-desktop.agents';
 const RECENT_MODELS_STORAGE_KEY = 'querymt-desktop.recent-models';
@@ -680,10 +680,16 @@ export class AgentsStore {
 
   updateConfig(agentId: string, updates: Partial<Omit<AgentConfig, 'id'>>) {
     if (isEmbedded && agentId === EMBEDDED_AGENT_ID) return;
-    const normalizedUpdates = updates.websocketUrl
-      ? { ...updates, websocketUrl: normalizeAcpWebSocketUrl(updates.websocketUrl) }
-      : updates;
     const current = this.configs.find((config) => config.id === agentId);
+    const explicitWebSocketScheme = updates.websocketUrl?.match(/^(wss?):\/\//i)?.[1]?.toLowerCase();
+    const normalizedUpdates = updates.websocketUrl
+      ? {
+          ...updates,
+          websocketUrl: normalizeAcpWebSocketEndpoint(updates.websocketUrl),
+          websocketSecure: updates.websocketSecure
+            ?? (explicitWebSocketScheme ? explicitWebSocketScheme === 'wss' : current?.websocketSecure ?? false)
+        }
+      : updates;
     if (current?.transport === 'websocket' && (normalizedUpdates.transport || normalizedUpdates.websocketUrl !== undefined || normalizedUpdates.enabled === false)) {
       this.cancelReconnect(agentId);
       this.invalidateConnectGeneration(agentId);
@@ -746,7 +752,8 @@ export class AgentsStore {
       name,
       transport,
       commandLine: transport === 'stdio' ? endpoint : '',
-      websocketUrl: transport === 'websocket' ? normalizeAcpWebSocketUrl(endpoint) : undefined,
+      websocketUrl: transport === 'websocket' ? normalizeAcpWebSocketEndpoint(endpoint) : undefined,
+      websocketSecure: transport === 'websocket' ? usesSecureWebSocket(endpoint) : undefined,
       enabled: true,
       autoStart: true
     };
@@ -3669,7 +3676,7 @@ function websocketStatus(
   };
 }
 
-export const normalizeAcpWebSocketEndpoint = normalizeAcpWebSocketUrl;
+export { normalizeAcpWebSocketEndpoint };
 
 function normalizeAgentConfig(config: AgentConfig): AgentConfig {
   const transport = config.transport === 'websocket' ? 'websocket' : 'stdio';
@@ -3677,7 +3684,10 @@ function normalizeAgentConfig(config: AgentConfig): AgentConfig {
     ...config,
     transport,
     commandLine: config.commandLine ?? '',
-    websocketUrl: transport === 'websocket' ? normalizeAcpWebSocketUrl(config.websocketUrl ?? '') : undefined
+    websocketUrl: transport === 'websocket' ? normalizeAcpWebSocketEndpoint(config.websocketUrl ?? '') : undefined,
+    websocketSecure: transport === 'websocket'
+      ? config.websocketSecure ?? usesSecureWebSocket(config.websocketUrl ?? '')
+      : undefined
   };
 }
 

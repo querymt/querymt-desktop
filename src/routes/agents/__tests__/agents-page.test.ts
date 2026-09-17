@@ -201,9 +201,76 @@ describe('Agents page', () => {
       name: 'QMTCODE Local',
       transport: 'stdio',
       commandLine: '/usr/bin/qmtcode --acp --mesh',
-      websocketUrl: undefined
+      websocketUrl: undefined,
+      websocketSecure: undefined
     });
     expect(agentsStore.refreshAgent).toHaveBeenCalled();
+  });
+
+  it('shows and edits WebSocket agents as host:port without protocol details', async () => {
+    agentsStore.configs = [
+      {
+        id: 'agent-1',
+        name: 'Remote QueryMT',
+        transport: 'websocket',
+        commandLine: '',
+        websocketUrl: 'ws://127.0.0.1:42069/acp/ws',
+        enabled: true,
+        autoStart: false
+      }
+    ] as unknown as typeof agentsStore.configs;
+    agentsStore.statuses = {} as typeof agentsStore.statuses;
+    agentsStore.sessionsByAgent = { 'agent-1': [] } as typeof agentsStore.sessionsByAgent;
+    agentsStore.connectionStates = { 'agent-1': 'idle' };
+    agentsStore.controlCapabilitiesByAgent = { 'agent-1': null } as unknown as typeof agentsStore.controlCapabilitiesByAgent;
+    agentsStore.controlHealthByAgent = {
+      'agent-1': { state: 'unknown', summary: 'Not checked.', missingMethods: [], missingFeatures: [] }
+    };
+    agentsStore.agentErrors = { 'agent-1': null };
+
+    render(AgentsPage);
+
+    expect(screen.getByText('127.0.0.1:42069')).toBeInTheDocument();
+    expect(screen.queryByText('ws://127.0.0.1:42069/acp/ws')).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Edit Remote QueryMT' }));
+    const addressInput = screen.getByDisplayValue('127.0.0.1:42069');
+    expect(addressInput).toHaveAttribute('inputmode', 'text');
+    await fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(agentsStore.updateConfig).toHaveBeenCalledWith('agent-1', {
+      name: 'Remote QueryMT',
+      transport: 'websocket',
+      commandLine: '',
+      websocketUrl: '127.0.0.1:42069'
+    });
+  });
+
+  it('shows address validation errors and keeps the agent dialog open', async () => {
+    agentsStore.createConfig.mockImplementationOnce(() => {
+      throw new Error('Enter only the server host and port.');
+    });
+    render(AgentsPage);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Add agent' }));
+    await fireEvent.input(screen.getByPlaceholderText('Agent name'), { target: { value: 'Remote QueryMT' } });
+    const connectionTypeSelect = screen.getByRole('button', { name: 'Agent connection type' });
+    Object.defineProperties(connectionTypeSelect, {
+      hasPointerCapture: { value: () => false },
+      releasePointerCapture: { value: () => undefined }
+    });
+    await fireEvent.pointerDown(connectionTypeSelect, { button: 0, pointerType: 'mouse' });
+    const websocketOption = await screen.findByRole('option', { name: 'WebSocket endpoint' });
+    await fireEvent.pointerDown(websocketOption, { button: 0, pointerType: 'mouse' });
+    await fireEvent.pointerUp(websocketOption, { button: 0, pointerType: 'mouse' });
+    const addressInput = screen.getByPlaceholderText('127.0.0.1:3030');
+    await fireEvent.input(addressInput, { target: { value: 'ws://agent.example/custom/path' } });
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Add agent' })[1]);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Enter only the server host and port.');
+    expect(screen.getByRole('dialog', { name: 'Add agent' })).toBeInTheDocument();
+    expect(addressInput).toHaveAttribute('aria-invalid', 'true');
+    expect(agentsStore.saveConfig).not.toHaveBeenCalled();
   });
 
   it('shows unique actionable diagnostics when ACP control is failing', async () => {
