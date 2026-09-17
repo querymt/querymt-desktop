@@ -26,6 +26,7 @@
   import { agentsStore } from '$lib/stores/agents.svelte';
   import type { AgentConfig } from '$lib/domain/types';
   import { isEmbedded } from '$lib/platform/runtime';
+  import { normalizeAcpWebSocketEndpoint } from '$lib/querymt/websocket-url';
 
   type AgentDialogMode = 'add' | 'edit' | null;
   type AgentMessageTone = 'error' | 'warning';
@@ -104,7 +105,12 @@
   }
 
   function endpointLabel(config: AgentConfig) {
-    return config.transport === 'websocket' ? config.websocketUrl ?? 'WebSocket endpoint missing' : config.commandLine;
+    if (config.transport !== 'websocket') return config.commandLine;
+    try {
+      return normalizeAcpWebSocketEndpoint(config.websocketUrl ?? '') || 'Server address missing';
+    } catch {
+      return config.websocketUrl ?? 'Server address missing';
+    }
   }
 
   function transportLabel(config: AgentConfig) {
@@ -239,7 +245,11 @@
     draftName = card.config.name;
     draftTransport = card.config.transport;
     draftCommandLine = card.config.commandLine;
-    draftWebSocketUrl = card.config.websocketUrl ?? '';
+    try {
+      draftWebSocketUrl = normalizeAcpWebSocketEndpoint(card.config.websocketUrl ?? '');
+    } catch {
+      draftWebSocketUrl = card.config.websocketUrl ?? '';
+    }
   }
 
   function closeAgentDialog() {
@@ -321,7 +331,7 @@
       const updates =
         draftTransport === 'websocket'
           ? { name, transport: draftTransport, commandLine: '', websocketUrl: endpoint }
-          : { name, transport: draftTransport, commandLine: endpoint, websocketUrl: undefined };
+          : { name, transport: draftTransport, commandLine: endpoint, websocketUrl: undefined, websocketSecure: undefined };
       agentsStore.updateConfig(config.id, updates);
       closeAgentDialog();
       await agentsStore.refreshAgent({ ...config, ...updates });
@@ -516,7 +526,7 @@
         {:else}
           <label class="app-dialog-field">
             <span class="app-dialog-field-label">Agent address</span>
-            <input class="input-shell w-full" placeholder="127.0.0.1:3030" bind:value={draftWebSocketUrl} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="url" />
+            <input class="input-shell w-full" placeholder="127.0.0.1:3030" bind:value={draftWebSocketUrl} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="text" />
             <span class="app-dialog-field-help">Host and port for an independently running ACP WebSocket server.</span>
           </label>
         {/if}

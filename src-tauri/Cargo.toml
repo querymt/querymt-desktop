@@ -12,6 +12,8 @@ tauri-build = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 shlex = "2"
+futures-util = "0.3"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 tauri = { version = "2", default-features = false, features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
@@ -23,7 +25,7 @@ tracing = "0.1"
 tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tonic = { version = "0.14", default-features = false, features = ["tls-webpki-roots"] }
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["macros", "sync", "time"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Tauri's CEF runtime is not published yet; Sable ports the experimental runtime to released Tauri crates.

@@ -201,7 +201,7 @@ function websocketClient() {
     name: 'Agent',
     transport: 'websocket',
     commandLine: '',
-    websocketUrl: 'wss://agent.example/acp/ws',
+    websocketUrl: 'agent.example',
     enabled: true,
     autoStart: true
   });
@@ -227,14 +227,14 @@ describe('DesktopAcpClient connect cancellation', () => {
     });
   });
 
-  it('preserves an explicit secure ACP WebSocket URL and path', async () => {
+  it('constructs the internal ACP WebSocket URL from the configured server address', async () => {
     const stream = mockAcpStream();
     createWebSocketAcpStream.mockResolvedValueOnce(stream);
 
     await websocketClient().connect();
 
     expect(createWebSocketAcpStream).toHaveBeenCalledWith(
-      'wss://agent.example/acp/ws',
+      'ws://agent.example/acp/ws',
       expect.any(Function)
     );
   });

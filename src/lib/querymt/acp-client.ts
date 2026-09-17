@@ -95,7 +95,7 @@ import {
 import { createTauriAcpStream, createWebSocketAcpStream } from '$lib/querymt/transport';
 import type { Stream } from '@agentclientprotocol/sdk';
 import { isEmbedded } from '$lib/platform/runtime';
-import { normalizeAcpWebSocketUrl } from '$lib/querymt/websocket-url';
+import { acpWebSocketUrl } from '$lib/querymt/websocket-url';
 
 const PROTOCOL_VERSION = 1;
 const CONNECT_CANCELLED_MESSAGE = 'ACP connection cancelled.';
@@ -803,9 +803,11 @@ function buildAttachmentUri(attachment: PromptAttachment): string {
 }
 
 function requireWebSocketUrl(config: AgentConfig): string {
-  const url = normalizeAcpWebSocketUrl(config.websocketUrl ?? '');
+  const url = isEmbedded
+    ? config.websocketUrl?.trim() ?? ''
+    : acpWebSocketUrl(config.websocketUrl ?? '', config.websocketSecure);
   if (!url) {
-    throw new Error(`WebSocket URL is required for ${config.name}.`);
+    throw new Error(`Server address is required for ${config.name}.`);
   }
   return url;
 }

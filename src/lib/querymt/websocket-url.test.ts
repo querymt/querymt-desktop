@@ -1,24 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { embeddedAcpWebSocketUrl, normalizeAcpWebSocketUrl } from './websocket-url';
+import { acpWebSocketUrl, embeddedAcpWebSocketUrl, normalizeAcpWebSocketEndpoint, usesSecureWebSocket } from './websocket-url';
 
-describe('normalizeAcpWebSocketUrl', () => {
+describe('normalizeAcpWebSocketEndpoint', () => {
   it.each([
-    ['127.0.0.1:3030', 'ws://127.0.0.1:3030/acp/ws'],
-    ['ws://127.0.0.1:3030', 'ws://127.0.0.1:3030/acp/ws'],
-    ['ws://127.0.0.1:3030/ws', 'ws://127.0.0.1:3030/acp/ws'],
-    ['wss://agent.example/acp/ws', 'wss://agent.example/acp/ws'],
-    ['ws://[::1]:3030/acp/ws', 'ws://[::1]:3030/acp/ws']
-  ])('normalizes %s', (input, expected) => {
-    expect(normalizeAcpWebSocketUrl(input)).toBe(expected);
+    ['127.0.0.1:3030', '127.0.0.1:3030'],
+    ['ws://127.0.0.1:3030', '127.0.0.1:3030'],
+    ['ws://127.0.0.1:3030/ws', '127.0.0.1:3030'],
+    ['wss://agent.example/acp/ws', 'agent.example'],
+    ['ws://[::1]:3030/acp/ws', '[::1]:3030']
+  ])('normalizes %s to a host and port', (input, expected) => {
+    expect(normalizeAcpWebSocketEndpoint(input)).toBe(expected);
   });
 
   it.each([
     'https://agent.example/acp/ws',
     'ws://user:secret@agent.example/acp/ws',
     'ws://agent.example/acp/ws?token=secret',
-    'ws://agent.example/acp/ws#fragment'
-  ])('rejects unsupported or unsafe URL %s', (input) => {
-    expect(() => normalizeAcpWebSocketUrl(input)).toThrow();
+    'ws://agent.example/acp/ws#fragment',
+    'ws://agent.example/custom/path'
+  ])('rejects unsupported or unsafe address %s', (input) => {
+    expect(() => normalizeAcpWebSocketEndpoint(input)).toThrow();
+  });
+});
+
+describe('acpWebSocketUrl', () => {
+  it('adds transport details only when opening the connection', () => {
+    expect(acpWebSocketUrl('127.0.0.1:42069')).toBe('ws://127.0.0.1:42069/acp/ws');
+    expect(acpWebSocketUrl('agent.example', true)).toBe('wss://agent.example/acp/ws');
+    expect(usesSecureWebSocket('wss://agent.example/acp/ws')).toBe(true);
   });
 });
 

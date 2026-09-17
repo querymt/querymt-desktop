@@ -23,6 +23,7 @@ export interface AgentConfig {
   transport: AgentTransport;
   commandLine: string;
   websocketUrl?: string;
+  websocketSecure?: boolean;
   enabled: boolean;
   autoStart: boolean;
 }

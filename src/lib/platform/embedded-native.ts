@@ -34,6 +34,13 @@ export async function createTauriAcpStream(_agentId: string): Promise<Stream> {
   return unavailable();
 }
 
+export async function createNativeWebSocketAcpStream(
+  _url: string,
+  _onDisconnect?: (reason: string) => void
+): Promise<Stream> {
+  return unavailable();
+}
+
 export async function listenAgentLogs<T>(_handler: (payload: T) => void): Promise<() => void> {
   return unavailable();
 }

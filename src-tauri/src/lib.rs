@@ -4,10 +4,12 @@ pub mod keychain;
 mod session_load_telemetry;
 pub mod sidecar;
 mod telemetry;
+mod websocket;
 
 use session_load_telemetry::SessionLoadTelemetry;
 use sidecar::AcpAgentManager;
 use tauri::Manager;
+use websocket::AcpWebSocketManager;
 
 #[cfg(all(feature = "cef", target_os = "linux"))]
 pub type BrowserEngine = tauri_runtime_cef::CefRuntime<tauri::EventLoopMessage>;
@@ -50,6 +52,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(AcpAgentManager::default())
+        .manage(AcpWebSocketManager::default())
         .manage(session_load_telemetry)
         .invoke_handler(tauri::generate_handler![
             commands::app_ping,
@@ -66,6 +69,9 @@ pub fn run() {
             commands::querymt_agent_detach_stdout,
             commands::querymt_agent_drain_session_updates,
             commands::querymt_agent_write_acp_line,
+            commands::querymt_websocket_connect,
+            commands::querymt_websocket_send,
+            commands::querymt_websocket_close,
             commands::querymt_session_load_start,
             commands::querymt_session_load_checkpoint,
             commands::querymt_session_load_heartbeat,
@@ -104,6 +110,7 @@ pub fn run() {
             ) {
                 let manager = app.state::<AcpAgentManager>();
                 manager.shutdown_all();
+                app.state::<AcpWebSocketManager>().close_all();
                 app.state::<SessionLoadTelemetry>()
                     .close_all("application_shutdown");
                 tauri::async_runtime::block_on(async { telemetry::flush() });
