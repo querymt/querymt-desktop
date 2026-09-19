@@ -37,7 +37,21 @@ export default defineConfig(({ mode }) => {
         ? {
             '/acp/ws': {
               target: proxyTarget,
-              ws: true
+              ws: true,
+              changeOrigin: true,
+              rewriteWsOrigin: true
+            }
+          }
+        : undefined
+    },
+    preview: {
+      proxy: embedded
+        ? {
+            '/acp/ws': {
+              target: proxyTarget,
+              ws: true,
+              changeOrigin: true,
+              rewriteWsOrigin: true
             }
           }
         : undefined
