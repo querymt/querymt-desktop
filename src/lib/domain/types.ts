@@ -117,6 +117,31 @@ export interface PromptAttachment {
   data: string;
 }
 
+export type SessionInputDeliveryMode = 'steer' | 'queue';
+export type SessionInputLifecycleState =
+  | 'sending'
+  | 'accepted'
+  | 'queued'
+  | 'applied'
+  | 'started'
+  | 'discarded'
+  | 'failed'
+  | 'unknown';
+
+export interface PendingSessionInput {
+  inputId: string;
+  delivery: SessionInputDeliveryMode;
+  state: SessionInputLifecycleState;
+  prompt: string;
+  attachments: PromptAttachment[];
+  runId?: string;
+  position?: number;
+  boundary?: string;
+  reason?: string;
+  latencyMs?: number;
+  createdAt: number;
+}
+
 export interface SessionTextBlock {
   type: 'text';
   text: string;

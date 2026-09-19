@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ActiveSessionViewModel } from './types';
 import { buildSessionConversation } from './session-conversation';
-import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHistoricalSession } from './session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession } from './session-snapshot';
 
 describe('getSnapshotProviderChange', () => {
   it('returns the last valid provider change including its mesh node', () => {
@@ -50,6 +50,30 @@ describe('getSnapshotProviderChange', () => {
         }
       })
     ).toBeNull();
+  });
+});
+
+describe('getSnapshotInputStates', () => {
+  it('folds steering and queued input lifecycle events to their latest state', () => {
+    const response = {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [
+              { kind: { type: 'steering_accepted', data: { input_id: 'steer-1', run_id: 'run-1', position: 1 } } },
+              { kind: { type: 'input_queued', data: { input_id: 'queue-1', position: 1 } } },
+              { kind: { type: 'steering_applied', data: { input_id: 'steer-1', run_id: 'run-1', boundary: 'after_tools', latency_ms: 12 } } },
+              { kind: { type: 'queued_input_started', data: { input_id: 'queue-1', run_id: 'run-2' } } }
+            ]
+          }
+        }
+      }
+    };
+
+    expect(getSnapshotInputStates(response)).toEqual([
+      expect.objectContaining({ inputId: 'steer-1', delivery: 'steer', state: 'applied', boundary: 'after_tools' }),
+      expect.objectContaining({ inputId: 'queue-1', delivery: 'queue', state: 'started', runId: 'run-2' })
+    ]);
   });
 });
 

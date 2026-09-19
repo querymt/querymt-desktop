@@ -10,7 +10,7 @@ import type {
 } from '@agentclientprotocol/sdk';
 import { tick } from 'svelte';
 import { normalizePromptError, type PromptFailure } from '$lib/domain/prompt-errors';
-import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
 import {
   createEmptyActiveSession,
@@ -48,12 +48,14 @@ import type {
   DesktopSessionSummary,
   ModelEntry,
   ModelInfo,
+  PendingSessionInput,
   PromptAttachment,
   SessionContentBlock,
+  SessionInputDeliveryMode,
   SessionRunState,
   SessionStatus
 } from '$lib/domain/types';
-import { DelegateAssignmentSource } from '$lib/querymt/generated/types';
+import { DelegateAssignmentSource, SessionInputDelivery, SessionInputState } from '$lib/querymt/generated/types';
 import type {
   AuthMethod,
   AuthProviderEntry,
@@ -76,7 +78,10 @@ import type {
   ScheduleActionResult,
   ScheduleInfo,
   ScheduleListInfo,
-  SetDelegateModelResponse
+  SessionInputStateNotification,
+  SessionRuntimeState,
+  SetDelegateModelResponse,
+  SubmitInputResult
 } from '$lib/querymt/generated/types';
 import {
   findModeConfigOption,
@@ -96,10 +101,14 @@ import { DesktopAcpClient } from '$lib/querymt/acp-client';
 import {
   QMT_METHOD_PROFILES,
   QMT_METHOD_SESSION_DELEGATE_MODELS,
+  QMT_METHOD_SESSION_QUEUE,
   QMT_METHOD_SESSION_REDO,
+  QMT_METHOD_SESSION_RUNTIME_STATE,
+  QMT_METHOD_SESSION_STEER,
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
-  QMT_METHOD_SESSION_UNDO_STACK
+  QMT_METHOD_SESSION_UNDO_STACK,
+  QMT_NOTIFICATION_SESSION_INPUT_STATE
 } from '$lib/querymt/querymt-extensions';
 import { sendDesktopNotification } from '$lib/querymt/notifications';
 import {
@@ -203,6 +212,7 @@ export class AgentsStore {
   // negligible next to the retained connectGenerations entry.
   private meshRefreshGenerations = new Map<string, number>();
   private sessionRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private sessionRuntimeRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectAttempts = new Map<string, number>();
   private workspaceSourceVersions = new Map<string, number>();
@@ -294,6 +304,10 @@ export class AgentsStore {
     return Object.fromEntries(Object.entries(this.pendingSessionConfigs[key] ?? {}).map(([id, count]) => [id, count > 0]));
   }
   promptAttachments = $state<PromptAttachment[]>([]);
+  sessionRuntimeBySession = $state<Record<string, SessionRuntimeState | null>>({});
+  pendingInputsBySession = $state<Record<string, PendingSessionInput[]>>({});
+  composerInputDeliveryBySession = $state<Record<string, SessionInputDeliveryMode>>({});
+  inputSubmitPending = $state(false);
   managedProfileOptions = $state<ComposerOption[]>([]);
   promptFocusToken = $state(0);
   loading = $state(false);
@@ -311,6 +325,43 @@ export class AgentsStore {
   lastSessionLoadMetrics = $state<SessionLoadMetrics | null>(null);
   recentModelsByAgent = $state<Record<string, string[]>>(loadRecentModels());
   recentWorkspaces = $state<string[]>(loadRecentWorkspaces());
+
+  get activeSessionRuntime(): SessionRuntimeState | null {
+    if (!this.activeAgentId || !this.activeSessionId) return null;
+    return this.sessionRuntimeBySession[buildSessionKey(this.activeAgentId, this.activeSessionId)] ?? null;
+  }
+
+  get activePendingInputs(): PendingSessionInput[] {
+    if (!this.activeAgentId || !this.activeSessionId) return [];
+    return this.pendingInputsBySession[buildSessionKey(this.activeAgentId, this.activeSessionId)] ?? [];
+  }
+
+  get activeComposerInputDelivery(): SessionInputDeliveryMode {
+    if (!this.activeAgentId || !this.activeSessionId) return 'steer';
+    return this.composerInputDeliveryBySession[buildSessionKey(this.activeAgentId, this.activeSessionId)] ?? 'steer';
+  }
+
+  get canControlActiveRun(): boolean {
+    if (!this.activeAgentId) return false;
+    const client = this.clients.get(this.activeAgentId)?.client;
+    return Boolean(
+      client?.supportsQuerymtFeature('steering') &&
+        client.supportsQuerymtMethod(QMT_METHOD_SESSION_STEER) &&
+        client.supportsQuerymtMethod(QMT_METHOD_SESSION_QUEUE) &&
+        client.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE)
+    );
+  }
+
+  get activeInputDelivery(): SessionInputDeliveryMode {
+    const runtime = this.activeSessionRuntime;
+    const draft = this.composerPrompt.trim();
+    if (draft.startsWith('/')) return 'queue';
+    if (!runtime || (runtime.phase === 'idle' && PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState))) {
+      return this.activeComposerInputDelivery;
+    }
+    if (!runtime.steerable || runtime.phase === 'closing' || runtime.phase === 'cancel_requested') return 'queue';
+    return this.activeComposerInputDelivery;
+  }
 
   get activeDelegateAssignments(): DelegateAssignmentsInfo | null {
     const key = this.activeAgentId && this.activeSessionId
@@ -472,6 +523,9 @@ export class AgentsStore {
     for (const agentId of [...this.reconnectTimers.keys()]) {
       this.cancelReconnect(agentId);
     }
+    for (const key of this.sessionRuntimeRefreshTimers.keys()) {
+      this.cancelSessionRuntimeRefresh(key);
+    }
   }
 
   async initialize() {
@@ -533,7 +587,17 @@ export class AgentsStore {
 
   setComposerPrompt(value: string) {
     this.composerPrompt = value;
+    this.promptFailure = null;
     this.error = null;
+  }
+
+  setActiveComposerInputDelivery(delivery: SessionInputDeliveryMode) {
+    if (!this.activeAgentId || !this.activeSessionId) return;
+    const key = buildSessionKey(this.activeAgentId, this.activeSessionId);
+    this.composerInputDeliveryBySession = {
+      ...this.composerInputDeliveryBySession,
+      [key]: delivery
+    };
   }
 
   clearError() {
@@ -999,6 +1063,9 @@ export class AgentsStore {
       void this.loadInitialModelsForAgent(config.id, 6);
       if (this.activeAgentId === config.id && this.activeSessionId) {
         void this.refreshDelegateAssignments(config.id, this.activeSessionId);
+        if (record.client.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE)) {
+          void this.refreshSessionRuntime(config.id, this.activeSessionId, record.client);
+        }
       }
     } catch (error) {
       if (error === CONNECT_ABORTED || this.clients.get(agentId) !== record) {
@@ -1608,7 +1675,7 @@ export class AgentsStore {
     return sessionId;
   }
 
-          async sendPromptToActiveSession(retryFailure: PromptFailure | null = null) {
+  async sendPromptToActiveSession(retryFailure: PromptFailure | null = null) {
     this.error = null;
     this.promptFailure = null;
     const prompt = (retryFailure?.prompt ?? this.composerPrompt).trim();
@@ -1631,9 +1698,21 @@ export class AgentsStore {
 
     try {
       const record = await this.connectInitializedRecord(agentId);
-      if (!record) {
-        throw new Error('Failed to connect to the agent.');
+      if (!record) throw new Error('Failed to connect to the agent.');
+
+      const runtime = this.canControlActiveRun
+        ? await this.refreshSessionRuntime(agentId, sessionId, record.client)
+        : null;
+      if (runtime && runtime.phase !== 'idle') {
+        await this.submitInputToActiveSession(record.client, runtime, prompt, attachments, clientPromptId, imageMode);
+        return;
       }
+      if (runtime?.phase === 'idle' && PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState)) {
+        this.activeSession.runState = 'completed';
+        this.activeSession.activeToolCallId = null;
+        this.activeSession.activityLabel = 'Turn completed.';
+      }
+
       const hasImages = attachments.some((attachment) => attachment.mimeType.startsWith('image/'));
       const hasResources = attachments.some(
         (attachment) => imageMode === 'resource' || !attachment.mimeType.startsWith('image/')
@@ -1657,10 +1736,12 @@ export class AgentsStore {
         this.composerPrompt = '';
         this.clearPromptAttachments();
       }
-      this.lastPromptResponse = await record.client.sendPrompt(sessionId, prompt, attachments, {
+      const promptResponse = record.client.sendPrompt(sessionId, prompt, attachments, {
         imageMode,
         clientPromptId
       });
+      this.scheduleSessionRuntimeRefresh(agentId, sessionId, record.client, 100);
+      this.lastPromptResponse = await promptResponse;
       if (retryFailure && this.composerPrompt.trim() === prompt && attachmentsMatch(this.promptAttachments, attachments)) {
         this.composerPrompt = '';
         this.clearPromptAttachments();
@@ -1675,6 +1756,7 @@ export class AgentsStore {
           this.lastPromptResponse.stopReason === 'cancelled' ? 'Turn cancelled.' : 'Turn completed.';
       }
       await this.refreshSessionsForAgent(agentId);
+      if (this.canControlActiveRun) void this.refreshSessionRuntime(agentId, sessionId, record.client);
     } catch (error) {
       endSessionWork(this.activeSession);
       const normalizedError = normalizePromptError(error);
@@ -1701,7 +1783,153 @@ export class AgentsStore {
     }
   }
 
-    async retryPromptFailure() {
+  private async submitInputToActiveSession(
+    client: DesktopAcpClient,
+    runtime: SessionRuntimeState,
+    prompt: string,
+    attachments: PromptAttachment[],
+    clientInputId: string,
+    imageMode: 'image' | 'resource'
+  ) {
+    if (!this.activeAgentId || !this.activeSessionId) return;
+    const agentId = this.activeAgentId;
+    const sessionId = this.activeSessionId;
+    const delivery = this.activeInputDelivery;
+    const key = buildSessionKey(agentId, sessionId);
+    const pending: PendingSessionInput = {
+      inputId: clientInputId,
+      delivery,
+      state: 'sending',
+      prompt,
+      attachments,
+      runId: delivery === 'steer' ? runtime.active_run_id : undefined,
+      createdAt: Date.now()
+    };
+    this.pendingInputsBySession = {
+      ...this.pendingInputsBySession,
+      [key]: upsertPendingSessionInput(this.pendingInputsBySession[key] ?? [], pending)
+    };
+    this.inputSubmitPending = true;
+    try {
+      const result = delivery === 'steer'
+        ? await client.steerSession(sessionId, prompt, attachments, clientInputId, runtime.active_run_id, imageMode)
+        : await client.queueSession(sessionId, prompt, attachments, clientInputId, imageMode);
+      this.applySubmitInputResult(agentId, sessionId, pending, result);
+      if (result.status === 'started') {
+        this.activeSession.runState = 'thinking';
+        this.activeSession.activityLabel = 'Waiting for the agent to respond…';
+        beginSessionWork(this.activeSession);
+      }
+      if (this.composerPrompt.trim() === prompt && attachmentsMatch(this.promptAttachments, attachments)) {
+        this.composerPrompt = '';
+        this.clearPromptAttachments();
+      }
+      this.activeSession.lastError = null;
+    } catch (error) {
+      this.updatePendingSessionInput(agentId, sessionId, clientInputId, {
+        state: 'failed',
+        reason: error instanceof Error ? error.message : 'Input submission failed.'
+      });
+      this.error = error instanceof Error ? error.message : 'Failed to submit input.';
+      await this.refreshSessionRuntime(agentId, sessionId, client).catch(() => null);
+    } finally {
+      this.inputSubmitPending = false;
+    }
+  }
+
+  private applySubmitInputResult(
+    agentId: string,
+    sessionId: string,
+    pending: PendingSessionInput,
+    result: SubmitInputResult
+  ) {
+    const inputId = result.data.input_id;
+    if (inputId !== pending.inputId) {
+      this.updatePendingSessionInput(agentId, sessionId, pending.inputId, { state: 'unknown' });
+    }
+    if (result.status === 'steered') {
+      this.updatePendingSessionInput(agentId, sessionId, inputId, {
+        inputId,
+        delivery: 'steer',
+        state: 'accepted',
+        runId: result.data.run_id,
+        position: result.data.position
+      });
+    } else if (result.status === 'queued') {
+      this.updatePendingSessionInput(agentId, sessionId, inputId, {
+        inputId,
+        delivery: 'queue',
+        state: 'queued',
+        position: result.data.position
+      });
+    } else {
+      this.updatePendingSessionInput(agentId, sessionId, inputId, {
+        inputId,
+        delivery: 'queue',
+        state: 'started',
+        runId: result.data.run_id
+      });
+    }
+  }
+
+  async refreshSessionRuntime(
+    agentId = this.activeAgentId,
+    sessionId = this.activeSessionId,
+    client?: DesktopAcpClient
+  ): Promise<SessionRuntimeState | null> {
+    if (!agentId || !sessionId) return null;
+    const record = client ? null : await this.connectInitializedRecord(agentId);
+    const resolvedClient = client ?? record?.client;
+    if (!resolvedClient?.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE)) return null;
+    const runtime = await resolvedClient.getSessionRuntimeState(sessionId);
+    this.sessionRuntimeBySession = {
+      ...this.sessionRuntimeBySession,
+      [buildSessionKey(agentId, sessionId)]: runtime
+    };
+    if (runtime.phase !== 'idle') {
+      this.scheduleSessionRuntimeRefresh(agentId, sessionId, resolvedClient);
+    } else {
+      this.cancelSessionRuntimeRefresh(buildSessionKey(agentId, sessionId));
+    }
+    return runtime;
+  }
+
+  private updatePendingSessionInput(
+    agentId: string,
+    sessionId: string,
+    inputId: string,
+    updates: Partial<PendingSessionInput>
+  ) {
+    const key = buildSessionKey(agentId, sessionId);
+    const current = this.pendingInputsBySession[key] ?? [];
+    const index = current.findIndex((input) => input.inputId === inputId);
+    if (index < 0) return;
+    const next = current.slice();
+    next[index] = { ...next[index], ...updates };
+    this.pendingInputsBySession = { ...this.pendingInputsBySession, [key]: next };
+  }
+
+  private applyInputStateNotification(agentId: string, notification: SessionInputStateNotification) {
+    if (notification.version !== 1) return;
+    const delivery: SessionInputDeliveryMode =
+      notification.delivery === SessionInputDelivery.Queue ? 'queue' : 'steer';
+    const state = sessionInputLifecycleState(notification.state);
+    const updates: Partial<PendingSessionInput> = {
+      delivery,
+      state,
+      runId: notification.run_id,
+      position: notification.position,
+      boundary: notification.boundary,
+      reason: notification.reason,
+      latencyMs: notification.latency_ms
+    };
+    this.updatePendingSessionInput(agentId, notification.session_id, notification.input_id, updates);
+    if (this.isSelectedSession(agentId, notification.session_id)) {
+      void this.refreshSessionRuntime(agentId, notification.session_id).catch(() => null);
+    }
+  }
+
+  async retryPromptFailure() {
     const failure = this.promptFailure;
     if (!failure || !failure.retryable || failure.sessionId !== this.activeSessionId || this.promptRetryPending) {
       return;
@@ -1895,6 +2123,10 @@ export class AgentsStore {
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });
       checkpoint('frontend.normalize');
       this.activeSession.undo.pendingOperation = pendingOperation;
+      this.reconcileInputStatesFromSnapshot(agentId, sessionId, loadedSession);
+      if (record.client.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE)) {
+        await this.refreshSessionRuntime(agentId, sessionId, record.client);
+      }
       await this.hydrateUndoStack(agentId, sessionId, record.client);
       checkpoint('frontend.undo_hydrate');
       if (!this.isSelectedSession(agentId, sessionId)) {
@@ -2381,6 +2613,9 @@ export class AgentsStore {
       record.unsubscribeExtensionNotifications = record.client.onExtensionNotification((notification) => {
         if (notification.method === 'querymt/models/changed') {
           void this.loadInitialModelsForAgent(agentId, 1);
+        }
+        if (notification.method === QMT_NOTIFICATION_SESSION_INPUT_STATE) {
+          this.applyInputStateNotification(agentId, notification.params as SessionInputStateNotification);
         }
         if (notification.method === 'querymt/session/delegateModelsChanged') {
           const params = notification.params as DelegateModelsChangedNotification;
@@ -3178,7 +3413,21 @@ export class AgentsStore {
     this.modelInfoByAgent = projected;
   }
 
-    private resetActiveSession(agentId: string, sessionId: string) {
+  private reconcileInputStatesFromSnapshot(agentId: string, sessionId: string, response: unknown) {
+    for (const state of getSnapshotInputStates(response)) {
+      this.updatePendingSessionInput(agentId, sessionId, state.inputId, {
+        delivery: state.delivery,
+        state: state.state,
+        runId: state.runId,
+        position: state.position,
+        boundary: state.boundary,
+        reason: state.reason,
+        latencyMs: state.latencyMs
+      });
+    }
+  }
+
+  private resetActiveSession(agentId: string, sessionId: string) {
     this.activeAgentId = agentId;
     this.activeSessionId = sessionId;
     this.activeSession = createEmptyActiveSession();
@@ -3488,6 +3737,14 @@ export class AgentsStore {
     if (record.recentSessionUpdateKeys.length > 200) {
       record.recentSessionUpdateKeys.shift();
     }
+    if (
+      record.client.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE) &&
+      ['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'].includes(
+        notification.update.sessionUpdate
+      )
+    ) {
+      this.scheduleSessionRuntimeRefresh(agentId, notification.sessionId, record.client, 100);
+    }
   }
 
   private handleUnexpectedConnectionLoss(agentId: string, record: AgentClientRecord, reason: string) {
@@ -3536,6 +3793,9 @@ export class AgentsStore {
         this.refreshSessionsForAgent(agentId, true),
         this.refreshAuthProviders(agentId)
       ]);
+      if (this.activeAgentId === agentId && this.activeSessionId) {
+        await this.loadSession(agentId, this.activeSessionId);
+      }
       await this.refreshAgent(config);
     } else {
       this.scheduleReconnect(agentId);
@@ -3546,6 +3806,27 @@ export class AgentsStore {
     const timer = this.reconnectTimers.get(agentId);
     if (timer) clearTimeout(timer);
     this.reconnectTimers.delete(agentId);
+  }
+
+  private scheduleSessionRuntimeRefresh(
+    agentId: string,
+    sessionId: string,
+    client: DesktopAcpClient,
+    delayMs = 500
+  ) {
+    const key = buildSessionKey(agentId, sessionId);
+    this.cancelSessionRuntimeRefresh(key);
+    const timer = setTimeout(() => {
+      this.sessionRuntimeRefreshTimers.delete(key);
+      void this.refreshSessionRuntime(agentId, sessionId, client).catch(() => null);
+    }, delayMs);
+    this.sessionRuntimeRefreshTimers.set(key, timer);
+  }
+
+  private cancelSessionRuntimeRefresh(key: string) {
+    const timer = this.sessionRuntimeRefreshTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.sessionRuntimeRefreshTimers.delete(key);
   }
 
   private scheduleSessionRefresh(agentId: string, delayMs = 800) {
@@ -3905,6 +4186,34 @@ function maxTimestamp(values: Array<string | null>): string | null {
     if (!value) return latest;
     return !latest || value > latest ? value : latest;
   }, null);
+}
+
+function sessionInputLifecycleState(
+  state: SessionInputState
+): PendingSessionInput['state'] {
+  switch (state) {
+    case SessionInputState.Queued:
+      return 'queued';
+    case SessionInputState.Applied:
+      return 'applied';
+    case SessionInputState.Started:
+      return 'started';
+    case SessionInputState.Discarded:
+      return 'discarded';
+    default:
+      return 'accepted';
+  }
+}
+
+function upsertPendingSessionInput(
+  inputs: PendingSessionInput[],
+  input: PendingSessionInput
+): PendingSessionInput[] {
+  const index = inputs.findIndex((candidate) => candidate.inputId === input.inputId);
+  if (index < 0) return [...inputs, input];
+  const next = inputs.slice();
+  next[index] = { ...next[index], ...input };
+  return next;
 }
 
 function createClientPromptId(): string {
