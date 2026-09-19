@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Brain, ChevronDown, FileCog, FilePlus2, Lock, Monitor, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
+  import { Brain, ChevronDown, FileCog, FilePlus2, Lock, Monitor, Navigation, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
   import { tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import type { TransitionConfig } from 'svelte/transition';
@@ -14,7 +14,7 @@
     findReasoningConfigOption,
     getConfigOptionChoices
   } from '$lib/querymt/config-options';
-  import type { ComposerOption, ModelEntry, ModelInfo, PendingSessionInput, PromptAttachment, SessionContentBlock, SessionInputDeliveryMode } from '$lib/domain/types';
+  import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment, SessionContentBlock, SessionInputDeliveryMode } from '$lib/domain/types';
   import type { SendShortcut } from '$lib/stores/chat-preferences.svelte';
   import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 
@@ -82,7 +82,6 @@
     agentRunning = false,
     turnControlSupported = false,
     inputDelivery = 'steer',
-    pendingInputs = [],
     onInputDeliveryChange = null,
     onStopPrompt = null,
     onSendPrompt
@@ -142,7 +141,6 @@
     agentRunning?: boolean;
     turnControlSupported?: boolean;
     inputDelivery?: SessionInputDeliveryMode;
-    pendingInputs?: PendingSessionInput[];
     onInputDeliveryChange?: ((delivery: SessionInputDeliveryMode) => void) | null;
     onStopPrompt?: (() => void) | null;
     onSendPrompt: () => void;
@@ -195,13 +193,17 @@
   const hasDraft = $derived(prompt.trim().length > 0 || attachments.length > 0);
   const primaryActionLabel = $derived(
     agentRunning && turnControlSupported
-      ? inputDelivery === 'queue' ? 'Queue next' : 'Steer'
+      ? inputDelivery === 'queue' ? 'Queue' : 'Steer'
       : 'Send reply'
   );
-  const displayedPendingInputs = $derived(
-    pendingInputs.filter((input) => !['applied', 'started'].includes(input.state))
+  // The send glyph is only overridden while a steerable run is active; idle
+  // composers always render the plain send arrow (never the queue "+").
+  const primaryActionIcon = $derived(
+    agentRunning && turnControlSupported
+      ? inputDelivery === 'queue' ? Plus : Navigation
+      : SendHorizontal
   );
-  const visiblePendingInputs = $derived(displayedPendingInputs.slice(0, 2));
+  const deliveryControlAvailable = $derived(activeSessionId && agentRunning && turnControlSupported);
   const promptMinHeightClass = $derived.by(() => {
     if (chatView && sessionOnly) return 'min-h-[76px]';
     if (launch) return 'min-h-[104px]';
@@ -255,6 +257,7 @@
     targetOptions.find((option) => option.id === selectedTargetId)?.label ?? 'Local'
   );
   const secondaryOptionCount = $derived(
+    (deliveryControlAvailable ? 1 : 0) +
     (!activeSessionId && launch && launchReasoningOptions.length > 0 ? 1 : reasoningOption ? 1 : 0) +
       (!sessionOnly && profileOptions.length > 0 ? 1 : 0) +
       (sessionOnly && sessionProfileLabel ? 1 : 0) +
@@ -551,46 +554,6 @@
     <SessionAttachmentPreview blocks={attachmentBlocks} removable={true} {compact} onRemove={onRemoveAttachment} />
   {/if}
 
-  {#if sessionOnly && turnControlSupported && agentRunning}
-    <div class="composer-turn-control" aria-label="Active run input delivery">
-      <div class="composer-turn-control-copy">
-        <strong>{inputDelivery === 'queue' ? 'Run after current work' : 'Adjust current work'}</strong>
-        <span>{inputDelivery === 'queue' ? 'Starts as the next turn.' : 'Applied at the next safe boundary.'}</span>
-      </div>
-      <div class="composer-delivery-switch" role="group" aria-label="Input delivery">
-        <button
-          type="button"
-          class:active={inputDelivery === 'steer'}
-          aria-pressed={inputDelivery === 'steer'}
-          onclick={() => onInputDeliveryChange?.('steer')}
-        >Adjust current</button>
-        <button
-          type="button"
-          class:active={inputDelivery === 'queue'}
-          aria-pressed={inputDelivery === 'queue'}
-          onclick={() => onInputDeliveryChange?.('queue')}
-        >Run next</button>
-      </div>
-    </div>
-  {/if}
-
-  {#if visiblePendingInputs.length > 0}
-    <div class="composer-pending-inputs" aria-label="Pending session inputs">
-      {#each visiblePendingInputs as input (input.inputId)}
-        <div class="composer-pending-input">
-          <span class="composer-pending-marker" class:queued={input.delivery === 'queue'}></span>
-          <span class="composer-pending-copy">
-            <strong>{input.delivery === 'queue' ? 'Next' : 'Adjustment'} · {input.state}</strong>
-            <small>{input.prompt || `${input.attachments.length} attachment(s)`}</small>
-          </span>
-        </div>
-      {/each}
-      {#if displayedPendingInputs.length > visiblePendingInputs.length}
-        <span class="composer-pending-more">+{displayedPendingInputs.length - visiblePendingInputs.length} more</span>
-      {/if}
-    </div>
-  {/if}
-
   <div class={`flex flex-wrap items-center justify-between gap-3 ${unifiedShell ? 'border-t border-[var(--border)] px-1 pt-3' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
     <div class="flex flex-wrap items-center gap-2">
       {#if !sessionOnly && onCreateSession && !minimal && !launch}
@@ -642,10 +605,38 @@
            <div class="composer-options-panel">
              <div class="composer-options-heading">
                <strong>Session options</strong>
-               <span>{activeSessionId ? 'Applied to the next reply' : 'Applied when this session starts'}</span>
+                <span>Fine-tune how this session runs</span>
              </div>
-             <div class="composer-options-list">
-               {#if !activeSessionId && launch && launchReasoningOptions.length > 0}
+              <div class="composer-options-list">
+                {#if deliveryControlAvailable}
+                  <div class="composer-option-row">
+                    <div class="composer-option-copy">
+                      {#if inputDelivery === 'queue'}<Plus size={15} />{:else}<Navigation size={15} />{/if}
+                      <span><strong>Message delivery</strong><small>How the next message joins the run</small></span>
+                    </div>
+                    <div class="composer-delivery-switch" role="group" aria-label="Input delivery">
+                      <button
+                        type="button"
+                        class:active={inputDelivery === 'steer'}
+                        aria-pressed={inputDelivery === 'steer'}
+                        onclick={() => onInputDeliveryChange?.('steer')}
+                      >
+                        <Navigation size={12} />
+                        Steer
+                      </button>
+                      <button
+                        type="button"
+                        class:active={inputDelivery === 'queue'}
+                        aria-pressed={inputDelivery === 'queue'}
+                        onclick={() => onInputDeliveryChange?.('queue')}
+                      >
+                        <Plus size={12} />
+                        Queue
+                      </button>
+                    </div>
+                  </div>
+                {/if}
+                {#if !activeSessionId && launch && launchReasoningOptions.length > 0}
                  <div class="composer-option-row">
                    <div class="composer-option-copy"><Brain size={15} /><span><strong>Reasoning</strong><small>How deeply the agent should think</small></span></div>
                    <ComposerSplitPillSelect
@@ -773,8 +764,10 @@
         >
         {#if activeSessionId}
           <span class="inline-flex items-center gap-2">
-            {#if inputDelivery === 'queue' && agentRunning && turnControlSupported}
+            {#if agentRunning && turnControlSupported && inputDelivery === 'queue'}
               <Plus size={16} />
+            {:else if agentRunning && turnControlSupported}
+              <Navigation size={16} />
             {:else}
               <SendHorizontal size={16} />
             {/if}
@@ -848,7 +841,7 @@
         {#if agentRunning && turnControlSupported && onStopPrompt}
           <IconTooltipButton label="Stop agent" icon={Square} size={15} onclick={onStopPrompt} />
         {/if}
-        <IconTooltipButton label={primaryActionLabel} icon={inputDelivery === 'queue' ? Plus : SendHorizontal} tone="primary" size={16} disabled={loading} onclick={handlePrimaryAction} />
+        <IconTooltipButton label={primaryActionLabel} icon={primaryActionIcon} tone="primary" size={16} disabled={loading} onclick={handlePrimaryAction} />
       {/if}
 
       {#if attachmentErrors.length > 0}

@@ -3108,32 +3108,6 @@ summary:focus-visible {
   margin-left: 0.2rem;
 }
 
-.composer-turn-control {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  border-top: 1px solid var(--border);
-  padding: 0.7rem 0.25rem 0;
-}
-
-.composer-turn-control-copy {
-  display: grid;
-  min-width: 0;
-  gap: 0.12rem;
-}
-
-.composer-turn-control-copy strong {
-  color: var(--text);
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.composer-turn-control-copy span {
-  color: var(--muted);
-  font-size: 0.68rem;
-}
-
 .composer-delivery-switch {
   display: inline-flex;
   flex: none;
@@ -3145,6 +3119,9 @@ summary:focus-visible {
 }
 
 .composer-delivery-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   border: 0;
   border-radius: calc(var(--radius-control) - 2px);
   background: transparent;
@@ -3163,61 +3140,6 @@ summary:focus-visible {
 
 .composer-delivery-switch button.active {
   box-shadow: inset 0 0 0 1px var(--border-strong);
-}
-
-.composer-pending-inputs {
-  display: grid;
-  gap: 0.35rem;
-  border-top: 1px solid var(--border);
-  padding: 0.65rem 0.25rem 0;
-}
-
-.composer-pending-input {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 0.55rem;
-}
-
-.composer-pending-marker {
-  width: 0.42rem;
-  height: 0.42rem;
-  flex: none;
-  border-radius: 999px;
-  background: var(--accent);
-}
-
-.composer-pending-marker.queued {
-  background: var(--status-warn);
-}
-
-.composer-pending-copy {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  align-items: baseline;
-  gap: 0.5rem;
-}
-
-.composer-pending-copy strong {
-  flex: none;
-  color: var(--text-muted);
-  font-size: 0.68rem;
-  font-weight: 600;
-  text-transform: capitalize;
-}
-
-.composer-pending-copy small {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 0.68rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-pending-more {
-  color: var(--muted);
-  font-size: 0.68rem;
 }
 
 .composer-options {
@@ -5728,6 +5650,7 @@ summary:focus-visible {
   );
   z-index: 34;
   display: flex;
+  gap: 0.4rem;
   justify-content: flex-start;
   width: min(var(--session-chat-max), calc(100vw - 2rem));
   max-width: calc(100vw - 2rem);
@@ -5754,6 +5677,100 @@ summary:focus-visible {
   color: var(--text);
   font-size: 0.78rem;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-queued-bubble {
+  display: inline-flex;
+  width: fit-content;
+  min-width: 0;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.7rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--body-bg-base);
+  color: var(--muted);
+  font-family: inherit;
+  pointer-events: auto;
+  cursor: pointer;
+  text-align: left;
+  box-shadow:
+    0 0 0 4px var(--body-bg-base),
+    0 0 12px 4px color-mix(in srgb, var(--body-bg-base) 85%, transparent),
+    0 0 28px 9px color-mix(in srgb, var(--body-bg-base) 50%, transparent);
+}
+
+.session-queued-bubble:hover,
+.session-queued-bubble.open {
+  color: var(--text);
+}
+
+.session-queued-bubble svg {
+  flex: 0 0 auto;
+  color: currentColor;
+}
+
+.session-queued-bubble-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-queued-panel {
+  position: fixed;
+  z-index: 150;
+  display: grid;
+  min-width: 16rem;
+  max-width: min(24rem, calc(100vw - 2rem));
+  gap: 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-panel-strong);
+  padding: 0.4rem;
+  box-shadow: var(--shadow-lg);
+}
+
+.session-queued-panel-heading {
+  padding: 0.15rem 0.35rem 0.3rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-queued-panel-item {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 0.5rem;
+  border-radius: calc(var(--radius-control) - 2px);
+  background: var(--bg-card);
+  padding: 0.4rem 0.5rem;
+}
+
+.session-queued-panel-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--status-warn);
+  font-size: 0.64rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.session-queued-panel-prompt {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.74rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

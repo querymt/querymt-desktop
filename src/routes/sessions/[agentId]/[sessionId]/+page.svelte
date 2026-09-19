@@ -7,6 +7,7 @@
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import SessionScrollToBottomPill from '$lib/components/session/SessionScrollToBottomPill.svelte';
   import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelte';
+  import SessionQueuedBubble from '$lib/components/session/SessionQueuedBubble.svelte';
   import DelegateModelDialog from '$lib/components/session/DelegateModelDialog.svelte';
   import SessionForkDialog from '$lib/components/session/SessionForkDialog.svelte';
   import SessionHeader from '$lib/components/session/SessionHeader.svelte';
@@ -39,6 +40,11 @@
   const sessionId = $derived(decodeURIComponent(page.params.sessionId ?? ''));
   const selectedSession = $derived(getSessionById(agentsStore.sessionsByAgent[agentId] ?? [], sessionId, agentId));
   const sessionProfileId = $derived(getCurrentProfileId(agentsStore.activeSession.configOptions) ?? null);
+  const waitingInputs = $derived(
+    agentsStore.activePendingInputs.filter(
+      (input) => !['applied', 'started'].includes(input.state)
+    )
+  );
   const inheritedReasoningLabel = $derived.by(() => {
     const option = findReasoningConfigOption(agentsStore.activeSession.configOptions);
     if (!option) return null;
@@ -599,6 +605,7 @@
         class="session-activity-bar-dock"
         style={dockAlignLeft != null && dockAlignWidth != null ? `left:${dockAlignLeft}px;width:${dockAlignWidth}px;transform:none;` : ''}
       >
+        <SessionQueuedBubble inputs={waitingInputs} />
         <SessionActivityBar session={agentsStore.activeSession} forkPending={agentsStore.forkPending} />
       </div>
 
@@ -614,7 +621,6 @@
         agentRunning={agentRunActive}
         turnControlSupported={agentsStore.canControlActiveRun}
         inputDelivery={agentsStore.activeInputDelivery}
-        pendingInputs={agentsStore.activePendingInputs}
         onInputDeliveryChange={(delivery) => agentsStore.setActiveComposerInputDelivery(delivery)}
         onStopPrompt={() => agentsStore.cancelActiveSession()}
         sendShortcut={chatPreferencesStore.sendShortcut}

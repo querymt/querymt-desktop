@@ -389,11 +389,11 @@ describe('SessionComposer', () => {
     expect(screen.getByText('Switch model')).toBeInTheDocument();
   });
 
-  it('offers steer and queue actions while a supported run is active', async () => {
+  it('offers steer and queue delivery from options while a supported run is active', async () => {
     const onSendPrompt = vi.fn();
     const onStopPrompt = vi.fn();
     const onInputDeliveryChange = vi.fn();
-    const { rerender } = renderComposer({
+    const { container, rerender } = renderComposer({
       activeSessionId: 'session-1',
       sessionOnly: true,
       prompt: 'Change direction',
@@ -405,15 +405,63 @@ describe('SessionComposer', () => {
       onInputDeliveryChange
     });
 
-    expect(screen.getByRole('button', { name: 'Steer' })).toBeInTheDocument();
+    const sendButton = container.querySelector('button.action-btn-primary') as HTMLButtonElement | null;
+    expect(sendButton).not.toBeNull();
+    expect(sendButton).toHaveAttribute('aria-label', 'Steer');
+    expect(sendButton!.querySelector('.lucide-navigation')).not.toBeNull();
+    expect(sendButton!.textContent?.trim()).toBe('Steer');
     expect(screen.getByRole('button', { name: 'Stop agent' })).toBeInTheDocument();
-    await fireEvent.click(screen.getByRole('button', { name: 'Steer' }));
+    await fireEvent.click(sendButton!);
     expect(onSendPrompt).toHaveBeenCalledTimes(1);
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Run next' }));
+    const options = container.querySelector('.composer-options') as HTMLDetailsElement | null;
+    expect(options).not.toBeNull();
+    options!.open = true;
+    const switchGroup = within(options!).getByRole('group', { name: 'Input delivery' });
+    expect(within(switchGroup).getByRole('button', { name: /Steer/ })).toHaveAttribute('aria-pressed', 'true');
+    await fireEvent.click(within(switchGroup).getByRole('button', { name: /Queue/ }));
     expect(onInputDeliveryChange).toHaveBeenCalledWith('queue');
+
     await rerender({ inputDelivery: 'queue' });
-    expect(screen.getByRole('button', { name: 'Queue next' })).toBeInTheDocument();
+    expect(sendButton).toHaveAttribute('aria-label', 'Queue');
+    expect(sendButton!.querySelector('.lucide-plus')).not.toBeNull();
+    expect(sendButton!.textContent?.trim()).toBe('Queue');
+  });
+
+  it('keeps the send icon while idle and only swaps glyphs for active steer/queue runs', () => {
+    const { container, rerender } = renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      prompt: 'Idle reply',
+      inputDelivery: 'queue'
+    });
+    const sendButton = screen.getByRole('button', { name: 'Send reply' });
+    expect(sendButton.querySelector('.lucide-send-horizontal')).not.toBeNull();
+    expect(sendButton.querySelector('.lucide-plus')).toBeNull();
+    expect(container.querySelector('.composer-delivery-switch')).toBeNull();
+
+    rerender({ agentRunning: true, turnControlSupported: true, inputDelivery: 'steer' });
+    expect(container.querySelector('.composer-delivery-switch')).not.toBeNull();
+    const steerButton = container.querySelector('button.action-btn-primary');
+    expect(steerButton?.querySelector('.lucide-navigation')).not.toBeNull();
+    expect(steerButton?.getAttribute('aria-label')).toBe('Steer');
+
+    rerender({ inputDelivery: 'queue' });
+    const queueButton = container.querySelector('button.action-btn-primary');
+    expect(queueButton?.querySelector('.lucide-plus')).not.toBeNull();
+    expect(queueButton?.getAttribute('aria-label')).toBe('Queue');
+  });
+
+  it('hides the delivery row when the active run does not support turn control', () => {
+    const { container } = renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      prompt: 'Busy reply',
+      agentRunning: true,
+      turnControlSupported: false
+    });
+
+    expect(container.querySelector('.composer-delivery-switch')).toBeNull();
   });
 
   it('uses Enter for the active-run delivery action instead of stopping', async () => {

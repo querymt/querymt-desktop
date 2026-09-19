@@ -337,8 +337,8 @@ export class AgentsStore {
   }
 
   get activeComposerInputDelivery(): SessionInputDeliveryMode {
-    if (!this.activeAgentId || !this.activeSessionId) return 'steer';
-    return this.composerInputDeliveryBySession[buildSessionKey(this.activeAgentId, this.activeSessionId)] ?? 'steer';
+    if (!this.activeAgentId || !this.activeSessionId) return chatPreferencesStore.inputDelivery;
+    return this.composerInputDeliveryBySession[buildSessionKey(this.activeAgentId, this.activeSessionId)] ?? chatPreferencesStore.inputDelivery;
   }
 
   get canControlActiveRun(): boolean {
@@ -592,6 +592,7 @@ export class AgentsStore {
   }
 
   setActiveComposerInputDelivery(delivery: SessionInputDeliveryMode) {
+    chatPreferencesStore.setInputDelivery(delivery);
     if (!this.activeAgentId || !this.activeSessionId) return;
     const key = buildSessionKey(this.activeAgentId, this.activeSessionId);
     this.composerInputDeliveryBySession = {
