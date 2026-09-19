@@ -52,6 +52,18 @@ export interface SnapshotProviderChange {
   providerNodeId: string | null;
 }
 
+export interface SnapshotInputState {
+  sessionId: string;
+  inputId: string;
+  delivery: 'steer' | 'queue';
+  state: 'accepted' | 'queued' | 'applied' | 'started' | 'discarded';
+  runId?: string;
+  position?: number;
+  boundary?: string;
+  reason?: string;
+  latencyMs?: number;
+}
+
 const TOOL_TERMINAL_EVENT_TYPES = new Set(['assistant_message_stored', 'llm_request_end']);
 
 export function activeSessionFromLoadResponse(sessionId: string, response: unknown): ActiveSessionViewModel {
@@ -97,6 +109,19 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
     if (kind === 'cancelled' || kind === 'error') {
       session.usage.activeWorkMs += elapsedWorkMs(activeWorkStartedAt, readTimestampMs(event.timestamp));
       activeWorkStartedAt = null;
+    }
+
+    if (kind === 'run_started') {
+      session.runState = 'thinking';
+      session.activityLabel = 'Agent is working…';
+      continue;
+    }
+
+    if (kind === 'run_completed') {
+      const outcome = readString(data.outcome);
+      session.runState = outcome === 'failed' ? 'failed' : 'completed';
+      session.activityLabel = outcome === 'cancelled' ? 'Turn cancelled.' : 'Turn completed.';
+      continue;
     }
 
     if (kind === 'prompt_received') {
@@ -249,6 +274,65 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
 
   session.toolCalls = finalizeHistoricalToolCalls(Array.from(toolCallsById.values()), snapshot.audit?.events ?? []);
   return normalizeHistoricalSession(session);
+}
+
+export function getSnapshotInputStates(response: unknown): SnapshotInputState[] {
+  const states = new Map<string, SnapshotInputState>();
+  for (const event of readSnapshot(response)?.audit?.events ?? []) {
+    const kind = event.kind?.type;
+    const data = event.kind?.data ?? {};
+    const inputId = readString(data.input_id) ?? readString(data.inputId);
+    if (!inputId) continue;
+
+    let next: SnapshotInputState | null = null;
+    if (kind === 'steering_accepted') {
+      next = {
+        sessionId: '',
+        inputId,
+        delivery: 'steer',
+        state: 'accepted',
+        runId: readString(data.run_id) ?? readString(data.runId) ?? undefined,
+        position: readNonNegativeNumber(data.position) ?? undefined
+      };
+    } else if (kind === 'steering_applied') {
+      next = {
+        sessionId: '',
+        inputId,
+        delivery: 'steer',
+        state: 'applied',
+        runId: readString(data.run_id) ?? readString(data.runId) ?? undefined,
+        boundary: readString(data.boundary) ?? undefined,
+        latencyMs: readNonNegativeNumber(data.latency_ms ?? data.latencyMs) ?? undefined
+      };
+    } else if (kind === 'steering_discarded') {
+      next = {
+        sessionId: '',
+        inputId,
+        delivery: 'steer',
+        state: 'discarded',
+        runId: readString(data.run_id) ?? readString(data.runId) ?? undefined,
+        reason: readString(data.reason) ?? undefined
+      };
+    } else if (kind === 'input_queued') {
+      next = {
+        sessionId: '',
+        inputId,
+        delivery: 'queue',
+        state: 'queued',
+        position: readNonNegativeNumber(data.position) ?? undefined
+      };
+    } else if (kind === 'queued_input_started') {
+      next = {
+        sessionId: '',
+        inputId,
+        delivery: 'queue',
+        state: 'started',
+        runId: readString(data.run_id) ?? readString(data.runId) ?? undefined
+      };
+    }
+    if (next) states.set(inputId, next);
+  }
+  return [...states.values()];
 }
 
 export function getSnapshotProviderChange(response: unknown): SnapshotProviderChange | null {

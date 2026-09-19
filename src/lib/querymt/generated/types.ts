@@ -594,6 +594,7 @@ export interface ControlFeatureInfo {
 	profiles: boolean;
 	auth: boolean;
 	models: boolean;
+	steering?: boolean;
 }
 
 export interface CapabilitiesInfo {
@@ -1081,12 +1082,72 @@ export enum DelegateReasoningEffort {
 	Max = "max",
 }
 
+export enum SessionInputDelivery {
+	Steer = "steer",
+	Queue = "queue",
+}
+
+export enum SessionInputState {
+	Accepted = "accepted",
+	Queued = "queued",
+	Applied = "applied",
+	Started = "started",
+	Discarded = "discarded",
+}
+
+export interface SessionInputStateNotification {
+	version: number;
+	session_id: string;
+	input_id: string;
+	delivery: SessionInputDelivery;
+	state: SessionInputState;
+	run_id?: string;
+	position?: number;
+	boundary?: string;
+	reason?: string;
+	latency_ms?: number;
+}
+
 export enum SessionRuntimeStatus {
 	Idle = "idle",
 	Running = "running",
 	Waiting = "waiting",
 	CancelRequested = "cancel_requested",
 }
+
+export enum SessionRuntimePhase {
+	Idle = "idle",
+	Starting = "starting",
+	Model = "model",
+	Tools = "tools",
+	Waiting = "waiting",
+	Closing = "closing",
+	CancelRequested = "cancel_requested",
+}
+
+export interface SessionRuntimeState {
+	phase: SessionRuntimePhase;
+	active_run_id?: string;
+	steerable: boolean;
+	pending_steering_count: number;
+	queued_input_count: number;
+	run_started_at_ms?: number;
+}
+
+export type SubmitInputResult =
+	| { status: "steered", data: {
+	run_id: string;
+	input_id: string;
+	position: number;
+}}
+	| { status: "queued", data: {
+	input_id: string;
+	position: number;
+}}
+	| { status: "started", data: {
+	run_id: string;
+	input_id: string;
+}};
 
 export interface SessionMeta {
 	messageCount: number;

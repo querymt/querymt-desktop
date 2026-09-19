@@ -80,7 +80,8 @@
   const followPinClass = $derived(sessionFollowPinClass(scrollMode));
   const agentRunActive = $derived(
     !agentsStore.sessionHistoryLoading &&
-      ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession?.runState ?? 'idle')
+      (agentsStore.activeSessionRuntime?.phase !== 'idle' ||
+        ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession?.runState ?? 'idle'))
   );
   // The agent name in the header only disambiguates between sessions when more
   // than one agent is actively connected.
@@ -611,10 +612,14 @@
         sessionProfileLabel={sessionProfileLabel}
         chatView={true}
         agentRunning={agentRunActive}
+        turnControlSupported={agentsStore.canControlActiveRun}
+        inputDelivery={agentsStore.activeInputDelivery}
+        pendingInputs={agentsStore.activePendingInputs}
+        onInputDeliveryChange={(delivery) => agentsStore.setActiveComposerInputDelivery(delivery)}
         onStopPrompt={() => agentsStore.cancelActiveSession()}
         sendShortcut={chatPreferencesStore.sendShortcut}
         prompt={agentsStore.composerPrompt}
-        loading={agentsStore.loading}
+        loading={agentsStore.loading || agentsStore.inputSubmitPending}
         error={agentsStore.error}
         activeSessionId={agentsStore.activeSessionId}
         promptFocusToken={agentsStore.promptFocusToken}

@@ -38,6 +38,9 @@ import type {
   OAuthFlowKindTs,
   PluginUpdateResult,
   SchedulesChangedNotification,
+  SessionInputStateNotification,
+  SessionRuntimeState,
+  SubmitInputResult,
   UndoStackFrame
 } from '$lib/querymt/generated/types';
 import type { ClientSideConnection } from '@agentclientprotocol/sdk';
@@ -47,6 +50,7 @@ export type QuerymtWireMethod = QuerymtLogicalMethod | `_${QuerymtLogicalMethod}
 export type QuerymtExtensionNotification =
   | { method: 'querymt/models/changed'; params: ModelsChangedNotification }
   | { method: 'querymt/session/delegateModelsChanged'; params: DelegateModelsChangedNotification }
+  | { method: 'querymt/session/inputState'; params: SessionInputStateNotification }
   | { method: 'querymt/mesh/joined'; params: MeshJoinedNotification }
   | { method: 'querymt/mesh/nodesChanged'; params: MeshNodesChangedNotification }
   | { method: 'querymt/mesh/peerExpired'; params: MeshPeerExpiredNotification }
@@ -90,6 +94,10 @@ export const QMT_METHOD_SESSION_UNDO = 'querymt/session/undo';
 export const QMT_METHOD_SESSION_REDO = 'querymt/session/redo';
 export const QMT_METHOD_SESSION_DELEGATE_MODELS = 'querymt/session/delegateModels';
 export const QMT_METHOD_SESSION_SET_DELEGATE_MODEL = 'querymt/session/setDelegateModel';
+export const QMT_METHOD_SESSION_STEER = 'querymt/session/steer';
+export const QMT_METHOD_SESSION_QUEUE = 'querymt/session/queue';
+export const QMT_METHOD_SESSION_RUNTIME_STATE = 'querymt/session/runtimeState';
+export const QMT_NOTIFICATION_SESSION_INPUT_STATE = 'querymt/session/inputState';
 
 export interface QuerymtProfileInfo {
   id: string;
@@ -228,6 +236,13 @@ export interface QuerymtRedoResponse extends QuerymtUndoStackResponse {
   success: boolean;
   restored?: boolean;
   message?: string;
+}
+
+export interface QuerymtSubmitInputRequest {
+  session_id: string;
+  prompt: import('@agentclientprotocol/sdk').ContentBlock[];
+  client_input_id: string;
+  expected_run_id?: string;
 }
 
 export function toAcpExtensionMethod(method: QuerymtLogicalMethod): QuerymtWireMethod {
@@ -383,6 +398,18 @@ export class QuerymtExtensions {
     return {
       results: response.results ?? []
     };
+  }
+
+  async steerSession(request: QuerymtSubmitInputRequest): Promise<SubmitInputResult> {
+    return this.call<SubmitInputResult>(QMT_METHOD_SESSION_STEER, request);
+  }
+
+  async queueSession(request: QuerymtSubmitInputRequest): Promise<SubmitInputResult> {
+    return this.call<SubmitInputResult>(QMT_METHOD_SESSION_QUEUE, request);
+  }
+
+  async sessionRuntimeState(session_id: string): Promise<SessionRuntimeState> {
+    return this.call<SessionRuntimeState>(QMT_METHOD_SESSION_RUNTIME_STATE, { session_id });
   }
 
   async undoStack(session_id: string): Promise<QuerymtUndoStackResponse> {

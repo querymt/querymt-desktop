@@ -3108,6 +3108,118 @@ summary:focus-visible {
   margin-left: 0.2rem;
 }
 
+.composer-turn-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-top: 1px solid var(--border);
+  padding: 0.7rem 0.25rem 0;
+}
+
+.composer-turn-control-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.composer-turn-control-copy strong {
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.composer-turn-control-copy span {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.composer-delivery-switch {
+  display: inline-flex;
+  flex: none;
+  gap: 0.15rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-card);
+  padding: 0.15rem;
+}
+
+.composer-delivery-switch button {
+  border: 0;
+  border-radius: calc(var(--radius-control) - 2px);
+  background: transparent;
+  padding: 0.3rem 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.composer-delivery-switch button:hover,
+.composer-delivery-switch button.active {
+  background: var(--bg-card-hover);
+  color: var(--text);
+}
+
+.composer-delivery-switch button.active {
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.composer-pending-inputs {
+  display: grid;
+  gap: 0.35rem;
+  border-top: 1px solid var(--border);
+  padding: 0.65rem 0.25rem 0;
+}
+
+.composer-pending-input {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.composer-pending-marker {
+  width: 0.42rem;
+  height: 0.42rem;
+  flex: none;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.composer-pending-marker.queued {
+  background: var(--status-warn);
+}
+
+.composer-pending-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.composer-pending-copy strong {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.composer-pending-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-pending-more {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
 .composer-options {
   position: relative;
 }

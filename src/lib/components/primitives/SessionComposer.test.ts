@@ -389,6 +389,53 @@ describe('SessionComposer', () => {
     expect(screen.getByText('Switch model')).toBeInTheDocument();
   });
 
+  it('offers steer and queue actions while a supported run is active', async () => {
+    const onSendPrompt = vi.fn();
+    const onStopPrompt = vi.fn();
+    const onInputDeliveryChange = vi.fn();
+    const { rerender } = renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      prompt: 'Change direction',
+      agentRunning: true,
+      turnControlSupported: true,
+      inputDelivery: 'steer',
+      onSendPrompt,
+      onStopPrompt,
+      onInputDeliveryChange
+    });
+
+    expect(screen.getByRole('button', { name: 'Steer' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop agent' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Steer' }));
+    expect(onSendPrompt).toHaveBeenCalledTimes(1);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Run next' }));
+    expect(onInputDeliveryChange).toHaveBeenCalledWith('queue');
+    await rerender({ inputDelivery: 'queue' });
+    expect(screen.getByRole('button', { name: 'Queue next' })).toBeInTheDocument();
+  });
+
+  it('uses Enter for the active-run delivery action instead of stopping', async () => {
+    const onSendPrompt = vi.fn();
+    const onStopPrompt = vi.fn();
+    renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      prompt: 'Change direction',
+      agentRunning: true,
+      turnControlSupported: true,
+      inputDelivery: 'steer',
+      onSendPrompt,
+      onStopPrompt
+    });
+
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+    await fireEvent.keyDown(prompt, { key: 'Enter' });
+    expect(onSendPrompt).toHaveBeenCalledTimes(1);
+    expect(onStopPrompt).not.toHaveBeenCalled();
+  });
+
   it('sends with Enter by default and keeps Shift+Enter for a new line', async () => {
     const onSendPrompt = vi.fn();
     renderComposer({ onSendPrompt });

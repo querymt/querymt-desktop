@@ -6,7 +6,10 @@ import {
   QMT_METHOD_AUTH_SET_METHOD,
   QMT_METHOD_PROFILES,
   QMT_METHOD_SESSION_DELEGATE_MODELS,
+  QMT_METHOD_SESSION_QUEUE,
   QMT_METHOD_SESSION_REDO,
+  QMT_METHOD_SESSION_RUNTIME_STATE,
+  QMT_METHOD_SESSION_STEER,
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK,
@@ -39,6 +42,39 @@ describe('QuerymtExtensions profiles', () => {
       active_profile_id: 'review'
     });
     expect(extMethod).toHaveBeenCalledWith(toAcpExtensionMethod(QMT_METHOD_PROFILES), {});
+  });
+});
+
+describe('QuerymtExtensions turn control', () => {
+  it('calls steering, queue, and runtime-state extensions with typed payloads', async () => {
+    const extMethod = vi.fn(async (method: string) => {
+      if (method.endsWith('runtimeState')) {
+        return { phase: 'model', active_run_id: 'run-1', steerable: true, pending_steering_count: 0, queued_input_count: 0 };
+      }
+      return method.endsWith('steer')
+        ? { status: 'steered', data: { run_id: 'run-1', input_id: 'input-1', position: 1 } }
+        : { status: 'queued', data: { input_id: 'input-2', position: 1 } };
+    });
+    const extensions = new QuerymtExtensions({ extMethod } as never);
+    const steerRequest = {
+      session_id: 's1',
+      client_input_id: 'input-1',
+      expected_run_id: 'run-1',
+      prompt: [{ type: 'text' as const, text: 'adjust' }]
+    };
+    const queueRequest = {
+      session_id: 's1',
+      client_input_id: 'input-2',
+      prompt: [{ type: 'text' as const, text: 'next' }]
+    };
+
+    await extensions.steerSession(steerRequest);
+    await extensions.queueSession(queueRequest);
+    await extensions.sessionRuntimeState('s1');
+
+    expect(extMethod).toHaveBeenNthCalledWith(1, toAcpExtensionMethod(QMT_METHOD_SESSION_STEER), steerRequest);
+    expect(extMethod).toHaveBeenNthCalledWith(2, toAcpExtensionMethod(QMT_METHOD_SESSION_QUEUE), queueRequest);
+    expect(extMethod).toHaveBeenNthCalledWith(3, toAcpExtensionMethod(QMT_METHOD_SESSION_RUNTIME_STATE), { session_id: 's1' });
   });
 });
 
