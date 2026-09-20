@@ -12,7 +12,14 @@ import {
   type MeshNodesInfo,
   type MeshStatusInfo,
   type SetDelegateModelRequest,
-  type SetDelegateModelResponse
+  SessionInputDelivery,
+  SessionInputState,
+  SessionRuntimePhase,
+  type SessionInputStateNotification,
+  type SessionRuntimeState,
+  type SetDelegateModelResponse,
+  type DiscardQueuedInputResult,
+  type SubmitInputResult
 } from '$lib/querymt/generated/types';
 import { tick } from 'svelte';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
@@ -66,7 +73,41 @@ const mockClient = vi.hoisted(() => {
       _attachments: PromptAttachment[] = [],
       _options: PromptSendOptions = {}
     ): Promise<PromptResponse> => ({ stopReason: 'end_turn' })),
+    steerSession: vi.fn(async (
+      _sessionId: string,
+      _prompt: string,
+      _attachments: PromptAttachment[],
+      clientInputId: string
+    ): Promise<SubmitInputResult> => ({
+      status: 'steered',
+      data: { run_id: 'run-1', input_id: clientInputId, position: 1 }
+    })),
+    queueSession: vi.fn(async (
+      _sessionId: string,
+      _prompt: string,
+      _attachments: PromptAttachment[],
+      clientInputId: string
+    ): Promise<SubmitInputResult> => ({
+      status: 'queued',
+      data: { input_id: clientInputId, position: 1 }
+    })),
+    discardQueuedInput: vi.fn(async (
+      _sessionId: string,
+      inputId: string
+    ): Promise<DiscardQueuedInputResult> => ({
+      status: 'discarded',
+      data: { input_id: inputId }
+    })),
+    getSessionRuntimeState: vi.fn(async (): Promise<SessionRuntimeState> => ({
+      phase: SessionRuntimePhase.Idle,
+      active_run_id: undefined,
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: undefined
+    })),
     cancelSession: vi.fn(async () => undefined),
+    supportsQuerymtFeature: vi.fn((_feature: string) => false),
     supportsQuerymtMethod: vi.fn(() => true),
     getUndoStack: vi.fn(async (): Promise<{ undo_stack: Array<{ message_id: string }> }> => ({ undo_stack: [] })),
     undoSession: vi.fn(async (_sessionId: string, messageId: string) => ({
@@ -343,6 +384,41 @@ beforeEach(() => {
   }));
   mockDrainAgentSessionUpdates.mockResolvedValue([]);
   mockClient.setSessionConfigOption.mockReset().mockResolvedValue([]);
+  mockClient.supportsQuerymtFeature.mockReset().mockReturnValue(false);
+  mockClient.supportsQuerymtMethod.mockReset().mockReturnValue(true);
+  mockClient.steerSession.mockReset().mockImplementation(async (
+    _sessionId: string,
+    _prompt: string,
+    _attachments: PromptAttachment[],
+    clientInputId: string
+  ): Promise<SubmitInputResult> => ({
+    status: 'steered',
+    data: { run_id: 'run-1', input_id: clientInputId, position: 1 }
+  }));
+  mockClient.queueSession.mockReset().mockImplementation(async (
+    _sessionId: string,
+    _prompt: string,
+    _attachments: PromptAttachment[],
+    clientInputId: string
+  ): Promise<SubmitInputResult> => ({
+    status: 'queued',
+    data: { input_id: clientInputId, position: 1 }
+  }));
+  mockClient.discardQueuedInput.mockReset().mockImplementation(async (
+    _sessionId: string,
+    inputId: string
+  ): Promise<DiscardQueuedInputResult> => ({
+    status: 'discarded',
+    data: { input_id: inputId }
+  }));
+  mockClient.getSessionRuntimeState.mockReset().mockResolvedValue({
+    phase: SessionRuntimePhase.Idle,
+    active_run_id: undefined,
+    steerable: false,
+    pending_steering_count: 0,
+    queued_input_count: 0,
+    run_started_at_ms: undefined
+  });
   mockClient.loadSession.mockReset().mockResolvedValue({ response: { configOptions: [] }, replay: [] });
   mockClient.createSession.mockReset().mockResolvedValue({ sessionId: 'session-1', configOptions: [] });
 });
@@ -437,6 +513,33 @@ describe('AgentsStore connections', () => {
     expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '/tmp/work');
     expect(mockClient.permissionUnsubscribe()).not.toHaveBeenCalled();
     expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
+  });
+
+  it('completes session hydration when runtime refresh fails', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1',
+        agentName: 'QMTCODE',
+        sessionId: 'session-1',
+        title: 'Question session',
+        cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z',
+        runtimeId: 'agent-1',
+        runtimeName: 'QMTCODE',
+        source: 'acp',
+        status: 'idle'
+      }]
+    };
+    mockClient.getSessionRuntimeState.mockRejectedValueOnce(new Error('runtime unavailable'));
+    await store.connectAgent('agent-1');
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(mockClient.getUndoStack).toHaveBeenCalledWith('session-1');
+    expect(store.activeSession.runState).toBe('completed');
+    expect(store.activeSession.lastError).toBeNull();
+    expect(store.error).toBeNull();
   });
 
   it('loads a known child session without switching the catalog off root', async () => {
@@ -2190,6 +2293,203 @@ describe('AgentsStore mesh node availability', () => {
 });
 
 describe('AgentsStore prompt session start', () => {
+  it('does not redirect an input when the selected session changes during runtime refresh', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    let resolveRuntime!: (runtime: SessionRuntimeState) => void;
+    mockClient.getSessionRuntimeState.mockReturnValueOnce(
+      new Promise<SessionRuntimeState>((resolve) => { resolveRuntime = resolve; })
+    );
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.composerPrompt = 'Keep this with session one';
+    await store.connectAgent('agent-1');
+
+    const send = store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(mockClient.getSessionRuntimeState).toHaveBeenCalledWith('session-1'));
+    store.activeSessionId = 'session-2';
+    store.activeSession.sessionId = 'session-2';
+    resolveRuntime({
+      phase: SessionRuntimePhase.Model,
+      active_run_id: 'run-1',
+      steerable: true,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    await send;
+
+    expect(mockClient.steerSession).not.toHaveBeenCalled();
+    expect(mockClient.queueSession).not.toHaveBeenCalled();
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('shows queue delivery when an active runtime lacks an active run id', async () => {
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Continue the task';
+    store.composerInputDeliveryBySession = { 'agent-1:session-1': 'steer' };
+    store.sessionRuntimeBySession = {
+      'agent-1:session-1': {
+        phase: SessionRuntimePhase.Model,
+        active_run_id: undefined,
+        steerable: true,
+        pending_steering_count: 0,
+        queued_input_count: 0,
+        run_started_at_ms: 1
+      }
+    };
+
+    expect(store.activeInputDelivery).toBe('queue');
+  });
+
+  it('keeps the newest runtime response when refreshes resolve out of order', async () => {
+    let resolveOlder!: (runtime: SessionRuntimeState) => void;
+    let resolveNewer!: (runtime: SessionRuntimeState) => void;
+    mockClient.getSessionRuntimeState
+      .mockImplementationOnce(() => new Promise<SessionRuntimeState>((resolve) => { resolveOlder = resolve; }))
+      .mockImplementationOnce(() => new Promise<SessionRuntimeState>((resolve) => { resolveNewer = resolve; }));
+    const store = createStore();
+    await store.connectAgent('agent-1');
+
+    const older = store.refreshSessionRuntime('agent-1', 'session-1');
+    const newer = store.refreshSessionRuntime('agent-1', 'session-1');
+    await vi.waitFor(() => expect(mockClient.getSessionRuntimeState).toHaveBeenCalledTimes(2));
+    const authoritative: SessionRuntimeState = {
+      phase: SessionRuntimePhase.Idle,
+      active_run_id: undefined,
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: undefined
+    };
+    resolveNewer(authoritative);
+    await expect(newer).resolves.toEqual(authoritative);
+    resolveOlder({
+      phase: SessionRuntimePhase.Model,
+      active_run_id: 'stale-run',
+      steerable: true,
+      pending_steering_count: 1,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+
+    await expect(older).resolves.toEqual(authoritative);
+    expect(store.sessionRuntimeBySession['agent-1:session-1']).toEqual(authoritative);
+  });
+
+  it('restores a snapshot-only queued message with attachments and allows discarding it', async () => {
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: {
+        configOptions: [],
+        _meta: {
+          'querymt/sessionLoadSnapshot.v1': {
+            audit: {
+              events: [{
+                seq: 1,
+                timestamp: 10,
+                kind: {
+                  type: 'input_queued',
+                  data: {
+                    input_id: 'queue-restored',
+                    position: 1,
+                    accepted_at_ms: 1234,
+                    blocks: [
+                      { type: 'text', text: 'Continue after this run' },
+                      {
+                        type: 'resource',
+                        resource: {
+                          uri: 'attachment:///file-1/notes.txt',
+                          blob: 'dGV4dA==',
+                          mimeType: 'text/plain'
+                        },
+                        _meta: { querymt: { attachment_id: 'file-1', filename: 'notes.txt', size: 4 } }
+                      }
+                    ]
+                  }
+                }
+              }]
+            }
+          }
+        }
+      },
+      replay: []
+    });
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1',
+        agentName: 'QMTCODE',
+        sessionId: 'session-1',
+        title: 'Queued work',
+        cwd: '/tmp/work',
+        updatedAt: '2026-09-20T00:00:00Z',
+        runtimeId: 'agent-1',
+        runtimeName: 'QMTCODE',
+        source: 'acp',
+        status: 'idle'
+      }]
+    };
+    await store.connectAgent('agent-1');
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activePendingInputs).toEqual([expect.objectContaining({
+      inputId: 'queue-restored',
+      delivery: 'queue',
+      state: 'queued',
+      prompt: 'Continue after this run',
+      createdAt: 1234,
+      attachments: [expect.objectContaining({ id: 'file-1', name: 'notes.txt', data: 'dGV4dA==' })]
+    })]);
+
+    await store.discardQueuedInput('queue-restored');
+
+    expect(mockClient.discardQueuedInput).toHaveBeenCalledWith('session-1', 'queue-restored');
+    expect(store.activePendingInputs).toEqual([]);
+  });
+
+  it('preserves explicit snapshot run lifecycle state over replay content during load', async () => {
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: {
+        configOptions: [],
+        _meta: {
+          'querymt/sessionLoadSnapshot.v1': {
+            audit: {
+              events: [
+                { seq: 1, kind: { type: 'run_completed', data: { run_id: 'run-1', outcome: 'failed' } } },
+                { seq: 2, kind: { type: 'assistant_message_stored', data: { message_id: 'a1', content: 'Partial response' } } }
+              ]
+            }
+          }
+        }
+      },
+      replay: [{
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'Replay response' },
+          messageId: 'a1'
+        }
+      } as SessionNotification]
+    });
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Failed run',
+        cwd: '/tmp/work', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    await store.connectAgent('agent-1');
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activeSession.runState).toBe('failed');
+    expect(store.activeSession.activityLabel).toBe('Turn failed.');
+  });
+
   it('opens a new active session with the user prompt rendered while the agent reply is pending', async () => {
     let resolvePrompt!: () => void;
     mockClient.sendPrompt.mockImplementationOnce(
@@ -2221,6 +2521,387 @@ describe('AgentsStore prompt session start', () => {
       );
     });
     resolvePrompt();
+  });
+
+  it('uses the canonical user chunk for applied steering instead of the lifecycle notification', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Model,
+      active_run_id: 'run-1',
+      steerable: true,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Use the smaller implementation';
+    await store.connectAgent('agent-1');
+
+    await store.sendPromptToActiveSession();
+
+    expect(mockClient.steerSession).toHaveBeenCalledWith(
+      'session-1',
+      'Use the smaller implementation',
+      [],
+      expect.any(String),
+      'run-1',
+      'image'
+    );
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    expect(store.composerPrompt).toBe('');
+    expect(store.activePendingInputs[0]).toEqual(expect.objectContaining({
+      delivery: 'steer',
+      state: 'accepted',
+      runId: 'run-1'
+    }));
+
+    const inputId = store.activePendingInputs[0].inputId;
+    const params: SessionInputStateNotification = {
+      version: 1,
+      session_id: 'session-1',
+      input_id: inputId,
+      delivery: SessionInputDelivery.Steer,
+      state: SessionInputState.Applied,
+      run_id: 'run-1',
+      boundary: 'after_tools',
+      latency_ms: 12
+    };
+    mockClient.emitExtensionNotification({ method: 'querymt/session/inputState', params });
+
+    expect(store.activePendingInputs[0]).toEqual(expect.objectContaining({
+      state: 'applied',
+      boundary: 'after_tools',
+      latencyMs: 12
+    }));
+    expect(store.activeSession.transcript).toEqual([]);
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: 'Use the smaller implementation' },
+        messageId: 'steering-message-1',
+        _meta: { querymt: { client_prompt_id: inputId } }
+      }
+    } as SessionNotification);
+
+    expect(store.activeSession.transcript).toEqual([
+      expect.objectContaining({
+        text: 'Use the smaller implementation',
+        messageId: 'steering-message-1',
+        clientPromptId: inputId
+      })
+    ]);
+  });
+
+  it.each([
+    { delivery: 'steer' as const, notificationState: SessionInputState.Applied },
+    { delivery: 'queue' as const, notificationState: SessionInputState.Started }
+  ])('does not regress $delivery state when a lifecycle notification precedes the submit response', async ({ delivery, notificationState }) => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: delivery === 'steer',
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    let resolveSubmit!: (result: SubmitInputResult) => void;
+    const submit = new Promise<SubmitInputResult>((resolve) => { resolveSubmit = resolve; });
+    const submitMock = delivery === 'steer' ? mockClient.steerSession : mockClient.queueSession;
+    submitMock.mockReturnValueOnce(submit);
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Continue with the fix';
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery(delivery);
+
+    const send = store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
+    const clientInputId = submitMock.mock.calls[0][3] as string;
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/inputState',
+      params: {
+        version: 1,
+        session_id: 'session-1',
+        input_id: clientInputId,
+        delivery: delivery === 'steer' ? SessionInputDelivery.Steer : SessionInputDelivery.Queue,
+        state: notificationState,
+        run_id: 'run-1'
+      } satisfies SessionInputStateNotification
+    });
+
+    resolveSubmit(delivery === 'steer'
+      ? { status: 'steered', data: { run_id: 'run-1', input_id: clientInputId, position: 1 } }
+      : { status: 'queued', data: { input_id: clientInputId, position: 1 } });
+    await send;
+
+    if (delivery === 'steer') {
+      expect(store.activePendingInputs).toEqual([expect.objectContaining({
+        inputId: clientInputId,
+        state: 'applied'
+      })]);
+    } else {
+      expect(store.activePendingInputs).toEqual([]);
+    }
+  });
+
+  it('does not resurrect a rekeyed queue item finalized before the submit response', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    let resolveSubmit!: (result: SubmitInputResult) => void;
+    mockClient.queueSession.mockReturnValueOnce(new Promise<SubmitInputResult>((resolve) => {
+      resolveSubmit = resolve;
+    }));
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Run tests next';
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery('queue');
+
+    const send = store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(mockClient.queueSession).toHaveBeenCalledTimes(1));
+    const clientInputId = mockClient.queueSession.mock.calls[0][3] as string;
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/inputState',
+      params: {
+        version: 1,
+        session_id: 'session-1',
+        input_id: 'server-input',
+        delivery: SessionInputDelivery.Queue,
+        state: SessionInputState.Started,
+        run_id: 'run-2'
+      } satisfies SessionInputStateNotification
+    });
+
+    resolveSubmit({ status: 'queued', data: { input_id: 'server-input', position: 1 } });
+    await send;
+
+    expect(clientInputId).not.toBe('server-input');
+    expect(store.activePendingInputs).toEqual([]);
+  });
+
+  it('removes queued input through the backend and clears local pending state', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Run tests next';
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery('queue');
+
+    await store.sendPromptToActiveSession();
+    const inputId = store.activePendingInputs[0].inputId;
+
+    await store.discardQueuedInput(inputId);
+
+    expect(mockClient.discardQueuedInput).toHaveBeenCalledWith('session-1', inputId);
+    expect(store.activePendingInputs).toEqual([]);
+  });
+
+  it('does not surface a failed discard after switching sessions', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    let rejectDiscard!: (error: Error) => void;
+    mockClient.discardQueuedInput.mockReturnValueOnce(new Promise<DiscardQueuedInputResult>((_resolve, reject) => {
+      rejectDiscard = reject;
+    }));
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Run tests next';
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery('queue');
+    await store.sendPromptToActiveSession();
+    const inputId = store.activePendingInputs[0].inputId;
+
+    const discard = store.discardQueuedInput(inputId);
+    await vi.waitFor(() => expect(mockClient.discardQueuedInput).toHaveBeenCalledWith('session-1', inputId));
+    store.activeSessionId = 'session-2';
+    rejectDiscard(new Error('discard failed'));
+    await discard;
+
+    expect(store.error).toBeNull();
+    expect(store.pendingInputsBySession['agent-1:session-1']).toEqual([
+      expect.objectContaining({ inputId, discardPending: false })
+    ]);
+  });
+
+  it('reconciles an already-started queue item as no longer pending', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    mockClient.discardQueuedInput.mockResolvedValueOnce({
+      status: 'not_pending',
+      data: { input_id: 'ignored' }
+    });
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Run tests next';
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery('queue');
+
+    await store.sendPromptToActiveSession();
+    const inputId = store.activePendingInputs[0].inputId;
+    await store.discardQueuedInput(inputId);
+
+    expect(store.activePendingInputs).toEqual([]);
+  });
+
+  it('rekeys queued input when the server returns a different input id', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 1,
+      run_started_at_ms: 1
+    });
+    mockClient.queueSession.mockImplementationOnce(async (
+      _sessionId: string,
+      _prompt: string,
+      _attachments: PromptAttachment[]
+    ): Promise<SubmitInputResult> => ({
+      status: 'queued',
+      data: { input_id: 'server-input', position: 1 }
+    }));
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Run tests next';
+    store.promptAttachments = [{
+      id: 'file-1',
+      name: 'notes.txt',
+      mimeType: 'text/plain',
+      size: 4,
+      data: 'dGV4dA=='
+    }];
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery('queue');
+
+    await store.sendPromptToActiveSession();
+
+    expect(store.activePendingInputs).toEqual([expect.objectContaining({
+      inputId: 'server-input',
+      state: 'queued',
+      prompt: 'Run tests next',
+      attachments: [expect.objectContaining({ id: 'file-1' })],
+      createdAt: expect.any(Number)
+    })]);
+
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/inputState',
+      params: {
+        version: 1,
+        session_id: 'session-1',
+        input_id: 'server-input',
+        delivery: SessionInputDelivery.Queue,
+        state: SessionInputState.Discarded,
+        reason: 'removed_by_user'
+      } satisfies SessionInputStateNotification
+    });
+
+    expect(store.activePendingInputs).toEqual([]);
+  });
+
+  it.each([
+    { name: 'started', state: SessionInputState.Started },
+    { name: 'discarded', state: SessionInputState.Discarded }
+  ])('removes queued input when its $name lifecycle notification arrives', async ({ state }) => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Run tests next';
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery('queue');
+
+    await store.sendPromptToActiveSession();
+    const inputId = store.activePendingInputs[0].inputId;
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/inputState',
+      params: {
+        version: 1,
+        session_id: 'session-1',
+        input_id: inputId,
+        delivery: SessionInputDelivery.Queue,
+        state,
+        reason: state === SessionInputState.Discarded ? 'removed_by_user' : undefined
+      } satisfies SessionInputStateNotification
+    });
+
+    expect(store.activePendingInputs).toEqual([]);
+  });
+
+  it('queues slash commands instead of steering an active run', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: true,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = '/compact';
+    await store.connectAgent('agent-1');
+
+    await store.sendPromptToActiveSession();
+
+    expect(mockClient.queueSession).toHaveBeenCalledWith(
+      'session-1',
+      '/compact',
+      [],
+      expect.any(String),
+      'image'
+    );
+    expect(mockClient.steerSession).not.toHaveBeenCalled();
   });
 
   it('sends attachment-only prompts and keeps structured optimistic blocks', async () => {

@@ -389,6 +389,101 @@ describe('SessionComposer', () => {
     expect(screen.getByText('Switch model')).toBeInTheDocument();
   });
 
+  it('offers steer and queue delivery from options while a supported run is active', async () => {
+    const onSendPrompt = vi.fn();
+    const onStopPrompt = vi.fn();
+    const onInputDeliveryChange = vi.fn();
+    const { container, rerender } = renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      prompt: 'Change direction',
+      agentRunning: true,
+      turnControlSupported: true,
+      inputDelivery: 'steer',
+      onSendPrompt,
+      onStopPrompt,
+      onInputDeliveryChange
+    });
+
+    const sendButton = container.querySelector('button.action-btn-primary') as HTMLButtonElement | null;
+    expect(sendButton).not.toBeNull();
+    expect(sendButton).toHaveAttribute('aria-label', 'Steer');
+    expect(sendButton!.querySelector('.lucide-navigation')).not.toBeNull();
+    expect(sendButton!.textContent?.trim()).toBe('Steer');
+    expect(screen.getByRole('button', { name: 'Stop agent' })).toBeInTheDocument();
+    await fireEvent.click(sendButton!);
+    expect(onSendPrompt).toHaveBeenCalledTimes(1);
+
+    const options = container.querySelector('.composer-options') as HTMLDetailsElement | null;
+    expect(options).not.toBeNull();
+    options!.open = true;
+    const switchGroup = within(options!).getByRole('group', { name: 'Input delivery' });
+    expect(within(switchGroup).getByRole('button', { name: /Steer/ })).toHaveAttribute('aria-pressed', 'true');
+    await fireEvent.click(within(switchGroup).getByRole('button', { name: /Queue/ }));
+    expect(onInputDeliveryChange).toHaveBeenCalledWith('queue');
+
+    await rerender({ inputDelivery: 'queue' });
+    expect(sendButton).toHaveAttribute('aria-label', 'Queue');
+    expect(sendButton!.querySelector('.lucide-plus')).not.toBeNull();
+    expect(sendButton!.textContent?.trim()).toBe('Queue');
+  });
+
+  it('keeps the send icon while idle and only swaps glyphs for active steer/queue runs', async () => {
+    const { container, rerender } = renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      prompt: 'Idle reply',
+      inputDelivery: 'queue'
+    });
+    const sendButton = screen.getByRole('button', { name: 'Send reply' });
+    expect(sendButton.querySelector('.lucide-send-horizontal')).not.toBeNull();
+    expect(sendButton.querySelector('.lucide-plus')).toBeNull();
+    expect(container.querySelector('.composer-delivery-switch')).toBeNull();
+
+    await rerender({ agentRunning: true, turnControlSupported: true, inputDelivery: 'steer' });
+    expect(container.querySelector('.composer-delivery-switch')).not.toBeNull();
+    const steerButton = container.querySelector('button.action-btn-primary');
+    expect(steerButton?.querySelector('.lucide-navigation')).not.toBeNull();
+    expect(steerButton?.getAttribute('aria-label')).toBe('Steer');
+
+    await rerender({ inputDelivery: 'queue' });
+    const queueButton = container.querySelector('button.action-btn-primary');
+    expect(queueButton?.querySelector('.lucide-plus')).not.toBeNull();
+    expect(queueButton?.getAttribute('aria-label')).toBe('Queue');
+  });
+
+  it('hides the delivery row when the active run does not support turn control', () => {
+    const { container } = renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      prompt: 'Busy reply',
+      agentRunning: true,
+      turnControlSupported: false
+    });
+
+    expect(container.querySelector('.composer-delivery-switch')).toBeNull();
+  });
+
+  it('uses Enter for the active-run delivery action instead of stopping', async () => {
+    const onSendPrompt = vi.fn();
+    const onStopPrompt = vi.fn();
+    renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      prompt: 'Change direction',
+      agentRunning: true,
+      turnControlSupported: true,
+      inputDelivery: 'steer',
+      onSendPrompt,
+      onStopPrompt
+    });
+
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+    await fireEvent.keyDown(prompt, { key: 'Enter' });
+    expect(onSendPrompt).toHaveBeenCalledTimes(1);
+    expect(onStopPrompt).not.toHaveBeenCalled();
+  });
+
   it('sends with Enter by default and keeps Shift+Enter for a new line', async () => {
     const onSendPrompt = vi.fn();
     renderComposer({ onSendPrompt });

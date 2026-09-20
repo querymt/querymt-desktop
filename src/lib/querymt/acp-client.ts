@@ -47,7 +47,10 @@ import type {
   ListSchedulesControlRequest,
   PluginUpdateResult,
   SetDelegateModelRequest,
-  SetDelegateModelResponse
+  SetDelegateModelResponse,
+  SessionRuntimeState,
+  DiscardQueuedInputResult,
+  SubmitInputResult
 } from '$lib/querymt/generated/types';
 import { BrowserClient } from '$lib/querymt/browser-client';
 import {
@@ -76,7 +79,11 @@ import {
   QMT_METHOD_SCHEDULES_RESUME,
   QMT_METHOD_SCHEDULES_TRIGGER,
   QMT_METHOD_SESSION_DELEGATE_MODELS,
+  QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT,
+  QMT_METHOD_SESSION_QUEUE,
   QMT_METHOD_SESSION_REDO,
+  QMT_METHOD_SESSION_RUNTIME_STATE,
+  QMT_METHOD_SESSION_STEER,
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK,
@@ -85,6 +92,7 @@ import {
   type QuerymtAuthStartResponse,
   type QuerymtPluginUpdateResponse,
   type QuerymtProfilesResponse,
+  type QuerymtSubmitInputRequest,
   type QuerymtRedoResponse,
   type QuerymtUndoResponse,
   type QuerymtUndoStackResponse,
@@ -636,8 +644,95 @@ export class DesktopAcpClient {
     if (!this.connection) {
       await this.connect();
     }
+    const content = this.buildPromptContent(prompt, attachments, options.imageMode ?? 'image');
+    return this.connection!.prompt({
+      sessionId,
+      prompt: content,
+      _meta: options.clientPromptId
+        ? { querymt: { client_prompt_id: options.clientPromptId } }
+        : undefined
+    });
+  }
 
-    const imageMode = options.imageMode ?? 'image';
+  async steerSession(
+    sessionId: string,
+    prompt: string,
+    attachments: PromptAttachment[],
+    clientInputId: string,
+    expectedRunId?: string,
+    imageMode: PromptSendOptions['imageMode'] = 'image'
+  ): Promise<SubmitInputResult> {
+    return this.submitSessionInput(
+      QMT_METHOD_SESSION_STEER,
+      sessionId,
+      prompt,
+      attachments,
+      clientInputId,
+      expectedRunId,
+      imageMode
+    );
+  }
+
+  async queueSession(
+    sessionId: string,
+    prompt: string,
+    attachments: PromptAttachment[],
+    clientInputId: string,
+    imageMode: PromptSendOptions['imageMode'] = 'image'
+  ): Promise<SubmitInputResult> {
+    return this.submitSessionInput(
+      QMT_METHOD_SESSION_QUEUE,
+      sessionId,
+      prompt,
+      attachments,
+      clientInputId,
+      undefined,
+      imageMode
+    );
+  }
+
+  async discardQueuedInput(
+    sessionId: string,
+    inputId: string
+  ): Promise<DiscardQueuedInputResult> {
+    if (!this.querymtExtensions) await this.connect();
+    this.assertQuerymtMethod(QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT);
+    return this.querymtExtensions!.discardQueuedInput(sessionId, inputId);
+  }
+
+  async getSessionRuntimeState(sessionId: string): Promise<SessionRuntimeState> {
+    if (!this.querymtExtensions) await this.connect();
+    this.assertQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE);
+    return this.querymtExtensions!.sessionRuntimeState(sessionId);
+  }
+
+  private async submitSessionInput(
+    method: typeof QMT_METHOD_SESSION_STEER | typeof QMT_METHOD_SESSION_QUEUE,
+    sessionId: string,
+    prompt: string,
+    attachments: PromptAttachment[],
+    clientInputId: string,
+    expectedRunId: string | undefined,
+    imageMode: PromptSendOptions['imageMode'] = 'image'
+  ): Promise<SubmitInputResult> {
+    if (!this.querymtExtensions) await this.connect();
+    this.assertQuerymtMethod(method);
+    const request: QuerymtSubmitInputRequest = {
+      session_id: sessionId,
+      prompt: this.buildPromptContent(prompt, attachments, imageMode ?? 'image'),
+      client_input_id: clientInputId,
+      ...(expectedRunId ? { expected_run_id: expectedRunId } : {})
+    };
+    return method === QMT_METHOD_SESSION_STEER
+      ? this.querymtExtensions!.steerSession(request)
+      : this.querymtExtensions!.queueSession(request);
+  }
+
+  private buildPromptContent(
+    prompt: string,
+    attachments: PromptAttachment[],
+    imageMode: NonNullable<PromptSendOptions['imageMode']>
+  ): ContentBlock[] {
     const hasImages = attachments.some((attachment) => attachment.mimeType.startsWith('image/'));
     const hasResources = attachments.some(
       (attachment) => imageMode === 'resource' || !attachment.mimeType.startsWith('image/')
@@ -649,10 +744,7 @@ export class DesktopAcpClient {
       throw new Error('This agent does not support embedded resources. Remove file attachments or use an agent with embedded context support.');
     }
 
-    const content: ContentBlock[] = [];
-    if (prompt.length > 0) {
-      content.push({ type: 'text', text: prompt });
-    }
+    const content: ContentBlock[] = prompt.length > 0 ? [{ type: 'text', text: prompt }] : [];
     for (const attachment of attachments) {
       const metadata = {
         querymt: {
@@ -662,34 +754,21 @@ export class DesktopAcpClient {
         }
       };
       if (imageMode === 'image' && attachment.mimeType.startsWith('image/')) {
+        content.push({ type: 'image', data: attachment.data, mimeType: attachment.mimeType, _meta: metadata });
+      } else {
         content.push({
-          type: 'image',
-          data: attachment.data,
-          mimeType: attachment.mimeType,
-          _meta: metadata
+          type: 'resource',
+          _meta: metadata,
+          resource: {
+            uri: buildAttachmentUri(attachment),
+            blob: attachment.data,
+            mimeType: attachment.mimeType,
+            _meta: metadata
+          }
         });
-        continue;
       }
-
-      content.push({
-        type: 'resource',
-        _meta: metadata,
-        resource: {
-          uri: buildAttachmentUri(attachment),
-          blob: attachment.data,
-          mimeType: attachment.mimeType,
-          _meta: metadata
-        }
-      });
     }
-
-    return this.connection!.prompt({
-      sessionId,
-      prompt: content,
-      _meta: options.clientPromptId
-        ? { querymt: { client_prompt_id: options.clientPromptId } }
-        : undefined
-    });
+    return content;
   }
 
   async cancelSession(sessionId: string): Promise<void> {

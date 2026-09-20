@@ -1,5 +1,5 @@
 import { createEmptyActiveSession, normalizeContentBlocks, stringifyOptional, summarizeContentBlocks } from '$lib/domain/session-updates';
-import type { ActiveSessionViewModel, SessionToolCallItem } from '$lib/domain/types';
+import type { ActiveSessionViewModel, PromptAttachment, SessionContentBlock, SessionToolCallItem } from '$lib/domain/types';
 
 type SnapshotEvent = {
   seq?: number;
@@ -52,6 +52,21 @@ export interface SnapshotProviderChange {
   providerNodeId: string | null;
 }
 
+export interface SnapshotInputState {
+  sessionId: string;
+  inputId: string;
+  delivery: 'steer' | 'queue';
+  state: 'accepted' | 'queued' | 'applied' | 'started' | 'discarded';
+  runId?: string;
+  position?: number;
+  boundary?: string;
+  reason?: string;
+  latencyMs?: number;
+  prompt?: string;
+  attachments?: PromptAttachment[];
+  createdAt?: number;
+}
+
 const TOOL_TERMINAL_EVENT_TYPES = new Set(['assistant_message_stored', 'llm_request_end']);
 
 export function activeSessionFromLoadResponse(sessionId: string, response: unknown): ActiveSessionViewModel {
@@ -97,6 +112,25 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
     if (kind === 'cancelled' || kind === 'error') {
       session.usage.activeWorkMs += elapsedWorkMs(activeWorkStartedAt, readTimestampMs(event.timestamp));
       activeWorkStartedAt = null;
+    }
+
+    if (kind === 'run_started') {
+      session.runState = 'thinking';
+      session.runStateFromLifecycle = true;
+      session.activityLabel = 'Agent is working…';
+      continue;
+    }
+
+    if (kind === 'run_completed') {
+      const outcome = readString(data.outcome);
+      session.runState = outcome === 'failed' ? 'failed' : 'completed';
+      session.runStateFromLifecycle = true;
+      session.activityLabel = outcome === 'cancelled'
+        ? 'Turn cancelled.'
+        : outcome === 'failed'
+          ? 'Turn failed.'
+          : 'Turn completed.';
+      continue;
     }
 
     if (kind === 'prompt_received') {
@@ -251,6 +285,75 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
   return normalizeHistoricalSession(session);
 }
 
+export function getSnapshotInputStates(response: unknown): SnapshotInputState[] {
+  const states = new Map<string, SnapshotInputState>();
+  for (const event of readSnapshot(response)?.audit?.events ?? []) {
+    const kind = event.kind?.type;
+    const data = event.kind?.data ?? {};
+    const inputId = readString(data.input_id) ?? readString(data.inputId);
+    if (!inputId) continue;
+
+    let next: SnapshotInputState | null = null;
+    if (kind === 'steering_accepted') {
+      next = {
+        sessionId: '',
+        inputId,
+        delivery: 'steer',
+        state: 'accepted',
+        runId: readString(data.run_id) ?? readString(data.runId) ?? undefined,
+        position: readNonNegativeNumber(data.position) ?? undefined,
+        ...pendingInputContent(data, event)
+      };
+    } else if (kind === 'steering_applied') {
+      next = {
+        sessionId: '',
+        inputId,
+        delivery: 'steer',
+        state: 'applied',
+        runId: readString(data.run_id) ?? readString(data.runId) ?? undefined,
+        boundary: readString(data.boundary) ?? undefined,
+        latencyMs: readNonNegativeNumber(data.latency_ms ?? data.latencyMs) ?? undefined
+      };
+    } else if (kind === 'steering_discarded') {
+      next = {
+        sessionId: '',
+        inputId,
+        delivery: 'steer',
+        state: 'discarded',
+        runId: readString(data.run_id) ?? readString(data.runId) ?? undefined,
+        reason: readString(data.reason) ?? undefined
+      };
+    } else if (kind === 'input_queued') {
+      next = {
+        sessionId: '',
+        inputId,
+        delivery: 'queue',
+        state: 'queued',
+        position: readNonNegativeNumber(data.position) ?? undefined,
+        ...pendingInputContent(data, event)
+      };
+    } else if (kind === 'queued_input_started') {
+      next = {
+        sessionId: '',
+        inputId,
+        delivery: 'queue',
+        state: 'started',
+        runId: readString(data.run_id) ?? readString(data.runId) ?? undefined
+      };
+    } else if (kind === 'queued_input_discarded') {
+      next = {
+        sessionId: '',
+        inputId,
+        delivery: 'queue',
+        state: 'discarded',
+        reason: readString(data.reason) ?? undefined
+      };
+    }
+    if (next) states.set(inputId, next);
+  }
+  return [...states.values()];
+}
+
 export function getSnapshotProviderChange(response: unknown): SnapshotProviderChange | null {
   const events = readSnapshot(response)?.audit?.events ?? [];
   for (let index = events.length - 1; index >= 0; index -= 1) {
@@ -274,6 +377,8 @@ export function normalizeHistoricalSession(
   session: ActiveSessionViewModel,
   options: { loadCompleted?: boolean } = {}
 ): ActiveSessionViewModel {
+  if (session.runStateFromLifecycle && !options.loadCompleted) return session;
+
   const hasActiveTool = session.toolCalls.some((tool) => tool.status === 'in_progress' || tool.status === 'pending');
   if (hasActiveTool && !options.loadCompleted) {
     const activeTool = session.toolCalls.find((tool) => tool.status === 'in_progress' || tool.status === 'pending') ?? null;
@@ -290,10 +395,12 @@ export function normalizeHistoricalSession(
         ? { ...tool, status: tool.isError ? 'failed' : 'completed' }
         : tool
     );
-    session.runState = 'completed';
     session.activeToolCallId = null;
-    session.activityLabel = 'Loaded from session history.';
-    session.lastError = null;
+    if (!session.runStateFromLifecycle) {
+      session.runState = 'completed';
+      session.activityLabel = 'Loaded from session history.';
+      session.lastError = null;
+    }
     return session;
   }
 
@@ -305,6 +412,43 @@ export function normalizeHistoricalSession(
   }
 
   return session;
+}
+
+function pendingInputContent(
+  data: Record<string, unknown>,
+  event: SnapshotEvent
+): Pick<SnapshotInputState, 'prompt' | 'attachments' | 'createdAt'> {
+  const blocks = normalizeContentBlocks(data.blocks);
+  const createdAt = readNonNegativeNumber(data.accepted_at_ms ?? data.acceptedAtMs)
+    ?? readTimestampMs(event.timestamp)
+    ?? undefined;
+  if (blocks.length === 0) return { createdAt };
+  return {
+    prompt: blocks
+      .filter((block): block is Extract<SessionContentBlock, { type: 'text' }> => block.type === 'text')
+      .map((block) => block.text)
+      .join(''),
+    attachments: blocks.flatMap(blockToPromptAttachment),
+    createdAt
+  };
+}
+
+function blockToPromptAttachment(block: SessionContentBlock): PromptAttachment[] {
+  if (block.type === 'text' || block.data == null) return [];
+  return [{
+    id: block.id ?? block.uri ?? `snapshot-attachment-${block.name ?? block.mimeType ?? 'file'}`,
+    name: block.name ?? block.uri?.split('/').at(-1) ?? (block.type === 'image' ? 'image' : 'attachment'),
+    mimeType: block.mimeType ?? 'application/octet-stream',
+    size: block.size ?? decodedBase64Size(block.data),
+    data: block.data
+  }];
+}
+
+function decodedBase64Size(data: string): number {
+  const normalized = data.replace(/\s/g, '');
+  if (!normalized) return 0;
+  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor(normalized.length * 3 / 4) - padding);
 }
 
 function indexStructuredPrompts(snapshot: SessionLoadSnapshot): Map<string, IndexedStructuredPrompt> {

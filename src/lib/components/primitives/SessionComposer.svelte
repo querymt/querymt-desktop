@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Brain, ChevronDown, FileCog, FilePlus2, Lock, Monitor, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
+  import { Brain, ChevronDown, FileCog, FilePlus2, Lock, Monitor, Navigation, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
   import { tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import type { TransitionConfig } from 'svelte/transition';
@@ -14,7 +14,7 @@
     findReasoningConfigOption,
     getConfigOptionChoices
   } from '$lib/querymt/config-options';
-  import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment, SessionContentBlock } from '$lib/domain/types';
+  import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment, SessionContentBlock, SessionInputDeliveryMode } from '$lib/domain/types';
   import type { SendShortcut } from '$lib/stores/chat-preferences.svelte';
   import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 
@@ -80,6 +80,9 @@
     onCreateSession = null,
     onDismissError = null,
     agentRunning = false,
+    turnControlSupported = false,
+    inputDelivery = 'steer',
+    onInputDeliveryChange = null,
     onStopPrompt = null,
     onSendPrompt
   }: {
@@ -136,6 +139,9 @@
     onCreateSession?: (() => void) | null;
     onDismissError?: (() => void) | null;
     agentRunning?: boolean;
+    turnControlSupported?: boolean;
+    inputDelivery?: SessionInputDeliveryMode;
+    onInputDeliveryChange?: ((delivery: SessionInputDeliveryMode) => void) | null;
     onStopPrompt?: (() => void) | null;
     onSendPrompt: () => void;
   } = $props();
@@ -184,6 +190,20 @@
       : { type: 'resource', uri: `attachment:///${encodeURIComponent(attachment.id)}/${encodeURIComponent(attachment.name)}`, data: attachment.data, mimeType: attachment.mimeType, id: attachment.id, name: attachment.name, size: attachment.size }
   ));
   const sessionPlaceholder = 'Write a reply for this session...';
+  const hasDraft = $derived(prompt.trim().length > 0 || attachments.length > 0);
+  const primaryActionLabel = $derived(
+    agentRunning && turnControlSupported
+      ? inputDelivery === 'queue' ? 'Queue' : 'Steer'
+      : 'Send reply'
+  );
+  // The send glyph is only overridden while a steerable run is active; idle
+  // composers always render the plain send arrow (never the queue "+").
+  const primaryActionIcon = $derived(
+    agentRunning && turnControlSupported
+      ? inputDelivery === 'queue' ? Plus : Navigation
+      : SendHorizontal
+  );
+  const deliveryControlAvailable = $derived(activeSessionId && agentRunning && turnControlSupported);
   const promptMinHeightClass = $derived.by(() => {
     if (chatView && sessionOnly) return 'min-h-[76px]';
     if (launch) return 'min-h-[104px]';
@@ -237,6 +257,7 @@
     targetOptions.find((option) => option.id === selectedTargetId)?.label ?? 'Local'
   );
   const secondaryOptionCount = $derived(
+    (deliveryControlAvailable ? 1 : 0) +
     (!activeSessionId && launch && launchReasoningOptions.length > 0 ? 1 : reasoningOption ? 1 : 0) +
       (!sessionOnly && profileOptions.length > 0 ? 1 : 0) +
       (sessionOnly && sessionProfileLabel ? 1 : 0) +
@@ -301,6 +322,14 @@
     }
   }
 
+  function handlePrimaryAction() {
+    if (agentRunning && !turnControlSupported && onStopPrompt) {
+      onStopPrompt();
+      return;
+    }
+    onSendPrompt();
+  }
+
   function handlePromptKeydown(event: KeyboardEvent) {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'm') {
       event.preventDefault();
@@ -316,7 +345,7 @@
 
     if (!loading && shouldSendFromKeyboard(event)) {
       event.preventDefault();
-      onSendPrompt();
+      handlePrimaryAction();
       return;
     }
 
@@ -576,10 +605,38 @@
            <div class="composer-options-panel">
              <div class="composer-options-heading">
                <strong>Session options</strong>
-               <span>{activeSessionId ? 'Applied to the next reply' : 'Applied when this session starts'}</span>
+                <span>Fine-tune how this session runs</span>
              </div>
-             <div class="composer-options-list">
-               {#if !activeSessionId && launch && launchReasoningOptions.length > 0}
+              <div class="composer-options-list">
+                {#if deliveryControlAvailable}
+                  <div class="composer-option-row">
+                    <div class="composer-option-copy">
+                      {#if inputDelivery === 'queue'}<Plus size={15} />{:else}<Navigation size={15} />{/if}
+                      <span><strong>Message delivery</strong><small>How the next message joins the run</small></span>
+                    </div>
+                    <div class="composer-delivery-switch" role="group" aria-label="Input delivery">
+                      <button
+                        type="button"
+                        class:active={inputDelivery === 'steer'}
+                        aria-pressed={inputDelivery === 'steer'}
+                        onclick={() => onInputDeliveryChange?.('steer')}
+                      >
+                        <Navigation size={12} />
+                        Steer
+                      </button>
+                      <button
+                        type="button"
+                        class:active={inputDelivery === 'queue'}
+                        aria-pressed={inputDelivery === 'queue'}
+                        onclick={() => onInputDeliveryChange?.('queue')}
+                      >
+                        <Plus size={12} />
+                        Queue
+                      </button>
+                    </div>
+                  </div>
+                {/if}
+                {#if !activeSessionId && launch && launchReasoningOptions.length > 0}
                  <div class="composer-option-row">
                    <div class="composer-option-copy"><Brain size={15} /><span><strong>Reasoning</strong><small>How deeply the agent should think</small></span></div>
                    <ComposerSplitPillSelect
@@ -684,7 +741,7 @@
           {/if}
         </button>
       {/if}
-      {#if agentRunning && onStopPrompt}
+      {#if agentRunning && onStopPrompt && (!turnControlSupported || !hasDraft)}
         <button
           class="icon-btn icon-btn-primary"
           type="button"
@@ -695,18 +752,27 @@
           <Square size={16} />
         </button>
       {:else}
+        {#if agentRunning && turnControlSupported && onStopPrompt}
+          <IconTooltipButton label="Stop agent" icon={Square} size={15} onclick={onStopPrompt} />
+        {/if}
         <button
-          class={`${launch ? 'action-btn action-btn-primary min-w-[9rem] justify-center px-5 py-3' : minimal ? 'action-btn action-btn-primary px-4' : 'icon-btn icon-btn-primary'}`}
+          class={`${launch ? 'action-btn action-btn-primary min-w-[9rem] justify-center px-5 py-3' : minimal || (activeSessionId && agentRunning && turnControlSupported) ? 'action-btn action-btn-primary px-4' : 'icon-btn icon-btn-primary'}`}
           disabled={loading}
           type="button"
-          aria-label={activeSessionId ? 'Send reply' : creatingBlankSession ? 'Start blank session' : 'Start session'}
-          onclick={onSendPrompt}
+          aria-label={activeSessionId ? primaryActionLabel : creatingBlankSession ? 'Start blank session' : 'Start session'}
+          onclick={handlePrimaryAction}
         >
         {#if activeSessionId}
           <span class="inline-flex items-center gap-2">
-            <SendHorizontal size={16} />
-            {#if minimal || launch}
-              <span>Send reply</span>
+            {#if agentRunning && turnControlSupported && inputDelivery === 'queue'}
+              <Plus size={16} />
+            {:else if agentRunning && turnControlSupported}
+              <Navigation size={16} />
+            {:else}
+              <SendHorizontal size={16} />
+            {/if}
+            {#if minimal || launch || (agentRunning && turnControlSupported)}
+              <span>{primaryActionLabel}</span>
             {/if}
           </span>
         {:else}
@@ -769,10 +835,13 @@
       />
       {#if attachments.length > 0}<span class="session-composer-attachment-count" aria-label={`${attachments.length} pending attachments`}>{attachments.length}</span>{/if}
       <IconTooltipButton label="Attach files" icon={Paperclip} size={16} onclick={handleAttachClick} />
-      {#if agentRunning && onStopPrompt}
+      {#if agentRunning && onStopPrompt && (!turnControlSupported || !hasDraft)}
         <IconTooltipButton label="Stop agent" icon={Square} tone="primary" size={16} onclick={onStopPrompt} />
       {:else}
-        <IconTooltipButton label="Send reply" icon={SendHorizontal} tone="primary" size={16} disabled={loading} onclick={onSendPrompt} />
+        {#if agentRunning && turnControlSupported && onStopPrompt}
+          <IconTooltipButton label="Stop agent" icon={Square} size={15} onclick={onStopPrompt} />
+        {/if}
+        <IconTooltipButton label={primaryActionLabel} icon={primaryActionIcon} tone="primary" size={16} disabled={loading} onclick={handlePrimaryAction} />
       {/if}
 
       {#if attachmentErrors.length > 0}

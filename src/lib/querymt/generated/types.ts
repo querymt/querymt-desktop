@@ -22,6 +22,46 @@ export type AgentEventKind =
 	 * (loading history, snapshotting, building tools, running middleware).
 	 */
 	| { type: "turn_started", data?: undefined }
+	| { type: "run_started", data: {
+	run_id: string;
+	origin: string;
+}}
+	| { type: "run_completed", data: {
+	run_id: string;
+	outcome: string;
+}}
+	| { type: "steering_accepted", data: {
+	run_id: string;
+	input_id: string;
+	position: number;
+	blocks?: any;
+	accepted_at_ms?: number;
+}}
+	| { type: "steering_applied", data: {
+	run_id: string;
+	input_id: string;
+	boundary: string;
+	latency_ms: number;
+}}
+	| { type: "steering_discarded", data: {
+	run_id: string;
+	input_id: string;
+	reason: string;
+}}
+	| { type: "input_queued", data: {
+	input_id: string;
+	position: number;
+	blocks?: any;
+	accepted_at_ms?: number;
+}}
+	| { type: "queued_input_started", data: {
+	input_id: string;
+	run_id: string;
+}}
+	| { type: "queued_input_discarded", data: {
+	input_id: string;
+	reason: string;
+}}
 	| { type: "assistant_message_stored", data: {
 	content: string;
 	thinking?: string;
@@ -594,6 +634,7 @@ export interface ControlFeatureInfo {
 	profiles: boolean;
 	auth: boolean;
 	models: boolean;
+	steering?: boolean;
 }
 
 export interface CapabilitiesInfo {
@@ -1081,12 +1122,80 @@ export enum DelegateReasoningEffort {
 	Max = "max",
 }
 
+export enum SessionInputDelivery {
+	Steer = "steer",
+	Queue = "queue",
+}
+
+export enum SessionInputState {
+	Accepted = "accepted",
+	Queued = "queued",
+	Applied = "applied",
+	Started = "started",
+	Discarded = "discarded",
+}
+
+export interface SessionInputStateNotification {
+	version: number;
+	session_id: string;
+	input_id: string;
+	delivery: SessionInputDelivery;
+	state: SessionInputState;
+	run_id?: string;
+	position?: number;
+	boundary?: string;
+	reason?: string;
+	latency_ms?: number;
+}
+
 export enum SessionRuntimeStatus {
 	Idle = "idle",
 	Running = "running",
 	Waiting = "waiting",
 	CancelRequested = "cancel_requested",
 }
+
+export enum SessionRuntimePhase {
+	Idle = "idle",
+	Starting = "starting",
+	Model = "model",
+	Tools = "tools",
+	Waiting = "waiting",
+	Closing = "closing",
+	CancelRequested = "cancel_requested",
+}
+
+export interface SessionRuntimeState {
+	phase: SessionRuntimePhase;
+	active_run_id?: string;
+	steerable: boolean;
+	pending_steering_count: number;
+	queued_input_count: number;
+	run_started_at_ms?: number;
+}
+
+export type DiscardQueuedInputResult =
+	| { status: "discarded", data: {
+	input_id: string;
+}}
+	| { status: "not_pending", data: {
+	input_id: string;
+}};
+
+export type SubmitInputResult =
+	| { status: "steered", data: {
+	run_id: string;
+	input_id: string;
+	position: number;
+}}
+	| { status: "queued", data: {
+	input_id: string;
+	position: number;
+}}
+	| { status: "started", data: {
+	run_id: string;
+	input_id: string;
+}};
 
 export interface SessionMeta {
 	messageCount: number;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ActiveSessionViewModel } from './types';
 import { buildSessionConversation } from './session-conversation';
-import { activeSessionFromLoadResponse, getSnapshotProviderChange, normalizeHistoricalSession } from './session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession } from './session-snapshot';
 
 describe('getSnapshotProviderChange', () => {
   it('returns the last valid provider change including its mesh node', () => {
@@ -50,6 +50,83 @@ describe('getSnapshotProviderChange', () => {
         }
       })
     ).toBeNull();
+  });
+});
+
+describe('getSnapshotInputStates', () => {
+  it('folds steering and queued input lifecycle events to their latest state', () => {
+    const response = {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [
+              { kind: { type: 'steering_accepted', data: { input_id: 'steer-1', run_id: 'run-1', position: 1 } } },
+              { kind: { type: 'input_queued', data: { input_id: 'queue-1', position: 1 } } },
+              { kind: { type: 'steering_applied', data: { input_id: 'steer-1', run_id: 'run-1', boundary: 'after_tools', latency_ms: 12 } } },
+              { kind: { type: 'queued_input_started', data: { input_id: 'queue-1', run_id: 'run-2' } } },
+              { kind: { type: 'input_queued', data: { input_id: 'queue-2', position: 2 } } },
+              { kind: { type: 'queued_input_discarded', data: { input_id: 'queue-2', reason: 'removed_by_user' } } }
+            ]
+          }
+        }
+      }
+    };
+
+    expect(getSnapshotInputStates(response)).toEqual([
+      expect.objectContaining({ inputId: 'steer-1', delivery: 'steer', state: 'applied', boundary: 'after_tools' }),
+      expect.objectContaining({ inputId: 'queue-1', delivery: 'queue', state: 'started', runId: 'run-2' }),
+      expect.objectContaining({ inputId: 'queue-2', delivery: 'queue', state: 'discarded', reason: 'removed_by_user' })
+    ]);
+  });
+
+  it('restores structured queued input content and acceptance time', () => {
+    const [state] = getSnapshotInputStates({
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [{
+              timestamp: 10,
+              kind: {
+                type: 'input_queued',
+                data: {
+                  input_id: 'queue-1',
+                  position: 1,
+                  accepted_at_ms: 1234,
+                  blocks: [
+                    { type: 'text', text: 'Review these files' },
+                    {
+                      type: 'image',
+                      data: 'aW1n',
+                      mimeType: 'image/png',
+                      _meta: { querymt: { attachment_id: 'image-1', filename: 'photo.png', size: 3 } }
+                    },
+                    {
+                      type: 'resource',
+                      resource: {
+                        uri: 'attachment:///file-1/notes.txt',
+                        blob: 'dGV4dA==',
+                        mimeType: 'text/plain'
+                      },
+                      _meta: { querymt: { attachment_id: 'file-1', filename: 'notes.txt', size: 4 } }
+                    }
+                  ]
+                }
+              }
+            }]
+          }
+        }
+      }
+    });
+
+    expect(state).toEqual(expect.objectContaining({
+      inputId: 'queue-1',
+      prompt: 'Review these files',
+      createdAt: 1234,
+      attachments: [
+        expect.objectContaining({ id: 'image-1', name: 'photo.png', mimeType: 'image/png', data: 'aW1n' }),
+        expect.objectContaining({ id: 'file-1', name: 'notes.txt', mimeType: 'text/plain', data: 'dGV4dA==' })
+      ]
+    }));
   });
 });
 
@@ -566,6 +643,86 @@ describe('activeSessionFromLoadResponse', () => {
     });
     expect(session.runState).toBe('completed');
     expect(session.activeToolCallId).toBeNull();
+  });
+
+  it.each([
+    {
+      name: 'run_started',
+      lifecycle: { type: 'run_started', data: { run_id: 'run-1', origin: 'prompt' } },
+      runState: 'thinking',
+      activityLabel: 'Agent is working…'
+    },
+    {
+      name: 'failed run_completed',
+      lifecycle: { type: 'run_completed', data: { run_id: 'run-1', outcome: 'failed' } },
+      runState: 'failed',
+      activityLabel: 'Turn failed.'
+    }
+  ])('preserves explicit $name lifecycle state when assistant content exists', ({ lifecycle, runState, activityLabel }) => {
+    const session = activeSessionFromLoadResponse('session-lifecycle', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [
+              { seq: 1, kind: lifecycle },
+              { seq: 2, kind: { type: 'assistant_message_stored', data: { message_id: 'a1', content: 'Partial response' } } }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(session.runState).toBe(runState);
+    expect(session.activityLabel).toBe(activityLabel);
+    expect(normalizeHistoricalSession(session, { loadCompleted: true }).runState).toBe(runState);
+  });
+
+  it('finalizes orphaned tools without overwriting explicit lifecycle state', () => {
+    const session: ActiveSessionViewModel = {
+      sessionId: 'session-lifecycle',
+      transcript: [],
+      toolCalls: [
+        {
+          id: 't-orphan',
+          title: 'Run shell',
+          status: 'in_progress',
+          kind: 'execute',
+          messageId: null,
+          arguments: '{"command":"echo hi"}',
+          eventIndex: 0
+        }
+      ],
+      plans: [],
+      events: [],
+      configOptions: [],
+      runState: 'failed',
+      runStateFromLifecycle: true,
+      activityLabel: 'Turn failed.',
+      activeToolCallId: 't-orphan',
+      lastStopReason: null,
+      lastError: 'tool failed',
+      usage: {
+        contextUsed: null,
+        contextLimit: null,
+        cumulativeCostUsd: null,
+        activeWorkMs: 0,
+        activeWorkStartedAt: null
+      },
+      undo: {
+        stack: [],
+        pendingOperation: null,
+        lastRevertedFiles: [],
+        lastMessage: null
+      }
+    };
+
+    const normalized = normalizeHistoricalSession(session, { loadCompleted: true });
+
+    expect(normalized.runState).toBe('failed');
+    expect(normalized.activityLabel).toBe('Turn failed.');
+    expect(normalized.activeToolCallId).toBeNull();
+    expect(normalized.lastError).toBe('tool failed');
+    expect(normalized.toolCalls[0]).toMatchObject({ id: 't-orphan', status: 'completed' });
   });
 
   it('uses successful session/load completion as the terminal state for replayed history', () => {

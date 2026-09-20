@@ -7,6 +7,7 @@
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import SessionScrollToBottomPill from '$lib/components/session/SessionScrollToBottomPill.svelte';
   import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelte';
+  import SessionQueuedBubble from '$lib/components/session/SessionQueuedBubble.svelte';
   import DelegateModelDialog from '$lib/components/session/DelegateModelDialog.svelte';
   import SessionForkDialog from '$lib/components/session/SessionForkDialog.svelte';
   import SessionHeader from '$lib/components/session/SessionHeader.svelte';
@@ -39,6 +40,11 @@
   const sessionId = $derived(decodeURIComponent(page.params.sessionId ?? ''));
   const selectedSession = $derived(getSessionById(agentsStore.sessionsByAgent[agentId] ?? [], sessionId, agentId));
   const sessionProfileId = $derived(getCurrentProfileId(agentsStore.activeSession.configOptions) ?? null);
+  const waitingInputs = $derived(
+    agentsStore.activePendingInputs.filter(
+      (input) => !['applied', 'started', 'discarded', 'failed'].includes(input.state)
+    )
+  );
   const inheritedReasoningLabel = $derived.by(() => {
     const option = findReasoningConfigOption(agentsStore.activeSession.configOptions);
     if (!option) return null;
@@ -80,7 +86,9 @@
   const followPinClass = $derived(sessionFollowPinClass(scrollMode));
   const agentRunActive = $derived(
     !agentsStore.sessionHistoryLoading &&
-      ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession?.runState ?? 'idle')
+      ((agentsStore.activeSessionRuntime != null &&
+        agentsStore.activeSessionRuntime.phase !== 'idle') ||
+        ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession?.runState ?? 'idle'))
   );
   // The agent name in the header only disambiguates between sessions when more
   // than one agent is actively connected.
@@ -598,6 +606,12 @@
         class="session-activity-bar-dock"
         style={dockAlignLeft != null && dockAlignWidth != null ? `left:${dockAlignLeft}px;width:${dockAlignWidth}px;transform:none;` : ''}
       >
+        <SessionQueuedBubble
+          inputs={waitingInputs}
+          onDiscardQueued={agentsStore.canDiscardQueuedInputs
+            ? (inputId) => agentsStore.discardQueuedInput(inputId)
+            : undefined}
+        />
         <SessionActivityBar session={agentsStore.activeSession} forkPending={agentsStore.forkPending} />
       </div>
 
@@ -611,10 +625,13 @@
         sessionProfileLabel={sessionProfileLabel}
         chatView={true}
         agentRunning={agentRunActive}
+        turnControlSupported={agentsStore.canControlActiveRun}
+        inputDelivery={agentsStore.activeInputDelivery}
+        onInputDeliveryChange={(delivery) => agentsStore.setActiveComposerInputDelivery(delivery)}
         onStopPrompt={() => agentsStore.cancelActiveSession()}
         sendShortcut={chatPreferencesStore.sendShortcut}
         prompt={agentsStore.composerPrompt}
-        loading={agentsStore.loading}
+        loading={agentsStore.loading || agentsStore.inputSubmitPending}
         error={agentsStore.error}
         activeSessionId={agentsStore.activeSessionId}
         promptFocusToken={agentsStore.promptFocusToken}
