@@ -216,6 +216,8 @@ export class AgentsStore {
   private sessionRuntimeRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private sessionRuntimeRefreshGenerations = new Map<string, number>();
   private sessionRuntimeRefreshPromises = new Map<string, Promise<SessionRuntimeState | null>>();
+  private inputSubmissionsBySession = new Map<string, number>();
+  private inputNotificationsDuringSubmit = new Map<string, SessionInputStateNotification>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectAttempts = new Map<string, number>();
   private workspaceSourceVersions = new Map<string, number>();
@@ -1842,6 +1844,7 @@ export class AgentsStore {
     };
     this.inputSubmitOwner = key;
     this.inputSubmitPending = true;
+    this.inputSubmissionsBySession.set(key, (this.inputSubmissionsBySession.get(key) ?? 0) + 1);
     try {
       const result = delivery === 'steer'
         ? await client.steerSession(sessionId, prompt, attachments, clientInputId, runtime.active_run_id, imageMode)
@@ -1859,6 +1862,9 @@ export class AgentsStore {
       }
       this.activeSession.lastError = null;
     } catch (error) {
+      this.inputNotificationsDuringSubmit.delete(
+        sessionInputNotificationKey(agentId, sessionId, clientInputId)
+      );
       this.updatePendingSessionInput(agentId, sessionId, clientInputId, {
         state: 'failed',
         reason: error instanceof Error ? error.message : 'Input submission failed.'
@@ -1868,6 +1874,12 @@ export class AgentsStore {
       }
       await this.refreshSessionRuntime(agentId, sessionId, client).catch(() => null);
     } finally {
+      const remainingSubmissions = (this.inputSubmissionsBySession.get(key) ?? 1) - 1;
+      if (remainingSubmissions > 0) {
+        this.inputSubmissionsBySession.set(key, remainingSubmissions);
+      } else {
+        this.inputSubmissionsBySession.delete(key);
+      }
       if (this.inputSubmitOwner === key) {
         this.inputSubmitOwner = null;
         this.inputSubmitPending = false;
@@ -1930,34 +1942,64 @@ export class AgentsStore {
     result: SubmitInputResult
   ) {
     const inputId = result.data.input_id;
+    const key = buildSessionKey(agentId, sessionId);
+    const bufferedNotification =
+      this.inputNotificationsDuringSubmit.get(sessionInputNotificationKey(agentId, sessionId, inputId))
+      ?? this.inputNotificationsDuringSubmit.get(sessionInputNotificationKey(agentId, sessionId, pending.inputId));
+    this.inputNotificationsDuringSubmit.delete(sessionInputNotificationKey(agentId, sessionId, inputId));
+    this.inputNotificationsDuringSubmit.delete(sessionInputNotificationKey(agentId, sessionId, pending.inputId));
+
     if (inputId !== pending.inputId) {
-      const key = buildSessionKey(agentId, sessionId);
       const current = this.pendingInputsBySession[key] ?? [];
+      const existing = current.find((input) => input.inputId === inputId)
+        ?? current.find((input) => input.inputId === pending.inputId);
+      const withoutPreviousIds = current.filter(
+        (input) => input.inputId !== pending.inputId && input.inputId !== inputId
+      );
       this.pendingInputsBySession = {
         ...this.pendingInputsBySession,
-        [key]: upsertPendingSessionInput(
-          current.filter((input) => input.inputId !== pending.inputId),
-          { ...pending, inputId }
-        )
+        [key]: existing
+          ? upsertPendingSessionInput(withoutPreviousIds, { ...existing, inputId })
+          : withoutPreviousIds
       };
     }
-    if (result.status === 'steered') {
+
+    if (
+      result.status === 'started'
+      || (bufferedNotification?.delivery === SessionInputDelivery.Queue
+        && (bufferedNotification.state === SessionInputState.Started
+          || bufferedNotification.state === SessionInputState.Discarded))
+    ) {
+      this.removePendingSessionInput(agentId, sessionId, inputId);
+      this.removePendingSessionInput(agentId, sessionId, pending.inputId);
+      return;
+    }
+
+    const current = (this.pendingInputsBySession[key] ?? []).find((input) => input.inputId === inputId);
+    if (!current) return;
+    const terminalState = current.state === 'applied' || current.state === 'discarded';
+    if (!terminalState && result.status === 'steered') {
       this.updatePendingSessionInput(agentId, sessionId, inputId, {
-        inputId,
         delivery: 'steer',
         state: 'accepted',
         runId: result.data.run_id,
         position: result.data.position
       });
-    } else if (result.status === 'queued') {
+    } else if (!terminalState && result.status === 'queued') {
       this.updatePendingSessionInput(agentId, sessionId, inputId, {
-        inputId,
         delivery: 'queue',
         state: 'queued',
         position: result.data.position
       });
-    } else {
-      this.removePendingSessionInput(agentId, sessionId, inputId);
+    }
+
+    if (bufferedNotification) {
+      this.updatePendingSessionInput(
+        agentId,
+        sessionId,
+        inputId,
+        pendingInputUpdatesFromNotification(bufferedNotification)
+      );
     }
   }
 
@@ -2023,6 +2065,13 @@ export class AgentsStore {
 
   private applyInputStateNotification(agentId: string, notification: SessionInputStateNotification) {
     if (notification.version !== 1) return;
+    const sessionKey = buildSessionKey(agentId, notification.session_id);
+    if ((this.inputSubmissionsBySession.get(sessionKey) ?? 0) > 0) {
+      this.inputNotificationsDuringSubmit.set(
+        sessionInputNotificationKey(agentId, notification.session_id, notification.input_id),
+        notification
+      );
+    }
     if (
       notification.delivery === SessionInputDelivery.Queue &&
       (notification.state === SessionInputState.Started || notification.state === SessionInputState.Discarded)
@@ -2033,19 +2082,12 @@ export class AgentsStore {
       }
       return;
     }
-    const delivery: SessionInputDeliveryMode =
-      notification.delivery === SessionInputDelivery.Queue ? 'queue' : 'steer';
-    const state = sessionInputLifecycleState(notification.state);
-    const updates: Partial<PendingSessionInput> = {
-      delivery,
-      state,
-      runId: notification.run_id,
-      position: notification.position,
-      boundary: notification.boundary,
-      reason: notification.reason,
-      latencyMs: notification.latency_ms
-    };
-    this.updatePendingSessionInput(agentId, notification.session_id, notification.input_id, updates);
+    this.updatePendingSessionInput(
+      agentId,
+      notification.session_id,
+      notification.input_id,
+      pendingInputUpdatesFromNotification(notification)
+    );
     if (this.isSelectedSession(agentId, notification.session_id)) {
       void this.refreshSessionRuntime(agentId, notification.session_id).catch(() => null);
     }
@@ -2254,7 +2296,11 @@ export class AgentsStore {
       this.activeSession.undo.pendingOperation = pendingOperation;
       this.reconcileInputStatesFromSnapshot(agentId, sessionId, loadedSession);
       if (record.client.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE)) {
-        await this.refreshSessionRuntime(agentId, sessionId, record.client);
+        await this.refreshSessionRuntime(agentId, sessionId, record.client).catch(() => null);
+        if (!this.isSelectedSession(agentId, sessionId)) {
+          telemetryStatus = 'cancelled';
+          return;
+        }
       }
       await this.hydrateUndoStack(agentId, sessionId, record.client);
       checkpoint('frontend.undo_hydrate');
@@ -4333,6 +4379,24 @@ function maxTimestamp(values: Array<string | null>): string | null {
     if (!value) return latest;
     return !latest || value > latest ? value : latest;
   }, null);
+}
+
+function sessionInputNotificationKey(agentId: string, sessionId: string, inputId: string): string {
+  return JSON.stringify([agentId, sessionId, inputId]);
+}
+
+function pendingInputUpdatesFromNotification(
+  notification: SessionInputStateNotification
+): Partial<PendingSessionInput> {
+  return {
+    delivery: notification.delivery === SessionInputDelivery.Queue ? 'queue' : 'steer',
+    state: sessionInputLifecycleState(notification.state),
+    runId: notification.run_id,
+    position: notification.position,
+    boundary: notification.boundary,
+    reason: notification.reason,
+    latencyMs: notification.latency_ms
+  };
 }
 
 function sessionInputLifecycleState(

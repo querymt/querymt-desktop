@@ -428,7 +428,7 @@ describe('SessionComposer', () => {
     expect(sendButton!.textContent?.trim()).toBe('Queue');
   });
 
-  it('keeps the send icon while idle and only swaps glyphs for active steer/queue runs', () => {
+  it('keeps the send icon while idle and only swaps glyphs for active steer/queue runs', async () => {
     const { container, rerender } = renderComposer({
       activeSessionId: 'session-1',
       sessionOnly: true,
@@ -440,13 +440,13 @@ describe('SessionComposer', () => {
     expect(sendButton.querySelector('.lucide-plus')).toBeNull();
     expect(container.querySelector('.composer-delivery-switch')).toBeNull();
 
-    rerender({ agentRunning: true, turnControlSupported: true, inputDelivery: 'steer' });
+    await rerender({ agentRunning: true, turnControlSupported: true, inputDelivery: 'steer' });
     expect(container.querySelector('.composer-delivery-switch')).not.toBeNull();
     const steerButton = container.querySelector('button.action-btn-primary');
     expect(steerButton?.querySelector('.lucide-navigation')).not.toBeNull();
     expect(steerButton?.getAttribute('aria-label')).toBe('Steer');
 
-    rerender({ inputDelivery: 'queue' });
+    await rerender({ inputDelivery: 'queue' });
     const queueButton = container.querySelector('button.action-btn-primary');
     expect(queueButton?.querySelector('.lucide-plus')).not.toBeNull();
     expect(queueButton?.getAttribute('aria-label')).toBe('Queue');

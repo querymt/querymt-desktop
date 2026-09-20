@@ -515,6 +515,33 @@ describe('AgentsStore connections', () => {
     expect(mockClient.elicitationUnsubscribe()).not.toHaveBeenCalled();
   });
 
+  it('completes session hydration when runtime refresh fails', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1',
+        agentName: 'QMTCODE',
+        sessionId: 'session-1',
+        title: 'Question session',
+        cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z',
+        runtimeId: 'agent-1',
+        runtimeName: 'QMTCODE',
+        source: 'acp',
+        status: 'idle'
+      }]
+    };
+    mockClient.getSessionRuntimeState.mockRejectedValueOnce(new Error('runtime unavailable'));
+    await store.connectAgent('agent-1');
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(mockClient.getUndoStack).toHaveBeenCalledWith('session-1');
+    expect(store.activeSession.runState).toBe('completed');
+    expect(store.activeSession.lastError).toBeNull();
+    expect(store.error).toBeNull();
+  });
+
   it('loads a known child session without switching the catalog off root', async () => {
     const store = createStore();
     store.composerCwd = '/tmp/work';
@@ -2547,6 +2574,103 @@ describe('AgentsStore prompt session start', () => {
         clientPromptId: inputId
       })
     ]);
+  });
+
+  it.each([
+    { delivery: 'steer' as const, notificationState: SessionInputState.Applied },
+    { delivery: 'queue' as const, notificationState: SessionInputState.Started }
+  ])('does not regress $delivery state when a lifecycle notification precedes the submit response', async ({ delivery, notificationState }) => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: delivery === 'steer',
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    let resolveSubmit!: (result: SubmitInputResult) => void;
+    const submit = new Promise<SubmitInputResult>((resolve) => { resolveSubmit = resolve; });
+    const submitMock = delivery === 'steer' ? mockClient.steerSession : mockClient.queueSession;
+    submitMock.mockReturnValueOnce(submit);
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Continue with the fix';
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery(delivery);
+
+    const send = store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(submitMock).toHaveBeenCalledTimes(1));
+    const clientInputId = submitMock.mock.calls[0][3] as string;
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/inputState',
+      params: {
+        version: 1,
+        session_id: 'session-1',
+        input_id: clientInputId,
+        delivery: delivery === 'steer' ? SessionInputDelivery.Steer : SessionInputDelivery.Queue,
+        state: notificationState,
+        run_id: 'run-1'
+      } satisfies SessionInputStateNotification
+    });
+
+    resolveSubmit(delivery === 'steer'
+      ? { status: 'steered', data: { run_id: 'run-1', input_id: clientInputId, position: 1 } }
+      : { status: 'queued', data: { input_id: clientInputId, position: 1 } });
+    await send;
+
+    if (delivery === 'steer') {
+      expect(store.activePendingInputs).toEqual([expect.objectContaining({
+        inputId: clientInputId,
+        state: 'applied'
+      })]);
+    } else {
+      expect(store.activePendingInputs).toEqual([]);
+    }
+  });
+
+  it('does not resurrect a rekeyed queue item finalized before the submit response', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    let resolveSubmit!: (result: SubmitInputResult) => void;
+    mockClient.queueSession.mockReturnValueOnce(new Promise<SubmitInputResult>((resolve) => {
+      resolveSubmit = resolve;
+    }));
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Run tests next';
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery('queue');
+
+    const send = store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(mockClient.queueSession).toHaveBeenCalledTimes(1));
+    const clientInputId = mockClient.queueSession.mock.calls[0][3] as string;
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/inputState',
+      params: {
+        version: 1,
+        session_id: 'session-1',
+        input_id: 'server-input',
+        delivery: SessionInputDelivery.Queue,
+        state: SessionInputState.Started,
+        run_id: 'run-2'
+      } satisfies SessionInputStateNotification
+    });
+
+    resolveSubmit({ status: 'queued', data: { input_id: 'server-input', position: 1 } });
+    await send;
+
+    expect(clientInputId).not.toBe('server-input');
+    expect(store.activePendingInputs).toEqual([]);
   });
 
   it('removes queued input through the backend and clears local pending state', async () => {
