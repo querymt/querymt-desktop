@@ -72,6 +72,7 @@ function cloneSession(current: ActiveSessionViewModel): ActiveSessionViewModel {
     events: current.events.map((item) => ({ ...item })),
     configOptions: current.configOptions.map((item) => ({ ...item })),
     runState: current.runState,
+    runStateFromLifecycle: current.runStateFromLifecycle,
     activityLabel: current.activityLabel,
     activeToolCallId: current.activeToolCallId,
     lastStopReason: current.lastStopReason,

@@ -86,7 +86,8 @@
   const followPinClass = $derived(sessionFollowPinClass(scrollMode));
   const agentRunActive = $derived(
     !agentsStore.sessionHistoryLoading &&
-      (agentsStore.activeSessionRuntime?.phase !== 'idle' ||
+      ((agentsStore.activeSessionRuntime != null &&
+        agentsStore.activeSessionRuntime.phase !== 'idle') ||
         ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession?.runState ?? 'idle'))
   );
   // The agent name in the header only disambiguates between sessions when more

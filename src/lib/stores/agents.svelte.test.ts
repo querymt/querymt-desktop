@@ -2266,6 +2266,183 @@ describe('AgentsStore mesh node availability', () => {
 });
 
 describe('AgentsStore prompt session start', () => {
+  it('does not redirect an input when the selected session changes during runtime refresh', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    let resolveRuntime!: (runtime: SessionRuntimeState) => void;
+    mockClient.getSessionRuntimeState.mockReturnValueOnce(
+      new Promise<SessionRuntimeState>((resolve) => { resolveRuntime = resolve; })
+    );
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.composerPrompt = 'Keep this with session one';
+    await store.connectAgent('agent-1');
+
+    const send = store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(mockClient.getSessionRuntimeState).toHaveBeenCalledWith('session-1'));
+    store.activeSessionId = 'session-2';
+    store.activeSession.sessionId = 'session-2';
+    resolveRuntime({
+      phase: SessionRuntimePhase.Model,
+      active_run_id: 'run-1',
+      steerable: true,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    await send;
+
+    expect(mockClient.steerSession).not.toHaveBeenCalled();
+    expect(mockClient.queueSession).not.toHaveBeenCalled();
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('keeps the newest runtime response when refreshes resolve out of order', async () => {
+    let resolveOlder!: (runtime: SessionRuntimeState) => void;
+    let resolveNewer!: (runtime: SessionRuntimeState) => void;
+    mockClient.getSessionRuntimeState
+      .mockImplementationOnce(() => new Promise<SessionRuntimeState>((resolve) => { resolveOlder = resolve; }))
+      .mockImplementationOnce(() => new Promise<SessionRuntimeState>((resolve) => { resolveNewer = resolve; }));
+    const store = createStore();
+    await store.connectAgent('agent-1');
+
+    const older = store.refreshSessionRuntime('agent-1', 'session-1');
+    const newer = store.refreshSessionRuntime('agent-1', 'session-1');
+    await vi.waitFor(() => expect(mockClient.getSessionRuntimeState).toHaveBeenCalledTimes(2));
+    const authoritative: SessionRuntimeState = {
+      phase: SessionRuntimePhase.Idle,
+      active_run_id: undefined,
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: undefined
+    };
+    resolveNewer(authoritative);
+    await expect(newer).resolves.toEqual(authoritative);
+    resolveOlder({
+      phase: SessionRuntimePhase.Model,
+      active_run_id: 'stale-run',
+      steerable: true,
+      pending_steering_count: 1,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+
+    await expect(older).resolves.toEqual(authoritative);
+    expect(store.sessionRuntimeBySession['agent-1:session-1']).toEqual(authoritative);
+  });
+
+  it('restores a snapshot-only queued message with attachments and allows discarding it', async () => {
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: {
+        configOptions: [],
+        _meta: {
+          'querymt/sessionLoadSnapshot.v1': {
+            audit: {
+              events: [{
+                seq: 1,
+                timestamp: 10,
+                kind: {
+                  type: 'input_queued',
+                  data: {
+                    input_id: 'queue-restored',
+                    position: 1,
+                    accepted_at_ms: 1234,
+                    blocks: [
+                      { type: 'text', text: 'Continue after this run' },
+                      {
+                        type: 'resource',
+                        resource: {
+                          uri: 'attachment:///file-1/notes.txt',
+                          blob: 'dGV4dA==',
+                          mimeType: 'text/plain'
+                        },
+                        _meta: { querymt: { attachment_id: 'file-1', filename: 'notes.txt', size: 4 } }
+                      }
+                    ]
+                  }
+                }
+              }]
+            }
+          }
+        }
+      },
+      replay: []
+    });
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1',
+        agentName: 'QMTCODE',
+        sessionId: 'session-1',
+        title: 'Queued work',
+        cwd: '/tmp/work',
+        updatedAt: '2026-09-20T00:00:00Z',
+        runtimeId: 'agent-1',
+        runtimeName: 'QMTCODE',
+        source: 'acp',
+        status: 'idle'
+      }]
+    };
+    await store.connectAgent('agent-1');
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activePendingInputs).toEqual([expect.objectContaining({
+      inputId: 'queue-restored',
+      delivery: 'queue',
+      state: 'queued',
+      prompt: 'Continue after this run',
+      createdAt: 1234,
+      attachments: [expect.objectContaining({ id: 'file-1', name: 'notes.txt', data: 'dGV4dA==' })]
+    })]);
+
+    await store.discardQueuedInput('queue-restored');
+
+    expect(mockClient.discardQueuedInput).toHaveBeenCalledWith('session-1', 'queue-restored');
+    expect(store.activePendingInputs).toEqual([]);
+  });
+
+  it('preserves explicit snapshot run lifecycle state over replay content during load', async () => {
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: {
+        configOptions: [],
+        _meta: {
+          'querymt/sessionLoadSnapshot.v1': {
+            audit: {
+              events: [
+                { seq: 1, kind: { type: 'run_completed', data: { run_id: 'run-1', outcome: 'failed' } } },
+                { seq: 2, kind: { type: 'assistant_message_stored', data: { message_id: 'a1', content: 'Partial response' } } }
+              ]
+            }
+          }
+        }
+      },
+      replay: [{
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'Replay response' },
+          messageId: 'a1'
+        }
+      } as SessionNotification]
+    });
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Failed run',
+        cwd: '/tmp/work', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    await store.connectAgent('agent-1');
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activeSession.runState).toBe('failed');
+    expect(store.activeSession.activityLabel).toBe('Turn completed.');
+  });
+
   it('opens a new active session with the user prompt rendered while the agent reply is pending', async () => {
     let resolvePrompt!: () => void;
     mockClient.sendPrompt.mockImplementationOnce(

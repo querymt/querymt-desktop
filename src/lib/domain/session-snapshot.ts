@@ -1,5 +1,5 @@
 import { createEmptyActiveSession, normalizeContentBlocks, stringifyOptional, summarizeContentBlocks } from '$lib/domain/session-updates';
-import type { ActiveSessionViewModel, SessionToolCallItem } from '$lib/domain/types';
+import type { ActiveSessionViewModel, PromptAttachment, SessionContentBlock, SessionToolCallItem } from '$lib/domain/types';
 
 type SnapshotEvent = {
   seq?: number;
@@ -62,6 +62,9 @@ export interface SnapshotInputState {
   boundary?: string;
   reason?: string;
   latencyMs?: number;
+  prompt?: string;
+  attachments?: PromptAttachment[];
+  createdAt?: number;
 }
 
 const TOOL_TERMINAL_EVENT_TYPES = new Set(['assistant_message_stored', 'llm_request_end']);
@@ -113,6 +116,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
 
     if (kind === 'run_started') {
       session.runState = 'thinking';
+      session.runStateFromLifecycle = true;
       session.activityLabel = 'Agent is working…';
       continue;
     }
@@ -120,6 +124,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
     if (kind === 'run_completed') {
       const outcome = readString(data.outcome);
       session.runState = outcome === 'failed' ? 'failed' : 'completed';
+      session.runStateFromLifecycle = true;
       session.activityLabel = outcome === 'cancelled' ? 'Turn cancelled.' : 'Turn completed.';
       continue;
     }
@@ -292,7 +297,8 @@ export function getSnapshotInputStates(response: unknown): SnapshotInputState[] 
         delivery: 'steer',
         state: 'accepted',
         runId: readString(data.run_id) ?? readString(data.runId) ?? undefined,
-        position: readNonNegativeNumber(data.position) ?? undefined
+        position: readNonNegativeNumber(data.position) ?? undefined,
+        ...pendingInputContent(data, event)
       };
     } else if (kind === 'steering_applied') {
       next = {
@@ -319,7 +325,8 @@ export function getSnapshotInputStates(response: unknown): SnapshotInputState[] 
         inputId,
         delivery: 'queue',
         state: 'queued',
-        position: readNonNegativeNumber(data.position) ?? undefined
+        position: readNonNegativeNumber(data.position) ?? undefined,
+        ...pendingInputContent(data, event)
       };
     } else if (kind === 'queued_input_started') {
       next = {
@@ -366,6 +373,8 @@ export function normalizeHistoricalSession(
   session: ActiveSessionViewModel,
   options: { loadCompleted?: boolean } = {}
 ): ActiveSessionViewModel {
+  if (session.runStateFromLifecycle) return session;
+
   const hasActiveTool = session.toolCalls.some((tool) => tool.status === 'in_progress' || tool.status === 'pending');
   if (hasActiveTool && !options.loadCompleted) {
     const activeTool = session.toolCalls.find((tool) => tool.status === 'in_progress' || tool.status === 'pending') ?? null;
@@ -397,6 +406,43 @@ export function normalizeHistoricalSession(
   }
 
   return session;
+}
+
+function pendingInputContent(
+  data: Record<string, unknown>,
+  event: SnapshotEvent
+): Pick<SnapshotInputState, 'prompt' | 'attachments' | 'createdAt'> {
+  const blocks = normalizeContentBlocks(data.blocks);
+  const createdAt = readNonNegativeNumber(data.accepted_at_ms ?? data.acceptedAtMs)
+    ?? readTimestampMs(event.timestamp)
+    ?? undefined;
+  if (blocks.length === 0) return { createdAt };
+  return {
+    prompt: blocks
+      .filter((block): block is Extract<SessionContentBlock, { type: 'text' }> => block.type === 'text')
+      .map((block) => block.text)
+      .join(''),
+    attachments: blocks.flatMap(blockToPromptAttachment),
+    createdAt
+  };
+}
+
+function blockToPromptAttachment(block: SessionContentBlock): PromptAttachment[] {
+  if (block.type === 'text' || block.data == null) return [];
+  return [{
+    id: block.id ?? block.uri ?? `snapshot-attachment-${block.name ?? block.mimeType ?? 'file'}`,
+    name: block.name ?? block.uri?.split('/').at(-1) ?? (block.type === 'image' ? 'image' : 'attachment'),
+    mimeType: block.mimeType ?? 'application/octet-stream',
+    size: block.size ?? decodedBase64Size(block.data),
+    data: block.data
+  }];
+}
+
+function decodedBase64Size(data: string): number {
+  const normalized = data.replace(/\s/g, '');
+  if (!normalized) return 0;
+  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor(normalized.length * 3 / 4) - padding);
 }
 
 function indexStructuredPrompts(snapshot: SessionLoadSnapshot): Map<string, IndexedStructuredPrompt> {

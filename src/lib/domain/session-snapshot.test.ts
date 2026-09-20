@@ -78,6 +78,56 @@ describe('getSnapshotInputStates', () => {
       expect.objectContaining({ inputId: 'queue-2', delivery: 'queue', state: 'discarded', reason: 'removed_by_user' })
     ]);
   });
+
+  it('restores structured queued input content and acceptance time', () => {
+    const [state] = getSnapshotInputStates({
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [{
+              timestamp: 10,
+              kind: {
+                type: 'input_queued',
+                data: {
+                  input_id: 'queue-1',
+                  position: 1,
+                  accepted_at_ms: 1234,
+                  blocks: [
+                    { type: 'text', text: 'Review these files' },
+                    {
+                      type: 'image',
+                      data: 'aW1n',
+                      mimeType: 'image/png',
+                      _meta: { querymt: { attachment_id: 'image-1', filename: 'photo.png', size: 3 } }
+                    },
+                    {
+                      type: 'resource',
+                      resource: {
+                        uri: 'attachment:///file-1/notes.txt',
+                        blob: 'dGV4dA==',
+                        mimeType: 'text/plain'
+                      },
+                      _meta: { querymt: { attachment_id: 'file-1', filename: 'notes.txt', size: 4 } }
+                    }
+                  ]
+                }
+              }
+            }]
+          }
+        }
+      }
+    });
+
+    expect(state).toEqual(expect.objectContaining({
+      inputId: 'queue-1',
+      prompt: 'Review these files',
+      createdAt: 1234,
+      attachments: [
+        expect.objectContaining({ id: 'image-1', name: 'photo.png', mimeType: 'image/png', data: 'aW1n' }),
+        expect.objectContaining({ id: 'file-1', name: 'notes.txt', mimeType: 'text/plain', data: 'dGV4dA==' })
+      ]
+    }));
+  });
 });
 
 describe('activeSessionFromLoadResponse', () => {
@@ -593,6 +643,38 @@ describe('activeSessionFromLoadResponse', () => {
     });
     expect(session.runState).toBe('completed');
     expect(session.activeToolCallId).toBeNull();
+  });
+
+  it.each([
+    {
+      name: 'run_started',
+      lifecycle: { type: 'run_started', data: { run_id: 'run-1', origin: 'prompt' } },
+      runState: 'thinking',
+      activityLabel: 'Agent is working…'
+    },
+    {
+      name: 'failed run_completed',
+      lifecycle: { type: 'run_completed', data: { run_id: 'run-1', outcome: 'failed' } },
+      runState: 'failed',
+      activityLabel: 'Turn completed.'
+    }
+  ])('preserves explicit $name lifecycle state when assistant content exists', ({ lifecycle, runState, activityLabel }) => {
+    const session = activeSessionFromLoadResponse('session-lifecycle', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [
+              { seq: 1, kind: lifecycle },
+              { seq: 2, kind: { type: 'assistant_message_stored', data: { message_id: 'a1', content: 'Partial response' } } }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(session.runState).toBe(runState);
+    expect(session.activityLabel).toBe(activityLabel);
+    expect(normalizeHistoricalSession(session, { loadCompleted: true }).runState).toBe(runState);
   });
 
   it('uses successful session/load completion as the terminal state for replayed history', () => {

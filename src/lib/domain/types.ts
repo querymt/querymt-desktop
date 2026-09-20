@@ -290,6 +290,7 @@ export interface ActiveSessionViewModel {
   events: SessionEventItem[];
   configOptions: SessionConfigOption[];
   runState: SessionRunState;
+  runStateFromLifecycle?: boolean;
   activityLabel: string | null;
   activeToolCallId: string | null;
   lastStopReason: string | null;

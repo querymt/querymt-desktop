@@ -22,6 +22,46 @@ export type AgentEventKind =
 	 * (loading history, snapshotting, building tools, running middleware).
 	 */
 	| { type: "turn_started", data?: undefined }
+	| { type: "run_started", data: {
+	run_id: string;
+	origin: string;
+}}
+	| { type: "run_completed", data: {
+	run_id: string;
+	outcome: string;
+}}
+	| { type: "steering_accepted", data: {
+	run_id: string;
+	input_id: string;
+	position: number;
+	blocks?: any;
+	accepted_at_ms?: number;
+}}
+	| { type: "steering_applied", data: {
+	run_id: string;
+	input_id: string;
+	boundary: string;
+	latency_ms: number;
+}}
+	| { type: "steering_discarded", data: {
+	run_id: string;
+	input_id: string;
+	reason: string;
+}}
+	| { type: "input_queued", data: {
+	input_id: string;
+	position: number;
+	blocks?: any;
+	accepted_at_ms?: number;
+}}
+	| { type: "queued_input_started", data: {
+	input_id: string;
+	run_id: string;
+}}
+	| { type: "queued_input_discarded", data: {
+	input_id: string;
+	reason: string;
+}}
 	| { type: "assistant_message_stored", data: {
 	content: string;
 	thinking?: string;
