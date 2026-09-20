@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import SessionQueuedBubble from './SessionQueuedBubble.svelte';
 import type { PendingSessionInput } from '$lib/domain/types';
 
@@ -88,11 +88,40 @@ describe('SessionQueuedBubble', () => {
     expect(panel).toHaveTextContent('1 attachment(s)');
   });
 
+  it('removes queued inputs but does not offer removal for steering', async () => {
+    const onDiscardQueued = vi.fn();
+    render(SessionQueuedBubble, {
+      inputs: [
+        queuedInput({ inputId: 'steer-1', prompt: 'Steer left', delivery: 'steer', state: 'accepted' }),
+        queuedInput({ inputId: 'queue-1', prompt: 'Queue next', delivery: 'queue', state: 'queued' })
+      ],
+      onDiscardQueued
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: /2 waiting messages/ }));
+
+    const removeButtons = screen.getAllByRole('button', { name: 'Remove queued message' });
+    expect(removeButtons).toHaveLength(1);
+    await fireEvent.click(removeButtons[0]);
+    expect(onDiscardQueued).toHaveBeenCalledWith('queue-1');
+  });
+
+  it('disables queued removal while the request is pending', async () => {
+    render(SessionQueuedBubble, {
+      inputs: [queuedInput({ inputId: 'queue-1', discardPending: true })],
+      onDiscardQueued: vi.fn()
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: /1 waiting message/ }));
+
+    expect(screen.getByRole('button', { name: 'Remove queued message' })).toBeDisabled();
+  });
+
   it('marks steered and queued inputs with distinct icons in submission order', async () => {
     render(SessionQueuedBubble, {
       inputs: [
-        queuedInput({ inputId: 'a', prompt: 'Steer left', delivery: 'steer', state: 'accepted' }),
-        queuedInput({ inputId: 'b', prompt: 'Queue next', delivery: 'queue', state: 'queued' })
+        queuedInput({ inputId: 'b', prompt: 'Queue next', delivery: 'queue', state: 'queued', createdAt: 2 }),
+        queuedInput({ inputId: 'a', prompt: 'Steer left', delivery: 'steer', state: 'accepted', createdAt: 1 })
       ]
     });
 

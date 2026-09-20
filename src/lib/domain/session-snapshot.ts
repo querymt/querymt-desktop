@@ -329,6 +329,14 @@ export function getSnapshotInputStates(response: unknown): SnapshotInputState[] 
         state: 'started',
         runId: readString(data.run_id) ?? readString(data.runId) ?? undefined
       };
+    } else if (kind === 'queued_input_discarded') {
+      next = {
+        sessionId: '',
+        inputId,
+        delivery: 'queue',
+        state: 'discarded',
+        reason: readString(data.reason) ?? undefined
+      };
     }
     if (next) states.set(inputId, next);
   }

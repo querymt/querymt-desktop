@@ -49,6 +49,7 @@ import type {
   SetDelegateModelRequest,
   SetDelegateModelResponse,
   SessionRuntimeState,
+  DiscardQueuedInputResult,
   SubmitInputResult
 } from '$lib/querymt/generated/types';
 import { BrowserClient } from '$lib/querymt/browser-client';
@@ -78,6 +79,7 @@ import {
   QMT_METHOD_SCHEDULES_RESUME,
   QMT_METHOD_SCHEDULES_TRIGGER,
   QMT_METHOD_SESSION_DELEGATE_MODELS,
+  QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT,
   QMT_METHOD_SESSION_QUEUE,
   QMT_METHOD_SESSION_REDO,
   QMT_METHOD_SESSION_RUNTIME_STATE,
@@ -687,6 +689,15 @@ export class DesktopAcpClient {
       undefined,
       imageMode
     );
+  }
+
+  async discardQueuedInput(
+    sessionId: string,
+    inputId: string
+  ): Promise<DiscardQueuedInputResult> {
+    if (!this.querymtExtensions) await this.connect();
+    this.assertQuerymtMethod(QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT);
+    return this.querymtExtensions!.discardQueuedInput(sessionId, inputId);
   }
 
   async getSessionRuntimeState(sessionId: string): Promise<SessionRuntimeState> {

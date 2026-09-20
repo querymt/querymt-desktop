@@ -63,7 +63,9 @@ describe('getSnapshotInputStates', () => {
               { kind: { type: 'steering_accepted', data: { input_id: 'steer-1', run_id: 'run-1', position: 1 } } },
               { kind: { type: 'input_queued', data: { input_id: 'queue-1', position: 1 } } },
               { kind: { type: 'steering_applied', data: { input_id: 'steer-1', run_id: 'run-1', boundary: 'after_tools', latency_ms: 12 } } },
-              { kind: { type: 'queued_input_started', data: { input_id: 'queue-1', run_id: 'run-2' } } }
+              { kind: { type: 'queued_input_started', data: { input_id: 'queue-1', run_id: 'run-2' } } },
+              { kind: { type: 'input_queued', data: { input_id: 'queue-2', position: 2 } } },
+              { kind: { type: 'queued_input_discarded', data: { input_id: 'queue-2', reason: 'removed_by_user' } } }
             ]
           }
         }
@@ -72,7 +74,8 @@ describe('getSnapshotInputStates', () => {
 
     expect(getSnapshotInputStates(response)).toEqual([
       expect.objectContaining({ inputId: 'steer-1', delivery: 'steer', state: 'applied', boundary: 'after_tools' }),
-      expect.objectContaining({ inputId: 'queue-1', delivery: 'queue', state: 'started', runId: 'run-2' })
+      expect.objectContaining({ inputId: 'queue-1', delivery: 'queue', state: 'started', runId: 'run-2' }),
+      expect.objectContaining({ inputId: 'queue-2', delivery: 'queue', state: 'discarded', reason: 'removed_by_user' })
     ]);
   });
 });

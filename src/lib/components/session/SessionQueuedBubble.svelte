@@ -1,18 +1,23 @@
 <script lang="ts">
-  import { Clock, Navigation, Plus } from '@lucide/svelte';
+  import { Clock, Navigation, Plus, X } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
   import type { PendingSessionInput } from '$lib/domain/types';
 
   let {
-    inputs = []
+    inputs = [],
+    onDiscardQueued
   }: {
     inputs?: PendingSessionInput[];
+    onDiscardQueued?: (inputId: string) => void | Promise<void>;
   } = $props();
 
   let open = $state(false);
   let panelElement = $state<HTMLDivElement | null>(null);
   let triggerElement: HTMLElement | null = null;
 
+  const orderedInputs = $derived(
+    inputs.toSorted((left, right) => left.createdAt - right.createdAt)
+  );
   const hint = $derived(`${inputs.length} waiting ${inputs.length === 1 ? 'message' : 'messages'}`);
 
   // The session dock is its own stacking context (fixed, z-index 34), so the
@@ -100,7 +105,7 @@
     aria-label="Waiting messages"
   >
     <div class="session-queued-panel-heading">Waiting messages</div>
-    {#each inputs as input (input.inputId)}
+    {#each orderedInputs as input (input.inputId)}
       <div class="session-queued-panel-item">
         <span class="session-queued-panel-state">
           {#if input.delivery === 'queue'}
@@ -113,6 +118,17 @@
         <span class="session-queued-panel-prompt" title={input.prompt}>
           {input.prompt || `${input.attachments.length} attachment(s)`}
         </span>
+        {#if input.delivery === 'queue' && input.state === 'queued' && onDiscardQueued}
+          <button
+            type="button"
+            class="session-queued-panel-remove"
+            aria-label="Remove queued message"
+            disabled={input.discardPending}
+            onclick={() => void onDiscardQueued(input.inputId)}
+          >
+            <X size={13} aria-hidden="true" />
+          </button>
+        {/if}
       </div>
     {/each}
   </div>

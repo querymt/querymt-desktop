@@ -1134,6 +1134,14 @@ export interface SessionRuntimeState {
 	run_started_at_ms?: number;
 }
 
+export type DiscardQueuedInputResult =
+	| { status: "discarded", data: {
+	input_id: string;
+}}
+	| { status: "not_pending", data: {
+	input_id: string;
+}};
+
 export type SubmitInputResult =
 	| { status: "steered", data: {
 	run_id: string;

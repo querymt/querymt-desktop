@@ -139,6 +139,7 @@ export interface PendingSessionInput {
   boundary?: string;
   reason?: string;
   latencyMs?: number;
+  discardPending?: boolean;
   createdAt: number;
 }
 

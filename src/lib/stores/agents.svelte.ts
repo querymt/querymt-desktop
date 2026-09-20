@@ -101,6 +101,7 @@ import { DesktopAcpClient } from '$lib/querymt/acp-client';
 import {
   QMT_METHOD_PROFILES,
   QMT_METHOD_SESSION_DELEGATE_MODELS,
+  QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT,
   QMT_METHOD_SESSION_QUEUE,
   QMT_METHOD_SESSION_REDO,
   QMT_METHOD_SESSION_RUNTIME_STATE,
@@ -349,6 +350,15 @@ export class AgentsStore {
         client.supportsQuerymtMethod(QMT_METHOD_SESSION_STEER) &&
         client.supportsQuerymtMethod(QMT_METHOD_SESSION_QUEUE) &&
         client.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE)
+    );
+  }
+
+  get canDiscardQueuedInputs(): boolean {
+    if (!this.activeAgentId) return false;
+    return Boolean(
+      this.clients
+        .get(this.activeAgentId)
+        ?.client.supportsQuerymtMethod(QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT)
     );
   }
 
@@ -1838,6 +1848,28 @@ export class AgentsStore {
     }
   }
 
+  async discardQueuedInput(inputId: string): Promise<void> {
+    if (!this.activeAgentId || !this.activeSessionId) return;
+    const agentId = this.activeAgentId;
+    const sessionId = this.activeSessionId;
+    const pending = this.activePendingInputs.find((input) => input.inputId === inputId);
+    if (!pending || pending.delivery !== 'queue' || pending.state !== 'queued' || pending.discardPending) {
+      return;
+    }
+    const record = await this.connectInitializedRecord(agentId);
+    const client = record?.client;
+    if (!client?.supportsQuerymtMethod(QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT)) return;
+
+    this.updatePendingSessionInput(agentId, sessionId, inputId, { discardPending: true });
+    try {
+      await client.discardQueuedInput(sessionId, inputId);
+      this.removePendingSessionInput(agentId, sessionId, inputId);
+    } catch (error) {
+      this.updatePendingSessionInput(agentId, sessionId, inputId, { discardPending: false });
+      this.error = error instanceof Error ? error.message : 'Failed to remove queued input.';
+    }
+  }
+
   private applySubmitInputResult(
     agentId: string,
     sessionId: string,
@@ -1910,8 +1942,26 @@ export class AgentsStore {
     this.pendingInputsBySession = { ...this.pendingInputsBySession, [key]: next };
   }
 
+  private removePendingSessionInput(agentId: string, sessionId: string, inputId: string) {
+    const key = buildSessionKey(agentId, sessionId);
+    const current = this.pendingInputsBySession[key] ?? [];
+    const next = current.filter((input) => input.inputId !== inputId);
+    if (next.length === current.length) return;
+    this.pendingInputsBySession = { ...this.pendingInputsBySession, [key]: next };
+  }
+
   private applyInputStateNotification(agentId: string, notification: SessionInputStateNotification) {
     if (notification.version !== 1) return;
+    if (
+      notification.delivery === SessionInputDelivery.Queue &&
+      notification.state === SessionInputState.Discarded
+    ) {
+      this.removePendingSessionInput(agentId, notification.session_id, notification.input_id);
+      if (this.isSelectedSession(agentId, notification.session_id)) {
+        void this.refreshSessionRuntime(agentId, notification.session_id).catch(() => null);
+      }
+      return;
+    }
     const delivery: SessionInputDeliveryMode =
       notification.delivery === SessionInputDelivery.Queue ? 'queue' : 'steer';
     const state = sessionInputLifecycleState(notification.state);
@@ -3416,6 +3466,10 @@ export class AgentsStore {
 
   private reconcileInputStatesFromSnapshot(agentId: string, sessionId: string, response: unknown) {
     for (const state of getSnapshotInputStates(response)) {
+      if (state.delivery === 'queue' && state.state === 'discarded') {
+        this.removePendingSessionInput(agentId, sessionId, state.inputId);
+        continue;
+      }
       this.updatePendingSessionInput(agentId, sessionId, state.inputId, {
         delivery: state.delivery,
         state: state.state,

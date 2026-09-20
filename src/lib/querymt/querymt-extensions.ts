@@ -40,6 +40,7 @@ import type {
   SchedulesChangedNotification,
   SessionInputStateNotification,
   SessionRuntimeState,
+  DiscardQueuedInputResult,
   SubmitInputResult,
   UndoStackFrame
 } from '$lib/querymt/generated/types';
@@ -96,6 +97,7 @@ export const QMT_METHOD_SESSION_DELEGATE_MODELS = 'querymt/session/delegateModel
 export const QMT_METHOD_SESSION_SET_DELEGATE_MODEL = 'querymt/session/setDelegateModel';
 export const QMT_METHOD_SESSION_STEER = 'querymt/session/steer';
 export const QMT_METHOD_SESSION_QUEUE = 'querymt/session/queue';
+export const QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT = 'querymt/session/discardQueuedInput';
 export const QMT_METHOD_SESSION_RUNTIME_STATE = 'querymt/session/runtimeState';
 export const QMT_NOTIFICATION_SESSION_INPUT_STATE = 'querymt/session/inputState';
 
@@ -406,6 +408,13 @@ export class QuerymtExtensions {
 
   async queueSession(request: QuerymtSubmitInputRequest): Promise<SubmitInputResult> {
     return this.call<SubmitInputResult>(QMT_METHOD_SESSION_QUEUE, request);
+  }
+
+  async discardQueuedInput(session_id: string, input_id: string): Promise<DiscardQueuedInputResult> {
+    return this.call<DiscardQueuedInputResult>(QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT, {
+      session_id,
+      input_id
+    });
   }
 
   async sessionRuntimeState(session_id: string): Promise<SessionRuntimeState> {

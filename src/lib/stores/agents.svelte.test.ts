@@ -18,6 +18,7 @@ import {
   type SessionInputStateNotification,
   type SessionRuntimeState,
   type SetDelegateModelResponse,
+  type DiscardQueuedInputResult,
   type SubmitInputResult
 } from '$lib/querymt/generated/types';
 import { tick } from 'svelte';
@@ -89,6 +90,13 @@ const mockClient = vi.hoisted(() => {
     ): Promise<SubmitInputResult> => ({
       status: 'queued',
       data: { input_id: clientInputId, position: 1 }
+    })),
+    discardQueuedInput: vi.fn(async (
+      _sessionId: string,
+      inputId: string
+    ): Promise<DiscardQueuedInputResult> => ({
+      status: 'discarded',
+      data: { input_id: inputId }
     })),
     getSessionRuntimeState: vi.fn(async (): Promise<SessionRuntimeState> => ({
       phase: SessionRuntimePhase.Idle,
@@ -395,6 +403,13 @@ beforeEach(() => {
   ): Promise<SubmitInputResult> => ({
     status: 'queued',
     data: { input_id: clientInputId, position: 1 }
+  }));
+  mockClient.discardQueuedInput.mockReset().mockImplementation(async (
+    _sessionId: string,
+    inputId: string
+  ): Promise<DiscardQueuedInputResult> => ({
+    status: 'discarded',
+    data: { input_id: inputId }
   }));
   mockClient.getSessionRuntimeState.mockReset().mockResolvedValue({
     phase: SessionRuntimePhase.Idle,
@@ -2355,6 +2370,94 @@ describe('AgentsStore prompt session start', () => {
         clientPromptId: inputId
       })
     ]);
+  });
+
+  it('removes queued input through the backend and clears local pending state', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Run tests next';
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery('queue');
+
+    await store.sendPromptToActiveSession();
+    const inputId = store.activePendingInputs[0].inputId;
+
+    await store.discardQueuedInput(inputId);
+
+    expect(mockClient.discardQueuedInput).toHaveBeenCalledWith('session-1', inputId);
+    expect(store.activePendingInputs).toEqual([]);
+  });
+
+  it('reconciles an already-started queue item as no longer pending', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    mockClient.discardQueuedInput.mockResolvedValueOnce({
+      status: 'not_pending',
+      data: { input_id: 'ignored' }
+    });
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Run tests next';
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery('queue');
+
+    await store.sendPromptToActiveSession();
+    const inputId = store.activePendingInputs[0].inputId;
+    await store.discardQueuedInput(inputId);
+
+    expect(store.activePendingInputs).toEqual([]);
+  });
+
+  it('removes queued input when its discarded lifecycle notification arrives', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Run tests next';
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery('queue');
+
+    await store.sendPromptToActiveSession();
+    const inputId = store.activePendingInputs[0].inputId;
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/inputState',
+      params: {
+        version: 1,
+        session_id: 'session-1',
+        input_id: inputId,
+        delivery: SessionInputDelivery.Queue,
+        state: SessionInputState.Discarded,
+        reason: 'removed_by_user'
+      } satisfies SessionInputStateNotification
+    });
+
+    expect(store.activePendingInputs).toEqual([]);
   });
 
   it('queues slash commands instead of steering an active run', async () => {

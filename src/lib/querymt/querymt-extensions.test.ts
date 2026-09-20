@@ -6,6 +6,7 @@ import {
   QMT_METHOD_AUTH_SET_METHOD,
   QMT_METHOD_PROFILES,
   QMT_METHOD_SESSION_DELEGATE_MODELS,
+  QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT,
   QMT_METHOD_SESSION_QUEUE,
   QMT_METHOD_SESSION_REDO,
   QMT_METHOD_SESSION_RUNTIME_STATE,
@@ -46,10 +47,13 @@ describe('QuerymtExtensions profiles', () => {
 });
 
 describe('QuerymtExtensions turn control', () => {
-  it('calls steering, queue, and runtime-state extensions with typed payloads', async () => {
+  it('calls steering, queue, discard, and runtime-state extensions with typed payloads', async () => {
     const extMethod = vi.fn(async (method: string) => {
       if (method.endsWith('runtimeState')) {
         return { phase: 'model', active_run_id: 'run-1', steerable: true, pending_steering_count: 0, queued_input_count: 0 };
+      }
+      if (method.endsWith('discardQueuedInput')) {
+        return { status: 'discarded', data: { input_id: 'input-2' } };
       }
       return method.endsWith('steer')
         ? { status: 'steered', data: { run_id: 'run-1', input_id: 'input-1', position: 1 } }
@@ -70,11 +74,16 @@ describe('QuerymtExtensions turn control', () => {
 
     await extensions.steerSession(steerRequest);
     await extensions.queueSession(queueRequest);
+    await extensions.discardQueuedInput('s1', 'input-2');
     await extensions.sessionRuntimeState('s1');
 
     expect(extMethod).toHaveBeenNthCalledWith(1, toAcpExtensionMethod(QMT_METHOD_SESSION_STEER), steerRequest);
     expect(extMethod).toHaveBeenNthCalledWith(2, toAcpExtensionMethod(QMT_METHOD_SESSION_QUEUE), queueRequest);
-    expect(extMethod).toHaveBeenNthCalledWith(3, toAcpExtensionMethod(QMT_METHOD_SESSION_RUNTIME_STATE), { session_id: 's1' });
+    expect(extMethod).toHaveBeenNthCalledWith(3, toAcpExtensionMethod(QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT), {
+      session_id: 's1',
+      input_id: 'input-2'
+    });
+    expect(extMethod).toHaveBeenNthCalledWith(4, toAcpExtensionMethod(QMT_METHOD_SESSION_RUNTIME_STATE), { session_id: 's1' });
   });
 });
 

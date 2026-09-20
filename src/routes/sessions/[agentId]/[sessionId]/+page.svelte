@@ -42,7 +42,7 @@
   const sessionProfileId = $derived(getCurrentProfileId(agentsStore.activeSession.configOptions) ?? null);
   const waitingInputs = $derived(
     agentsStore.activePendingInputs.filter(
-      (input) => !['applied', 'started'].includes(input.state)
+      (input) => !['applied', 'started', 'discarded'].includes(input.state)
     )
   );
   const inheritedReasoningLabel = $derived.by(() => {
@@ -605,7 +605,12 @@
         class="session-activity-bar-dock"
         style={dockAlignLeft != null && dockAlignWidth != null ? `left:${dockAlignLeft}px;width:${dockAlignWidth}px;transform:none;` : ''}
       >
-        <SessionQueuedBubble inputs={waitingInputs} />
+        <SessionQueuedBubble
+          inputs={waitingInputs}
+          onDiscardQueued={agentsStore.canDiscardQueuedInputs
+            ? (inputId) => agentsStore.discardQueuedInput(inputId)
+            : undefined}
+        />
         <SessionActivityBar session={agentsStore.activeSession} forkPending={agentsStore.forkPending} />
       </div>
 
