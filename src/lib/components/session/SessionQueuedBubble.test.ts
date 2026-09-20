@@ -26,7 +26,7 @@ describe('SessionQueuedBubble', () => {
     expect(document.querySelector('.session-queued-panel')).toBeNull();
   });
 
-  it('shows the waiting count hint with correct pluralization', () => {
+  it('shows the waiting count hint with correct pluralization', async () => {
     const { rerender } = render(SessionQueuedBubble, {
       inputs: [queuedInput({ inputId: 'a', prompt: 'Run the test suite' })]
     });
@@ -35,7 +35,7 @@ describe('SessionQueuedBubble', () => {
     expect(bubble).toHaveAttribute('aria-label', '1 waiting message');
     expect(bubble.querySelector('.session-queued-bubble-title')).toHaveTextContent('1');
 
-    rerender({
+    await rerender({
       inputs: [
         queuedInput({ inputId: 'a', prompt: 'Run the test suite' }),
         queuedInput({ inputId: 'b', prompt: 'Deploy to staging' })

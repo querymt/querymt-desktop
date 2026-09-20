@@ -125,7 +125,11 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
       const outcome = readString(data.outcome);
       session.runState = outcome === 'failed' ? 'failed' : 'completed';
       session.runStateFromLifecycle = true;
-      session.activityLabel = outcome === 'cancelled' ? 'Turn cancelled.' : 'Turn completed.';
+      session.activityLabel = outcome === 'cancelled'
+        ? 'Turn cancelled.'
+        : outcome === 'failed'
+          ? 'Turn failed.'
+          : 'Turn completed.';
       continue;
     }
 
@@ -373,7 +377,7 @@ export function normalizeHistoricalSession(
   session: ActiveSessionViewModel,
   options: { loadCompleted?: boolean } = {}
 ): ActiveSessionViewModel {
-  if (session.runStateFromLifecycle) return session;
+  if (session.runStateFromLifecycle && !options.loadCompleted) return session;
 
   const hasActiveTool = session.toolCalls.some((tool) => tool.status === 'in_progress' || tool.status === 'pending');
   if (hasActiveTool && !options.loadCompleted) {
@@ -391,10 +395,12 @@ export function normalizeHistoricalSession(
         ? { ...tool, status: tool.isError ? 'failed' : 'completed' }
         : tool
     );
-    session.runState = 'completed';
     session.activeToolCallId = null;
-    session.activityLabel = 'Loaded from session history.';
-    session.lastError = null;
+    if (!session.runStateFromLifecycle) {
+      session.runState = 'completed';
+      session.activityLabel = 'Loaded from session history.';
+      session.lastError = null;
+    }
     return session;
   }
 

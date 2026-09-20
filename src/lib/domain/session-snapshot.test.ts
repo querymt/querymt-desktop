@@ -656,7 +656,7 @@ describe('activeSessionFromLoadResponse', () => {
       name: 'failed run_completed',
       lifecycle: { type: 'run_completed', data: { run_id: 'run-1', outcome: 'failed' } },
       runState: 'failed',
-      activityLabel: 'Turn completed.'
+      activityLabel: 'Turn failed.'
     }
   ])('preserves explicit $name lifecycle state when assistant content exists', ({ lifecycle, runState, activityLabel }) => {
     const session = activeSessionFromLoadResponse('session-lifecycle', {
@@ -675,6 +675,54 @@ describe('activeSessionFromLoadResponse', () => {
     expect(session.runState).toBe(runState);
     expect(session.activityLabel).toBe(activityLabel);
     expect(normalizeHistoricalSession(session, { loadCompleted: true }).runState).toBe(runState);
+  });
+
+  it('finalizes orphaned tools without overwriting explicit lifecycle state', () => {
+    const session: ActiveSessionViewModel = {
+      sessionId: 'session-lifecycle',
+      transcript: [],
+      toolCalls: [
+        {
+          id: 't-orphan',
+          title: 'Run shell',
+          status: 'in_progress',
+          kind: 'execute',
+          messageId: null,
+          arguments: '{"command":"echo hi"}',
+          eventIndex: 0
+        }
+      ],
+      plans: [],
+      events: [],
+      configOptions: [],
+      runState: 'failed',
+      runStateFromLifecycle: true,
+      activityLabel: 'Turn failed.',
+      activeToolCallId: 't-orphan',
+      lastStopReason: null,
+      lastError: 'tool failed',
+      usage: {
+        contextUsed: null,
+        contextLimit: null,
+        cumulativeCostUsd: null,
+        activeWorkMs: 0,
+        activeWorkStartedAt: null
+      },
+      undo: {
+        stack: [],
+        pendingOperation: null,
+        lastRevertedFiles: [],
+        lastMessage: null
+      }
+    };
+
+    const normalized = normalizeHistoricalSession(session, { loadCompleted: true });
+
+    expect(normalized.runState).toBe('failed');
+    expect(normalized.activityLabel).toBe('Turn failed.');
+    expect(normalized.activeToolCallId).toBeNull();
+    expect(normalized.lastError).toBe('tool failed');
+    expect(normalized.toolCalls[0]).toMatchObject({ id: 't-orphan', status: 'completed' });
   });
 
   it('uses successful session/load completion as the terminal state for replayed history', () => {

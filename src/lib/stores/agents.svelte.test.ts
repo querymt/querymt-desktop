@@ -2440,7 +2440,7 @@ describe('AgentsStore prompt session start', () => {
     await store.loadSession('agent-1', 'session-1');
 
     expect(store.activeSession.runState).toBe('failed');
-    expect(store.activeSession.activityLabel).toBe('Turn completed.');
+    expect(store.activeSession.activityLabel).toBe('Turn failed.');
   });
 
   it('opens a new active session with the user prompt rendered while the agent reply is pending', async () => {
@@ -2603,7 +2603,67 @@ describe('AgentsStore prompt session start', () => {
     expect(store.activePendingInputs).toEqual([]);
   });
 
-  it('removes queued input when its discarded lifecycle notification arrives', async () => {
+  it('rekeys queued input when the server returns a different input id', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 1,
+      run_started_at_ms: 1
+    });
+    mockClient.queueSession.mockImplementationOnce(async (
+      _sessionId: string,
+      _prompt: string,
+      _attachments: PromptAttachment[]
+    ): Promise<SubmitInputResult> => ({
+      status: 'queued',
+      data: { input_id: 'server-input', position: 1 }
+    }));
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Run tests next';
+    store.promptAttachments = [{
+      id: 'file-1',
+      name: 'notes.txt',
+      mimeType: 'text/plain',
+      size: 4,
+      data: 'dGV4dA=='
+    }];
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery('queue');
+
+    await store.sendPromptToActiveSession();
+
+    expect(store.activePendingInputs).toEqual([expect.objectContaining({
+      inputId: 'server-input',
+      state: 'queued',
+      prompt: 'Run tests next',
+      attachments: [expect.objectContaining({ id: 'file-1' })],
+      createdAt: expect.any(Number)
+    })]);
+
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/inputState',
+      params: {
+        version: 1,
+        session_id: 'session-1',
+        input_id: 'server-input',
+        delivery: SessionInputDelivery.Queue,
+        state: SessionInputState.Discarded,
+        reason: 'removed_by_user'
+      } satisfies SessionInputStateNotification
+    });
+
+    expect(store.activePendingInputs).toEqual([]);
+  });
+
+  it.each([
+    { name: 'started', state: SessionInputState.Started },
+    { name: 'discarded', state: SessionInputState.Discarded }
+  ])('removes queued input when its $name lifecycle notification arrives', async ({ state }) => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
     mockClient.getSessionRuntimeState.mockResolvedValue({
       phase: SessionRuntimePhase.Tools,
@@ -2629,8 +2689,8 @@ describe('AgentsStore prompt session start', () => {
         session_id: 'session-1',
         input_id: inputId,
         delivery: SessionInputDelivery.Queue,
-        state: SessionInputState.Discarded,
-        reason: 'removed_by_user'
+        state,
+        reason: state === SessionInputState.Discarded ? 'removed_by_user' : undefined
       } satisfies SessionInputStateNotification
     });
 

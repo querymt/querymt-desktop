@@ -1931,7 +1931,15 @@ export class AgentsStore {
   ) {
     const inputId = result.data.input_id;
     if (inputId !== pending.inputId) {
-      this.updatePendingSessionInput(agentId, sessionId, pending.inputId, { state: 'unknown' });
+      const key = buildSessionKey(agentId, sessionId);
+      const current = this.pendingInputsBySession[key] ?? [];
+      this.pendingInputsBySession = {
+        ...this.pendingInputsBySession,
+        [key]: upsertPendingSessionInput(
+          current.filter((input) => input.inputId !== pending.inputId),
+          { ...pending, inputId }
+        )
+      };
     }
     if (result.status === 'steered') {
       this.updatePendingSessionInput(agentId, sessionId, inputId, {
@@ -1949,12 +1957,7 @@ export class AgentsStore {
         position: result.data.position
       });
     } else {
-      this.updatePendingSessionInput(agentId, sessionId, inputId, {
-        inputId,
-        delivery: 'queue',
-        state: 'started',
-        runId: result.data.run_id
-      });
+      this.removePendingSessionInput(agentId, sessionId, inputId);
     }
   }
 
@@ -2022,7 +2025,7 @@ export class AgentsStore {
     if (notification.version !== 1) return;
     if (
       notification.delivery === SessionInputDelivery.Queue &&
-      notification.state === SessionInputState.Discarded
+      (notification.state === SessionInputState.Started || notification.state === SessionInputState.Discarded)
     ) {
       this.removePendingSessionInput(agentId, notification.session_id, notification.input_id);
       if (this.isSelectedSession(agentId, notification.session_id)) {
