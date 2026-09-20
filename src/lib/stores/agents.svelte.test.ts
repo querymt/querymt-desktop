@@ -2325,6 +2325,26 @@ describe('AgentsStore prompt session start', () => {
     expect(mockClient.sendPrompt).not.toHaveBeenCalled();
   });
 
+  it('shows queue delivery when an active runtime lacks an active run id', async () => {
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Continue the task';
+    store.composerInputDeliveryBySession = { 'agent-1:session-1': 'steer' };
+    store.sessionRuntimeBySession = {
+      'agent-1:session-1': {
+        phase: SessionRuntimePhase.Model,
+        active_run_id: undefined,
+        steerable: true,
+        pending_steering_count: 0,
+        queued_input_count: 0,
+        run_started_at_ms: 1
+      }
+    };
+
+    expect(store.activeInputDelivery).toBe('queue');
+  });
+
   it('keeps the newest runtime response when refreshes resolve out of order', async () => {
     let resolveOlder!: (runtime: SessionRuntimeState) => void;
     let resolveNewer!: (runtime: SessionRuntimeState) => void;
@@ -2697,6 +2717,41 @@ describe('AgentsStore prompt session start', () => {
 
     expect(mockClient.discardQueuedInput).toHaveBeenCalledWith('session-1', inputId);
     expect(store.activePendingInputs).toEqual([]);
+  });
+
+  it('does not surface a failed discard after switching sessions', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
+    mockClient.getSessionRuntimeState.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools,
+      active_run_id: 'run-1',
+      steerable: false,
+      pending_steering_count: 0,
+      queued_input_count: 0,
+      run_started_at_ms: 1
+    });
+    let rejectDiscard!: (error: Error) => void;
+    mockClient.discardQueuedInput.mockReturnValueOnce(new Promise<DiscardQueuedInputResult>((_resolve, reject) => {
+      rejectDiscard = reject;
+    }));
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = 'Run tests next';
+    await store.connectAgent('agent-1');
+    store.setActiveComposerInputDelivery('queue');
+    await store.sendPromptToActiveSession();
+    const inputId = store.activePendingInputs[0].inputId;
+
+    const discard = store.discardQueuedInput(inputId);
+    await vi.waitFor(() => expect(mockClient.discardQueuedInput).toHaveBeenCalledWith('session-1', inputId));
+    store.activeSessionId = 'session-2';
+    rejectDiscard(new Error('discard failed'));
+    await discard;
+
+    expect(store.error).toBeNull();
+    expect(store.pendingInputsBySession['agent-1:session-1']).toEqual([
+      expect.objectContaining({ inputId, discardPending: false })
+    ]);
   });
 
   it('reconciles an already-started queue item as no longer pending', async () => {

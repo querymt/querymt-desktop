@@ -369,7 +369,12 @@ export class AgentsStore {
     if (!runtime || (runtime.phase === 'idle' && PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState))) {
       return this.activeComposerInputDelivery;
     }
-    if (!runtime.steerable || runtime.phase === 'closing' || runtime.phase === 'cancel_requested') return 'queue';
+    if (
+      !runtime.steerable ||
+      !runtime.active_run_id ||
+      runtime.phase === 'closing' ||
+      runtime.phase === 'cancel_requested'
+    ) return 'queue';
     return this.activeComposerInputDelivery;
   }
 
@@ -1931,7 +1936,9 @@ export class AgentsStore {
       this.removePendingSessionInput(agentId, sessionId, inputId);
     } catch (error) {
       this.updatePendingSessionInput(agentId, sessionId, inputId, { discardPending: false });
-      this.error = error instanceof Error ? error.message : 'Failed to remove queued input.';
+      if (this.isSelectedSession(agentId, sessionId)) {
+        this.error = error instanceof Error ? error.message : 'Failed to remove queued input.';
+      }
     }
   }
 
