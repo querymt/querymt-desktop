@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
-import { buildListSessionsRequest, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, mapAcpSessionsToDesktopSessions } from './sessions';
+import { buildListSessionsRequest, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 
 function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionId: string }): DesktopSessionSummary {
@@ -102,6 +102,22 @@ describe('session relationship metadata', () => {
       hasChildren: false,
       forkCount: 0
     });
+  });
+});
+
+describe('isRootSession', () => {
+  it('treats sessions without a parent as root sessions', () => {
+    expect(isRootSession(createDesktopSession({ sessionId: 'root-1' }))).toBe(true);
+    expect(isRootSession({ ...createDesktopSession({ sessionId: 'root-2' }), parentSessionId: null })).toBe(true);
+    expect(isRootSession({ ...createDesktopSession({ sessionId: 'root-3' }), parentSessionId: '   ' })).toBe(true);
+  });
+
+  it('rejects delegate and forked sessions that reference a parent session', () => {
+    const delegateSession = { ...createDesktopSession({ sessionId: 'task-1', title: 'Task: explore repo' }), parentSessionId: 'root-1' };
+    const forkedSession = { ...createDesktopSession({ sessionId: 'fork-1' }), parentSessionId: 'root-1', forkOrigin: 'user' };
+
+    expect(isRootSession(delegateSession)).toBe(false);
+    expect(isRootSession(forkedSession)).toBe(false);
   });
 });
 
