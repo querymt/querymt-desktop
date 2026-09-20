@@ -42,7 +42,7 @@
   const sessionProfileId = $derived(getCurrentProfileId(agentsStore.activeSession.configOptions) ?? null);
   const waitingInputs = $derived(
     agentsStore.activePendingInputs.filter(
-      (input) => !['applied', 'started', 'discarded'].includes(input.state)
+      (input) => !['applied', 'started', 'discarded', 'failed'].includes(input.state)
     )
   );
   const inheritedReasoningLabel = $derived.by(() => {
