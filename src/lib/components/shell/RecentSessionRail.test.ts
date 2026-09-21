@@ -139,6 +139,24 @@ describe('RecentSessionRail navigation', () => {
 
     expect(screen.getAllByRole('link', { name: /Session \d, Waiting/ })).toHaveLength(1);
   });
+
+  it('lists only root sessions and hides delegate session summaries', () => {
+    const delegateSession: DesktopSessionSummary = {
+      ...activeSession,
+      sessionId: 'session-task',
+      title: 'Task: explore repo',
+      parentSessionId: 'session-1'
+    };
+
+    render(RecentSessionRail, {
+      current: 'Sessions',
+      sessions: [delegateSession, activeSession]
+    });
+
+    expect(screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl+1' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Task: explore repo/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('Task: explore repo')).not.toBeInTheDocument();
+  });
 });
 
 describe('RecentSessionRail agents count', () => {

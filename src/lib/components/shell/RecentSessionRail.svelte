@@ -10,6 +10,7 @@
     formatSessionTimestamp,
     getRecentSessionRailItems,
     getSessionWorkspaceName,
+    isRootSession,
     type SessionRailItem
   } from '$lib/domain/sessions';
   import { agentsStore } from '$lib/stores/agents.svelte';
@@ -79,7 +80,9 @@
     )
   );
   const visibleSessions = $derived.by(() =>
-    sessions.filter((session) => !(session.agentId === currentAgentId && session.sessionId === currentSessionId))
+    sessions
+      .filter(isRootSession)
+      .filter((session) => !(session.agentId === currentAgentId && session.sessionId === currentSessionId))
   );
   const railItems = $derived(
     getRecentSessionRailItems(visibleSessions, {

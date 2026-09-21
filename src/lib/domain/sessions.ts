@@ -92,6 +92,10 @@ export function isActiveSessionStatus(status: SessionStatus): boolean {
   return ACTIVE_SESSION_STATUSES.has(status);
 }
 
+export function isRootSession(session: Pick<DesktopSessionSummary, 'parentSessionId'>): boolean {
+  return !session.parentSessionId?.trim();
+}
+
 export function mapAcpSessionsToDesktopSessions(
   sessions: SessionInfo[],
   agent: { agentId: string; agentName: string }
