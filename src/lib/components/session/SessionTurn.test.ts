@@ -437,4 +437,180 @@ describe('SessionTurn', () => {
     expect(getByRole('button', { name: 'Show fewer work entries' })).toHaveAttribute('aria-expanded', 'true');
     expect(getByRole('region', { name: 'Agent work' })).toHaveTextContent('Inspecting components');
   });
+
+  it('collapses consecutive reasoning summaries into one disclosure and previews the latest', async () => {
+    const consecutiveTurn: SessionConversationTurn = {
+      id: 'turn-summaries',
+      forkMessageId: 'assistant-summaries',
+      user: {
+        id: 'user-summaries',
+        messageId: 'message-summaries',
+        html: '<p>plan</p>',
+        text: 'plan'
+      },
+      content: [
+        {
+          type: 'reasoning',
+          id: 'reasoning-1',
+          html: '<p>Inspecting the codec</p>',
+          text: 'Inspecting the codec',
+          isLive: false,
+          summary: true
+        },
+        {
+          type: 'reasoning',
+          id: 'reasoning-2',
+          html: '<p>Checking tests</p>',
+          text: 'Checking tests',
+          isLive: false,
+          summary: true
+        },
+        {
+          type: 'tool',
+          id: 'tool-1',
+          tool: {
+            id: 'tool-1',
+            title: 'read_tool',
+            status: 'completed',
+            kind: 'read_tool'
+          }
+        },
+        {
+          type: 'assistant',
+          id: 'assistant-summaries',
+          messageId: 'assistant-summaries',
+          html: '<p>Done.</p>',
+          text: 'Done.',
+          relatedEvents: []
+        }
+      ],
+      settled: true
+    };
+
+    const { container, getByRole } = render(SessionTurn, { turn: consecutiveTurn });
+    await fireEvent.click(getByRole('button', { name: /Worked through 1 tool call and 2 reasoning steps/ }));
+
+    const workItems = Array.from(container.querySelector('.session-work-list')?.children ?? []);
+    expect(workItems).toHaveLength(2);
+    expect(workItems[0].tagName).toBe('DETAILS');
+    expect(workItems[0]).toHaveClass('session-reasoning');
+    expect(workItems[0].querySelector('.session-reasoning-preview')).toHaveTextContent('Checking tests');
+    expect(Array.from(workItems[0].querySelectorAll('.session-reasoning-summary-item')).map((item) => item.textContent)).toEqual([
+      '- Inspecting the codec',
+      '- Checking tests'
+    ]);
+    expect(workItems[1]).toHaveTextContent('Read file');
+  });
+
+  it('renders summary markdown instead of showing raw emphasis markers', async () => {
+    const markdownTurn: SessionConversationTurn = {
+      id: 'turn-markdown-summaries',
+      forkMessageId: 'assistant-markdown-summaries',
+      content: [
+        {
+          type: 'reasoning',
+          id: 'reasoning-1',
+          html: '<p><strong>Verifying tool call distribution</strong></p>',
+          text: '**Verifying tool call distribution**',
+          isLive: false,
+          summary: true
+        },
+        {
+          type: 'reasoning',
+          id: 'reasoning-2',
+          html: '<p><strong>Planning batch reading of OpenSpec artifacts</strong></p>',
+          text: '**Planning batch reading of OpenSpec artifacts**',
+          isLive: false,
+          summary: true
+        }
+      ],
+      settled: true
+    };
+
+    const { container, getByRole } = render(SessionTurn, { turn: markdownTurn });
+    await fireEvent.click(getByRole('button', { name: /Worked through 2 reasoning steps/ }));
+
+    const reasoning = container.querySelector('.session-reasoning');
+    expect(reasoning?.querySelector('.session-reasoning-preview')).toHaveTextContent(
+      'Planning batch reading of OpenSpec artifacts'
+    );
+    expect(reasoning?.textContent).not.toContain('**');
+    expect(Array.from(reasoning?.querySelectorAll('.session-reasoning-summary-item') ?? []).map((item) => item.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+      '- Verifying tool call distribution',
+      '- Planning batch reading of OpenSpec artifacts'
+    ]);
+    expect(reasoning?.querySelectorAll('.session-reasoning-summary-markdown strong')).toHaveLength(2);
+  });
+
+  it('does not let a single reasoning summary expand', async () => {
+    const singleSummaryTurn: SessionConversationTurn = {
+      id: 'turn-single-summary',
+      forkMessageId: 'assistant-single-summary',
+      content: [
+        {
+          type: 'reasoning',
+          id: 'reasoning-1',
+          html: '<p>Checking tests</p>',
+          text: 'Checking tests',
+          isLive: false,
+          summary: true
+        },
+        {
+          type: 'tool',
+          id: 'tool-1',
+          tool: {
+            id: 'tool-1',
+            title: 'read_tool',
+            status: 'completed',
+            kind: 'read_tool'
+          }
+        }
+      ],
+      settled: true
+    };
+
+    const { container, getByRole } = render(SessionTurn, { turn: singleSummaryTurn });
+    await fireEvent.click(getByRole('button', { name: /Worked through 1 tool call and 1 reasoning step/ }));
+
+    const reasoning = container.querySelector('.session-reasoning');
+    expect(reasoning).not.toBeNull();
+    expect(reasoning?.tagName).toBe('DIV');
+    expect(reasoning).toHaveClass('session-reasoning-static');
+    expect(reasoning?.querySelector('.session-reasoning-preview')).toHaveTextContent('Checking tests');
+    expect(reasoning?.querySelector('.session-reasoning-disclosure')).toBeNull();
+    expect(container.querySelector('details.session-reasoning')).toBeNull();
+  });
+
+  it('keeps consecutive ordinary reasoning blocks as separate disclosures', async () => {
+    const ordinaryTurn: SessionConversationTurn = {
+      id: 'turn-ordinary-reasoning',
+      forkMessageId: 'assistant-ordinary',
+      content: [
+        {
+          type: 'reasoning',
+          id: 'reasoning-1',
+          html: '<p>First thought</p>',
+          text: 'First thought',
+          isLive: false
+        },
+        {
+          type: 'reasoning',
+          id: 'reasoning-2',
+          html: '<p>Second thought</p>',
+          text: 'Second thought',
+          isLive: false
+        }
+      ],
+      settled: true
+    };
+
+    const { container, getByRole } = render(SessionTurn, { turn: ordinaryTurn });
+    await fireEvent.click(getByRole('button', { name: /Worked through 2 reasoning steps/ }));
+
+    const workItems = Array.from(container.querySelector('.session-work-list')?.children ?? []);
+    expect(workItems).toHaveLength(2);
+    expect(workItems[0].tagName).toBe('DETAILS');
+    expect(workItems[1].tagName).toBe('DETAILS');
+    expect(container.querySelectorAll('.session-reasoning-summary-item')).toHaveLength(0);
+  });
 });

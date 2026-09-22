@@ -14,6 +14,7 @@ export type SessionReasoningContent = {
   html: string;
   text?: string;
   isLive: boolean;
+  summary?: boolean;
 };
 
 export type SessionAssistantContent = {
@@ -44,6 +45,14 @@ export type SessionConversationWorkGroup = {
   settled: boolean;
 };
 
+export type SessionWorkGroupReasoningRun = {
+  type: 'reasoning';
+  id: string;
+  entries: SessionReasoningContent[];
+};
+
+export type SessionWorkGroupEntry = SessionWorkGroupReasoningRun | SessionToolContent;
+
 export type SessionConversationPresentationItem = SessionAssistantContent | SessionConversationWorkGroup;
 
 export type SessionConversationTurn = {
@@ -73,7 +82,7 @@ type OrderedConversationItem =
 
 type DraftContent =
   | SessionToolContent
-  | { type: 'reasoning'; id: string; text: string }
+  | { type: 'reasoning'; id: string; text: string; summary?: boolean }
   | { type: 'assistant'; id: string; messageId: string | null; text: string; blocks: SessionContentBlock[] };
 
 type DraftTurn = {
@@ -230,7 +239,7 @@ function canReuseSettledTurn(previous: SessionConversationTurn, draft: DraftTurn
       return item.text === next.text && item.messageId === next.messageId && sameBlocks(item.blocks, next.blocks);
     }
     if (item.type === 'reasoning' && next.type === 'reasoning') {
-      return (item.text ?? '') === next.text;
+      return (item.text ?? '') === next.text && Boolean(item.summary) === Boolean(next.summary);
     }
     if (item.type === 'tool' && next.type === 'tool') {
       return (
@@ -262,7 +271,8 @@ function materializeContent(
       id: item.id,
       text: item.text,
       html: settled || !liveReasoning ? renderMarkdownToHtml(item.text) : previousHtml,
-      isLive: !settled && liveReasoning
+      isLive: !settled && liveReasoning,
+      summary: Boolean(item.summary)
     };
   }
 
@@ -321,7 +331,12 @@ function buildConversationDrafts(session: ActiveSessionViewModel): DraftTurn[] {
     }
 
     if (item.group.role === 'thought') {
-      current.content.push({ type: 'reasoning', id: item.group.id, text: item.group.text });
+      current.content.push({
+        type: 'reasoning',
+        id: item.group.id,
+        text: item.group.text,
+        summary: isReasoningSummaryPart(item.group.reasoningPartId)
+      });
       continue;
     }
 
@@ -392,6 +407,36 @@ export function buildTurnPresentation(
   return items;
 }
 
+export function isReasoningSummaryPart(partId?: string | null): boolean {
+  return typeof partId === 'string' && /(^|[:/])summary([:/]|$)/i.test(partId);
+}
+
+export function groupConsecutiveReasoning(
+  content: Array<SessionReasoningContent | SessionToolContent>
+): SessionWorkGroupEntry[] {
+  const grouped: SessionWorkGroupEntry[] = [];
+  for (const item of content) {
+    if (item.type !== 'reasoning') {
+      grouped.push(item);
+      continue;
+    }
+    const last = grouped.at(-1);
+    if (last?.type === 'reasoning' && item.summary && last.entries.every((entry) => entry.summary)) {
+      last.entries.push(item);
+      continue;
+    }
+    grouped.push({ type: 'reasoning', id: item.id, entries: [item] });
+  }
+  return grouped;
+}
+
+function sameThoughtPart(group: SessionTranscriptGroup, item: SessionTranscriptItem): boolean {
+  const incoming = item.reasoningPartId ?? null;
+  const current = group.reasoningPartId ?? null;
+  if (!incoming && !current) return true;
+  return incoming === current;
+}
+
 function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionToolCallItem[]): OrderedConversationItem[] {
   const rawItems: RawConversationItem[] = [
     ...transcript.map((item, sourceOrder) => ({
@@ -431,17 +476,19 @@ function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionTo
     // User chunks stay strict: distinct message ids mean distinct prompts.
     const sameRole = previous?.type === 'group' && previous.group.role === role;
     const sameMessage = previous?.type === 'group' && previous.group.messageId === item.transcript.messageId;
+    const previousGroup = previous?.type === 'group' ? previous.group : null;
     const mergeTarget =
       role === 'assistant' && openAssistantGroup
         ? openAssistantGroup
-        : role === 'thought' && openThoughtGroup
+        : role === 'thought' && openThoughtGroup && sameThoughtPart(openThoughtGroup, item.transcript)
           ? openThoughtGroup
-          : sameRole && (role !== 'user' || sameMessage)
-            ? previous.group
+          : previousGroup && sameRole && (role !== 'user' || sameMessage) && (role !== 'thought' || sameThoughtPart(previousGroup, item.transcript))
+            ? previousGroup
             : null;
     if (mergeTarget) {
       mergeTarget.text += item.transcript.text;
       mergeTarget.messageId = item.transcript.messageId ?? mergeTarget.messageId;
+      mergeTarget.reasoningPartId = mergeTarget.reasoningPartId ?? item.transcript.reasoningPartId;
       mergeTarget.blocks = [...(mergeTarget.blocks ?? []), ...getTranscriptBlocks(item.transcript)];
       mergeTarget.eventIds.push(item.transcript.id);
       if (item.transcript.timestampMs !== undefined) mergeTarget.endedAtMs = item.transcript.timestampMs;
@@ -454,6 +501,7 @@ function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionTo
       text: item.transcript.text,
       blocks: getTranscriptBlocks(item.transcript),
       messageId: item.transcript.messageId,
+      reasoningPartId: item.transcript.reasoningPartId,
       clientPromptId: item.transcript.clientPromptId,
       eventIds: [item.transcript.id],
       eventIndex: item.transcript.eventIndex,

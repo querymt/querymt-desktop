@@ -403,4 +403,43 @@ describe('applySessionNotification stream coalescing', () => {
     expect(next.transcript).not.toBe(session.transcript);
     expect(next.transcript[0]).not.toBe(session.transcript[0]);
   });
+
+  it('keeps summary parts with different ids as separate reasoning entries', () => {
+    let session = applySessionNotification(
+      createEmptyActiveSession(),
+      notification({
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'First title', _meta: { querymt: { reasoning_part_id: 'rs_1:summary:0' } } },
+        messageId: 'assistant-1'
+      } as SessionNotification['update'])
+    );
+    session = applySessionNotification(
+      session,
+      notification({
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: ' continues' },
+        messageId: 'assistant-1',
+        _meta: { querymt: { reasoning_part_id: 'rs_1:summary:0' } }
+      } as SessionNotification['update'])
+    );
+    session = applySessionNotification(
+      session,
+      notification({
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'Second title' },
+        messageId: 'assistant-1',
+        _meta: { querymt: { reasoning_part_id: 'rs_1:summary:1' } }
+      } as SessionNotification['update'])
+    );
+
+    expect(session.transcript).toHaveLength(2);
+    expect(session.transcript[0]).toMatchObject({
+      text: 'First title continues',
+      reasoningPartId: 'rs_1:summary:0'
+    });
+    expect(session.transcript[1]).toMatchObject({
+      text: 'Second title',
+      reasoningPartId: 'rs_1:summary:1'
+    });
+  });
 });

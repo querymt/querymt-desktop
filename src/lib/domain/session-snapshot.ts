@@ -188,6 +188,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
           text,
           blocks: [{ type: 'text', text }],
           messageId,
+          reasoningPartId: readString(data.part_id) ?? null,
           eventIndex: event.seq,
           timestampMs: readTimestampMs(event.timestamp) ?? undefined
         });
@@ -200,8 +201,24 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
       const messageId: string = readString(data.message_id) ?? lastAssistantMessageId ?? eventId;
       lastAssistantMessageId = messageId;
       const text = readString(data.content) ?? '';
-      const thinking = readString(data.thinking) ?? '';
-      if (thinking) {
+      const parts = readReasoningParts(data.reasoning_parts);
+      const thinking = parts.length > 0 ? '' : readString(data.thinking) ?? '';
+      if (parts.length > 0) {
+        for (const [index, part] of parts.entries()) {
+          const partEventId = `${eventId}-thinking-${index}`;
+          session.transcript.push({
+            id: partEventId,
+            kind: 'agent_thought_chunk',
+            text: part.text,
+            blocks: [{ type: 'text', text: part.text }],
+            messageId,
+            reasoningPartId: part.id,
+            eventIndex: event.seq,
+            timestampMs: readTimestampMs(event.timestamp) ?? undefined
+          });
+          session.events.push({ id: partEventId, kind: 'agent_thought_chunk', text: part.text, messageId });
+        }
+      } else if (thinking) {
         const thinkingEventId = `${eventId}-thinking`;
         replaceThinkingTranscriptForMessage(session, messageId, thinking, thinkingEventId, event.seq, readTimestampMs(event.timestamp) ?? undefined);
         session.events.push({ id: thinkingEventId, kind: 'agent_thought_chunk', text: thinking, messageId });
@@ -692,6 +709,20 @@ function replaceThinkingTranscriptForMessage(
 
 function resolveAssistantMessageId(data: Record<string, unknown>, fallback: string | null): string | null {
   return readString(data.message_id) ?? readString(data.assistant_message_id) ?? fallback;
+}
+
+function readReasoningParts(value: unknown): Array<{ id: string; text: string }> {
+  if (!Array.isArray(value)) return [];
+  const parts: Array<{ id: string; text: string }> = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') continue;
+    const record = entry as Record<string, unknown>;
+    const id = readString(record.id);
+    const text = readString(record.text);
+    if (!id || !text) continue;
+    parts.push({ id, text });
+  }
+  return parts;
 }
 
 function readString(value: unknown): string | undefined {
