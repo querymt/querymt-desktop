@@ -6619,17 +6619,25 @@ summary:focus-visible {
   border-radius: var(--radius-control);
 }
 
-.session-reasoning-summary {
+.session-reasoning-summary,
+.session-reasoning-static {
   display: grid;
-  grid-template-columns: 1.25rem minmax(0, 1fr) auto;
   min-height: 1.8rem;
   align-items: center;
   gap: 0.4rem;
   border-radius: var(--radius-control);
   padding: 0.18rem 0.3rem;
   color: var(--muted);
+}
+
+.session-reasoning-summary {
+  grid-template-columns: 1.25rem minmax(0, 1fr) auto;
   cursor: pointer;
   outline: none;
+}
+
+.session-reasoning-static {
+  grid-template-columns: 1.25rem minmax(0, 1fr);
 }
 
 .session-reasoning-summary:hover {
@@ -6688,6 +6696,40 @@ summary:focus-visible {
 
 .session-reasoning-entry {
   padding: 0;
+}
+
+.session-reasoning-summary-list {
+  gap: 0.12rem;
+}
+
+.session-reasoning-summary-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.session-reasoning-summary-bullet {
+  flex: none;
+}
+
+.session-reasoning-summary-markdown,
+.session-reasoning-summary-markdown :is(p, h1, h2, h3, h4, h5, h6, ul, ol, pre, blockquote) {
+  margin: 0;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}
+
+.session-reasoning-summary-markdown strong,
+.session-reasoning-summary-markdown b {
+  font-weight: 500;
 }
 
 .session-activities {

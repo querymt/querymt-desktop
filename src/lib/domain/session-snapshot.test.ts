@@ -532,6 +532,50 @@ describe('activeSessionFromLoadResponse', () => {
     expect(turns[0].content[1]).toMatchObject({ type: 'assistant', html: expect.stringContaining('I have a plan.') });
   });
 
+  it('hydrates stored summary parts as separate reasoning entries and ignores the glued thinking string', () => {
+    const session = activeSessionFromLoadResponse('session-1', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: {
+            events: [
+              {
+                seq: 1,
+                kind: { type: 'prompt_received', data: { message_id: 'u1', content: 'inspect' } }
+              },
+              {
+                seq: 2,
+                kind: {
+                  type: 'assistant_message_stored',
+                  data: {
+                    message_id: 'a1',
+                    content: 'Done.',
+                    thinking: 'Inspecting\n\nChecking',
+                    reasoning_parts: [
+                      { id: 'rs_1:summary:0', text: 'Inspecting' },
+                      { id: 'rs_1:summary:1', text: 'Checking' }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(session.transcript).toEqual([
+      expect.objectContaining({ kind: 'user_message_chunk', messageId: 'u1' }),
+      expect.objectContaining({ kind: 'agent_thought_chunk', messageId: 'a1', text: 'Inspecting', reasoningPartId: 'rs_1:summary:0' }),
+      expect.objectContaining({ kind: 'agent_thought_chunk', messageId: 'a1', text: 'Checking', reasoningPartId: 'rs_1:summary:1' }),
+      expect.objectContaining({ kind: 'agent_message_chunk', messageId: 'a1', text: 'Done.' })
+    ]);
+
+    const turns = buildSessionConversation(session);
+    const reasoning = turns[0].content.filter((item) => item.type === 'reasoning');
+    expect(reasoning).toHaveLength(2);
+    expect(reasoning.map((item) => item.type === 'reasoning' ? item.text : '')).toEqual(['Inspecting', 'Checking']);
+  });
+
   it('hydrates reasoning-only stored assistant messages without empty assistant output', () => {
     const session = activeSessionFromLoadResponse('session-1', {
       _meta: {

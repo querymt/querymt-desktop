@@ -89,14 +89,17 @@ function cloneSession(current: ActiveSessionViewModel): ActiveSessionViewModel {
 function canMergeStreamChunk(
   last: SessionTranscriptItem | undefined,
   kind: SessionTranscriptItem['kind'],
-  messageId: string | null
+  messageId: string | null,
+  reasoningPartId: string | null = null
 ): last is SessionTranscriptItem {
-  return Boolean(
-    last &&
-      STREAM_CHUNK_KINDS.has(kind) &&
-      last.kind === kind &&
-      last.messageId === messageId
-  );
+  if (!last || !STREAM_CHUNK_KINDS.has(kind) || last.kind !== kind || last.messageId !== messageId) {
+    return false;
+  }
+  if (kind !== 'agent_thought_chunk') return true;
+  const current = last.reasoningPartId ?? null;
+  // Untagged historical chunks still append. A different part id is a new summary.
+  if (!reasoningPartId && !current) return true;
+  return reasoningPartId === current;
 }
 
 function appendTextBlocks(current: SessionContentBlock[] | undefined, incoming: SessionContentBlock[]): SessionContentBlock[] {
@@ -118,7 +121,8 @@ function mergeStreamChunk(
   kind: 'agent_message_chunk' | 'agent_thought_chunk',
   text: string,
   blocks: SessionContentBlock[],
-  messageId: string | null
+  messageId: string | null,
+  reasoningPartId: string | null = null
 ): ActiveSessionViewModel {
   const lastIndex = current.transcript.length - 1;
   const last = current.transcript[lastIndex];
@@ -126,6 +130,7 @@ function mergeStreamChunk(
     ...last,
     text: `${last.text}${text}`,
     blocks: appendTextBlocks(last.blocks, blocks),
+    reasoningPartId: last.reasoningPartId ?? reasoningPartId,
     timestampMs: Date.now()
   };
   const transcript = current.transcript.slice();
@@ -150,15 +155,17 @@ export function applySessionNotification(
   const update = notification.update;
   if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'agent_thought_chunk') {
     const messageId = update.messageId ?? null;
+    const reasoningPartId = update.sessionUpdate === 'agent_thought_chunk' ? readReasoningPartId(update) : null;
     const last = current.transcript.at(-1);
-    if (canMergeStreamChunk(last, update.sessionUpdate, messageId)) {
+    if (canMergeStreamChunk(last, update.sessionUpdate, messageId, reasoningPartId)) {
       return mergeStreamChunk(
         current,
         notification,
         update.sessionUpdate,
         getTextContent(update.content),
         normalizeContentBlocks([update.content]),
-        messageId
+        messageId,
+        reasoningPartId
       );
     }
   }
@@ -208,6 +215,7 @@ export function applySessionNotification(
         text: getTextContent(update.content),
         blocks: normalizeContentBlocks([update.content]),
         messageId: update.messageId ?? null,
+        reasoningPartId: readReasoningPartId(update),
         eventIndex: conversationEventIndex,
         timestampMs: Date.now()
       });
@@ -468,6 +476,22 @@ function readAttachmentMeta(value: unknown): { id?: string; name?: string; size?
     name: readString(querymt.filename) ?? readString(querymt.name),
     size: typeof querymt.size === 'number' && Number.isFinite(querymt.size) ? querymt.size : undefined
   };
+}
+
+export function readReasoningPartId(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const root = value as Record<string, unknown>;
+  const direct = readString(root.reasoning_part_id) ?? readString(root.reasoningPartId);
+  if (direct) return direct;
+
+  for (const key of ['_meta', 'metadata', 'querymt', 'content'] as const) {
+    const nested = root[key];
+    if (nested && typeof nested === 'object' && nested !== value) {
+      const partId = readReasoningPartId(nested);
+      if (partId) return partId;
+    }
+  }
+  return null;
 }
 
 export function readClientPromptId(value: unknown): string | null {

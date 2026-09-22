@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildSessionConversation, formatTurnDuration } from './session-conversation';
+import { buildSessionConversation, formatTurnDuration, groupConsecutiveReasoning, isReasoningSummaryPart } from './session-conversation';
 import { createEmptyActiveSession } from './session-updates';
 import type { ActiveSessionViewModel } from '$lib/domain/types';
 import * as markdown from './markdown';
@@ -206,6 +206,75 @@ describe('buildSessionConversation', () => {
     const assistantItems = turns[0].content.filter((item) => item.type === 'assistant');
     expect(assistantItems).toHaveLength(1);
     expect(assistantItems[0]).toMatchObject({ text: 'Ah, the programmer socks heuristic.' });
+  });
+
+  it('renders each reasoning part id as its own entry', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'plan', messageId: 'm-user', eventIndex: 0 },
+      { id: 'r1', kind: 'agent_thought_chunk', text: 'Inspecting', messageId: 'm-reason', reasoningPartId: 'rs_1:summary:0', eventIndex: 1 },
+      { id: 'r1b', kind: 'agent_thought_chunk', text: ' the codec', messageId: 'm-reason', reasoningPartId: 'rs_1:summary:0', eventIndex: 2 },
+      { id: 'r2', kind: 'agent_thought_chunk', text: 'Checking tests', messageId: 'm-reason', reasoningPartId: 'rs_1:summary:1', eventIndex: 3 }
+    ];
+
+    const turns = buildSessionConversation(session);
+    const reasoning = turns[0].content.filter((item) => item.type === 'reasoning');
+
+    expect(reasoning).toHaveLength(2);
+    expect(reasoning[0]).toMatchObject({ id: 'r1', text: 'Inspecting the codec', summary: true });
+    expect(reasoning[1]).toMatchObject({ id: 'r2', text: 'Checking tests', summary: true });
+  });
+
+  it('identifies summary part ids without treating ordinary reasoning ids as summaries', () => {
+    expect(isReasoningSummaryPart('rs_1:summary:0')).toBe(true);
+    expect(isReasoningSummaryPart('rs_1:summary:1')).toBe(true);
+    expect(isReasoningSummaryPart('rs_1:encrypted:0')).toBe(false);
+    expect(isReasoningSummaryPart(null)).toBe(false);
+    expect(isReasoningSummaryPart(undefined)).toBe(false);
+  });
+
+  it('collapses consecutive reasoning summaries into one run and keeps tools as separators', () => {
+    const grouped = groupConsecutiveReasoning([
+      { type: 'reasoning', id: 'r1', html: '<p>Inspecting</p>', text: 'Inspecting', isLive: false, summary: true },
+      { type: 'reasoning', id: 'r2', html: '<p>Checking tests</p>', text: 'Checking tests', isLive: false, summary: true },
+      {
+        type: 'tool',
+        id: 't1',
+        tool: { id: 't1', title: 'read_tool', status: 'completed', kind: 'read_tool' }
+      },
+      { type: 'reasoning', id: 'r3', html: '<p>Writing the patch</p>', text: 'Writing the patch', isLive: false, summary: true }
+    ]);
+
+    expect(grouped).toHaveLength(3);
+    expect(grouped[0]).toMatchObject({
+      type: 'reasoning',
+      id: 'r1',
+      entries: [
+        expect.objectContaining({ id: 'r1', text: 'Inspecting' }),
+        expect.objectContaining({ id: 'r2', text: 'Checking tests' })
+      ]
+    });
+    expect(grouped[1]).toMatchObject({ type: 'tool', id: 't1' });
+    expect(grouped[2]).toMatchObject({
+      type: 'reasoning',
+      id: 'r3',
+      entries: [expect.objectContaining({ id: 'r3', text: 'Writing the patch' })]
+    });
+  });
+
+  it('does not collapse consecutive ordinary reasoning blocks', () => {
+    const grouped = groupConsecutiveReasoning([
+      { type: 'reasoning', id: 'r1', html: '<p>First thought</p>', text: 'First thought', isLive: false },
+      { type: 'reasoning', id: 'r2', html: '<p>Second thought</p>', text: 'Second thought', isLive: false },
+      { type: 'reasoning', id: 'r3', html: '<p>Summary title</p>', text: 'Summary title', isLive: false, summary: true }
+    ]);
+
+    expect(grouped).toHaveLength(3);
+    expect(grouped.map((item) => item.type === 'reasoning' ? item.entries.map((entry) => entry.id) : item.id)).toEqual([
+      ['r1'],
+      ['r2'],
+      ['r3']
+    ]);
   });
 
   it('keeps reasoning traces separate when a tool appears between chunks with the same message id', () => {

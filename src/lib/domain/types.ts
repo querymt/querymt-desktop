@@ -230,6 +230,7 @@ export interface SessionTranscriptItem {
   text: string;
   blocks?: SessionContentBlock[];
   messageId: string | null;
+  reasoningPartId?: string | null;
   clientPromptId?: string | null;
   eventIndex?: number;
   timestampMs?: number;
@@ -241,6 +242,7 @@ export interface SessionTranscriptGroup {
   text: string;
   blocks?: SessionContentBlock[];
   messageId: string | null;
+  reasoningPartId?: string | null;
   clientPromptId?: string | null;
   eventIds: string[];
   eventIndex?: number;

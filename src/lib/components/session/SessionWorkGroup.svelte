@@ -2,7 +2,7 @@
   import { AlertTriangle, ChevronDown, Wrench } from '@lucide/svelte';
   import SessionReasoningBlock from '$lib/components/session/SessionReasoningBlock.svelte';
   import SessionToolBlock from '$lib/components/session/SessionToolBlock.svelte';
-  import type { SessionConversationWorkGroup } from '$lib/domain/session-conversation';
+  import { groupConsecutiveReasoning, type SessionConversationWorkGroup } from '$lib/domain/session-conversation';
 
   let {
     group,
@@ -27,6 +27,7 @@
     return group.content.filter((item) => visibleIds.has(item.id));
   });
   const visibleContent = $derived(expanded ? group.content : compactActiveContent);
+  const visibleGroups = $derived(groupConsecutiveReasoning(visibleContent));
   const hiddenActiveCount = $derived(Math.max(0, group.content.length - compactActiveContent.length));
   const summaryLabel = $derived.by(() => {
     const parts: string[] = [];
@@ -70,9 +71,9 @@
 
   {#if expanded || !group.settled}
     <div class="session-work-list">
-      {#each visibleContent as item (item.id)}
+      {#each visibleGroups as item (item.id)}
         {#if item.type === 'reasoning'}
-          <SessionReasoningBlock reasoning={[item]} />
+          <SessionReasoningBlock reasoning={item.entries} />
         {:else}
           <SessionToolBlock tool={item.tool} />
         {/if}
