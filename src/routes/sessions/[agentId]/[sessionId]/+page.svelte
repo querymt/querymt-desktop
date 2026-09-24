@@ -401,7 +401,8 @@
 
   function handleViewportWheel(event: Event) {
     programmaticScroll = false;
-    if (!scrollViewport || scrollMode !== 'free' || !(event instanceof WheelEvent) || event.deltaY <= 0) return;
+    const deltaY = 'deltaY' in event && typeof event.deltaY === 'number' ? event.deltaY : 0;
+    if (!scrollViewport || scrollMode !== 'free' || deltaY <= 0) return;
 
     const distanceFromBottom = getDistanceFromBottom(scrollViewport);
     const nextMode = nextSessionScrollMode(scrollMode, distanceFromBottom, 'down');

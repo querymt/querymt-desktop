@@ -12,7 +12,7 @@
   }>();
 
   const routeMap: Record<SectionName, string> = {
-    Today: '/',
+    Start: '/',
     Inbox: '/inbox',
     Agents: '/agents',
     Sessions: '/sessions',

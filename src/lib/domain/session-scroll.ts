@@ -3,7 +3,8 @@ export type SessionScrollDirection = 'up' | 'down' | 'none';
 export type SessionChatPresentationState = 'fixed-following' | 'fixed-free-expanded' | 'fixed-free-compact';
 
 export const SESSION_SCROLL_LEAVE_THRESHOLD = 48;
-export const SESSION_SCROLL_REJOIN_THRESHOLD = 16;
+// scrollHeight/clientHeight are integer-rounded while scrollTop can be fractional.
+export const SESSION_SCROLL_REJOIN_THRESHOLD = 1;
 export const SESSION_COMPOSER_COLLAPSE_THRESHOLD = 160;
 
 export type ScrollMetrics = {
@@ -38,7 +39,9 @@ export function nextSessionScrollMode(
     return direction === 'up' || distanceFromBottom > leaveThreshold ? 'free' : 'following';
   }
 
-  return direction === 'down' && distanceFromBottom <= rejoinThreshold ? 'following' : 'free';
+  // At the physical bottom, rejoin even if the browser reports no final scroll
+  // direction. An upward gesture still leaves the user in control.
+  return direction !== 'up' && distanceFromBottom <= rejoinThreshold ? 'following' : 'free';
 }
 
 export function sessionFollowPinClass(mode: SessionScrollMode): string {

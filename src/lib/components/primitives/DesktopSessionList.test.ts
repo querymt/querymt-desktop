@@ -267,7 +267,13 @@ describe('DesktopSessionList', () => {
     expect(screen.getByRole('button', { name: 'Needs input' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Thinking' })).not.toBeInTheDocument();
 
+    const filterToggle = screen.getByRole('button', { name: 'Show session filters' });
+    expect(filterToggle).toHaveAttribute('aria-expanded', 'false');
+    await fireEvent.click(filterToggle);
+    expect(screen.getByRole('button', { name: 'Hide session filters' })).toHaveAttribute('aria-expanded', 'true');
+
     await fireEvent.click(screen.getByRole('button', { name: 'Needs input' }));
+    expect(screen.getByRole('button', { name: 'Show session filters' })).toHaveAttribute('aria-expanded', 'false');
     expect(screen.getByText('Needs approval')).toBeInTheDocument();
     expect(screen.queryByText('Active work')).not.toBeInTheDocument();
   });

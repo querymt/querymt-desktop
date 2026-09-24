@@ -23,7 +23,7 @@ beforeEach(() => {
 
 describe('LeftRail Inbox attention', () => {
   it('hides the attention dot when no Inbox action is required', () => {
-    const { container } = render(LeftRail, { current: 'Today', collapsed: true });
+    const { container } = render(LeftRail, { current: 'Start', collapsed: true });
 
     expect(container.querySelector('.sidebar-attention-dot')).toBeNull();
     expect(screen.getByRole('link', { name: 'Inbox' })).toBeInTheDocument();
@@ -32,7 +32,7 @@ describe('LeftRail Inbox attention', () => {
   it('shows the attention dot and action count in the accessible label', () => {
     inboxStore.actionableItems = [{ id: 'one' }, { id: 'two' }];
 
-    const { container } = render(LeftRail, { current: 'Today', collapsed: true });
+    const { container } = render(LeftRail, { current: 'Start', collapsed: true });
 
     expect(container.querySelector('.sidebar-attention-dot')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'Inbox, 2 actions required' })).toBeInTheDocument();
@@ -42,7 +42,7 @@ describe('LeftRail Inbox attention', () => {
     agentsStore.connectedAgents = [{ id: 'agent-1' }];
     agentsStore.agentsNeedingAttention = [{ id: 'agent-2' }];
 
-    const { container } = render(LeftRail, { current: 'Today', collapsed: true });
+    const { container } = render(LeftRail, { current: 'Start', collapsed: true });
 
     expect(container.querySelectorAll('.sidebar-attention-dot')).toHaveLength(1);
     expect(screen.getByRole('link', { name: 'Agents, 1 online, 1 need attention' })).toBeInTheDocument();

@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DesktopSessionSummary } from '$lib/domain/types';
 
@@ -62,6 +62,25 @@ describe('RecentSessionRail navigation', () => {
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
   });
 
+  it('replaces the desktop rail with app-style navigation on mobile', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({
+      matches: true,
+      media: '(max-width: 760px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    })));
+
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed: true });
+
+    const navigation = screen.getByRole('navigation', { name: 'App navigation' });
+    expect(within(navigation).getByRole('link', { name: 'Sessions' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.queryByRole('navigation', { name: 'App navigation and recent sessions' })).not.toBeInTheDocument();
+
+    await fireEvent.click(within(navigation).getByLabelText('More sections'));
+    expect(within(navigation).getByRole('link', { name: 'Workspaces' })).toBeInTheDocument();
+    expect(within(navigation).getByRole('link', { name: 'Settings' })).toBeInTheDocument();
+  });
+
   it('locks the automatic compact rail without showing an unavailable expand control', () => {
     render(RecentSessionRail, {
       current: 'Sessions',
@@ -76,11 +95,11 @@ describe('RecentSessionRail navigation', () => {
   });
 
   it('shows the compact brand subtitle only in the expanded sidebar', () => {
-    const { rerender } = render(RecentSessionRail, { current: 'Today', sessions: [], collapsed: false });
+    const { rerender } = render(RecentSessionRail, { current: 'Start', sessions: [], collapsed: false });
 
     expect(screen.getByText('Agents command and control').closest('.app-sidebar-brand-copy')).not.toBeNull();
 
-    rerender({ current: 'Today', sessions: [], collapsed: true });
+    rerender({ current: 'Start', sessions: [], collapsed: true });
     expect(screen.queryByText('Agents command and control')).not.toBeInTheDocument();
   });
 
@@ -289,7 +308,7 @@ describe('RecentSessionRail Mesh node count', () => {
   it('labels the expanded Mesh link with a trailing node count and no icon badge', () => {
     agentsStore.meshNodeCount = 3;
 
-    render(RecentSessionRail, { current: 'Today', sessions: [activeSession] });
+    render(RecentSessionRail, { current: 'Start', sessions: [activeSession] });
 
     const meshLink = screen.getByRole('link', { name: 'Mesh, 3 nodes' });
     expect(meshLink.querySelector('small')).toHaveTextContent('3');
@@ -299,7 +318,7 @@ describe('RecentSessionRail Mesh node count', () => {
   it('shows the node count as a badge on the collapsed Mesh icon only', () => {
     agentsStore.meshNodeCount = 2;
 
-    render(RecentSessionRail, { current: 'Today', sessions: [activeSession], collapsed: true });
+    render(RecentSessionRail, { current: 'Start', sessions: [activeSession], collapsed: true });
 
     const meshLink = screen.getByRole('link', { name: 'Mesh, 2 nodes' });
     const count = meshLink.querySelector('.app-icon-agent-count');
@@ -313,13 +332,13 @@ describe('RecentSessionRail Mesh node count', () => {
   it('keeps the singular label for one mesh node', () => {
     agentsStore.meshNodeCount = 1;
 
-    render(RecentSessionRail, { current: 'Today', sessions: [activeSession] });
+    render(RecentSessionRail, { current: 'Start', sessions: [activeSession] });
 
     expect(screen.getByRole('link', { name: 'Mesh, 1 node' })).toBeInTheDocument();
   });
 
   it('omits the count badge and suffix when no mesh nodes are available', () => {
-    render(RecentSessionRail, { current: 'Today', sessions: [activeSession] });
+    render(RecentSessionRail, { current: 'Start', sessions: [activeSession] });
 
     const meshLink = screen.getByRole('link', { name: 'Mesh' });
     expect(meshLink.querySelector('small')).toBeNull();

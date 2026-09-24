@@ -157,9 +157,10 @@ describe('SessionComposer', () => {
     expect(modeSelect).toHaveClass('composer-control-pill');
     expect(modeSelect).toHaveTextContent('Build');
     const options = screen.getByLabelText('Session options').closest('details');
+    const optionsHost = options?.closest('.composer-options-host');
     const reasoningSelect = screen.getByRole('button', { name: 'Reasoning effort' });
     expect(options).not.toHaveAttribute('open');
-    expect(reasoningSelect.closest('.composer-options')).toBe(options);
+    expect(reasoningSelect.closest('.composer-options-host')).toBe(optionsHost);
 
     await fireEvent.click(screen.getByLabelText('Session options'));
     expect(options).toHaveAttribute('open');
@@ -221,7 +222,7 @@ describe('SessionComposer', () => {
 
     const controls = screen
       .getAllByRole('button')
-      .filter((button) => button.classList.contains('composer-control-pill') && !button.closest('.composer-options'));
+      .filter((button) => button.classList.contains('composer-control-pill') && !button.closest('.composer-options-host'));
     expect(controls.map((button) => button.getAttribute('aria-label') ?? button.textContent?.trim())).toEqual([
       'Claude Sonnet 4 · anthropic',
       'Mode'
@@ -414,10 +415,11 @@ describe('SessionComposer', () => {
     await fireEvent.click(sendButton!);
     expect(onSendPrompt).toHaveBeenCalledTimes(1);
 
-    const options = container.querySelector('.composer-options') as HTMLDetailsElement | null;
+    const optionsHost = container.querySelector('.composer-options-host') as HTMLElement | null;
+    const options = optionsHost?.querySelector('.composer-options') as HTMLDetailsElement | null;
     expect(options).not.toBeNull();
     options!.open = true;
-    const switchGroup = within(options!).getByRole('group', { name: 'Input delivery' });
+    const switchGroup = within(optionsHost!).getByRole('group', { name: 'Input delivery' });
     expect(within(switchGroup).getByRole('button', { name: /Steer/ })).toHaveAttribute('aria-pressed', 'true');
     await fireEvent.click(within(switchGroup).getByRole('button', { name: /Queue/ }));
     expect(onInputDeliveryChange).toHaveBeenCalledWith('queue');
@@ -555,6 +557,21 @@ describe('SessionComposer', () => {
     expect(prompt.tagName).toBe('TEXTAREA');
     expect(prompt).toHaveClass('bg-inherit');
     expect(prompt).not.toHaveClass('bg-transparent');
+  });
+
+  it('does not autofocus the expanded composer on narrow viewports', async () => {
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: query.includes('max-width: 760px'),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    })));
+
+    renderComposer({ docked: true, collapsed: false, sessionOnly: true, chatView: true });
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+    await Promise.resolve();
+
+    expect(prompt).not.toHaveFocus();
   });
 
   it('renders the compact composer while fixed and free-scrolling', () => {

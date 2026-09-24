@@ -104,9 +104,9 @@
       {
         id: 'new-session-prompt',
         title: 'New session with prompt',
-        subtitle: 'Go to Today and focus the prompt composer.',
+        subtitle: 'Go to Start and focus the prompt composer.',
         section: 'Create',
-        keywords: ['new', 'session', 'prompt', 'today'],
+        keywords: ['new', 'session', 'prompt', 'start'],
         disabled: onlineAgents.length === 0,
         run: async () => {
           await goto('/');
@@ -117,7 +117,7 @@
       {
         id: 'new-blank-session',
         title: 'New blank session',
-        subtitle: 'Create a blank interactive session from the Today view.',
+        subtitle: 'Create a blank interactive session from the Start view.',
         section: 'Create',
         keywords: ['blank', 'session', 'workspace'],
         disabled: onlineAgents.length === 0,

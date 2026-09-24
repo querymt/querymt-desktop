@@ -16,7 +16,7 @@ export const appMeta = {
 };
 
 export const sectionOrder = [
-  'Today',
+  'Start',
   'Inbox',
   'Agents',
   'Sessions',
@@ -29,7 +29,7 @@ export const sectionOrder = [
 export type SectionName = (typeof sectionOrder)[number];
 
 export const sectionIcons: Record<SectionName, Component> = {
-  Today: LayoutDashboard,
+  Start: LayoutDashboard,
   Inbox,
   Agents: Bot,
   Sessions: MessagesSquare,

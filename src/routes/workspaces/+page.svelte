@@ -44,12 +44,12 @@
 
   <div class="settings-unified-panel">
     {#if isEmbedded}
-      <form class="settings-section" onsubmit={(event) => { event.preventDefault(); addServerWorkspace(); }}>
-        <label class="app-dialog-field">
-          <span class="app-dialog-field-label">Workspace path on qmtcode server</span>
-          <input class="input-shell w-full" placeholder="/path/on/qmtcode/server" bind:value={workspacePath} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} />
-        </label>
-        <div><button class="action-btn action-btn-primary" type="submit" disabled={!workspacePath.trim()}>Add server path</button></div>
+      <form class="settings-section workspace-add-form" onsubmit={(event) => { event.preventDefault(); addServerWorkspace(); }}>
+        <label class="app-dialog-field-label" for="workspace-server-path">Workspace path on qmtcode server</label>
+        <div class="workspace-add-row">
+          <input id="workspace-server-path" class="input-shell workspace-add-input" placeholder="/path/on/qmtcode/server" bind:value={workspacePath} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} />
+          <button class="action-btn action-btn-primary workspace-add-action" type="submit" disabled={!workspacePath.trim()}>Add server path</button>
+        </div>
       </form>
     {/if}
     <WorkspaceList

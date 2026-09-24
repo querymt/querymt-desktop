@@ -50,10 +50,17 @@ describe('session scroll state', () => {
     expect(nextSessionScrollMode('following', SESSION_SCROLL_LEAVE_THRESHOLD + 1)).toBe('free');
   });
 
-  it('stays free until downward intent reaches the tighter rejoin threshold', () => {
-    expect(nextSessionScrollMode('free', SESSION_SCROLL_REJOIN_THRESHOLD + 1, 'down')).toBe('free');
-    expect(nextSessionScrollMode('free', SESSION_SCROLL_REJOIN_THRESHOLD, 'none')).toBe('free');
-    expect(nextSessionScrollMode('free', 0, 'down')).toBe('following');
+  it('rejoins only at the bottom boundary', () => {
+    expect(nextSessionScrollMode('free', SESSION_SCROLL_REJOIN_THRESHOLD + 0.01, 'down')).toBe('free');
+    expect(nextSessionScrollMode('free', SESSION_SCROLL_REJOIN_THRESHOLD, 'down')).toBe('following');
+  });
+
+  it('accepts a directionless final event at the bottom boundary', () => {
+    expect(nextSessionScrollMode('free', 0, 'none')).toBe('following');
+  });
+
+  it('does not rejoin during an upward gesture at the bottom boundary', () => {
+    expect(nextSessionScrollMode('free', 0, 'up')).toBe('free');
   });
 });
 

@@ -202,7 +202,7 @@
       {#if actionError}<div class="alert-error settings-section-message" role="alert">{actionError}</div>{/if}
 
       <section class="settings-section" aria-labelledby="mesh-nodes-title">
-        <div class="settings-section-header settings-section-header-action">
+        <div class="settings-section-header settings-section-header-action mesh-section-header">
           <div>
             <h2 id="mesh-nodes-title">Nodes</h2>
             <p>Remote peers available through the selected agent.</p>
@@ -230,7 +230,7 @@
 
       {#if selectedCapabilities?.features.mesh_invites || meshInvites.length > 0}
         <section class="settings-section" aria-labelledby="mesh-invites-title">
-          <div class="settings-section-header settings-section-header-action">
+          <div class="settings-section-header settings-section-header-action mesh-section-header">
             <div>
               <h2 id="mesh-invites-title">Invites</h2>
               <p>Access links for peers joining this mesh.</p>

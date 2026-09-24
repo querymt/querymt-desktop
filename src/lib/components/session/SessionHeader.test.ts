@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SessionHeader from './SessionHeader.svelte';
 import { session } from './session-fixture';
@@ -24,9 +24,15 @@ describe('SessionHeader', () => {
       updatedAt: 'Just now'
     });
 
+    const metadata = document.querySelector<HTMLElement>('.session-header-meta');
+    const mobileContext = screen.getByLabelText('Session context');
+    expect(metadata).not.toBeNull();
     expect(screen.getByRole('heading', { name: 'Refine session hierarchy' })).toBeInTheDocument();
-    expect(screen.getByText('querymt-desktop')).toBeInTheDocument();
-    expect(screen.getByText('QMTCODE')).toBeInTheDocument();
+    expect(within(metadata!).getByText('querymt-desktop')).toHaveClass('copy-chip-label');
+    expect(metadata!.querySelector('.session-header-workspace')).not.toBeNull();
+    expect(within(metadata!).getByText('QMTCODE')).toBeInTheDocument();
+    expect(within(mobileContext).getByText('querymt-desktop')).toBeInTheDocument();
+    expect(within(mobileContext).getByText('session-1')).toBeInTheDocument();
     expect(screen.getByLabelText('Status: Ready')).toBeInTheDocument();
     expect(screen.getByText('Context')).toBeInTheDocument();
   });
@@ -44,14 +50,16 @@ describe('SessionHeader', () => {
       updatedAt: 'Just now'
     });
 
-    const chip = screen.getByRole('button', { name: 'Copy session ID' });
+    const metadata = document.querySelector<HTMLElement>('.session-header-meta');
+    expect(metadata).not.toBeNull();
+    const chip = within(metadata!).getByRole('button', { name: 'Copy session ID' });
     expect(chip).toHaveTextContent('01a072b3-a266');
     await fireEvent.click(chip);
 
     expect(writeText).toHaveBeenCalledWith('01a072b3-a266-4c5d-8e9f-102030405060');
     // The copied confirmation overlays the id instead of replacing it, so the chip keeps its width.
-    expect(screen.getByText('01a072b3-a266')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('copied');
+    expect(within(chip).getByText('01a072b3-a266')).toBeInTheDocument();
+    expect(within(chip).getByRole('status')).toHaveTextContent('copied');
   });
 
   it('hides the session id chip while no session is loaded', () => {
@@ -63,6 +71,30 @@ describe('SessionHeader', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'Copy session ID' })).not.toBeInTheDocument();
+  });
+
+  it('makes complete session metadata available from the compact details popover', async () => {
+    render(SessionHeader, {
+      session: session({ sessionId: '01a072b3-a266-4c5d-8e9f-102030405060' }),
+      title: 'Mobile details test',
+      workspace: 'querymt-desktop',
+      workspacePath: '/projects/querymt-org/querymt-desktop',
+      agentName: 'QMTCODE',
+      profileLabel: 'Default',
+      updatedAt: 'Just now'
+    });
+
+    await fireEvent.click(screen.getByLabelText('Session details'));
+    const panel = document.querySelector<HTMLElement>('.session-header-details-panel');
+    const details = document.querySelector<HTMLElement>('.session-header-mobile-details');
+    expect(panel).not.toBeNull();
+    expect(details).not.toBeNull();
+    expect(within(panel!).getByText('Ready')).toBeInTheDocument();
+    expect(within(details!).getByText('querymt-desktop')).toBeInTheDocument();
+    expect(within(details!).getByText('QMTCODE')).toBeInTheDocument();
+    expect(within(details!).getByText('Default')).toBeInTheDocument();
+    expect(within(details!).getByText('Just now')).toBeInTheDocument();
+    expect(within(details!).getByRole('button', { name: 'Copy session ID' })).toHaveTextContent('01a072b3-a266');
   });
 
   it('collapses session details on outside clicks but keeps the trigger toggle', async () => {
@@ -81,7 +113,7 @@ describe('SessionHeader', () => {
     expect(details).toHaveAttribute('open');
 
     // Pointer downs inside the panel keep it open.
-    await fireEvent.mouseDown(screen.getByText('Session details'));
+    await fireEvent.mouseDown(screen.getByText('Session'));
     expect(details).toHaveAttribute('open');
 
     await fireEvent.mouseDown(document.body);

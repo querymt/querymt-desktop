@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Tooltip } from 'bits-ui';
-  import { ChevronLeft, ChevronRight, LoaderCircle } from '@lucide/svelte';
+  import { ChevronLeft, ChevronRight, LoaderCircle, Menu } from '@lucide/svelte';
   import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
+  import { autoCollapsePopover } from '$lib/design/details-popover';
   import { formatAriaShortcut, formatShortcut } from '$lib/design/platform';
   import { sectionIcons, type SectionName } from '$lib/design/tokens';
   import {
@@ -31,6 +32,7 @@
     currentSessionId = null,
     collapsed = false,
     collapseLocked = false,
+    mobileHidden = false,
     onToggleCollapsed = null,
     onOpenSession = null,
     onVisibleSessionItemsChange = null
@@ -42,13 +44,14 @@
     currentSessionId?: string | null;
     collapsed?: boolean;
     collapseLocked?: boolean;
+    mobileHidden?: boolean;
     onToggleCollapsed?: (() => void) | null;
     onOpenSession?: ((session: DesktopSessionSummary) => void) | null;
     onVisibleSessionItemsChange?: ((items: SessionRailItem[]) => void) | null;
   } = $props();
 
   const routeMap: Record<SectionName, string> = {
-    Today: '/',
+    Start: '/',
     Inbox: '/inbox',
     Agents: '/agents',
     Sessions: '/sessions',
@@ -64,9 +67,12 @@
   const AGENTS_STATUS_DESCRIPTION_ID = 'app-sidebar-agents-status-description';
   const workSections: SectionName[] = ['Inbox', 'Sessions', 'Workspaces'];
   const manageSections: SectionName[] = ['Agents', 'Automations', 'Mesh'];
+  const mobilePrimarySections: SectionName[] = ['Start', 'Inbox', 'Sessions', 'Agents'];
+  const mobileMoreSections: SectionName[] = ['Workspaces', 'Automations', 'Mesh', 'Settings'];
   const SettingsIcon = sectionIcons.Settings;
 
   let sessionListElement = $state<HTMLElement | null>(null);
+  let mobileNavigation = $state(false);
   let sessionIconLimit = $state(MAX_SESSION_ICONS);
   const compact = $derived(collapsed);
   const onlineAgentCount = $derived(agentsStore.connectedAgents.length);
@@ -94,6 +100,16 @@
 
   $effect(() => {
     onVisibleSessionItemsChange?.(railItems);
+  });
+
+  onMount(() => {
+    if (typeof window.matchMedia !== 'function') return;
+
+    const mediaQuery = window.matchMedia('(max-width: 760px)');
+    const updateMobileNavigation = () => (mobileNavigation = mediaQuery.matches);
+    updateMobileNavigation();
+    mediaQuery.addEventListener('change', updateMobileNavigation);
+    return () => mediaQuery.removeEventListener('change', updateMobileNavigation);
   });
 
   onMount(() => {
@@ -230,18 +246,23 @@
 {/snippet}
 
 <Tooltip.Provider delayDuration={120} skipDelayDuration={80}>
-  <nav class={`app-sidebar ${compact ? 'app-sidebar-collapsed' : 'app-sidebar-expanded'}`} aria-label="App navigation and recent sessions">
+  <nav
+    class={`app-sidebar ${compact ? 'app-sidebar-collapsed' : 'app-sidebar-expanded'}`}
+    aria-label="App navigation and recent sessions"
+    aria-hidden={mobileNavigation ? 'true' : undefined}
+    inert={mobileNavigation}
+  >
     {#if compact}
       <div class="app-icon-rail-top">
         <Tooltip.Root>
           <Tooltip.Trigger>
             {#snippet child({ props })}
-              <a {...props} class={`app-icon-link app-icon-home ${current === 'Today' ? 'app-icon-link-current' : ''}`} href="/" aria-current={current === 'Today' ? 'page' : undefined} aria-label="Today">
+              <a {...props} class={`app-icon-link app-icon-home ${current === 'Start' ? 'app-icon-link-current' : ''}`} href="/" aria-current={current === 'Start' ? 'page' : undefined} aria-label="Start">
                 <span class="app-icon-activity-pill" aria-hidden="true"></span><span>Q</span>
               </a>
             {/snippet}
           </Tooltip.Trigger>
-          <Tooltip.Portal><Tooltip.Content class="app-icon-tooltip" side="right" sideOffset={10}>Today<Tooltip.Arrow class="app-icon-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal>
+          <Tooltip.Portal><Tooltip.Content class="app-icon-tooltip" side="right" sideOffset={10}>Start<Tooltip.Arrow class="app-icon-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal>
         </Tooltip.Root>
 
         <div class="app-icon-nav-list">
@@ -324,7 +345,7 @@
       </div>
     {:else}
       <div class="app-sidebar-header">
-        <a class="app-sidebar-brand" href="/" aria-label="Today">
+        <a class="app-sidebar-brand" href="/" aria-label="Start">
           <span>Q</span>
           <span class="app-sidebar-brand-copy"><strong>QueryMT</strong><small>Agents command and control</small></span>
         </a>
@@ -369,4 +390,48 @@
       </div>
     {/if}
   </nav>
+
+  {#if mobileNavigation && !mobileHidden}
+    <nav class="app-mobile-nav" aria-label="App navigation">
+      {#each mobilePrimarySections as section}
+        {@const Icon = sectionIcons[section]}
+        <a
+          class={`app-mobile-nav-link ${current === section ? 'app-mobile-nav-link-current' : ''}`}
+          href={routeMap[section]}
+          aria-current={current === section ? 'page' : undefined}
+          aria-label={getSectionLabel(section)}
+        >
+          <span class="app-mobile-nav-icon"><Icon size={19} />{@render navIndicator(section)}</span>
+          <span>{section}</span>
+        </a>
+      {/each}
+
+      <details class="app-mobile-more" use:autoCollapsePopover>
+        <summary
+          class={`app-mobile-nav-link ${mobileMoreSections.includes(current) ? 'app-mobile-nav-link-current' : ''}`}
+          aria-label="More sections"
+        >
+          <span class="app-mobile-nav-icon"><Menu size={19} /></span>
+          <span>More</span>
+        </summary>
+        <div class="app-mobile-more-panel">
+          <div class="app-mobile-more-heading">More</div>
+          <div class="app-mobile-more-grid">
+            {#each mobileMoreSections as section}
+              {@const Icon = sectionIcons[section]}
+              <a
+                class={`app-mobile-more-link ${current === section ? 'app-mobile-more-link-current' : ''}`}
+                href={routeMap[section]}
+                aria-current={current === section ? 'page' : undefined}
+                aria-label={getSectionLabel(section)}
+              >
+                <span class="app-mobile-more-icon"><Icon size={18} />{@render navIndicator(section)}</span>
+                <span>{section}</span>
+              </a>
+            {/each}
+          </div>
+        </div>
+      </details>
+    </nav>
+  {/if}
 </Tooltip.Provider>
