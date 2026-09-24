@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SessionComposer from './SessionComposer.svelte';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
@@ -572,6 +572,31 @@ describe('SessionComposer', () => {
     await Promise.resolve();
 
     expect(prompt).not.toHaveFocus();
+  });
+
+  it('tracks focus requests while the current viewport blocks programmatic focus', async () => {
+    let narrowViewport = true;
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: narrowViewport && query.includes('max-width: 760px'),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    })));
+
+    const { rerender } = renderComposer({
+      docked: true,
+      collapsed: false,
+      sessionOnly: true,
+      chatView: true,
+      promptFocusToken: 0
+    });
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+    expect(prompt).not.toHaveFocus();
+
+    narrowViewport = false;
+    await rerender({ promptFocusToken: 1 });
+
+    await waitFor(() => expect(prompt).toHaveFocus());
   });
 
   it('renders the compact composer while fixed and free-scrolling', () => {

@@ -76,9 +76,18 @@ describe('RecentSessionRail navigation', () => {
     expect(within(navigation).getByRole('link', { name: 'Sessions' })).toHaveAttribute('aria-current', 'page');
     expect(screen.queryByRole('navigation', { name: 'App navigation and recent sessions' })).not.toBeInTheDocument();
 
-    await fireEvent.click(within(navigation).getByLabelText('More sections'));
-    expect(within(navigation).getByRole('link', { name: 'Workspaces' })).toBeInTheDocument();
+    const moreTrigger = within(navigation).getByLabelText('More sections');
+    const morePanel = moreTrigger.closest('details');
+    await fireEvent.click(moreTrigger);
+    expect(morePanel).toHaveAttribute('open');
+
+    const workspacesLink = within(navigation).getByRole('link', { name: 'Workspaces' });
+    expect(workspacesLink).toBeInTheDocument();
     expect(within(navigation).getByRole('link', { name: 'Settings' })).toBeInTheDocument();
+
+    workspacesLink.addEventListener('click', (event) => event.preventDefault(), { once: true });
+    await fireEvent.click(workspacesLink);
+    expect(morePanel).not.toHaveAttribute('open');
   });
 
   it('locks the automatic compact rail without showing an unavailable expand control', () => {

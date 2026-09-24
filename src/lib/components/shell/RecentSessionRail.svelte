@@ -424,6 +424,7 @@
                 href={routeMap[section]}
                 aria-current={current === section ? 'page' : undefined}
                 aria-label={getSectionLabel(section)}
+                onclick={(event) => event.currentTarget.closest('details')?.removeAttribute('open')}
               >
                 <span class="app-mobile-more-icon"><Icon size={18} />{@render navIndicator(section)}</span>
                 <span>{section}</span>

@@ -441,8 +441,8 @@
   }
 
   $effect(() => {
+    promptFocusToken;
     if (!collapsed && allowsProgrammaticPromptFocus()) {
-      promptFocusToken;
       void focusPrompt();
     }
   });
