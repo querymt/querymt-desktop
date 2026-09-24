@@ -16,6 +16,18 @@ const loadSessionToolPatchDiff = vi.hoisted(() =>
     return { default: MockPatchDiff };
   })
 );
+const loadSessionToolReadOutput = vi.hoisted(() =>
+  vi.fn(async () => {
+    const { default: MockReadOutput } = await import('./SessionToolReadOutput.stub.svelte');
+    return { default: MockReadOutput };
+  })
+);
+const loadSessionToolTerminalOutput = vi.hoisted(() =>
+  vi.fn(async () => {
+    const { default: MockTerminalOutput } = await import('./SessionToolTerminalOutput.stub.svelte');
+    return { default: MockTerminalOutput };
+  })
+);
 vi.mock('$app/navigation', () => ({ goto }));
 vi.mock('$app/state', () => ({
   page: { params: { agentId: 'agent-1' } }
@@ -24,6 +36,16 @@ vi.mock('./session-tool-patch-diff', () => ({ loadSessionToolPatchDiff }));
 vi.mock('./SessionToolPatchDiff.svelte', async () => {
   const { default: MockPatchDiff } = await import('./SessionToolPatchDiff.stub.svelte');
   return { default: MockPatchDiff };
+});
+vi.mock('./session-tool-read-output', () => ({ loadSessionToolReadOutput }));
+vi.mock('./SessionToolReadOutput.svelte', async () => {
+  const { default: MockReadOutput } = await import('./SessionToolReadOutput.stub.svelte');
+  return { default: MockReadOutput };
+});
+vi.mock('./session-tool-terminal-output', () => ({ loadSessionToolTerminalOutput }));
+vi.mock('./SessionToolTerminalOutput.svelte', async () => {
+  const { default: MockTerminalOutput } = await import('./SessionToolTerminalOutput.stub.svelte');
+  return { default: MockTerminalOutput };
 });
 
 const writeText = vi.fn().mockResolvedValue(undefined);
@@ -38,6 +60,16 @@ afterEach(() => {
   loadSessionToolPatchDiff.mockImplementation(async () => {
     const { default: MockPatchDiff } = await import('./SessionToolPatchDiff.stub.svelte');
     return { default: MockPatchDiff };
+  });
+  loadSessionToolReadOutput.mockReset();
+  loadSessionToolReadOutput.mockImplementation(async () => {
+    const { default: MockReadOutput } = await import('./SessionToolReadOutput.stub.svelte');
+    return { default: MockReadOutput };
+  });
+  loadSessionToolTerminalOutput.mockReset();
+  loadSessionToolTerminalOutput.mockImplementation(async () => {
+    const { default: MockTerminalOutput } = await import('./SessionToolTerminalOutput.stub.svelte');
+    return { default: MockTerminalOutput };
   });
 });
 
@@ -318,6 +350,206 @@ describe('SessionToolBlock', () => {
     expect(showSource).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+  });
+
+  it('shows the requested line range in the read summary', () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'read-2',
+        title: 'Run read_tool',
+        kind: 'read_tool',
+        status: 'in_progress',
+        arguments: '{"path":"src/app.ts","offset":140,"limit":75}'
+      }
+    });
+
+    expect(screen.getByRole('group', { name: 'Read file - src/app.ts (lines 141-215)' })).toBeInTheDocument();
+  });
+
+  it('renders only the highlighted read view by default, with raw data behind the developer toggle', async () => {
+    chatPreferencesStore.setDeveloperMode(true);
+    render(SessionToolBlock, {
+      tool: {
+        id: 'read-3',
+        title: 'Run read_tool',
+        kind: 'read_tool',
+        status: 'completed',
+        arguments: '{"path":"src/app.ts","offset":10}',
+        result: '<path>src/app.ts</path>\n<type>file</type>\n<content>\n00011| const value = 1;\n</content>'
+      }
+    });
+
+    const toolGroup = screen.getByRole('group', { name: 'Read file - src/app.ts (lines 11+)' });
+    await fireEvent.click(toolGroup.querySelector('summary')!);
+
+    const viewer = await screen.findByTestId('session-tool-read-output');
+    expect(viewer).toHaveTextContent('src/app.ts (1 lines)');
+    expect(screen.queryByText('<path>src/app.ts</path>')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Show source data' }));
+    expect(screen.getByRole('region', { name: 'Tool parameters' })).toHaveTextContent('"path": "src/app.ts"');
+    expect(screen.getByRole('region', { name: 'Tool result' })).toHaveTextContent('00011| const value = 1;');
+    expect(screen.getByRole('region', { name: 'Tool result' })).toHaveTextContent('</content>');
+    expect(screen.getByTestId('session-tool-read-output')).toBeInTheDocument();
+  });
+
+  it('renders the read viewer for live ACP calls that carry the semantic kind', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'read-live',
+        title: 'Run read_tool',
+        kind: 'read',
+        status: 'completed',
+        arguments: '{"path":"src/app.ts"}',
+        result: '<path>src/app.ts</path>\n<type>file</type>\n<content>\n00011| const value = 1;\n</content>'
+      }
+    });
+
+    const toolGroup = screen.getByRole('group', { name: 'Read - src/app.ts' });
+    await fireEvent.click(toolGroup.querySelector('summary')!);
+    expect(await screen.findByTestId('session-tool-read-output')).toBeInTheDocument();
+  });
+
+  it('renders the read viewer for get_function symbol reads', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'get-function-1',
+        title: 'Run get_function',
+        kind: 'read',
+        status: 'completed',
+        arguments: '{"paths":["src/app.ts"],"names":["value"]}',
+        result: [
+          '/tmp/project/src/app.ts',
+          '- value [1-1] hash=abc bytes=16 lines=1',
+          '00001| export const value = 1;'
+        ].join('\n')
+      }
+    });
+
+    const toolGroup = screen.getByRole('group', { name: 'Read - /tmp/project/src/app.ts' });
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    const viewer = await screen.findByTestId('session-tool-read-output');
+    expect(viewer).toHaveTextContent('/tmp/project/src/app.ts');
+  });
+
+  it('falls back to the plain result view when read output cannot be parsed', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'read-4',
+        title: 'Run read_tool',
+        kind: 'read_tool',
+        status: 'completed',
+        arguments: '{"path":"src/app.ts"}',
+        result: 'ENOENT: no such file'
+      }
+    });
+
+    const toolGroup = screen.getByText('Read file').closest('details');
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    expect(await screen.findByRole('region', { name: 'Tool result' })).toHaveTextContent('ENOENT: no such file');
+    expect(screen.queryByTestId('session-tool-read-output')).toBeNull();
+  });
+
+  it('renders shell stdout as a terminal without the parameters JSON', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'shell-2',
+        title: 'Run shell',
+        kind: 'shell',
+        status: 'completed',
+        arguments: '{"command":"ls"}',
+        result: '{"stdout":"src\\npackage.json","stderr":"","exit_code":0}'
+      }
+    });
+
+    const toolGroup = screen.getByText('Run command').closest('details');
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    const terminal = await screen.findByTestId('session-tool-terminal-output');
+    expect(terminal.textContent).toContain('$ ls');
+    expect(terminal.textContent).toContain('src\npackage.json');
+    expect(terminal.textContent).toContain('exit 0');
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+  });
+
+  it('renders failed shell stderr as terminal output without the raw JSON', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'shell-3',
+        title: 'Run shell',
+        kind: 'shell',
+        status: 'failed',
+        arguments: '{"command":"make"}',
+        result: '{"stdout":"","stderr":"make: *** No targets specified and no makefile found.  Stop.","exit_code":2}'
+      }
+    });
+
+    const toolGroup = screen.getByText('Run command').closest('details');
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    const terminal = await screen.findByTestId('session-tool-terminal-output');
+    expect(terminal.textContent).toContain('$ make');
+    expect(terminal.textContent).toContain('make: *** No targets specified and no makefile found.  Stop.');
+    expect(terminal.textContent).toContain('exit 2');
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+  });
+
+  it('falls back to plain text shell output when the result is not JSON', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'shell-4',
+        title: 'Run shell',
+        kind: 'shell',
+        status: 'completed',
+        arguments: '{"command":"echo","args":["hi"]}',
+        result: 'legacy plain output'
+      }
+    });
+
+    const toolGroup = screen.getByText('Run command').closest('details');
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    const terminal = await screen.findByTestId('session-tool-terminal-output');
+    expect(terminal.textContent).toContain('$ echo hi');
+    expect(terminal.textContent).toContain('legacy plain output');
+    expect(terminal.textContent).not.toContain('exit');
+  });
+
+  it('keeps shell parameters visible while the command is still running', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'shell-5',
+        title: 'Run shell',
+        kind: 'shell',
+        status: 'in_progress',
+        arguments: '{"command":"bun","args":["run","check"]}'
+      }
+    });
+
+    const toolGroup = screen.getByText('Run command').closest('details');
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    expect(await screen.findByRole('region', { name: 'Tool parameters' })).toBeInTheDocument();
+    expect(screen.queryByTestId('session-tool-terminal-output')).toBeNull();
+  });
+
+  it('keeps completed non-read, non-shell results plain', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'search-1',
+        title: 'Run search_text',
+        kind: 'search_text',
+        status: 'completed',
+        arguments: '{"pattern":"ToolCall"}',
+        result: 'src/a.ts:1: ToolCall'
+      }
+    });
+
+    const toolGroup = screen.getByText('Search text').closest('details');
+    await fireEvent.click(toolGroup!.querySelector('summary')!);
+    expect(await screen.findByRole('region', { name: 'Tool result' })).toHaveTextContent('src/a.ts:1: ToolCall');
+    expect(screen.queryByTestId('session-tool-read-output')).toBeNull();
+    expect(screen.queryByTestId('session-tool-terminal-output')).toBeNull();
   });
 
   it('surfaces failed status and preserves error detail after expand', async () => {

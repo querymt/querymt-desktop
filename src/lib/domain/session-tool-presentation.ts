@@ -47,6 +47,7 @@ const TASK_TOOLS = new Set(['create_task', 'todowrite', 'todoread']);
 
 export function getSessionToolPresentation(tool: SessionToolCallItem): SessionToolPresentation {
   const name = normalizeToolName(tool);
+  const toolName = getSessionToolName(tool);
   const args = parseObject(tool.arguments);
   const argumentsText = formatTechnicalText(tool.arguments);
   const resultText = formatTechnicalText(tool.result);
@@ -54,7 +55,7 @@ export function getSessionToolPresentation(tool: SessionToolCallItem): SessionTo
   return {
     name,
     label: toolLabel(name),
-    preview: toolPreview(name, args, tool.result),
+    preview: toolPreview(toolName, args, tool.result),
     icon: toolIcon(name),
     statusLabel: statusLabel(tool.status),
     expandable: Boolean(argumentsText || resultText),
@@ -62,6 +63,18 @@ export function getSessionToolPresentation(tool: SessionToolCallItem): SessionTo
     resultText,
     changeStats: toolChangeStats(name, tool.status, args, tool.result)
   };
+}
+
+/**
+ * Resolves the concrete tool name for a call. Live ACP updates carry the
+ * semantic kind (`read`) in `kind` and the real tool name only in the title
+ * (`Run read_tool`), so prefer the title-derived name and fall back to the
+ * kind-based normalization (which persisted event snapshots already need).
+ */
+export function getSessionToolName(tool: SessionToolCallItem): string {
+  const titleName = stripRunPrefix(tool.title).toLowerCase();
+  if (titleName) return titleName;
+  return normalizeToolName(tool);
 }
 
 export function formatChangeStats(stats: SessionToolChangeStats | null | undefined): string | null {
@@ -109,6 +122,18 @@ export function isDelegateToolName(name: string): boolean {
 
 export function getDelegateTargetAgentId(tool: SessionToolCallItem): string | null {
   return getDelegateTargetAgentIdFromArgs(parseObject(tool.arguments));
+}
+
+/** Joins a shell tool's `command` argument with its string `args` array. */
+export function getShellCommand(args: Record<string, unknown> | null): string | null {
+  if (!args) return null;
+  const command = stringValue(args.command);
+  const commandArgs = Array.isArray(args.args) ? args.args.filter((item): item is string => typeof item === 'string') : [];
+  return [command, ...commandArgs].filter(Boolean).join(' ') || null;
+}
+
+export function getSessionShellCommand(tool: SessionToolCallItem): string | null {
+  return getShellCommand(parseObject(tool.arguments));
 }
 
 function getDelegateTargetAgentIdFromArgs(args: Record<string, unknown> | null): string | null {
@@ -236,45 +261,49 @@ function compactChangeStats(added: number, removed: number): SessionToolChangeSt
   return added > 0 || removed > 0 ? { added, removed } : null;
 }
 
-function toolPreview(name: string, args: Record<string, unknown> | null, rawResult: string | null | undefined): string | null {
+function toolPreview(toolName: string, args: Record<string, unknown> | null, rawResult: string | null | undefined): string | null {
   if (!args) return resultPreview(rawResult);
 
-  if (name === 'shell' || name === 'execute') {
-    const command = stringValue(args.command);
-    const commandArgs = Array.isArray(args.args) ? args.args.filter((item): item is string => typeof item === 'string') : [];
-    return compact([command, ...commandArgs].filter(Boolean).join(' '));
+  if (toolName === 'shell' || toolName === 'execute') {
+    return compact(getShellCommand(args));
   }
-  if (name === 'search_text') {
+  if (toolName === 'search_text') {
     const pattern = stringValue(args.pattern);
     const location = stringValue(args.include) || stringValue(args.path);
     return compact(pattern ? `${quote(pattern)}${location ? ` in ${location}` : ''}` : location);
   }
-  if (name === 'glob') {
+  if (toolName === 'glob') {
     const pattern = stringValue(args.pattern);
     const path = stringValue(args.path);
     return compact(pattern ? `${pattern}${path ? ` in ${path}` : ''}` : path);
   }
-  if (name === 'question') {
+  if (toolName === 'question') {
     const questions = Array.isArray(args.questions) ? args.questions.length : 0;
     return questions > 0 ? `${questions} question${questions === 1 ? '' : 's'}` : null;
   }
-  if (isDelegateToolName(name)) {
+  if (isDelegateToolName(toolName)) {
     const target = getDelegateTargetAgentIdFromArgs(args);
     const objective = stringValue(args.objective);
     return compact([target, objective].filter(Boolean).join(' - '));
   }
-  if (name === 'todowrite') {
+  if (toolName === 'todowrite') {
     const todos = Array.isArray(args.todos) ? args.todos.length : 0;
     return todos > 0 ? `${todos} task${todos === 1 ? '' : 's'}` : null;
   }
-  if (name === 'create_task') return compact(stringValue(args.expected_deliverable) || stringValue(args.kind));
-  if (name === 'skill') return compact(stringValue(args.name));
-  if (name === 'browse' || name === 'web_fetch') return compact(stringValue(args.url));
-  if (name === 'replace_symbol') {
+  if (toolName === 'create_task') return compact(stringValue(args.expected_deliverable) || stringValue(args.kind));
+  if (toolName === 'skill') return compact(stringValue(args.name));
+  if (toolName === 'browse' || toolName === 'web_fetch') return compact(stringValue(args.url));
+  if (toolName === 'replace_symbol') {
     const replacements = Array.isArray(args.replacements) ? args.replacements : [];
     const first = replacements[0];
     const firstPath = first && typeof first === 'object' ? stringValue((first as Record<string, unknown>).path) : '';
     return replacements.length > 1 ? compact(`${firstPath || 'symbols'} +${replacements.length - 1} more`) : compact(firstPath);
+  }
+  if (toolName === 'read_tool') {
+    const path = toolFilePath(args) || stringValue(args.root);
+    if (!path) return resultPreview(rawResult);
+    const range = readRangeLabel(args);
+    return compact(range ? `${path} ${range}` : path);
   }
 
   const path = toolFilePath(args) || stringValue(args.root);
@@ -285,6 +314,20 @@ function toolPreview(name: string, args: Record<string, unknown> | null, rawResu
 
 function quote(value: string): string {
   return `"${value}"`;
+}
+
+function readRangeLabel(args: Record<string, unknown>): string | null {
+  const offset = readNonNegativeInt(args.offset);
+  const limit = readNonNegativeInt(args.limit);
+  if (limit !== null && limit > 0 && offset !== null && offset > 0) return `(lines ${offset + 1}-${offset + limit})`;
+  if (offset !== null && offset > 0) return `(lines ${offset + 1}+)`;
+  if (limit !== null && limit > 0) return `(first ${limit} lines)`;
+  return null;
+}
+
+function readNonNegativeInt(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function resultPreview(value: string | null | undefined): string | null {

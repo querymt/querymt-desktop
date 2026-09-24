@@ -24,6 +24,31 @@ describe('getSessionToolPresentation', () => {
     });
   });
 
+  it('shows the requested line range in read previews', () => {
+    const previewFor = (args: Record<string, unknown>) =>
+      getSessionToolPresentation(tool({ arguments: JSON.stringify({ path: 'src/app.ts', ...args }) })).preview;
+    expect(previewFor({ offset: 140, limit: 75 })).toBe('src/app.ts (lines 141-215)');
+    expect(previewFor({ offset: 140 })).toBe('src/app.ts (lines 141+)');
+    expect(previewFor({ offset: 0, limit: 75 })).toBe('src/app.ts (first 75 lines)');
+    expect(previewFor({ offset: -4, limit: 'many' })).toBe('src/app.ts');
+    expect(previewFor({})).toBe('src/app.ts');
+  });
+
+  it('resolves the read preview from the title for live ACP tool calls', () => {
+    // Live ACP updates carry the semantic kind in `kind` and the tool name in the title.
+    expect(
+      getSessionToolPresentation(
+        tool({ kind: 'read', title: 'Run read_tool', arguments: '{"path":"src/app.ts","offset":140,"limit":75}' })
+      ).preview
+    ).toBe('src/app.ts (lines 141-215)');
+    // Persisted event snapshots carry the tool name in both fields.
+    expect(
+      getSessionToolPresentation(
+        tool({ kind: 'read_tool', title: 'read_tool', arguments: '{"path":"src/app.ts","offset":140,"limit":75}' })
+      ).preview
+    ).toBe('src/app.ts (lines 141-215)');
+  });
+
   it('summarizes shell commands and search locations', () => {
     expect(
       getSessionToolPresentation(tool({ title: 'Run shell', kind: 'shell', arguments: '{"command":"bun","args":["run","check"]}' }))

@@ -20,6 +20,26 @@ function isSessionInputDeliveryMode(value: string | null): value is SessionInput
   return value === 'steer' || value === 'queue';
 }
 
+// localStorage can be unavailable in restricted webviews or privacy modes;
+// treat every storage failure as a no-op instead of breaking the UI.
+function readStorage(key: string): string | null {
+  if (!browser) return null;
+  try {
+    return window.localStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: string) {
+  if (!browser) return;
+  try {
+    window.localStorage?.setItem(key, value);
+  } catch {
+    // Ignore persistence failures.
+  }
+}
+
 export class ChatPreferencesStore {
   sendShortcut = $state<SendShortcut>('enter');
   imageSendMode = $state<ImageSendMode>('image');
@@ -32,19 +52,19 @@ export class ChatPreferencesStore {
       return;
     }
 
-    const savedShortcut = window.localStorage.getItem(storageKey);
+    const savedShortcut = readStorage(storageKey);
     if (isSendShortcut(savedShortcut)) {
       this.sendShortcut = savedShortcut;
     }
 
-    const savedImageMode = window.localStorage.getItem(imageModeStorageKey);
+    const savedImageMode = readStorage(imageModeStorageKey);
     if (isImageSendMode(savedImageMode)) {
       this.imageSendMode = savedImageMode;
     }
 
-    this.developerMode = window.localStorage.getItem(developerModeStorageKey) === 'true';
+    this.developerMode = readStorage(developerModeStorageKey) === 'true';
 
-    const savedInputDelivery = window.localStorage.getItem(inputDeliveryStorageKey);
+    const savedInputDelivery = readStorage(inputDeliveryStorageKey);
     if (isSessionInputDeliveryMode(savedInputDelivery)) {
       this.inputDelivery = savedInputDelivery;
     }
@@ -54,34 +74,22 @@ export class ChatPreferencesStore {
 
   setSendShortcut(shortcut: SendShortcut) {
     this.sendShortcut = shortcut;
-
-    if (browser) {
-      window.localStorage.setItem(storageKey, shortcut);
-    }
+    writeStorage(storageKey, shortcut);
   }
 
   setImageSendMode(mode: ImageSendMode) {
     this.imageSendMode = mode;
-
-    if (browser) {
-      window.localStorage.setItem(imageModeStorageKey, mode);
-    }
+    writeStorage(imageModeStorageKey, mode);
   }
 
   setDeveloperMode(enabled: boolean) {
     this.developerMode = enabled;
-
-    if (browser) {
-      window.localStorage.setItem(developerModeStorageKey, enabled ? 'true' : 'false');
-    }
+    writeStorage(developerModeStorageKey, enabled ? 'true' : 'false');
   }
 
   setInputDelivery(delivery: SessionInputDeliveryMode) {
     this.inputDelivery = delivery;
-
-    if (browser) {
-      window.localStorage.setItem(inputDeliveryStorageKey, delivery);
-    }
+    writeStorage(inputDeliveryStorageKey, delivery);
   }
 }
 
