@@ -18,6 +18,9 @@ export function autoCollapsePopover(node: HTMLDetailsElement) {
     const target = event.target;
     if (!(target instanceof Node)) return;
     if (node.contains(target)) return;
+
+    const siblingPanel = node.nextElementSibling;
+    if (siblingPanel?.classList.contains('composer-options-panel') && siblingPanel.contains(target)) return;
     if (target instanceof Element && target.closest(FLOATING_MENU_SELECTOR)) return;
     node.removeAttribute('open');
   };

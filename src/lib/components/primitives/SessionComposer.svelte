@@ -441,8 +441,8 @@
   }
 
   $effect(() => {
-    if (!collapsed) {
-      promptFocusToken;
+    promptFocusToken;
+    if (!collapsed && allowsProgrammaticPromptFocus()) {
       void focusPrompt();
     }
   });
@@ -469,6 +469,11 @@
       }
     };
   });
+
+  function allowsProgrammaticPromptFocus(): boolean {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true;
+    return !window.matchMedia('(max-width: 760px), (pointer: coarse)').matches;
+  }
 
   async function focusPrompt() {
     await tick();
@@ -515,7 +520,7 @@
   {/if}
 
   <div
-    class={`${unifiedShell ? 'px-1' : 'px-2'} rounded-[18px] bg-inherit transition ${isDragging ? 'bg-[var(--accent-dim)] ring-1 ring-[var(--border-strong)]' : ''}`}
+    class={`composer-prompt-zone ${unifiedShell ? 'px-1' : 'px-2'} rounded-[18px] bg-inherit transition ${isDragging ? 'bg-[var(--accent-dim)] ring-1 ring-[var(--border-strong)]' : ''}`}
     role="region"
     aria-label="Prompt and attachment drop zone"
     ondragover={(event) => {
@@ -554,8 +559,8 @@
     <SessionAttachmentPreview blocks={attachmentBlocks} removable={true} {compact} onRemove={onRemoveAttachment} />
   {/if}
 
-  <div class={`flex flex-wrap items-center justify-between gap-3 ${unifiedShell ? 'border-t border-[var(--border)] px-1 pt-3' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
-    <div class="flex flex-wrap items-center gap-2">
+  <div class={`composer-toolbar flex flex-wrap items-center justify-between gap-3 ${unifiedShell ? 'border-t border-[var(--border)] px-1 pt-3' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
+    <div class="composer-toolbar-controls flex flex-wrap items-center gap-2">
       {#if !sessionOnly && onCreateSession && !minimal && !launch}
         <IconTooltipButton label="Blank session" icon={Plus} size={16} disabled={loading} onclick={onCreateSession} />
       {/if}
@@ -595,13 +600,15 @@
         />
       {/if}
        {#if secondaryOptionCount > 0}
-         <details class="composer-options" use:autoCollapsePopover>
-           <summary class="composer-options-trigger" aria-label="Session options">
-             <Settings2 size={14} />
-             <span>Options</span>
-             {#if optionsSummary}<small>{optionsSummary}</small>{/if}
-             <ChevronDown class="composer-options-chevron" size={13} />
-           </summary>
+         <div class="composer-options-host">
+           <details class="composer-options" use:autoCollapsePopover>
+             <summary class="composer-options-trigger" aria-label="Session options">
+               <Settings2 size={14} />
+               <span>Options</span>
+               {#if optionsSummary}<small>{optionsSummary}</small>{/if}
+               <ChevronDown class="composer-options-chevron" size={13} />
+             </summary>
+           </details>
            <div class="composer-options-panel">
              <div class="composer-options-heading">
                <strong>Session options</strong>
@@ -714,11 +721,11 @@
                {/if}
              </div>
            </div>
-         </details>
+         </div>
        {/if}
     </div>
 
-    <div class="flex items-center gap-2">
+    <div class="composer-toolbar-actions flex items-center gap-2">
       <input
         bind:this={fileInputElement}
         class="hidden"

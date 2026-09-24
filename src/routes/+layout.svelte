@@ -34,7 +34,7 @@
   setContext('app-overlay-target', () => overlayPortalTarget);
 
   const routeToSection: Record<string, SectionName> = {
-    '/': 'Today',
+    '/': 'Start',
     '/inbox': 'Inbox',
     '/agents': 'Agents',
     '/sessions': 'Sessions',
@@ -60,7 +60,7 @@
       return 'Sessions';
     }
 
-    return routeToSection[pathname] ?? 'Today';
+    return routeToSection[pathname] ?? 'Start';
   });
 
   function preventNewWindowNavigation(event: MouseEvent) {
@@ -329,7 +329,7 @@
 {/if}
 
 <Tooltip.Provider>
-  <div class={`app-shell min-h-screen p-4 ${windowDecorationsStore.usesCustomTitlebar ? `app-shell-custom-titlebar ${windowMaximized ? 'app-shell-maximized' : ''}` : ''}`}>
+  <div class={`app-shell min-h-screen p-4 ${isActiveSessionRoute ? 'app-shell-active-session' : ''} ${windowDecorationsStore.usesCustomTitlebar ? `app-shell-custom-titlebar ${windowMaximized ? 'app-shell-maximized' : ''}` : ''}`}>
     <RecentSessionRail
       current={section}
       sessions={agentsStore.sessions}
@@ -338,6 +338,7 @@
       currentSessionId={currentRailSessionId}
       collapsed={sidebarStore.initialized && sidebarStore.effectiveCollapsed}
       collapseLocked={sidebarStore.viewportConstrained}
+      mobileHidden={isActiveSessionRoute}
       onToggleCollapsed={() => sidebarStore.toggleCollapsed()}
       onOpenSession={(session) => agentsStore.acknowledgeSession(session.agentId, session.sessionId)}
       onVisibleSessionItemsChange={(items) => (visibleRailSessionItems = items)}

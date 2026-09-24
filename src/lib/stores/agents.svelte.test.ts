@@ -1069,7 +1069,7 @@ describe('AgentsStore session model isolation', () => {
     return store;
   }
 
-  it('choosing Grok on Today leaves session A on Sol and applies Grok only to new session B', async () => {
+  it('choosing Grok on Start leaves session A on Sol and applies Grok only to new session B', async () => {
     const store = setup();
     mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: modelOptions(sol.id) }, replay: [] });
     await store.loadSession('agent-1', 'session-a');

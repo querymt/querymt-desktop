@@ -91,6 +91,13 @@
 
   <div class="session-header-identity">
     <h1>{title}</h1>
+    <div class="session-header-mobile-meta" aria-label="Session context">
+      <span class="session-header-mobile-workspace" title={workspace}>{workspace}</span>
+      {#if session.sessionId}
+        <span aria-hidden="true">·</span>
+        <span class="session-header-mobile-id" title={session.sessionId}>{session.sessionId.slice(0, 13)}</span>
+      {/if}
+    </div>
     <div class="session-header-meta">
       <span class="session-header-status-wrap">
         <span
@@ -99,20 +106,19 @@
         ></span>
         <span class="session-row-status-tooltip" role="tooltip">{status.label}</span>
       </span>
-      <CopyTextChip value={workspacePath ?? workspace} display={workspace} title="Copy project path" />
+      <CopyTextChip class="session-header-workspace" value={workspacePath ?? workspace} display={workspace} title="Copy project path" />
       {#if agentName}
-        <span aria-hidden="true">·</span>
-        <span>{agentName}</span>
+        <span class="session-header-meta-desktop"><span aria-hidden="true">·</span><span>{agentName}</span></span>
       {/if}
       {#if profileLabel}
-        <span aria-hidden="true">·</span>
-        <span class="session-header-profile" title="Session profile (set at start)"><FileCog size={11} aria-hidden="true" />{profileLabel}</span>
+        <span class="session-header-meta-desktop">
+          <span aria-hidden="true">·</span>
+          <span class="session-header-profile" title="Session profile (set at start)"><FileCog size={11} aria-hidden="true" />{profileLabel}</span>
+        </span>
       {/if}
-      <span aria-hidden="true">·</span>
-      <span>{updatedAt}</span>
+      <span class="session-header-meta-desktop"><span aria-hidden="true">·</span><span>{updatedAt}</span></span>
       {#if session.sessionId}
-        <span aria-hidden="true">·</span>
-        <SessionIdChip sessionId={session.sessionId} />
+        <span class="session-header-session-id"><span aria-hidden="true">·</span><SessionIdChip sessionId={session.sessionId} /></span>
       {/if}
     </div>
   </div>
@@ -160,8 +166,25 @@
         <summary class="icon-btn" aria-label="Session details" title="Session details"><Info size={16} /></summary>
         <div class="session-header-details-panel">
           <div class="session-header-details-heading">
-            <strong>Session details</strong>
+            <strong>Session</strong>
+            <span class="session-header-details-status">
+              <span class={`session-header-status-dot session-header-status-dot-${status.tone}`} aria-hidden="true"></span>
+              {status.label}
+            </span>
           </div>
+          <dl class="session-header-details-list session-header-mobile-details">
+            <div><dt>Workspace</dt><dd><CopyTextChip value={workspacePath ?? workspace} display={workspace} title="Copy project path" /></dd></div>
+            {#if agentName}
+              <div><dt>Agent</dt><dd>{agentName}</dd></div>
+            {/if}
+            {#if profileLabel}
+              <div><dt>Profile</dt><dd>{profileLabel}</dd></div>
+            {/if}
+            <div><dt>Updated</dt><dd>{updatedAt}</dd></div>
+            {#if session.sessionId}
+              <div><dt>Session ID</dt><dd><SessionIdChip sessionId={session.sessionId} /></dd></div>
+            {/if}
+          </dl>
           {#if session.lastError}
             <dl class="session-header-details-list">
               <div><dt>Error</dt><dd>{session.lastError}</dd></div>

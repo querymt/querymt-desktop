@@ -31,7 +31,7 @@
     return localActive + remoteActive;
   });
 
-  async function startSessionFromToday() {
+  async function startSessionFromLauncher() {
     if (!primaryAgentId) {
       return;
     }
@@ -42,7 +42,7 @@
     }
   }
 
-  async function startBlankSessionFromToday() {
+  async function startBlankSessionFromLauncher() {
     if (!primaryAgentId) {
       return;
     }
@@ -56,7 +56,7 @@
   }
 </script>
 
-<div class="flex min-h-[calc(100vh-7rem)] w-full items-center justify-center px-4">
+<div class="start-launch-page flex min-h-[calc(100vh-7rem)] w-full items-center justify-center px-4">
   <section class="mx-auto w-full max-w-4xl space-y-6">
     <div class="space-y-3 text-center">
       <div class="section-eyebrow">New session</div>
@@ -104,9 +104,9 @@
       onLaunchModeChange={(modeId) => agentsStore.setComposerMode(modeId)}
       onLaunchReasoningChange={(reasoningId) => agentsStore.setComposerReasoning(reasoningId)}
       onTargetChange={(targetId) => agentsStore.setComposerTarget(targetId)}
-      onCreateSession={() => startBlankSessionFromToday()}
+      onCreateSession={() => startBlankSessionFromLauncher()}
       onDismissError={() => agentsStore.clearError()}
-      onSendPrompt={() => startSessionFromToday()}
+      onSendPrompt={() => startSessionFromLauncher()}
     />
 
     <div class="flex flex-wrap items-center justify-center gap-3 text-sm text-[var(--muted)]">

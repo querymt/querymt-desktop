@@ -359,13 +359,13 @@
 </script>
 
 <div class="agents-page">
-  <div class="page-toolbar">
+  <div class="page-toolbar agents-page-toolbar">
     <SectionHeader
       title="Agents"
       description={isEmbedded ? 'Inspect and reconnect the qmtcode instance serving this interface.' : 'Configure connections, inspect status, and control agent runtimes.'}
     />
 
-    <div class="compact-toolbar">
+    <div class="compact-toolbar agents-page-actions">
       <IconTooltipButton
         label={refreshing ? 'Refreshing agents' : 'Refresh agents'}
         icon={refreshing ? LoaderCircle : RefreshCw}
@@ -424,11 +424,11 @@
           {#each agentCards as card}
             <article class="agent-list-row">
               <div class="agent-list-row-inner flex flex-wrap items-center justify-between gap-3">
-                <div class="min-w-0 flex flex-1 items-center gap-3">
-                  <span class={`status-dot ${statusClass(card.status?.state, card.connectionState, card.controlHealth.state)}`}></span>
-                  <div class="min-w-0 flex-1">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <div class="truncate text-sm font-medium">{card.config.name}</div>
+                <div class="agent-list-primary min-w-0 flex flex-1 items-center gap-3">
+                  <span class={`agent-list-status status-dot ${statusClass(card.status?.state, card.connectionState, card.controlHealth.state)}`}></span>
+                  <div class="agent-list-copy min-w-0 flex-1">
+                    <div class="agent-list-heading flex flex-wrap items-center gap-2">
+                      <div class="agent-list-name truncate text-sm font-medium">{card.config.name}</div>
                       <span class="badge">{statusLabel(card.config)}</span>
                       {#if isEmbedded}
                         <span class="badge">host managed</span>
@@ -441,11 +441,11 @@
                         </button>
                       {/if}
                     </div>
-                    <div class="mt-1 truncate text-xs text-[var(--muted)]">{endpointLabel(card.config)}</div>
+                    <div class="agent-list-endpoint mt-1 truncate text-xs text-[var(--muted)]">{endpointLabel(card.config)}</div>
                   </div>
                 </div>
 
-                <div class="compact-toolbar">
+                <div class="compact-toolbar agent-list-actions">
                   <IconTooltipButton label={`Details for ${card.config.name}`} icon={Info} onclick={() => openDetails(card.config.id)} />
                   {#if !isEmbedded}<IconTooltipButton label={`Edit ${card.config.name}`} icon={Pencil} onclick={() => openEditDialog(card)} />{/if}
                   {#if isConnected(card.config)}

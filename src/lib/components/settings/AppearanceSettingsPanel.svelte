@@ -64,7 +64,7 @@
       <p>The accent highlights buttons, prompts, and selections across the app.</p>
     </div>
     <div class="settings-simple-list">
-      <div class="settings-simple-row">
+      <div class="settings-simple-row accent-settings-row">
         <div class="settings-simple-main">
           <h3>Accent color</h3>
           <p>Applies instantly and is saved automatically.</p>

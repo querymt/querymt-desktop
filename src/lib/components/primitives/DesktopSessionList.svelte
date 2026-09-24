@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { Accordion } from 'bits-ui';
-  import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, FolderSync, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, Plus, RefreshCw, Search, SearchX, Trash2 } from '@lucide/svelte';
+  import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, FolderSync, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, Trash2 } from '@lucide/svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
@@ -17,6 +17,7 @@
     emptyMessage = 'No sessions returned yet.',
     disconnected = false,
     showAgentNames = true,
+    showToolbarRefresh = true,
     onRefresh = null,
     onCreateSession = null,
     onOpenAgents = null,
@@ -34,6 +35,7 @@
     emptyMessage?: string;
     disconnected?: boolean;
     showAgentNames?: boolean;
+    showToolbarRefresh?: boolean;
     onRefresh?: (() => void | Promise<void>) | null;
     onCreateSession?: (() => void | Promise<void>) | null;
     onOpenAgents?: (() => void | Promise<void>) | null;
@@ -49,6 +51,7 @@
 
   let query = $state('');
   let statusFilter = $state<SessionFilter>('all');
+  let filtersExpanded = $state(false);
   let openGroups = $state<string[]>([]);
   let lastWorkspaceKeySignature = $state('');
   let requestedWorkspaceLoads = $state<Record<string, number>>({});
@@ -156,6 +159,12 @@
   function clearFilters() {
     query = '';
     statusFilter = 'all';
+    filtersExpanded = false;
+  }
+
+  function setStatusFilter(filter: SessionFilter) {
+    statusFilter = filter;
+    filtersExpanded = false;
   }
 
   function getStatusLabel(status: SessionStatus): string {
@@ -241,19 +250,36 @@
       <input bind:value={query} placeholder="Search sessions, workspaces, agents…" />
     </label>
     <div class="session-browser-actions">
-      <div class="session-browser-filters" aria-label="Session status filter">
+      <button
+        class="session-browser-filter-toggle"
+        type="button"
+        aria-label={filtersExpanded ? 'Hide session filters' : 'Show session filters'}
+        aria-controls="session-status-filters"
+        aria-expanded={filtersExpanded}
+        onclick={() => (filtersExpanded = !filtersExpanded)}
+      >
+        <SlidersHorizontal size={15} />
+        <span>Filters</span>
+        {#if statusFilter !== 'all'}<span class="session-browser-filter-indicator" aria-hidden="true"></span>{/if}
+        <ChevronDown size={14} class={filtersExpanded ? 'rotate-180' : ''} />
+      </button>
+      <div
+        id="session-status-filters"
+        class={`session-browser-filters ${filtersExpanded ? 'session-browser-filters-expanded' : ''}`}
+        aria-label="Session status filter"
+      >
         {#each statusFilters as filter}
           <button
             class={`session-browser-filter ${statusFilter === filter.value ? 'session-browser-filter-active' : ''}`}
             type="button"
             aria-pressed={statusFilter === filter.value}
-            onclick={() => (statusFilter = filter.value)}
+            onclick={() => setStatusFilter(filter.value)}
           >
             {filter.label}
           </button>
         {/each}
       </div>
-      {#if onRefresh}
+      {#if showToolbarRefresh && onRefresh}
         <button class="icon-btn" type="button" aria-label={refreshing ? 'Refreshing sessions' : 'Refresh sessions'} disabled={loading} onclick={onRefresh}>
           {#if refreshing}<LoaderCircle size={16} class="animate-spin" />{:else}<RefreshCw size={16} />{/if}
         </button>
