@@ -41,6 +41,84 @@ export function nextSessionScrollMode(
   return direction === 'down' && distanceFromBottom <= rejoinThreshold ? 'following' : 'free';
 }
 
+export function shouldKeepProgrammaticScroll(
+  mode: SessionScrollMode,
+  distanceFromBottom: number,
+  rejoinThreshold = SESSION_SCROLL_REJOIN_THRESHOLD
+): boolean {
+  // Follow-mode programmatic jumps (load, send, pin-to-latest) self-release
+  // once re-anchored in the rejoin band. Free-mode navigation must keep the
+  // flag even when a downward target lands in that band, otherwise the same
+  // scroll event would flip the session back to following.
+  return mode === 'free' || distanceFromBottom > rejoinThreshold;
+}
+
+export function observeScrollSettle(
+  target: EventTarget,
+  onSettle: () => void,
+  requestFrame: typeof requestAnimationFrame = (callback) => requestAnimationFrame(callback),
+  cancelFrame: typeof cancelAnimationFrame = (handle) => cancelAnimationFrame(handle)
+): () => void {
+  let settled = false;
+  let pendingScroll = false;
+  let idleFrames = 0;
+  let armed = false;
+  let frame: number | null = null;
+
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    onSettle();
+  };
+
+  const onScroll = () => {
+    pendingScroll = true;
+  };
+  const onScrollEnd = () => finish();
+
+  const poll = () => {
+    frame = null;
+    if (settled) return;
+    if (!armed) {
+      armed = true;
+      frame = requestFrame(poll);
+      return;
+    }
+    if (pendingScroll) {
+      pendingScroll = false;
+      idleFrames = 0;
+      frame = requestFrame(poll);
+      return;
+    }
+
+    idleFrames += 1;
+    if (idleFrames >= 2) {
+      finish();
+      return;
+    }
+    frame = requestFrame(poll);
+  };
+
+  target.addEventListener('scroll', onScroll, { passive: true });
+  target.addEventListener('scrollend', onScrollEnd);
+  frame = requestFrame(poll);
+
+  function cleanup() {
+    target.removeEventListener('scroll', onScroll);
+    target.removeEventListener('scrollend', onScrollEnd);
+    if (frame === null) return;
+    cancelFrame(frame);
+    frame = null;
+  }
+
+  return () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+  };
+}
+
 export function sessionFollowPinClass(mode: SessionScrollMode): string {
   return mode === 'following' ? 'session-page-following' : '';
 }

@@ -4,7 +4,9 @@ import {
   getDistanceFromBottom,
   nextSessionChatPresentationState,
   nextSessionScrollMode,
+  observeScrollSettle,
   sessionFollowPinClass,
+  shouldKeepProgrammaticScroll,
   SESSION_COMPOSER_COLLAPSE_THRESHOLD,
   SESSION_SCROLL_LEAVE_THRESHOLD,
   SESSION_SCROLL_REJOIN_THRESHOLD
@@ -54,6 +56,111 @@ describe('session scroll state', () => {
     expect(nextSessionScrollMode('free', SESSION_SCROLL_REJOIN_THRESHOLD + 1, 'down')).toBe('free');
     expect(nextSessionScrollMode('free', SESSION_SCROLL_REJOIN_THRESHOLD, 'none')).toBe('free');
     expect(nextSessionScrollMode('free', 0, 'down')).toBe('following');
+  });
+
+  it('holds a free programmatic jump that lands in the rejoin band until it is released', () => {
+    let mode: ReturnType<typeof nextSessionScrollMode> = 'following';
+    let programmatic = false;
+    const distanceFromBottom = SESSION_SCROLL_REJOIN_THRESHOLD;
+
+    programmatic = true;
+    mode = 'free';
+
+    if (programmatic) {
+      if (!shouldKeepProgrammaticScroll(mode, distanceFromBottom)) programmatic = false;
+    } else {
+      mode = nextSessionScrollMode(mode, distanceFromBottom, 'down');
+    }
+
+    expect(programmatic).toBe(true);
+    expect(mode).toBe('free');
+
+    programmatic = false;
+    expect(nextSessionScrollMode(mode, distanceFromBottom, 'down')).toBe('following');
+  });
+
+  it('still lets follow-mode programmatic jumps self-release in the rejoin band', () => {
+    expect(shouldKeepProgrammaticScroll('following', 0)).toBe(false);
+    expect(shouldKeepProgrammaticScroll('following', SESSION_SCROLL_REJOIN_THRESHOLD)).toBe(false);
+    expect(shouldKeepProgrammaticScroll('following', SESSION_SCROLL_REJOIN_THRESHOLD + 1)).toBe(true);
+    expect(shouldKeepProgrammaticScroll('free', 0)).toBe(true);
+  });
+
+  it('lets user input cancel programmatic free-scroll and rejoin from the rejoin band', () => {
+    expect(shouldKeepProgrammaticScroll('free', 0)).toBe(true);
+    expect(nextSessionScrollMode('free', 0, 'down')).toBe('following');
+  });
+});
+
+describe('programmatic scroll settle', () => {
+  function fakeFrames() {
+    const frames: FrameRequestCallback[] = [];
+    return {
+      frames,
+      requestFrame: (cb: FrameRequestCallback) => {
+        frames.push(cb);
+        return frames.length;
+      },
+      cancelFrame: (id: number) => {
+        if (id === frames.length) frames.pop();
+      },
+      runNext() {
+        frames.shift()?.(0);
+      }
+    };
+  }
+
+  it('settles after a grace frame plus two idle frames when scrollend never fires', () => {
+    const target = new EventTarget();
+    const onSettle = vi.fn();
+    const frames = fakeFrames();
+    observeScrollSettle(target, onSettle, frames.requestFrame, frames.cancelFrame);
+
+    expect(onSettle).not.toHaveBeenCalled();
+    frames.runNext();
+    expect(onSettle).not.toHaveBeenCalled();
+    frames.runNext();
+    expect(onSettle).not.toHaveBeenCalled();
+    frames.runNext();
+    expect(onSettle).toHaveBeenCalledOnce();
+  });
+
+  it('waits through movement frames before settling on idle', () => {
+    const target = new EventTarget();
+    const onSettle = vi.fn();
+    const frames = fakeFrames();
+    observeScrollSettle(target, onSettle, frames.requestFrame, frames.cancelFrame);
+
+    frames.runNext();
+    target.dispatchEvent(new Event('scroll'));
+    frames.runNext();
+    expect(onSettle).not.toHaveBeenCalled();
+    frames.runNext();
+    expect(onSettle).not.toHaveBeenCalled();
+    frames.runNext();
+    expect(onSettle).toHaveBeenCalledOnce();
+  });
+
+  it('settles immediately on scrollend and ignores later idle frames', () => {
+    const target = new EventTarget();
+    const onSettle = vi.fn();
+    const frames = fakeFrames();
+    observeScrollSettle(target, onSettle, frames.requestFrame, frames.cancelFrame);
+
+    target.dispatchEvent(new Event('scroll'));
+    target.dispatchEvent(new Event('scrollend'));
+    expect(onSettle).toHaveBeenCalledOnce();
+    frames.runNext();
+    expect(onSettle).toHaveBeenCalledOnce();
+  });
+
+  it('abort prevents a later scrollend from settling', () => {
+    const target = new EventTarget();
+    const onSettle = vi.fn();
+    const abort = observeScrollSettle(target, onSettle, () => 1, () => undefined);
+    abort();
+    target.dispatchEvent(new Event('scrollend'));
+    expect(onSettle).not.toHaveBeenCalled();
   });
 });
 

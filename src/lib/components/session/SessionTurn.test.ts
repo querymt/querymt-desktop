@@ -402,6 +402,32 @@ describe('SessionTurn', () => {
     expect(queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
   });
 
+  it('anchors request and response parts for turn navigation', () => {
+    render(SessionTurn, { turn });
+
+    expect(document.querySelector('[data-turn-id="turn-1"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-turn-part-id="turn-1:request"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-turn-part-id="turn-1:response"]')).toBeInTheDocument();
+  });
+
+  it('omits a response anchor when the turn has no agent content', () => {
+    const requestOnly: SessionConversationTurn = {
+      id: 'turn-request-only',
+      forkMessageId: null,
+      user: {
+        id: 'user-request-only',
+        messageId: 'message-request-only',
+        html: '<p>Just a prompt</p>',
+        text: 'Just a prompt'
+      },
+      content: []
+    };
+    render(SessionTurn, { turn: requestOnly });
+
+    expect(document.querySelector('[data-turn-part-id="turn-request-only:request"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-turn-part-id="turn-request-only:response"]')).not.toBeInTheDocument();
+  });
+
   it('folds settled work behind a concise summary while keeping the final answer visible', () => {
     const { getByRole, getByText, queryByText } = render(SessionTurn, { turn: { ...turn, settled: true } });
 
