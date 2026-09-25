@@ -24,6 +24,7 @@
     Trash2,
     Wrench
   } from '@lucide/svelte';
+  import { toolFilePath, parseObject } from '$lib/domain/session-tool-args';
   import { buildSessionToolDiffs } from '$lib/domain/session-tool-diff';
   import { parseReadFileOutput } from '$lib/domain/session-tool-read-output';
   import { parseShellToolOutput } from '$lib/domain/session-tool-shell-output';
@@ -47,19 +48,35 @@
   let copiedPart = $state<'arguments' | 'result' | null>(null);
   const presentation = $derived(getSessionToolPresentation(tool));
   const diffs = $derived(buildSessionToolDiffs(presentation.name, tool.status, tool.arguments, tool.result));
-  const READ_FILE_TOOLS = new Set(['read_tool', 'get_function', 'get_symbol']);
-  const readOutputView = $derived(
-    READ_FILE_TOOLS.has(getSessionToolName(tool)) ? parseReadFileOutput(presentation.resultText) : null
-  );
-  // Shell tools answer with a JSON payload carrying stdout/stderr; anything
-  // else (plain text from older sessions) renders as a single output stream.
-  const terminalOutput = $derived.by(() => {
-    if (presentation.icon !== 'terminal') return null;
-    const raw = tool.result?.trim();
-    if (!raw) return null;
-    return parseShellToolOutput(raw) ?? { stdout: presentation.resultText ?? '', stderr: '', exitCode: null };
+  const READ_FILE_TOOLS = new Set(['read_tool', 'get_function', 'get_symbol', 'read']);
+  const toolName = $derived(getSessionToolName(tool));
+  const isRead = $derived(READ_FILE_TOOLS.has(toolName));
+  const isShell = $derived(toolName === 'shell' || toolName === 'execute');
+  const readOutputView = $derived.by(() => {
+    if (!isRead) return null;
+    const args = parseObject(tool.arguments);
+    const paths = args?.paths;
+    const path = args ? toolFilePath(args) || (Array.isArray(paths) && typeof paths[0] === 'string' ? paths[0] : '') : '';
+    return parseReadFileOutput(tool.result, path);
   });
-  const hasCustomResult = $derived(readOutputView !== null || terminalOutput !== null);
+  const terminalOutput = $derived.by(() => {
+    if (!isShell) return null;
+    const raw = tool.result?.trim() ?? '';
+    if (!raw) return { stdout: '', stderr: '', exitCode: null };
+    const parsed = parseShellToolOutput(raw);
+    if (parsed) return parsed;
+    return {
+      stdout: resultError(raw) ?? (raw.startsWith('{') || /^\[\s*[{\"]/.test(raw) ? 'Unable to decode shell output.' : raw),
+      stderr: '',
+      exitCode: null
+    };
+  });
+  const readFallback = $derived.by(() => {
+    const raw = tool.result?.trim();
+    if (!raw) return tool.status === 'in_progress' ? 'Waiting for read output...' : 'No read output available.';
+    return resultError(raw) ?? (/^[\[{]/.test(raw) ? 'Unable to display read output.' : raw);
+  });
+  const hasCustomResult = $derived(isRead || isShell || readOutputView !== null || terminalOutput !== null);
   const shellCommand = $derived(terminalOutput ? getSessionShellCommand(tool) : null);
   const expandable = $derived(presentation.expandable || diffs.length > 0);
   const changeStatsLabel = $derived(formatChangeStats(presentation.changeStats));
@@ -78,6 +95,18 @@
   $effect(() => {
     if (!open || !chatPreferencesStore.developerMode) sourceOpenForId = null;
   });
+
+  function resultError(raw: string): string | null {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+      const record = parsed as Record<string, unknown>;
+      const error = record.error ?? record.message;
+      return typeof error === 'string' ? error : null;
+    } catch {
+      return null;
+    }
+  }
 
   function handleDetailsToggle(event: Event) {
     const details = event.currentTarget as HTMLDetailsElement;
@@ -252,8 +281,10 @@
         {#await loadSessionToolReadOutput() then { default: SessionToolReadOutput }}
           <SessionToolReadOutput view={readOutputView} />
         {:catch}
-          <pre>{presentation.resultText}</pre>
+          <p>Unable to load read output.</p>
         {/await}
+      {:else if isRead}
+        <section class="session-tool-detail" aria-label="Read output"><pre>{readFallback}</pre></section>
       {:else if terminalOutput}
         {#await loadSessionToolTerminalOutput() then { default: SessionToolTerminalOutput }}
           <SessionToolTerminalOutput
@@ -263,7 +294,7 @@
             exitCode={terminalOutput.exitCode}
           />
         {:catch}
-          <pre>{presentation.resultText}</pre>
+          <p>Unable to load console output.</p>
         {/await}
       {/if}
       {#if diffs.length === 0 && !hasCustomResult}

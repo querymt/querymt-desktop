@@ -7282,6 +7282,8 @@ summary:focus-visible {
 
 .session-tool-content {
   display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.8rem;
   margin: 0.25rem 0 0.6rem 1.75rem;
   border-left: 1px solid color-mix(in srgb, var(--border), transparent 20%);
@@ -7367,7 +7369,8 @@ summary:focus-visible {
 .session-tool-read-output {
   min-width: 0;
   max-height: 18rem;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid color-mix(in srgb, var(--border), transparent 20%);
   border-radius: var(--radius-control);
   background: color-mix(in srgb, var(--bg-card), transparent 12%);
@@ -7431,17 +7434,19 @@ summary:focus-visible {
   border-top: 0;
 }
 
-.session-tool-read-code {
+.session-tool-read-code,
+.session-tool-content .session-tool-read-code {
   display: grid;
-  grid-template-columns: auto max-content;
+  min-width: 0;
+  grid-template-columns: max-content minmax(0, 1fr);
   margin: 0;
   padding: 0.35rem 0;
-  overflow: visible;
+  overflow-x: hidden;
   color: var(--shiki-light);
   font-family: var(--font-mono);
   font-size: 0.7rem;
   line-height: 1.5;
-  white-space: pre;
+  white-space: normal;
 }
 
 :root[data-theme='dark'] .session-tool-read-code {
@@ -7464,7 +7469,10 @@ summary:focus-visible {
 }
 
 .session-tool-read-text {
+  min-width: 0;
   grid-column: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .session-tool-read-text span {
@@ -7566,17 +7574,20 @@ summary:focus-visible {
   color: var(--status-danger, #cd3131);
 }
 
-.session-tool-terminal {
+.session-tool-terminal,
+.session-tool-content .session-tool-terminal {
   flex: 1;
   min-height: 0;
   margin: 0;
   padding: 0.45rem 0.6rem;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   color: var(--terminal-fg);
   font-family: var(--font-mono);
   font-size: 0.7rem;
   line-height: 1.5;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .session-tool-terminal-prompt {
@@ -7595,7 +7606,9 @@ summary:focus-visible {
 
 .session-tool-terminal-line {
   display: block;
-  min-width: max-content;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .session-tool-terminal-bold {

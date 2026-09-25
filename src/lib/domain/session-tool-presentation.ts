@@ -67,12 +67,16 @@ export function getSessionToolPresentation(tool: SessionToolCallItem): SessionTo
 
 /**
  * Resolves the concrete tool name for a call. Live ACP updates carry the
- * semantic kind (`read`) in `kind` and the real tool name only in the title
- * (`Run read_tool`), so prefer the title-derived name and fall back to the
- * kind-based normalization (which persisted event snapshots already need).
+ * semantic kind (`read`, `execute`) in `kind` and either the real tool name
+ * or a human description in the title, so shell kinds win over descriptive
+ * titles and read-kind calls keep the title-derived name only when it names
+ * a concrete read tool, falling back to the semantic `read` kind otherwise.
  */
 export function getSessionToolName(tool: SessionToolCallItem): string {
   const titleName = stripRunPrefix(tool.title).toLowerCase();
+  const kindName = stripRunPrefix(tool.kind ?? '').toLowerCase();
+  if (kindName === 'execute' || kindName === 'shell') return kindName;
+  if (kindName === 'read' && !READ_TOOLS.has(titleName)) return kindName;
   if (titleName) return titleName;
   return normalizeToolName(tool);
 }
@@ -299,7 +303,7 @@ function toolPreview(toolName: string, args: Record<string, unknown> | null, raw
     const firstPath = first && typeof first === 'object' ? stringValue((first as Record<string, unknown>).path) : '';
     return replacements.length > 1 ? compact(`${firstPath || 'symbols'} +${replacements.length - 1} more`) : compact(firstPath);
   }
-  if (toolName === 'read_tool') {
+  if (toolName === 'read_tool' || toolName === 'read') {
     const path = toolFilePath(args) || stringValue(args.root);
     if (!path) return resultPreview(rawResult);
     const range = readRangeLabel(args);

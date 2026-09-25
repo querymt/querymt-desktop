@@ -109,7 +109,24 @@ describe('SessionToolReadOutput', () => {
   });
 
   it('falls back to escaped plain text when the language is unsupported', async () => {
-    render(SessionToolReadOutput, { view: view({ path: 'README.unknown' }) });
+    render(
+      SessionToolReadOutput,
+      {
+        view: view({
+          path: 'README.unknown',
+          sections: [
+            {
+              path: 'README.unknown',
+              truncated: false,
+              lines: [
+                { lineNumber: '00001', text: 'const value = 1;' },
+                { lineNumber: '00002', text: '' }
+              ]
+            }
+          ]
+        })
+      }
+    );
 
     await waitFor(() => expect(screen.getByText('00001')).toBeInTheDocument());
     expect(screen.getByText('00001').closest('.session-tool-read-row')).toHaveTextContent('const value = 1;');

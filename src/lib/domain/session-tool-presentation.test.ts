@@ -49,6 +49,19 @@ describe('getSessionToolPresentation', () => {
     ).toBe('src/app.ts (lines 141-215)');
   });
 
+  it('prioritizes execute kinds over descriptive titles and keeps read for descriptive read titles', () => {
+    // An execute-kind call whose title is a bare command name keeps the shell preview.
+    expect(
+      getSessionToolPresentation(tool({ title: 'ls', kind: 'execute', arguments: '{"command":"ls src/lib"}' }))
+    ).toMatchObject({ name: 'execute', label: 'Run command', preview: 'ls src/lib', icon: 'terminal' });
+    // A read-kind call with a descriptive title keeps the semantic read name and read preview.
+    expect(
+      getSessionToolPresentation(
+        tool({ title: 'Read file', kind: 'read', arguments: '{"path":"src/app.ts","offset":140,"limit":75}' })
+      )
+    ).toMatchObject({ name: 'read', label: 'Read', preview: 'src/app.ts (lines 141-215)' });
+  });
+
   it('summarizes shell commands and search locations', () => {
     expect(
       getSessionToolPresentation(tool({ title: 'Run shell', kind: 'shell', arguments: '{"command":"bun","args":["run","check"]}' }))
