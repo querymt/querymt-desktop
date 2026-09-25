@@ -2,21 +2,18 @@
   let {
     command = null,
     stdout = '',
-    stderr = '',
-    exitCode = null
+    stderr = ''
   }: {
     command?: string | null;
     stdout?: string;
     stderr?: string;
-    exitCode?: number | null;
   } = $props();
 
   const text = $derived(
     [
       command ? `$ ${command}` : null,
       stdout,
-      stderr,
-      exitCode !== null ? `exit ${exitCode}` : null
+      stderr
     ]
       .filter((part): part is string => Boolean(part))
       .join('\n')

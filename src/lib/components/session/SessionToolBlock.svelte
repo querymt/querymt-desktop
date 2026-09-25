@@ -78,6 +78,7 @@
   });
   const hasCustomResult = $derived(isRead || isShell || readOutputView !== null || terminalOutput !== null);
   const shellCommand = $derived(terminalOutput ? getSessionShellCommand(tool) : null);
+  const terminalExitCode = $derived(terminalOutput?.exitCode ?? null);
   const expandable = $derived(presentation.expandable || diffs.length > 0);
   const changeStatsLabel = $derived(formatChangeStats(presentation.changeStats));
   const summaryLabel = $derived(
@@ -146,6 +147,7 @@
   bind:open
   class={`details-reset session-tool-block session-tool-block-${tool.status}`}
   class:session-tool-block-diff={diffs.length > 0}
+  class:session-tool-block-attached={diffs.length > 0 || isRead || isShell}
   aria-label={summaryLabel}
   ontoggle={handleDetailsToggle}
 >
@@ -194,7 +196,7 @@
       {/if}
       {#if childSessionHref}
         <span
-          class="session-tool-session-pill"
+          class="session-tool-pill session-tool-session-pill"
           role="button"
           tabindex="0"
           aria-label={delegateTarget ? `Open ${delegateTarget} session` : 'Open delegated session'}
@@ -205,6 +207,15 @@
           <ArrowUpRight size={12} aria-hidden="true" />
           <span class="session-tool-session-pill-label">{delegateTarget ?? 'Open session'}</span>
         </span>
+      {/if}
+      {#if readOutputView && readOutputView.sections.length > 1}
+        <span class="session-tool-pill session-tool-read-more" title={`${readOutputView.sections.length} files`}>+{readOutputView.sections.length - 1}</span>
+      {/if}
+      {#if chatPreferencesStore.developerMode && readOutputView?.truncated}
+        <span class="session-tool-pill session-tool-read-truncated">truncated</span>
+      {/if}
+      {#if terminalExitCode !== null}
+        <span class="session-tool-pill session-tool-terminal-exit" class:session-tool-terminal-exit-failed={terminalExitCode !== 0}>exit {terminalExitCode}</span>
       {/if}
       {#if expandable}
         <span class="session-tool-disclosure" aria-hidden="true"><ChevronDown size={13} /></span>
@@ -282,21 +293,20 @@
           <SessionToolReadOutput view={readOutputView} />
         {:catch}
           <p>Unable to load read output.</p>
-          <section class="session-tool-detail" aria-label="Read output"><pre>{tool.result ?? ''}</pre></section>
+          <section class="session-tool-detail session-tool-output-fallback" aria-label="Read output"><pre>{tool.result ?? ''}</pre></section>
         {/await}
       {:else if isRead}
-        <section class="session-tool-detail" aria-label="Read output"><pre>{readFallback}</pre></section>
+        <section class="session-tool-detail session-tool-output-fallback" aria-label="Read output"><pre>{readFallback}</pre></section>
       {:else if terminalOutput}
         {#await loadSessionToolTerminalOutput() then { default: SessionToolTerminalOutput }}
           <SessionToolTerminalOutput
             command={shellCommand}
             stdout={terminalOutput.stdout}
             stderr={terminalOutput.stderr}
-            exitCode={terminalOutput.exitCode}
           />
         {:catch}
           <p>Unable to load console output.</p>
-          <section class="session-tool-detail" aria-label="Console output"><pre>{tool.result ?? ''}</pre></section>
+          <section class="session-tool-detail session-tool-output-fallback" aria-label="Console output"><pre>{tool.result ?? ''}</pre></section>
         {/await}
       {/if}
       {#if diffs.length === 0 && !hasCustomResult}

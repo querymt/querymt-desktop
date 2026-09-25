@@ -1,21 +1,22 @@
 import '@testing-library/jest-dom/vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { render, screen } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
 import SessionToolTerminalOutput from './SessionToolTerminalOutput.svelte';
 
 describe('SessionToolTerminalOutput', () => {
-  it('renders a titlebar with the command as a prompt line', () => {
+  it('renders the command as a prompt line without a subheader', () => {
     const { container } = render(SessionToolTerminalOutput, {
       command: 'bun run check',
       stdout: '',
-      stderr: '',
-      exitCode: null
+      stderr: ''
     });
 
     expect(screen.getByTestId('session-tool-terminal-output')).toHaveClass('session-tool-terminal-widget');
-    expect(container.querySelector('.session-tool-terminal-titlebar')).toBeInTheDocument();
-    expect(container.querySelector('.session-tool-terminal-title')).toHaveTextContent('shell');
+    expect(container.querySelector('.session-tool-terminal-titlebar')).toBeNull();
     expect(container.querySelector('.session-tool-terminal-command')).toHaveTextContent('bun run check');
+    expect(container.querySelector('.session-tool-terminal-command-line')).toHaveTextContent('$ bun run check');
     expect(container.querySelector('.session-tool-terminal-prompt')).toHaveTextContent('$');
     expect(container.querySelector('.session-tool-terminal-exit')).toBeNull();
   });
@@ -24,8 +25,7 @@ describe('SessionToolTerminalOutput', () => {
     const { container } = render(SessionToolTerminalOutput, {
       command: 'make',
       stdout: 'compiling\n',
-      stderr: 'make: *** No targets specified.',
-      exitCode: 2
+      stderr: 'make: *** No targets specified.'
     });
 
     const lines = container.querySelectorAll('.session-tool-terminal-line');
@@ -33,21 +33,7 @@ describe('SessionToolTerminalOutput', () => {
     expect(lines).toHaveLength(3);
     expect(lines[1]).toHaveTextContent('compiling');
     expect(lines[2]).toHaveTextContent('make: *** No targets specified.');
-    const exit = container.querySelector('.session-tool-terminal-exit');
-    expect(exit).toHaveTextContent('exit 2');
-    expect(exit).toHaveClass('session-tool-terminal-exit-failed');
-  });
-
-  it('keeps a neutral exit badge for zero exit codes', () => {
-    const { container } = render(SessionToolTerminalOutput, {
-      command: 'ls',
-      stdout: 'src\n',
-      exitCode: 0
-    });
-
-    const exit = container.querySelector('.session-tool-terminal-exit');
-    expect(exit).toHaveTextContent('exit 0');
-    expect(exit).not.toHaveClass('session-tool-terminal-exit-failed');
+    expect(container.querySelector('.session-tool-terminal-exit')).toBeNull();
   });
 
   it('applies ansi colors as inline styles and keeps unstyled text plain', () => {
@@ -73,9 +59,18 @@ describe('SessionToolTerminalOutput', () => {
     expect(container.querySelector('.session-tool-terminal-empty')).toHaveTextContent('(no output)');
   });
 
+  it('uses an inset dim divider after the command line', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
+    const rule = css.match(/\.session-tool-terminal-command-line::after \{([^}]*)\}/)?.[1];
+    expect(rule).toContain('display: block;');
+    expect(rule).toContain('margin: 0.4rem 0.35rem;');
+    expect(rule).toContain('border-bottom: 1px solid color-mix(in srgb, var(--terminal-muted) 35%, transparent);');
+  });
+
   it('renders without a prompt line or placeholder when no command is provided', () => {
     const { container } = render(SessionToolTerminalOutput, { stdout: 'legacy text' });
     expect(container.querySelector('.session-tool-terminal-command')).toBeNull();
+    expect(container.querySelector('.session-tool-terminal-command-line')).toBeNull();
     expect(container.querySelector('.session-tool-terminal-empty')).toBeNull();
     expect(container.querySelectorAll('.session-tool-terminal-line')).toHaveLength(1);
   });

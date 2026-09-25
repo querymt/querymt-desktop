@@ -84,15 +84,6 @@
 </script>
 
 <div class="session-tool-read-output" style={rootStyle}>
-  <div class="session-tool-read-meta">
-    <span class="session-tool-read-path" title={view.path}>{view.path}</span>
-    {#if sections.length > 1}
-      <span class="session-tool-read-more">+{sections.length - 1}</span>
-    {/if}
-    {#if view.truncated}
-      <span class="session-tool-read-truncated">truncated</span>
-    {/if}
-  </div>
   {#each sections as section, sectionIndex (sectionIndex)}
     {#if sections.length > 1}
       <div class="session-tool-read-section" title={section.path}>{section.path}</div>

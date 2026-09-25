@@ -381,9 +381,11 @@ describe('SessionToolBlock', () => {
     });
 
     const toolGroup = screen.getByRole('group', { name: 'Read file - src/app.ts (lines 11+)' });
+    expect(toolGroup).toHaveClass('session-tool-block-attached');
     await fireEvent.click(toolGroup.querySelector('summary')!);
 
     const viewer = await screen.findByTestId('session-tool-read-output');
+    expect(viewer.parentElement).toHaveClass('session-tool-content');
     expect(viewer).toHaveTextContent('src/app.ts (1 lines)');
     expect(screen.queryByText('<path>src/app.ts</path>')).toBeNull();
     expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
@@ -394,6 +396,39 @@ describe('SessionToolBlock', () => {
     expect(screen.getByRole('region', { name: 'Tool result' })).toHaveTextContent('00011| const value = 1;');
     expect(screen.getByRole('region', { name: 'Tool result' })).toHaveTextContent('</content>');
     expect(screen.getByTestId('session-tool-read-output')).toBeInTheDocument();
+  });
+
+  it('places read badges before the chevron without a second header', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'read-multiple',
+        title: 'Run get_function',
+        kind: 'read',
+        status: 'completed',
+        arguments: '{"paths":["src/a.ts","src/b.ts"],"names":["value"]}',
+        result: JSON.stringify({ results: [
+          { path: 'src/a.ts', content: '00001| const a = 1;\n(File has more lines. Use offset)' },
+          { path: 'src/b.ts', content: '00001| const b = 2;' }
+        ] })
+      }
+    });
+
+    const summary = screen.getByText('Read').closest('summary')!;
+    expect(summary.querySelector('.session-tool-read-more')).toHaveTextContent('+1');
+    expect(summary.querySelector('.session-tool-read-truncated')).toBeNull();
+
+    chatPreferencesStore.setDeveloperMode(true);
+    await tick();
+    const badges = [...summary.querySelectorAll('.session-tool-read-more, .session-tool-read-truncated')];
+    expect(badges.map((badge) => badge.textContent)).toEqual(['+1', 'truncated']);
+    expect(badges.every((badge) => badge.classList.contains('session-tool-pill'))).toBe(true);
+    expect(badges[1]!.compareDocumentPosition(summary.querySelector('.session-tool-disclosure')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    chatPreferencesStore.setDeveloperMode(false);
+    await tick();
+    expect(summary.querySelector('.session-tool-read-truncated')).toBeNull();
+    await fireEvent.click(summary);
+    expect(await screen.findByTestId('session-tool-read-output')).toBeInTheDocument();
   });
 
   it('renders the read viewer for live ACP calls that carry the semantic kind', async () => {
@@ -466,7 +501,8 @@ describe('SessionToolBlock', () => {
 
     const toolGroup = screen.getByText('Read file').closest('details');
     await fireEvent.click(toolGroup!.querySelector('summary')!);
-    expect(await screen.findByRole('region', { name: 'Read output' })).toHaveTextContent('ENOENT: no such file');
+    expect(await screen.findByRole('region', { name: 'Read output' })).toHaveClass('session-tool-output-fallback');
+    expect(screen.getByRole('region', { name: 'Read output' })).toHaveTextContent('ENOENT: no such file');
     expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
     expect(screen.queryByTestId('session-tool-read-output')).toBeNull();
   });
@@ -484,11 +520,19 @@ describe('SessionToolBlock', () => {
     });
 
     const toolGroup = screen.getByText('Run command').closest('details');
+    expect(toolGroup).toHaveClass('session-tool-block-attached');
     await fireEvent.click(toolGroup!.querySelector('summary')!);
     const terminal = await screen.findByTestId('session-tool-terminal-output');
+    expect(terminal.parentElement).toHaveClass('session-tool-content');
     expect(terminal.textContent).toContain('$ ls');
     expect(terminal.textContent).toContain('src\npackage.json');
-    expect(terminal.textContent).toContain('exit 0');
+    const summary = toolGroup!.querySelector('summary')!;
+    const exit = summary.querySelector('.session-tool-terminal-exit')!;
+    expect(exit).toHaveTextContent('exit 0');
+    expect(exit).toHaveClass('session-tool-pill');
+    expect(exit).not.toHaveClass('session-tool-terminal-exit-failed');
+    expect(exit.compareDocumentPosition(summary.querySelector('.session-tool-disclosure')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(terminal.textContent).not.toContain('exit 0');
     expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
   });
@@ -510,7 +554,9 @@ describe('SessionToolBlock', () => {
     const terminal = await screen.findByTestId('session-tool-terminal-output');
     expect(terminal.textContent).toContain('$ make');
     expect(terminal.textContent).toContain('make: *** No targets specified and no makefile found.  Stop.');
-    expect(terminal.textContent).toContain('exit 2');
+    expect(toolGroup!.querySelector('.session-tool-terminal-exit')).toHaveTextContent('exit 2');
+    expect(toolGroup!.querySelector('.session-tool-terminal-exit')).toHaveClass('session-tool-pill', 'session-tool-terminal-exit-failed');
+    expect(terminal.textContent).not.toContain('exit 2');
     expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
   });
@@ -533,6 +579,7 @@ describe('SessionToolBlock', () => {
     expect(terminal.textContent).toContain('$ echo hi');
     expect(terminal.textContent).toContain('[WARN] legacy plain output');
     expect(terminal.textContent).not.toContain('exit');
+    expect(toolGroup!.querySelector('.session-tool-terminal-exit')).toBeNull();
   });
 
   it('shows a running shell console without exposing parameters', async () => {
@@ -549,6 +596,7 @@ describe('SessionToolBlock', () => {
     const toolGroup = screen.getByText('Run command').closest('details');
     await fireEvent.click(toolGroup!.querySelector('summary')!);
     expect(await screen.findByTestId('session-tool-terminal-output')).toHaveTextContent('$ bun run check');
+    expect(toolGroup!.querySelector('.session-tool-terminal-exit')).toBeNull();
     expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
   });
 
@@ -678,6 +726,7 @@ describe('SessionToolBlock', () => {
     const toolGroup = screen.getByText('Delegate task').closest('details');
     expect(toolGroup).not.toBeNull();
     expect(toolGroup).not.toHaveAttribute('open');
+    expect(screen.getByRole('button', { name: 'Open linus session' })).toHaveClass('session-tool-pill');
     await fireEvent.click(screen.getByRole('button', { name: 'Open linus session' }));
     expect(goto).toHaveBeenCalledWith('/sessions/agent-1/child-session-1');
     expect(toolGroup).not.toHaveAttribute('open');
@@ -699,6 +748,12 @@ describe('SessionToolBlock', () => {
 });
 
 describe('session tool output wrapping', () => {
+  it('joins the read and shell viewers to the expanded tool summary like a file diff', () => {
+    expect(appCss).toContain('.session-tool-block-attached[open] > .session-tool-summary {');
+    expect(appCss).toContain('.session-tool-block-attached[open] > .session-tool-content {');
+    expect(appCss).toContain(':is(.session-tool-read-output, .session-tool-terminal-widget, .session-tool-output-fallback) {');
+  });
+
   it('wraps read source beside a fixed gutter without horizontal scrolling', () => {
     const code = appCss.match(/\.session-tool-content \.session-tool-read-code \{([^}]*)\}/)?.[1];
     const text = appCss.match(/\.session-tool-read-text \{([^}]*)\}/)?.[1];
