@@ -7204,10 +7204,11 @@ summary:focus-visible {
   color: var(--status-danger);
 }
 
-.session-tool-session-pill {
+.session-tool-pill {
   display: inline-flex;
   max-width: 7.5rem;
   min-width: 0;
+  flex-shrink: 0;
   align-items: center;
   gap: 0.18rem;
   height: 1.15rem;
@@ -7216,12 +7217,15 @@ summary:focus-visible {
   border-radius: 999px;
   padding: 0 0.38rem 0 0.28rem;
   background: color-mix(in srgb, var(--border) 48%, transparent);
-  color: color-mix(in srgb, var(--text), transparent 8%);
+  color: var(--text-dim);
   font-family: var(--font-mono);
   font-size: 0.62rem;
   font-weight: 560;
   line-height: 1;
   white-space: nowrap;
+}
+
+.session-tool-session-pill {
   cursor: pointer;
 }
 
@@ -7290,7 +7294,7 @@ summary:focus-visible {
   padding: 0.2rem 0 0.1rem 0.85rem;
 }
 
-.session-tool-block-diff[open] > .session-tool-summary {
+.session-tool-block-attached[open] > .session-tool-summary {
   position: relative;
   z-index: 1;
   border: 1px solid color-mix(in srgb, var(--border), transparent 20%);
@@ -7299,14 +7303,26 @@ summary:focus-visible {
   background: color-mix(in srgb, var(--bg-card), transparent 12%);
 }
 
-.session-tool-block-diff[open] > .session-tool-summary:hover {
+.session-tool-block-attached[open] > .session-tool-summary:hover {
   background: color-mix(in srgb, var(--bg-card-hover), transparent 45%);
 }
 
-.session-tool-block-diff[open] > .session-tool-content {
+.session-tool-block-attached[open] > .session-tool-content {
   margin: -1px 0 0.6rem;
   border-left: 0;
   padding: 0;
+}
+
+.session-tool-block-attached[open] > .session-tool-content > :is(.session-tool-read-output, .session-tool-terminal-widget, .session-tool-output-fallback) {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.session-tool-output-fallback {
+  border: 1px solid color-mix(in srgb, var(--border), transparent 20%);
+  border-radius: var(--radius-control);
+  padding: 0.45rem 0.6rem;
+  background: color-mix(in srgb, var(--bg-card), transparent 12%);
 }
 
 .session-tool-detail {
@@ -7376,49 +7392,6 @@ summary:focus-visible {
   background: color-mix(in srgb, var(--bg-card), transparent 12%);
 }
 
-.session-tool-read-meta {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.3rem 0.6rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--border), transparent 30%);
-  background: var(--bg-card);
-  font-size: 0.66rem;
-}
-
-.session-tool-read-path {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-tool-read-truncated {
-  flex-shrink: 0;
-  padding: 0.05rem 0.4rem;
-  border: 1px solid color-mix(in srgb, var(--status-warning, var(--border)), transparent 30%);
-  border-radius: 999px;
-  color: var(--status-warning, var(--muted));
-  font-size: 0.6rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.session-tool-read-more {
-  flex-shrink: 0;
-  padding: 0.05rem 0.4rem;
-  border: 1px solid color-mix(in srgb, var(--border), transparent 30%);
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: 0.6rem;
-  letter-spacing: 0.04em;
-}
-
 .session-tool-read-section {
   padding: 0.25rem 0.6rem;
   border-top: 1px solid color-mix(in srgb, var(--border), transparent 30%);
@@ -7430,7 +7403,7 @@ summary:focus-visible {
   white-space: nowrap;
 }
 
-.session-tool-read-meta + .session-tool-read-section {
+.session-tool-read-section:first-child {
   border-top: 0;
 }
 
@@ -7491,7 +7464,6 @@ summary:focus-visible {
 
 .session-tool-terminal-widget {
   --terminal-bg: #fdfdfc;
-  --terminal-titlebar-bg: color-mix(in srgb, var(--border), transparent 82%);
   --terminal-fg: #24292e;
   --terminal-muted: var(--text-dim);
   display: flex;
@@ -7507,71 +7479,12 @@ summary:focus-visible {
 
 :root[data-theme='dark'] .session-tool-terminal-widget {
   --terminal-bg: #1e1e1e;
-  --terminal-titlebar-bg: #2d2d2d;
   --terminal-fg: #d4d4d4;
   --terminal-muted: #8c8c8c;
 }
 
-.session-tool-terminal-titlebar {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.32rem 0.6rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--border), transparent 40%);
-  background: var(--terminal-titlebar-bg);
-}
-
-.session-tool-terminal-dots {
-  display: inline-flex;
-  flex-shrink: 0;
-  gap: 0.3rem;
-}
-
-.session-tool-terminal-dot {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 999px;
-}
-
-.session-tool-terminal-dot-red {
-  background: #ff5f57;
-}
-
-.session-tool-terminal-dot-yellow {
-  background: #febc2e;
-}
-
-.session-tool-terminal-dot-green {
-  background: #28c840;
-}
-
-.session-tool-terminal-title {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--terminal-muted);
-  font-family: var(--font-mono);
-  font-size: 0.62rem;
-  letter-spacing: 0.04em;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.session-tool-terminal-exit {
-  flex-shrink: 0;
-  margin-left: auto;
-  padding: 0.05rem 0.4rem;
-  border: 1px solid color-mix(in srgb, var(--border), transparent 30%);
-  border-radius: 999px;
-  color: var(--terminal-muted);
-  font-family: var(--font-mono);
-  font-size: 0.6rem;
-}
-
 .session-tool-terminal-exit-failed {
-  border-color: color-mix(in srgb, var(--status-danger, #cd3131), transparent 40%);
-  color: var(--status-danger, #cd3131);
+  color: var(--status-danger);
 }
 
 .session-tool-terminal,
@@ -7597,6 +7510,13 @@ summary:focus-visible {
 
 .session-tool-terminal-command {
   font-weight: 600;
+}
+
+.session-tool-terminal-command-line::after {
+  content: '';
+  display: block;
+  margin: 0.4rem 0.35rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--terminal-muted) 35%, transparent);
 }
 
 .session-tool-terminal-empty {

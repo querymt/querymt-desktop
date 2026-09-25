@@ -49,11 +49,12 @@ afterEach(() => {
 });
 
 describe('SessionToolReadOutput', () => {
-  it('renders a gutter with line numbers and a path meta bar', async () => {
-    render(SessionToolReadOutput, { view: view({ truncated: true }) });
+  it('renders a line-number gutter without a redundant path subheader', () => {
+    const { container } = render(SessionToolReadOutput, { view: view({ truncated: true }) });
 
-    expect(screen.getByText('src/app.ts')).toBeInTheDocument();
-    expect(screen.getByText('truncated')).toBeInTheDocument();
+    expect(container.querySelector('.session-tool-read-meta')).toBeNull();
+    expect(screen.queryByText('src/app.ts')).toBeNull();
+    expect(screen.queryByText('truncated')).toBeNull();
     expect(screen.getByText('00001')).toBeInTheDocument();
     expect(screen.getByText('00002')).toBeInTheDocument();
   });
@@ -102,7 +103,7 @@ describe('SessionToolReadOutput', () => {
       }
     );
 
-    expect(screen.getByText('+1')).toBeInTheDocument();
+    expect(screen.queryByText('+1')).toBeNull();
     expect(screen.getByText('src/a.ts')).toBeInTheDocument();
     expect(screen.getByText('src/b.ts')).toBeInTheDocument();
     expect(screen.getAllByText('00001')).toHaveLength(2);
