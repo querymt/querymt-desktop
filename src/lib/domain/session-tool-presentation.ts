@@ -303,7 +303,7 @@ function toolPreview(toolName: string, args: Record<string, unknown> | null, raw
     const firstPath = first && typeof first === 'object' ? stringValue((first as Record<string, unknown>).path) : '';
     return replacements.length > 1 ? compact(`${firstPath || 'symbols'} +${replacements.length - 1} more`) : compact(firstPath);
   }
-  if (toolName === 'read_tool' || toolName === 'read') {
+  if (toolName === 'read_tool' || toolName === 'read' || toolName === 'read_shared') {
     const path = toolFilePath(args) || stringValue(args.root);
     if (!path) return resultPreview(rawResult);
     const range = readRangeLabel(args);

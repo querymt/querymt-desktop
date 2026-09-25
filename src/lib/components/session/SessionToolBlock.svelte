@@ -48,7 +48,7 @@
   let copiedPart = $state<'arguments' | 'result' | null>(null);
   const presentation = $derived(getSessionToolPresentation(tool));
   const diffs = $derived(buildSessionToolDiffs(presentation.name, tool.status, tool.arguments, tool.result));
-  const READ_FILE_TOOLS = new Set(['read_tool', 'get_function', 'get_symbol', 'read']);
+  const READ_FILE_TOOLS = new Set(['read_tool', 'get_function', 'get_symbol', 'read', 'read_shared']);
   const toolName = $derived(getSessionToolName(tool));
   const isRead = $derived(READ_FILE_TOOLS.has(toolName));
   const isShell = $derived(toolName === 'shell' || toolName === 'execute');
@@ -282,6 +282,7 @@
           <SessionToolReadOutput view={readOutputView} />
         {:catch}
           <p>Unable to load read output.</p>
+          <section class="session-tool-detail" aria-label="Read output"><pre>{tool.result ?? ''}</pre></section>
         {/await}
       {:else if isRead}
         <section class="session-tool-detail" aria-label="Read output"><pre>{readFallback}</pre></section>
@@ -295,6 +296,7 @@
           />
         {:catch}
           <p>Unable to load console output.</p>
+          <section class="session-tool-detail" aria-label="Console output"><pre>{tool.result ?? ''}</pre></section>
         {/await}
       {/if}
       {#if diffs.length === 0 && !hasCustomResult}
