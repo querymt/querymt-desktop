@@ -90,7 +90,6 @@ import {
   findModelConfigOption,
   findReasoningConfigOption,
   getConfigOptionChoices,
-  getCurrentModeId,
   getCurrentModelId,
   getModelSelectionKey,
   getProfileChoices,
@@ -3494,13 +3493,14 @@ export class AgentsStore {
       if (!record) {
         throw new Error('Failed to connect to the agent.');
       }
-      const oldOptions = this.getSessionConfigOptions(agentId, sessionId);
       const payload = options.model
         ? setModelConfigOptionRequest(sessionId, options.model, configId)
         : setSessionConfigOptionRequest(sessionId, configId, value);
       const configOptions = await record.client.setSessionConfigOption(payload);
       this.sessionConfigOptions.set(key, configOptions);
       const confirmedId = getCurrentModelId(configOptions);
+      // Selection changes only when the response carries model metadata; a mode
+      // change may omit it, in which case the last known selection is kept.
       if (confirmedId) {
         const previousModel = (this.modelsByAgent[agentId] ?? []).find(
           (model) => getModelSelectionKey(model) === this.getSessionModelId(agentId, sessionId)
@@ -3513,9 +3513,6 @@ export class AgentsStore {
       } else if (options.model) {
         // Older servers acknowledge the write without returning a model config option.
         this.sessionModelIds = { ...this.sessionModelIds, [key]: getModelSelectionKey(options.model) };
-      } else if (configId === findModeConfigOption(oldOptions)?.id || configId === 'mode') {
-        // A mode change can select another model; without metadata its identity is unknown.
-        this.sessionModelIds = { ...this.sessionModelIds, [key]: '' };
       }
       if (options.model && (!confirmedId || confirmedId === options.model.id)) {
         this.rememberRecentModel(agentId, options.model);
@@ -3903,7 +3900,6 @@ export class AgentsStore {
 
     const optimisticEventIndex = this.reconcileOptimisticUserPrompt(notification);
     const beforeEvents = this.activeSession.events.length;
-    const previousMode = getCurrentModeId(this.activeSession.configOptions);
     this.activeSession = applySessionNotification(this.activeSession, notification, optimisticEventIndex);
     if (notification.update.sessionUpdate === 'config_option_update') {
       const key = buildSessionKey(agentId, notification.sessionId);
@@ -3913,16 +3909,14 @@ export class AgentsStore {
       const currentModel = (this.modelsByAgent[agentId] ?? []).find(
         (model) => getModelSelectionKey(model) === this.getSessionModelId(agentId, notification.sessionId)
       );
+      // Selection changes only when the update carries model metadata; a mode
+      // change may omit it, in which case the last known selection is kept.
       if (modelId) {
         this.sessionModelIds = {
           ...this.sessionModelIds,
           [key]: currentModel?.id === modelId ? getModelSelectionKey(currentModel) : modelId
         };
-      } else if (getCurrentModeId(configOptions) !== previousMode) {
-        this.sessionModelIds = { ...this.sessionModelIds, [key]: '' };
       }
-    } else if (notification.update.sessionUpdate === 'current_mode_update' && notification.update.currentModeId !== previousMode) {
-      this.sessionModelIds = { ...this.sessionModelIds, [buildSessionKey(agentId, notification.sessionId)]: '' };
     }
     this.activeLoadMeasurement?.increment('appliedNotifications');
     console.debug('querymt session/update applied', {

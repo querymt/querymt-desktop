@@ -1053,6 +1053,10 @@ describe('AgentsStore session model isolation', () => {
     id: 'mode', name: 'Mode', type: 'select', currentValue: mode,
     options: [{ value: 'build', name: 'Build' }, { value: 'plan', name: 'Plan' }]
   }];
+  const modeAndModelOptions = (mode: string, modelId: string): SessionConfigOption[] => [
+    ...modeOptions(mode),
+    ...modelOptions(modelId)
+  ];
 
   function setup() {
     const store = createStore();
@@ -1242,18 +1246,53 @@ describe('AgentsStore session model isolation', () => {
     expect(store.getSessionModelId('agent-1', 'session-a')).toBe(getModelSelectionKey({ ...grok, node_id: 'offline-node' }));
   });
 
-  it('uses unknown after a mode change without model metadata and accepts subsequent config updates', async () => {
+  it('preserves the selected model when a mode change response omits model metadata and accepts later authoritative updates', async () => {
     const store = setup();
     await store.setSessionModel('agent-1', 'session-a', grok.id);
     mockClient.setSessionConfigOption.mockResolvedValueOnce(modeOptions('plan'));
     await store.setActiveSessionConfigOption('mode', 'plan');
-    expect(store.getSessionModelId('agent-1', 'session-a')).toBe('');
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(grok.id);
     store.setLaunchModel(glm.id);
     mockClient.emitSessionUpdate({ sessionId: 'session-a', update: {
       sessionUpdate: 'config_option_update', configOptions: modelOptions(sol.id)
     } });
     expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
     expect(store.launchModelId).toBe(glm.id);
+  });
+
+  it('keeps the selected model across live mode-change notifications without model metadata', async () => {
+    const store = setup();
+    await store.setSessionModel('agent-1', 'session-a', grok.id);
+    mockClient.emitSessionUpdate({ sessionId: 'session-a', update: {
+      sessionUpdate: 'config_option_update', configOptions: modeOptions('plan')
+    } });
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(grok.id);
+
+    mockClient.emitSessionUpdate({ sessionId: 'session-a', update: {
+      sessionUpdate: 'current_mode_update', currentModeId: 'build'
+    } });
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(grok.id);
+  });
+
+  it('applies an authoritative model change returned with a mode-change response when the new id differs', async () => {
+    const store = setup();
+    await store.setSessionModel('agent-1', 'session-a', grok.id);
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(modeAndModelOptions('plan', glm.id));
+    await store.setActiveSessionConfigOption('mode', 'plan');
+
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(glm.id);
+    expect(store.activeSession.configOptions).toEqual(modeAndModelOptions('plan', glm.id));
+  });
+
+  it('applies an authoritative model change reported alongside a mode change in a config_option_update', async () => {
+    const store = setup();
+    await store.setSessionModel('agent-1', 'session-a', grok.id);
+    mockClient.emitSessionUpdate({ sessionId: 'session-a', update: {
+      sessionUpdate: 'config_option_update', configOptions: modeAndModelOptions('plan', glm.id)
+    } });
+
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(glm.id);
+    expect(store.activeSession.configOptions).toEqual(modeAndModelOptions('plan', glm.id));
   });
 });
 
