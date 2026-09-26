@@ -1082,6 +1082,7 @@ export class AgentsStore {
           void this.refreshSessionRuntime(config.id, this.activeSessionId, record.client);
         }
       }
+      void this.recoverPendingElicitations(config, record);
     } catch (error) {
       if (error === CONNECT_ABORTED || this.clients.get(agentId) !== record) {
         return;
@@ -1108,6 +1109,30 @@ export class AgentsStore {
       if (config.transport === 'websocket') {
         this.scheduleReconnect(agentId);
       }
+    }
+  }
+
+  /**
+   * After (re)connect, recover pending questions with held resume authorities.
+   *
+   * Re-delivered requests rebind in the inbox; authoritative snapshots clean up
+   * stale cards. Recovery never starts a run and never fabricates user answers;
+   * failures are non-fatal and leave offline cards for the next reconnect.
+   */
+  private async recoverPendingElicitations(config: AgentConfig, record: AgentClientRecord) {
+    try {
+      if (!record.client.supportsElicitationRecovery()) {
+        return;
+      }
+      const snapshots = await record.client.recoverPendingElicitations();
+      if (this.clients.get(config.id) !== record) {
+        return;
+      }
+      for (const snapshot of snapshots) {
+        inboxStore.reconcileReboundElicitations(config.id, snapshot.sessionId, snapshot.elicitationIds);
+      }
+    } catch {
+      // Best-effort recovery: offline cards stay pending for the next reconnect.
     }
   }
 

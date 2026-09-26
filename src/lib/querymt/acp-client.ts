@@ -87,9 +87,14 @@ import {
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK,
+  QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY,
   QuerymtExtensions,
+  parseQuerymtElicitationRecoveryAuthority,
+  parseQuerymtElicitationRecoveryCapability,
   type QuerymtAuthResult,
   type QuerymtAuthStartResponse,
+  type QuerymtElicitationRecoveryCapability,
+  type QuerymtExtensionNotification,
   type QuerymtPluginUpdateResponse,
   type QuerymtProfilesResponse,
   type QuerymtSubmitInputRequest,
@@ -97,7 +102,6 @@ import {
   type QuerymtUndoResponse,
   type QuerymtUndoStackResponse,
   toLogicalQuerymtMethod,
-  type QuerymtExtensionNotification,
   type QuerymtLogicalMethod
 } from '$lib/querymt/querymt-extensions';
 import { createTauriAcpStream, createWebSocketAcpStream } from '$lib/querymt/transport';
@@ -107,6 +111,52 @@ import { acpWebSocketUrl } from '$lib/querymt/websocket-url';
 
 const PROTOCOL_VERSION = 1;
 const CONNECT_CANCELLED_MESSAGE = 'ACP connection cancelled.';
+
+/**
+ * In-memory resume authorities keyed by agent id, then session id.
+ *
+ * Secrets exist only in this process-lifetime map: they are never logged and
+ * never persisted. Holding them at module scope (instead of per instance)
+ * keeps them available when the WebSocket transport is replaced by a new
+ * DesktopAcpClient during reconnect.
+ */
+const elicitationResumeAuthorities = new Map<string, Map<string, string>>();
+
+function storeElicitationResumeAuthority(agentId: string, sessionId: string, secret: string): void {
+  let sessions = elicitationResumeAuthorities.get(agentId);
+  if (!sessions) {
+    sessions = new Map<string, string>();
+    elicitationResumeAuthorities.set(agentId, sessions);
+  }
+  sessions.set(sessionId, secret);
+}
+
+function hasElicitationResumeAuthority(agentId: string, sessionId: string): boolean {
+  return elicitationResumeAuthorities.get(agentId)?.has(sessionId) ?? false;
+}
+
+function takeElicitationResumeAuthority(agentId: string, sessionId: string): string | null {
+  return elicitationResumeAuthorities.get(agentId)?.get(sessionId) ?? null;
+}
+
+function listElicitationResumeAuthorities(agentId: string): Array<[string, string]> {
+  return [...(elicitationResumeAuthorities.get(agentId)?.entries() ?? [])];
+}
+
+function forgetElicitationResumeAuthority(agentId: string, sessionId: string): void {
+  elicitationResumeAuthorities.get(agentId)?.delete(sessionId);
+}
+
+/** Authoritative pending-question set for one session after a recovery attach. */
+export interface ElicitationRecoverySnapshot {
+  sessionId: string;
+  elicitationIds: string[];
+}
+
+/** Drop every in-memory resume authority (used by tests and full teardown). */
+export function clearElicitationResumeAuthorities(): void {
+  elicitationResumeAuthorities.clear();
+}
 
 export interface LoadedAcpSession {
   response: LoadSessionResponse;
@@ -122,6 +172,8 @@ export class DesktopAcpClient {
   private initializeResponse: InitializeResponse | null = null;
   private querymtExtensions: QuerymtExtensions | null = null;
   private controlCapabilities: CapabilitiesInfo | null = null;
+  private elicitationRecovery: QuerymtElicitationRecoveryCapability | null = null;
+  private authorityListenerRegistered = false;
   private connectionLossHandlers = new Set<(reason: string) => void>();
   private intentionallyDisconnected = false;
   private connectEpoch = 0;
@@ -232,11 +284,106 @@ export class DesktopAcpClient {
       throw connectCancelledError();
     }
 
+    this.elicitationRecovery = controlCapabilities
+      ? parseQuerymtElicitationRecoveryCapability(controlCapabilities)
+      : null;
+    if (this.elicitationRecovery) {
+      this.ensureElicitationAuthorityListener();
+    }
+
     this.initializeResponse = initializeResponse;
     this.querymtExtensions = querymtExtensions;
     this.controlCapabilities = controlCapabilities;
     this.controlHealth = controlHealth;
     return initializeResponse;
+  }
+
+  /**
+   * Capture per-session resume authorities pushed by the agent.
+   *
+   * Values stay in the module-level in-memory registry; malformed or unknown
+   * payloads are dropped silently. Nothing here logs or serializes secrets.
+   */
+  private ensureElicitationAuthorityListener(): void {
+    if (this.authorityListenerRegistered) {
+      return;
+    }
+    this.authorityListenerRegistered = true;
+    this.browserClient.onExtensionNotification((notification: QuerymtExtensionNotification) => {
+      if (notification.method !== QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY) {
+        return;
+      }
+      if (!this.elicitationRecovery) {
+        return;
+      }
+      const authority = parseQuerymtElicitationRecoveryAuthority(notification.params);
+      if (!authority) {
+        return;
+      }
+      storeElicitationResumeAuthority(this.config.id, authority.session_id, authority.resume_authority);
+    });
+  }
+
+  getElicitationRecoveryCapability(): QuerymtElicitationRecoveryCapability | null {
+    return this.elicitationRecovery;
+  }
+
+  supportsElicitationRecovery(): boolean {
+    return this.elicitationRecovery !== null;
+  }
+
+  hasElicitationAuthority(sessionId: string): boolean {
+    return hasElicitationResumeAuthority(this.config.id, sessionId);
+  }
+
+  getElicitationAuthority(sessionId: string): string | null {
+    return takeElicitationResumeAuthority(this.config.id, sessionId);
+  }
+
+  /**
+   * Discover and attach pending questions for every held resume authority.
+   *
+   * Returns the authoritative per-session pending sets. Discovery that ends in
+   * denial forgets the expired authority and reports an empty set so stale
+   * cards can be cleaned up. Attach failures likewise report an empty set.
+   */
+  async recoverPendingElicitations(): Promise<ElicitationRecoverySnapshot[]> {
+    if (!this.elicitationRecovery || !this.querymtExtensions) {
+      return [];
+    }
+    const version = this.elicitationRecovery.version;
+    const snapshots: ElicitationRecoverySnapshot[] = [];
+    for (const [sessionId, resumeAuthority] of listElicitationResumeAuthorities(this.config.id)) {
+      let sessionIds: string[];
+      try {
+        const discovery = await this.querymtExtensions.listPendingElicitationSessions({
+          version,
+          resume_authority: resumeAuthority
+        });
+        sessionIds = discovery.session_ids;
+      } catch {
+        forgetElicitationResumeAuthority(this.config.id, sessionId);
+        snapshots.push({ sessionId, elicitationIds: [] });
+        continue;
+      }
+      if (sessionIds.length === 0) {
+        snapshots.push({ sessionId, elicitationIds: [] });
+        continue;
+      }
+      for (const attachedSessionId of sessionIds) {
+        try {
+          const attach = await this.querymtExtensions.attachPendingElicitationSession({
+            version,
+            session_id: attachedSessionId,
+            resume_authority: resumeAuthority
+          });
+          snapshots.push({ sessionId: attachedSessionId, elicitationIds: attach.elicitation_ids });
+        } catch {
+          snapshots.push({ sessionId: attachedSessionId, elicitationIds: [] });
+        }
+      }
+    }
+    return snapshots;
   }
 
   async listSessions(request: ListSessionsRequest = {}): Promise<ListSessionsResponse> {
@@ -789,6 +936,7 @@ export class DesktopAcpClient {
     this.initializeResponse = null;
     this.querymtExtensions = null;
     this.controlCapabilities = null;
+    this.elicitationRecovery = null;
     if (stream) {
       await closeAcpStream(stream);
     }
@@ -848,6 +996,7 @@ export class DesktopAcpClient {
     this.initializeResponse = null;
     this.querymtExtensions = null;
     this.controlCapabilities = null;
+    this.elicitationRecovery = null;
     for (const handler of this.connectionLossHandlers) handler(reason);
   }
 

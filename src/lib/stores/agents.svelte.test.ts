@@ -25,6 +25,7 @@ import { tick } from 'svelte';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
 import { startAgent } from '$native';
 import { AgentsStore } from './agents.svelte';
+import { inboxStore } from './inbox.svelte';
 import { DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
 
 function listSessionsRequest(input: { cwd?: string; cursor?: string } = {}) {
@@ -127,6 +128,8 @@ const mockClient = vi.hoisted(() => {
     })),
     getControlCapabilities: vi.fn(() => null),
     getControlHealth: vi.fn(() => ({ state: 'unknown', summary: 'unknown', missingMethods: [], missingFeatures: [] })),
+    supportsElicitationRecovery: vi.fn(() => false),
+    recoverPendingElicitations: vi.fn(async (): Promise<Array<{ sessionId: string; elicitationIds: string[] }>> => []),
     listModels: vi.fn(async (): Promise<ModelEntry[]> => []),
     refreshAndListModels: vi.fn(async (): Promise<ModelEntry[]> => []),
     getModelInfo: vi.fn(async () => ({})),
@@ -257,6 +260,7 @@ function meshNodes(ids: string[]): MeshNodesInfo {
 function createDistinctMockClient() {
   let connectionLossHandler: ((reason: string) => void) | null = null;
   let extensionNotificationHandler: ((notification: { method: string; params: unknown }) => void) | null = null;
+  let elicitationHandler: ((request: unknown) => Promise<unknown>) | null = null;
 
   return {
     connect: vi.fn(async (): Promise<InitializeResponse> => ({
@@ -281,6 +285,8 @@ function createDistinctMockClient() {
     listMeshInvites: vi.fn(async (): Promise<MeshInviteListInfo> => ({ invites: [] })),
     getModelInfo: vi.fn(async () => ({})),
     supportsQuerymtFeature: vi.fn((_feature: string) => false),
+    supportsElicitationRecovery: vi.fn(() => false),
+    recoverPendingElicitations: vi.fn(async (): Promise<Array<{ sessionId: string; elicitationIds: string[] }>> => []),
     getControlCapabilities: vi.fn(() => null),
     getControlHealth: vi.fn(() => ({ state: 'unknown', summary: 'unknown', missingMethods: [], missingFeatures: [] })),
     onConnectionLost: vi.fn((handler: (reason: string) => void) => {
@@ -299,7 +305,13 @@ function createDistinctMockClient() {
     }),
     emitExtensionNotification: (notification: { method: string; params: unknown }) => extensionNotificationHandler?.(notification),
     onPermissionRequest: vi.fn(() => vi.fn()),
-    onElicitationRequest: vi.fn(() => vi.fn())
+    onElicitationRequest: vi.fn((handler: (request: unknown) => Promise<unknown>) => {
+      elicitationHandler = handler;
+      return () => {
+        elicitationHandler = null;
+      };
+    }),
+    elicit: (request: unknown) => elicitationHandler!(request) as Promise<unknown>
   };
 }
 
@@ -4883,5 +4895,169 @@ describe('AgentsStore prompt session start', () => {
     store.acknowledgeSession('agent-1', 'session-1');
 
     expect(store.attentionSessionKeys).toEqual(['agent-1:session-2']);
+  });
+
+  describe('elicitation recovery on reconnect', () => {
+    function websocketStore() {
+      const store = createStore();
+      store.configs = [
+        {
+          id: 'agent-1',
+          name: 'QMTCODE',
+          transport: 'websocket',
+          commandLine: '',
+          websocketUrl: '127.0.0.1:3030',
+          enabled: true,
+          autoStart: true
+        }
+      ];
+      return store;
+    }
+
+    function recoveryElicitation(sessionId: string, elicitationId: string) {
+      return {
+        mode: 'form' as const,
+        sessionId,
+        message: `Choose a target (${elicitationId})`,
+        _meta: { querymt: { elicitation_id: elicitationId, source: 'builtin:question' } },
+        requestedSchema: {
+          type: 'object',
+          title: 'Target',
+          properties: {
+            selection: {
+              type: 'string',
+              title: 'Target',
+              oneOf: [{ const: 'prod', title: 'Production' }]
+            }
+          },
+          required: ['selection']
+        }
+      };
+    }
+
+    async function seedOfflineCards(sessionId: string, elicitationIds: string[]) {
+      const firstClient = createDistinctMockClient();
+      vi.mocked(DesktopAcpClient).mockImplementationOnce(function () {
+        return firstClient as never;
+      });
+      const store = websocketStore();
+      await store.connectAgent('agent-1');
+
+      const deliveries = elicitationIds.map((elicitationId) =>
+        firstClient.elicit(recoveryElicitation(sessionId, elicitationId)) as Promise<unknown>
+      );
+      const settled = deliveries.map(() => ({ resolved: false }));
+      deliveries.forEach((delivery, index) => {
+        void delivery.then(() => {
+          settled[index].resolved = true;
+        });
+      });
+      return { store, firstClient, settled };
+    }
+
+    it('recovers an offline question after reconnect and answers on the new request', async () => {
+      vi.useFakeTimers();
+      try {
+        const sessionId = 'recover-session-1';
+        const { store, firstClient, settled } = await seedOfflineCards(sessionId, ['elicit-keep-1']);
+        const card = inboxStore.pendingElicitationsForSession('agent-1', sessionId)[0];
+        inboxStore.updateField(card.id, 'selection', 'prod');
+
+        firstClient.emitConnectionLoss('WebSocket closed (code 1006).');
+        expect(inboxStore.items.find((item) => item.id === card.id)?.offline).toBe(true);
+
+        const reconnected = createDistinctMockClient();
+        reconnected.supportsElicitationRecovery = vi.fn(() => true);
+        reconnected.recoverPendingElicitations = vi.fn(async () => [
+          { sessionId, elicitationIds: ['elicit-keep-1'] }
+        ]);
+        vi.mocked(DesktopAcpClient).mockImplementationOnce(function () {
+          return reconnected as never;
+        });
+        await store.connectAgent('agent-1');
+
+        expect(reconnected.recoverPendingElicitations).toHaveBeenCalledTimes(1);
+        expect(inboxStore.items.find((item) => item.id === card.id)?.status).toBe('pending');
+
+        const redelivered = reconnected.elicit(recoveryElicitation(sessionId, 'elicit-keep-1'));
+        const rebound = inboxStore.pendingElicitationsForSession('agent-1', sessionId);
+        expect(rebound).toHaveLength(1);
+        expect(rebound[0].id).toBe(card.id);
+        expect(rebound[0].offline).toBe(false);
+        expect(rebound[0].formFields?.find((field) => field.key === 'selection')?.value).toBe('prod');
+
+        await inboxStore.handleAction(card.id, 'accept');
+        await expect(redelivered).resolves.toEqual({ action: 'accept', content: { selection: 'prod' } });
+        await Promise.resolve();
+        expect(settled[0].resolved).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('resolves stale offline cards against the authoritative snapshot without fabricating answers', async () => {
+      vi.useFakeTimers();
+      try {
+        const sessionId = 'stale-session-1';
+        const { store, firstClient, settled } = await seedOfflineCards(sessionId, [
+          'elicit-still-pending',
+          'elicit-gone'
+        ]);
+        firstClient.emitConnectionLoss('WebSocket closed (code 1006).');
+
+        const reconnected = createDistinctMockClient();
+        reconnected.supportsElicitationRecovery = vi.fn(() => true);
+        reconnected.recoverPendingElicitations = vi.fn(async () => [
+          { sessionId, elicitationIds: ['elicit-still-pending'] }
+        ]);
+        vi.mocked(DesktopAcpClient).mockImplementationOnce(function () {
+          return reconnected as never;
+        });
+        await store.connectAgent('agent-1');
+
+        const kept = inboxStore.items.find(
+          (item) => item.sessionId === sessionId && item.detail.includes('elicit-still-pending')
+        );
+        const stale = inboxStore.items.find(
+          (item) => item.sessionId === sessionId && item.detail.includes('elicit-gone')
+        );
+        expect(kept?.status).toBe('pending');
+        expect(stale?.status).toBe('resolved');
+        expect(stale?.actions).toEqual([]);
+        expect(stale?.resolution).toBe('No longer pending');
+        expect(settled.every((delivery) => !delivery.resolved)).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reconciles background sessions without activating them or starting a run', async () => {
+      vi.useFakeTimers();
+      try {
+        const sessionId = 'background-session-1';
+        const { store, firstClient } = await seedOfflineCards(sessionId, ['elicit-background']);
+        const activeSessionBefore = store.activeSessionId;
+        firstClient.emitConnectionLoss('WebSocket closed (code 1006).');
+
+        const reconnected = createDistinctMockClient();
+        reconnected.supportsElicitationRecovery = vi.fn(() => true);
+        reconnected.recoverPendingElicitations = vi.fn(async () => [
+          { sessionId, elicitationIds: [] }
+        ]);
+        vi.mocked(DesktopAcpClient).mockImplementationOnce(function () {
+          return reconnected as never;
+        });
+        await store.connectAgent('agent-1');
+
+        const card = inboxStore.items.find((item) => item.sessionId === sessionId);
+        expect(card?.status).toBe('resolved');
+        expect(card?.resolution).toBe('No longer pending');
+        expect(store.activeSessionId).toBe(activeSessionBefore);
+        expect(store.activeSession?.sessionId ?? null).not.toBe(sessionId);
+        expect(store.sessionsByAgent['agent-1'] ?? []).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

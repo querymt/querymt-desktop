@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { PlugZap } from '@lucide/svelte';
   import AppCheckbox from '$lib/components/primitives/AppCheckbox.svelte';
   import type { InboxFormField, InboxItem } from '$lib/domain/types';
 
@@ -20,6 +21,9 @@
     onOpenSession?: ((item: InboxItem) => void | Promise<void>) | null;
   } = $props();
 
+  /** A pending card whose transport dropped: retained but not answerable until recovery. */
+  const offline = $derived(item.offline === true && item.status !== 'resolved');
+
   const primaryActionId = $derived.by(() => {
     const actions = item.actions ?? [];
     return actions.find((action) => action.kind === 'accept')?.id
@@ -38,6 +42,8 @@
     <div class="flex items-center gap-2">
       {#if item.status === 'resolved' && item.resolution}
         <span class="badge">{item.resolution}</span>
+      {:else if offline}
+        <span class="badge">Temporarily unavailable</span>
       {/if}
       <span class="badge">{item.type}</span>
     </div>
@@ -69,7 +75,10 @@
             <AppCheckbox
               checked={Boolean(field.value)}
               ariaLabel={field.label}
-              onCheckedChange={(checked) => onFieldChange?.(item.id, field.key, checked)}
+              disabled={offline}
+              onCheckedChange={(checked) => {
+                if (!offline) onFieldChange?.(item.id, field.key, checked);
+              }}
             />
           {:else if field.kind === 'array' && field.options}
             <div class="elicitation-option-list" role="group" aria-labelledby={`${item.id}-${field.key}-label`}>
@@ -78,7 +87,9 @@
                   class="elicitation-option-row"
                   checked={!field.customActive && Array.isArray(field.value) && field.value.includes(option.value)}
                   label={option.label}
+                  disabled={offline}
                   onCheckedChange={(checked) => {
+                    if (offline) return;
                     const current = field.customActive || !Array.isArray(field.value) ? [] : field.value;
                     const next = checked
                       ? [...current, option.value]
@@ -92,7 +103,10 @@
                   class="elicitation-option-row"
                   checked={Boolean(field.customActive)}
                   label="Custom answer…"
-                  onCheckedChange={(checked) => onCustomFieldToggle?.(item.id, field.key, checked)}
+                  disabled={offline}
+                  onCheckedChange={(checked) => {
+                    if (!offline) onCustomFieldToggle?.(item.id, field.key, checked);
+                  }}
                 />
               {/if}
             </div>
@@ -103,8 +117,11 @@
                 aria-label={`${field.label} custom response`}
                 placeholder="Custom answer…"
                 value={field.customValue ?? ''}
-                oninput={(event) =>
-                  onCustomFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value)}
+                disabled={offline}
+                oninput={(event) => {
+                  if (!offline)
+                    onCustomFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value);
+                }}
               />
             {/if}
           {:else if field.options}
@@ -117,7 +134,10 @@
                     name={`${item.id}-${field.key}`}
                     value={option.value}
                     checked={!field.customActive && field.value === option.value}
-                    onchange={() => onFieldChange?.(item.id, field.key, option.value)}
+                    disabled={offline}
+                    onchange={() => {
+                      if (!offline) onFieldChange?.(item.id, field.key, option.value);
+                    }}
                   />
                   <span class="elicitation-option-label">{option.label}</span>
                 </label>
@@ -130,7 +150,10 @@
                     name={`${item.id}-${field.key}`}
                     value="__querymt_custom__"
                     checked={Boolean(field.customActive)}
-                    onchange={() => onCustomFieldToggle?.(item.id, field.key, true)}
+                    disabled={offline}
+                    onchange={() => {
+                      if (!offline) onCustomFieldToggle?.(item.id, field.key, true);
+                    }}
                   />
                   <span class="elicitation-option-label">Custom answer…</span>
                 </label>
@@ -143,8 +166,11 @@
                 aria-label={`${field.label} custom response`}
                 placeholder="Custom answer…"
                 value={field.customValue ?? ''}
-                oninput={(event) =>
-                  onCustomFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value)}
+                disabled={offline}
+                oninput={(event) => {
+                  if (!offline)
+                    onCustomFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value);
+                }}
               />
             {/if}
           {:else if field.kind === 'number' || field.kind === 'integer'}
@@ -153,7 +179,11 @@
               type="number"
               aria-label={field.label}
               value={String(field.value)}
-              onchange={(event) => onFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value)}
+              disabled={offline}
+              onchange={(event) => {
+                if (!offline)
+                  onFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value);
+              }}
             />
           {:else}
             <input
@@ -161,7 +191,11 @@
               type="text"
               aria-label={field.label}
               value={String(field.value)}
-              onchange={(event) => onFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value)}
+              disabled={offline}
+              onchange={(event) => {
+                if (!offline)
+                  onFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value);
+              }}
             />
           {/if}
           {#if field.description && field.description.trim() !== item.detail.trim()}
@@ -169,6 +203,16 @@
           {/if}
         </div>
       {/each}
+    </div>
+  {/if}
+
+  {#if offline}
+    <div class="state-inline-progress mt-4" role="status">
+      <PlugZap size={14} />
+      <span>
+        Waiting to reconnect. This question is temporarily unavailable, not cancelled; your draft is
+        kept and you can answer once the connection recovers.
+      </span>
     </div>
   {/if}
 
@@ -182,7 +226,10 @@
         <button
           class={`action-btn ${action.id === primaryActionId ? 'action-btn-primary' : ''}`}
           type="button"
-          onclick={() => onAction?.(item.id, action.id)}
+          disabled={offline}
+          onclick={() => {
+            if (!offline) onAction?.(item.id, action.id);
+          }}
         >
           {action.label}
         </button>

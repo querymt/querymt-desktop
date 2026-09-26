@@ -35,6 +35,8 @@ export class InboxStore {
   private pendingPermissionRequests = new Map<string, PendingPermissionRequest>();
   private pendingElicitationRequests = new Map<string, PendingElicitationRequest>();
   private pendingElicitationKeys = new Map<string, string>();
+  /** Cards whose resolver was retired offline, keyed by stable elicitation identity. */
+  private offlineElicitationKeys = new Map<string, string>();
 
   items = $state<InboxItem[]>([]);
 
@@ -51,13 +53,49 @@ export class InboxStore {
   }
 
   get liveRequestCount(): number {
-    return this.actionableItems.filter((item) => item.id.startsWith('live-')).length;
+    return this.actionableItems.filter((item) => item.id.startsWith('live-') && !item.offline).length;
   }
 
   pendingElicitationsForSession(agentId: string, sessionId: string): InboxItem[] {
     return this.actionableItems.filter(
       (item) => item.type === 'elicitation' && item.agentId === agentId && item.sessionId === sessionId
     );
+  }
+
+  /**
+   * Reconcile cards against the agent's authoritative pending set.
+   *
+   * Cards whose stable identity is no longer pending agent-side lose their
+   * actionability without sending any fabricated user action; re-delivered
+   * identities keep their cards for rebinding.
+   */
+  reconcileReboundElicitations(agentId: string, sessionId: string, authoritativeIds: string[]) {
+    const authoritative = new Set(authoritativeIds.map((id) => `${agentId}:${id}`));
+    const stale = new Set<string>();
+    const collect = (entries: Iterable<[string, string]>) => {
+      for (const [key, itemId] of entries) {
+        if (!key.startsWith(`${agentId}:`) || authoritative.has(key)) continue;
+        const item = this.items.find((candidate) => candidate.id === itemId);
+        if (item && item.status !== 'resolved' && item.sessionId === sessionId) {
+          stale.add(itemId);
+        }
+      }
+    };
+    collect(this.pendingElicitationKeys.entries());
+    collect(this.offlineElicitationKeys.entries());
+
+    for (const itemId of stale) {
+      const live = this.pendingElicitationRequests.get(itemId);
+      if (live) {
+        // Retire the resolver without answering; the question no longer exists.
+        this.removePendingElicitation(live);
+      } else {
+        for (const [key, candidate] of [...this.offlineElicitationKeys.entries()]) {
+          if (candidate === itemId) this.offlineElicitationKeys.delete(key);
+        }
+      }
+      this.markResolved(itemId, 'No longer pending');
+    }
   }
 
   bindClient(client: DesktopAcpClient, agentId: string, agentName: string): () => void {
@@ -75,10 +113,15 @@ export class InboxStore {
   }
 
   disconnectAgent(agentId: string) {
-    this.cancelPendingRequestsForAgent(agentId);
+    this.retirePendingRequestsForAgent(agentId);
   }
 
   async handleAction(itemId: string, actionId: string) {
+    if (this.items.find((item) => item.id === itemId)?.offline) {
+      // The transport is offline: question cards stay visible but cannot answer.
+      return;
+    }
+
     if (this.pendingPermissionRequests.has(itemId)) {
       this.resolvePermissionRequest(itemId, actionId);
       return;
@@ -210,6 +253,11 @@ export class InboxStore {
       return Promise.resolve({ action: 'cancel' });
     }
 
+    const offlineItemId = requestKey ? this.offlineElicitationKeys.get(requestKey) : null;
+    if (offlineItemId) {
+      return this.rebindOfflineElicitation(offlineItemId, requestKey!, request, agentId);
+    }
+
     const itemId = `live-elicitation-${this.nextLiveItemId++}`;
     const item = mapElicitationRequestToInboxItem(request, itemId, agentId, agentName);
     this.items = [item, ...this.items];
@@ -227,20 +275,70 @@ export class InboxStore {
     });
   }
 
-  private cancelPendingRequestsForAgent(agentId: string) {
+  /**
+   * Retire resolvers tied to a disconnected transport without answering them.
+   *
+   * Cards and drafts stay pending but are marked offline, so a reconnection can
+   * rebind re-delivered questions to the same card instead of answering `cancel`
+   * on a transport that no longer exists.
+   */
+  private retirePendingRequestsForAgent(agentId: string) {
     for (const [itemId, pending] of this.pendingPermissionRequests) {
       if (pending.agentId !== agentId) continue;
       this.pendingPermissionRequests.delete(itemId);
-      this.markResolved(itemId, 'Cancelled');
-      pending.resolve({ outcome: { outcome: 'cancelled' } });
+      this.markItemOffline(itemId);
     }
 
     for (const pending of [...this.pendingElicitationRequests.values()]) {
       if (pending.agentId !== agentId) continue;
       this.removePendingElicitation(pending);
-      this.markResolved(pending.itemId, 'Cancelled');
-      pending.resolve({ action: 'cancel' });
+      if (pending.requestKey) {
+        this.offlineElicitationKeys.set(pending.requestKey, pending.itemId);
+      }
+      this.markItemOffline(pending.itemId);
     }
+  }
+
+  private markItemOffline(itemId: string) {
+    this.items = this.items.map((item) =>
+      item.id === itemId && item.status !== 'resolved' ? { ...item, offline: true } : item
+    );
+  }
+
+  /**
+   * Rebind a re-delivered question to the card that went offline.
+   *
+   * The stable agent/session/elicitation identity maps the new transport's
+   * resolver onto the existing card: drafts survive, no duplicate card or
+   * notification is created, and only this new resolver can answer it.
+   */
+  private rebindOfflineElicitation(
+    itemId: string,
+    requestKey: string,
+    request: CreateElicitationRequest,
+    agentId: string
+  ): Promise<CreateElicitationResponse> {
+    this.items = this.items.map((item) =>
+      item.id === itemId && item.status !== 'resolved'
+        ? {
+            ...item,
+            offline: false,
+            error: null
+          }
+        : item
+    );
+    this.offlineElicitationKeys.delete(requestKey);
+
+    return new Promise<CreateElicitationResponse>((resolve) => {
+      this.pendingElicitationRequests.set(itemId, {
+        itemId,
+        agentId,
+        requestKey,
+        request,
+        resolve
+      });
+      this.pendingElicitationKeys.set(requestKey, itemId);
+    });
   }
 
   private removePendingElicitation(pending: PendingElicitationRequest) {

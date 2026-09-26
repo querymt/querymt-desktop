@@ -1,294 +1,160 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DelegateReasoningEffort } from '$lib/querymt/generated/types';
+import type { ClientSideConnection } from '@agentclientprotocol/sdk';
 import {
-  QMT_METHOD_AUTH_CLEAR_API_TOKEN,
-  QMT_METHOD_AUTH_SET_API_TOKEN,
-  QMT_METHOD_AUTH_SET_METHOD,
-  QMT_METHOD_PROFILES,
-  QMT_METHOD_SESSION_DELEGATE_MODELS,
-  QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT,
-  QMT_METHOD_SESSION_QUEUE,
-  QMT_METHOD_SESSION_REDO,
-  QMT_METHOD_SESSION_RUNTIME_STATE,
-  QMT_METHOD_SESSION_STEER,
-  QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
-  QMT_METHOD_SESSION_UNDO,
-  QMT_METHOD_SESSION_UNDO_STACK,
+  QMT_ELICITATION_RECOVERY_VERSION,
+  QMT_METHOD_ELICITATION_ATTACH_SESSION,
+  QMT_METHOD_ELICITATION_LIST_PENDING,
+  QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY,
   QuerymtExtensions,
-  normalizeQuerymtModelInfoResponse,
-  normalizeQuerymtModelsResponse,
-  toAcpExtensionMethod
+  parseQuerymtElicitationRecoveryAuthority,
+  parseQuerymtElicitationRecoveryCapability
 } from './querymt-extensions';
+import type { CapabilitiesInfo } from './generated/types';
 
-const model = {
-  id: 'anthropic/claude-sonnet-4',
-  provider: 'anthropic',
-  model: 'claude-sonnet-4',
-  label: 'Claude Sonnet 4'
-};
+function capabilitiesFixture(
+  overrides: Partial<Record<string, unknown>> = {}
+): CapabilitiesInfo {
+  return {
+    querymt_control_version: 1,
+    agent: { id: 'agent-1', display_name: 'Agent', kind: 'local' },
+	transport: { acp: true, stdio: false, websocket: true, mesh: false, mesh_transport: 'none' },
+    features: {
+      auth: true,
+      models: true,
+      steering: true,
+      schedules: true,
+      mesh: false,
+      mesh_invites: false,
+      remote_sessions: false,
+      remote_schedules: false,
+      profiles: false
+    },
+    methods: [
+      'querymt/capabilities',
+      QMT_METHOD_ELICITATION_LIST_PENDING,
+      QMT_METHOD_ELICITATION_ATTACH_SESSION
+    ],
+    notifications: [
+      QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY,
+      'querymt/elicitation/validationFailed',
+      'querymt/elicitation/completed'
+    ],
+    elicitation_recovery: {
+      version: QMT_ELICITATION_RECOVERY_VERSION,
+      authority_notification: QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY,
+      list_pending_method: QMT_METHOD_ELICITATION_LIST_PENDING,
+      attach_method: QMT_METHOD_ELICITATION_ATTACH_SESSION
+    },
+    ...overrides
+  } as CapabilitiesInfo;
+}
 
-describe('toAcpExtensionMethod', () => {
-  it('uses the desktop ACP extension method prefix', () => {
-    expect(toAcpExtensionMethod('querymt/models')).toBe('_querymt/models');
-  });
-});
+function extensionClient() {
+  const extMethod = vi.fn(async () => ({}));
+  const extensions = new QuerymtExtensions({
+    extMethod
+  } as unknown as ClientSideConnection);
+  return { extensions, extMethod };
+}
 
-describe('QuerymtExtensions profiles', () => {
-  it('lists profiles over the QueryMT ACP extension', async () => {
-    const extMethod = vi.fn(async () => ({ profiles: [{ id: 'review', name: 'Review' }], active_profile_id: 'review' }));
-    const extensions = new QuerymtExtensions({ extMethod } as never);
+describe('QuerymtExtensions elicitation recovery contract', () => {
+  it('lists pending sessions with the versioned v1 wire method', async () => {
+    const { extensions, extMethod } = extensionClient();
+    extMethod.mockResolvedValueOnce({ version: 1, session_ids: ['session-a', 'session-b'] });
 
-    await expect(extensions.profiles()).resolves.toEqual({
-      profiles: [{ id: 'review', name: 'Review' }],
-      active_profile_id: 'review'
+    const response = await extensions.listPendingElicitationSessions({
+      version: 1,
+      resume_authority: 'process-secret'
     });
-    expect(extMethod).toHaveBeenCalledWith(toAcpExtensionMethod(QMT_METHOD_PROFILES), {});
+
+    expect(extMethod).toHaveBeenCalledWith('_querymt/elicitation/listPendingSessions', {
+      version: 1,
+      resume_authority: 'process-secret'
+    });
+    expect(response).toEqual({ version: 1, session_ids: ['session-a', 'session-b'] });
+  });
+
+  it('attaches pending sessions with the versioned v1 wire method', async () => {
+    const { extensions, extMethod } = extensionClient();
+    extMethod.mockResolvedValueOnce({
+      version: 1,
+      session_id: 'session-a',
+      elicitation_ids: ['elicitation-1']
+    });
+
+    const response = await extensions.attachPendingElicitationSession({
+      version: 1,
+      session_id: 'session-a',
+      resume_authority: 'process-secret'
+    });
+
+    expect(extMethod).toHaveBeenCalledWith('_querymt/elicitation/attachSession', {
+      version: 1,
+      session_id: 'session-a',
+      resume_authority: 'process-secret'
+    });
+    expect(response).toEqual({
+      version: 1,
+      session_id: 'session-a',
+      elicitation_ids: ['elicitation-1']
+    });
   });
 });
 
-describe('QuerymtExtensions turn control', () => {
-  it('calls steering, queue, discard, and runtime-state extensions with typed payloads', async () => {
-    const extMethod = vi.fn(async (method: string) => {
-      if (method.endsWith('runtimeState')) {
-        return { phase: 'model', active_run_id: 'run-1', steerable: true, pending_steering_count: 0, queued_input_count: 0 };
+describe('parseQuerymtElicitationRecoveryCapability', () => {
+  it('accepts a complete compatible advertisement', () => {
+    const capability = parseQuerymtElicitationRecoveryCapability(capabilitiesFixture());
+    expect(capability).toEqual({
+      version: 1,
+      authority_notification: QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY,
+      list_pending_method: QMT_METHOD_ELICITATION_LIST_PENDING,
+      attach_method: QMT_METHOD_ELICITATION_ATTACH_SESSION
+    });
+  });
+
+  it('returns null for legacy capabilities without the recovery field', () => {
+    const { elicitation_recovery: _omitted, ...legacy } = capabilitiesFixture() as CapabilitiesInfo &
+      Record<string, unknown>;
+    expect(parseQuerymtElicitationRecoveryCapability(legacy)).toBeNull();
+  });
+
+  it('returns null for an unsupported contract version', () => {
+    const capabilities = capabilitiesFixture({
+      elicitation_recovery: {
+        version: QMT_ELICITATION_RECOVERY_VERSION + 1,
+        authority_notification: QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY,
+        list_pending_method: QMT_METHOD_ELICITATION_LIST_PENDING,
+        attach_method: QMT_METHOD_ELICITATION_ATTACH_SESSION
       }
-      if (method.endsWith('discardQueuedInput')) {
-        return { status: 'discarded', data: { input_id: 'input-2' } };
-      }
-      return method.endsWith('steer')
-        ? { status: 'steered', data: { run_id: 'run-1', input_id: 'input-1', position: 1 } }
-        : { status: 'queued', data: { input_id: 'input-2', position: 1 } };
     });
-    const extensions = new QuerymtExtensions({ extMethod } as never);
-    const steerRequest = {
-      session_id: 's1',
-      client_input_id: 'input-1',
-      expected_run_id: 'run-1',
-      prompt: [{ type: 'text' as const, text: 'adjust' }]
-    };
-    const queueRequest = {
-      session_id: 's1',
-      client_input_id: 'input-2',
-      prompt: [{ type: 'text' as const, text: 'next' }]
-    };
+    expect(parseQuerymtElicitationRecoveryCapability(capabilities)).toBeNull();
+  });
 
-    await extensions.steerSession(steerRequest);
-    await extensions.queueSession(queueRequest);
-    await extensions.discardQueuedInput('s1', 'input-2');
-    await extensions.sessionRuntimeState('s1');
-
-    expect(extMethod).toHaveBeenNthCalledWith(1, toAcpExtensionMethod(QMT_METHOD_SESSION_STEER), steerRequest);
-    expect(extMethod).toHaveBeenNthCalledWith(2, toAcpExtensionMethod(QMT_METHOD_SESSION_QUEUE), queueRequest);
-    expect(extMethod).toHaveBeenNthCalledWith(3, toAcpExtensionMethod(QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT), {
-      session_id: 's1',
-      input_id: 'input-2'
+  it('returns null when the contract methods are not advertised', () => {
+    const capabilities = capabilitiesFixture({
+      methods: ['querymt/capabilities']
     });
-    expect(extMethod).toHaveBeenNthCalledWith(4, toAcpExtensionMethod(QMT_METHOD_SESSION_RUNTIME_STATE), { session_id: 's1' });
+    expect(parseQuerymtElicitationRecoveryCapability(capabilities)).toBeNull();
   });
 });
 
-describe('QuerymtExtensions undo and redo', () => {
-  it('calls the desktop extension methods with session and message ids', async () => {
-    const extMethod = vi.fn(async (method: string) => {
-      if (method.endsWith('undoStack')) return { undo_stack: [{ message_id: 'm1' }] };
-      if (method.endsWith('undo')) return { success: true, undo_stack: [{ message_id: 'm1' }] };
-      return { success: true, restored: true, undo_stack: [] };
-    });
-    const extensions = new QuerymtExtensions({ extMethod } as never);
-
-    await expect(extensions.undoStack('s1')).resolves.toEqual({ undo_stack: [{ message_id: 'm1' }] });
-    await extensions.undoSession('s1', 'm1');
-    await extensions.redoSession('s1');
-
-    expect(extMethod).toHaveBeenNthCalledWith(1, toAcpExtensionMethod(QMT_METHOD_SESSION_UNDO_STACK), { session_id: 's1' });
-    expect(extMethod).toHaveBeenNthCalledWith(2, toAcpExtensionMethod(QMT_METHOD_SESSION_UNDO), { session_id: 's1', message_id: 'm1' });
-    expect(extMethod).toHaveBeenNthCalledWith(3, toAcpExtensionMethod(QMT_METHOD_SESSION_REDO), { session_id: 's1' });
-  });
-});
-
-describe('QuerymtExtensions delegate model assignments', () => {
-  it('reads and writes the versioned session assignment contract', async () => {
-    const extMethod = vi.fn(async (method: string) => {
-      if (method.endsWith('delegateModels')) {
-        return {
-          version: 1,
-          reasoning_effort_supported: true,
-          session_id: 's1',
-          profile_id: 'quorum',
-          revision: 4,
-          durable: true,
-          editable: true,
-          assignments: [],
-          orphaned_overrides: []
-        };
-      }
-      return {
-        version: 1,
-        reasoning_effort_supported: true,
-        session_id: 's1',
-        agent_id: 'coder',
-        model: { model_id: 'codex/gpt-5.6-sol' },
-        reasoning_effort: 'high',
-        revision: 5,
-        durable: true
-      };
-    });
-    const extensions = new QuerymtExtensions({ extMethod } as never);
-
-    await extensions.delegateModels({ session_id: 's1' });
-    await extensions.setDelegateModel({
-      session_id: 's1',
-      agent_id: 'coder',
-      model_id: 'codex/gpt-5.6-sol',
-      node_id: null,
-      reasoning_effort: DelegateReasoningEffort.High,
-      expected_revision: 4
-    });
-
-    expect(extMethod).toHaveBeenNthCalledWith(1, toAcpExtensionMethod(QMT_METHOD_SESSION_DELEGATE_MODELS), {
-      session_id: 's1'
-    });
-    expect(extMethod).toHaveBeenNthCalledWith(2, toAcpExtensionMethod(QMT_METHOD_SESSION_SET_DELEGATE_MODEL), {
-      session_id: 's1',
-      agent_id: 'coder',
-      model_id: 'codex/gpt-5.6-sol',
-      node_id: null,
-      reasoning_effort: 'high',
-      expected_revision: 4
-    });
-  });
-
-  it('accepts the older model-only version-one response shape', async () => {
-    const extMethod = vi.fn(async (method: string) => method.endsWith('delegateModels')
-      ? {
-        version: 1,
-        session_id: 's1',
-        profile_id: 'quorum',
-        revision: 4,
-        durable: true,
-        editable: true,
-        assignments: [{
-          agent_id: 'coder',
-          name: 'Coder',
-          description: 'Writes code',
-          model: null,
-          source: 'profile_default',
-          configured_default_model_id: 'codex/gpt-5.6-sol'
-        }],
-        orphaned_overrides: [{ agent_id: 'removed-role', model: { model_id: 'legacy/model' } }]
-      }
-      : {
-        version: 1,
-        session_id: 's1',
-        agent_id: 'removed-role',
-        model: null,
-        revision: 5,
-        durable: true
-      });
-    const extensions = new QuerymtExtensions({ extMethod } as never);
-
-    const state = await extensions.delegateModels({ session_id: 's1' });
-    const response = await extensions.setDelegateModel({
-      session_id: 's1',
-      agent_id: 'removed-role',
-      model_id: null,
-      expected_revision: 4
-    });
-
-    expect(state.reasoning_effort_supported).toBeUndefined();
-    expect(state.assignments[0].reasoning_effort).toBeUndefined();
-    expect(state.orphaned_overrides[0].reasoning_effort).toBeUndefined();
-    expect(response.reasoning_effort).toBeUndefined();
-  });
-
-  it('rejects unknown contract versions instead of guessing their meaning', async () => {
-    const extMethod = vi.fn(async () => ({
-      version: 2,
-      session_id: 's1',
-      profile_id: 'quorum',
-      revision: 0,
-      durable: true,
-      editable: true,
-      assignments: [],
-      orphaned_overrides: []
-    }));
-    const extensions = new QuerymtExtensions({ extMethod } as never);
-
-    await expect(extensions.delegateModels({ session_id: 's1' })).rejects.toThrow(
-      'Unsupported delegate-model contract version 2'
-    );
-  });
-});
-
-describe('QuerymtExtensions auth token mutations', () => {
-  it('calls set/clear/method with the ACP extension wire names and params', async () => {
-    const extMethod = vi.fn(async () => ({ provider: 'groq', success: true, message: 'ok' }));
-    const extensions = new QuerymtExtensions({ extMethod } as never);
-
-    await extensions.setApiToken('groq', 'sk-test');
-    await extensions.clearApiToken('groq');
-    await extensions.setAuthMethod('groq', 'api_key' as never);
-
-    expect(extMethod).toHaveBeenNthCalledWith(1, toAcpExtensionMethod(QMT_METHOD_AUTH_SET_API_TOKEN), {
-      provider: 'groq',
-      api_key: 'sk-test'
-    });
-    expect(extMethod).toHaveBeenNthCalledWith(2, toAcpExtensionMethod(QMT_METHOD_AUTH_CLEAR_API_TOKEN), {
-      provider: 'groq'
-    });
-    expect(extMethod).toHaveBeenNthCalledWith(3, toAcpExtensionMethod(QMT_METHOD_AUTH_SET_METHOD), {
-      provider: 'groq',
-      method: 'api_key'
-    });
-  });
-});
-
-describe('normalizeQuerymtModelInfoResponse', () => {
-  it('normalizes flattened model capabilities, limits, and pricing', () => {
+describe('parseQuerymtElicitationRecoveryAuthority', () => {
+  it('accepts a well-formed authority notification', () => {
     expect(
-      normalizeQuerymtModelInfoResponse({
-        models: {
-          'xai/grok-4.6': {
-            id: 'grok-4.6',
-            name: 'Grok 4.6',
-            attachment: true,
-            reasoning: true,
-            temperature: false,
-            tool_call: true,
-            modalities: { input: ['text', 'image'], output: ['text'] },
-            limit: { context: 200000, output: 32000 },
-            cost: { input: 3, output: 15 }
-          }
-        }
-      }).models['xai/grok-4.6']
-    ).toEqual(expect.objectContaining({
-      capabilities: expect.objectContaining({
-        attachment: true,
-        modalities: { input: ['text', 'image'], output: ['text'] }
-      }),
-      limits: { context: 200000, output: 32000 },
-      pricing: { input: 3, output: 15 }
-    }));
+      parseQuerymtElicitationRecoveryAuthority({
+        version: 1,
+        session_id: 'session-1',
+        resume_authority: 'process-secret'
+      })
+    ).toEqual({ version: 1, session_id: 'session-1', resume_authority: 'process-secret' });
   });
 
-  it('preserves null entries for unknown models', () => {
-    expect(normalizeQuerymtModelInfoResponse({ models: { 'custom/model': null } }).models).toEqual({
-      'custom/model': null
-    });
-  });
-});
-
-describe('normalizeQuerymtModelsResponse', () => {
-  it('supports direct model responses', () => {
-    expect(normalizeQuerymtModelsResponse({ models: [model] }).models).toEqual([model]);
-  });
-
-  it('supports wrapped all_models_list responses', () => {
-    expect(
-      normalizeQuerymtModelsResponse({
-        type: 'all_models_list',
-        data: { models: [model] }
-      }).models
-    ).toEqual([model]);
+  it.each([
+    ['null payload', null],
+    ['wrong version', { version: 2, session_id: 's', resume_authority: 'secret' }],
+    ['empty session id', { version: 1, session_id: '', resume_authority: 'secret' }],
+    ['missing secret', { version: 1, session_id: 'session-1' }]
+  ])('rejects %s', (_label, params) => {
+    expect(parseQuerymtElicitationRecoveryAuthority(params)).toBeNull();
   });
 });
