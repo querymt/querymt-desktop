@@ -6341,7 +6341,7 @@ summary:focus-visible {
   flex: 0 0 auto;
   align-items: center;
   gap: 0.25rem;
-  color: var(--status-danger);
+  color: var(--status-running);
   font-size: 0.7rem;
 }
 
@@ -7277,7 +7277,7 @@ summary:focus-visible {
 }
 
 .session-tool-status-failed {
-  color: var(--status-danger);
+  color: var(--status-running);
 }
 
 .session-tool-status-completed {
