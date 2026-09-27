@@ -1,0 +1,32 @@
+# Tasks
+
+## 1. Coordinate the Agent Contract (external dependency)
+
+The agent repository identified by `${QUERYMT_AGENT_REPO}` is outside this repo-local change's allowed edit roots; the variable denotes the root of the sibling QueryMT agent checkout. The following tasks require a separately authorized companion change there; do not edit it as part of a desktop-only apply.
+
+- [x] 1.1 Agree on a versioned QueryMT capability and wire contract for issuing in-process resume authority, listing only authorized pending session IDs, and attaching recoverable sessions; verify protocol fixtures cover legacy agents and denied unauthorized clients.
+- [x] 1.2 In the authorized agent companion change, extend session/profile/delegate pending entries with form payload, owner authority, run lifecycle, and delivery generation; verify unit tests cover register, snapshot, and cleanup on tool exit/Stop.
+- [x] 1.3 In the agent companion change, remove wall-clock limits from WebSocket form elicitation delivery without changing permission RPC limits, and stop mapping bridge/stdio transport errors to user `cancel`; verify simulated multi-hour waits and disconnect tests keep the original waiter alive.
+- [x] 1.4 In the agent companion change, implement verified-principal or original-connection-issued secret authority, per-session discovery and authorized attach with secure transport checks; verify guessed session IDs, stolen/stale IDs, capability mismatch, and insecure remote transport cannot recover a question.
+- [x] 1.5 In the agent companion change, re-deliver standard ACP `elicitation/create` on authorized reconnect with fresh JSON-RPC IDs, stable opaque question IDs, atomic single-winner resolution, form validation, and terminal outcome without answer-content replay; verify old-socket races, invalid content, duplicate replies, off-screen sessions, and profile/delegate routing in agent integration tests.
+- [x] 1.6 Classify WebSocket elicitation delivery failures so local request-construction errors preserve the waiter and event loop, transport send failures end only the failed connection's forwarding, and client/malformed response errors preserve the waiter without synthesizing `cancel`; verify each path independently.
+- [x] 1.7 Remove disconnected connection IDs from live authorization sets and retire each session authority after its final pending question finishes; verify disconnect preserves recoverability, unauthorized subscribers receive no question content, and expired authority cannot authorize a later unrelated question.
+
+## 2. Desktop Reconnect Behavior (this repository)
+
+- [x] 2.1 Extend the desktop QueryMT extension client to negotiate the agent contract, hold resume authority in memory across WebSocket client replacement, and handle unavailable/legacy capability without exposing secrets in logs or storage; verify ACP client and extension unit tests.
+- [x] 2.2 Change `InboxStore` to retain question cards and drafts while transport is offline, disable offline actions, and retire only the old ACP resolver without responding `cancel`; verify disconnect and explicit user-cancel unit tests in `src/lib/stores/inbox.svelte.test.ts`.
+- [x] 2.3 Rebind a re-delivered ACP question by stable agent/session/elicitation identity to its existing card and new resolver, preserving entered fields and avoiding duplicate notifications; verify re-delivery, draft retention, and one-card/one-answer unit tests.
+- [x] 2.4 Update `AgentsStore` reconnect to authenticate, discover authorized pending sessions including off-screen ones, attach without starting a new run, and reconcile inbox items against the authoritative snapshot; verify reconnect, stale-item, and active-versus-background session tests in `src/lib/stores/agents.svelte.test.ts`.
+- [x] 2.5 Update offline/recovery UI states so users see a temporarily unavailable question rather than an actionable or cancelled one; verify component behavior with desktop UI tests and no response emitted during offline interaction.
+
+## 3. Cross-Repository Verification and Rollout
+
+- [x] 3.1 With separately authorized agent companion work present, run desktop unit/type tests and agent ACP integration tests; verify a multi-hour simulated wait followed by reconnect resumes the *same* tool exactly once.
+- [x] 3.2 Exercise two ACP clients, a dead connection's late response, explicit `accept`/`decline`/`cancel`, run Stop, and an unrelated client with a known session ID; verify only the authorized current delivery can resolve and only explicit user `cancel` is attributed to the user.
+- [x] 3.3 Verify feature-gated deployment against old desktop and old agent versions, secure/non-secure transports, and sessions created before rollout; document cases where recovery is unavailable rather than misreporting cancellation.
+
+## 4. Frontend Refresh Recovery (this repository)
+
+- [x] 4.1 Mirror resume authorities to session-scoped webview storage bound to the agent endpoint scope, restoring them on connect and dropping them on endpoint change, malformed records, or agent denial; verify restore-after-refresh, endpoint-change drop, malformed-record drop, and denial cleanup in `src/lib/querymt/acp-client.test.ts`.
+- [x] 4.2 Verify a refreshed UI (new store instance, no retained cards) recovers pending sessions and creates fresh actionable cards from re-delivered requests without fabricated user actions in `src/lib/stores/agents.svelte.test.ts` and `src/lib/stores/inbox.svelte.test.ts`.

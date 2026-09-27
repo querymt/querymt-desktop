@@ -52,6 +52,18 @@ export type QuerymtExtensionNotification =
   | { method: 'querymt/models/changed'; params: ModelsChangedNotification }
   | { method: 'querymt/session/delegateModelsChanged'; params: DelegateModelsChangedNotification }
   | { method: 'querymt/session/inputState'; params: SessionInputStateNotification }
+  | {
+      method: 'querymt/elicitation/recoveryAuthority';
+      params: QuerymtElicitationRecoveryAuthorityNotification;
+    }
+  | {
+      method: 'querymt/elicitation/validationFailed';
+      params: QuerymtElicitationValidationFailedNotification;
+    }
+  | {
+      method: 'querymt/elicitation/completed';
+      params: QuerymtElicitationCompletedNotification;
+    }
   | { method: 'querymt/mesh/joined'; params: MeshJoinedNotification }
   | { method: 'querymt/mesh/nodesChanged'; params: MeshNodesChangedNotification }
   | { method: 'querymt/mesh/peerExpired'; params: MeshPeerExpiredNotification }
@@ -61,6 +73,14 @@ export type QuerymtExtensionNotification =
   | { method: QuerymtLogicalMethod; params: unknown };
 
 export const QMT_METHOD_CAPABILITIES = 'querymt/capabilities';
+export const QMT_METHOD_ELICITATION_LIST_PENDING = 'querymt/elicitation/listPendingSessions';
+export const QMT_METHOD_ELICITATION_ATTACH_SESSION = 'querymt/elicitation/attachSession';
+export const QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY =
+  'querymt/elicitation/recoveryAuthority';
+export const QMT_NOTIFICATION_ELICITATION_VALIDATION_FAILED =
+  'querymt/elicitation/validationFailed';
+export const QMT_NOTIFICATION_ELICITATION_COMPLETED = 'querymt/elicitation/completed';
+export const QMT_ELICITATION_RECOVERY_VERSION = 1;
 export const QMT_METHOD_MODELS = 'querymt/models';
 export const QMT_METHOD_REFRESH_MODELS = 'querymt/refreshModels';
 export const QMT_METHOD_MODEL_INFO = 'querymt/modelInfo';
@@ -109,6 +129,54 @@ export interface QuerymtProfileInfo {
   config_kind?: string | null;
   source?: string | null;
   fingerprint?: string | null;
+}
+
+/** Versioned v1 elicitation-recovery contract advertised by compatible agents. */
+export interface QuerymtElicitationRecoveryCapability {
+  version: number;
+  authority_notification: string;
+  list_pending_method: string;
+  attach_method: string;
+}
+
+export interface QuerymtListPendingElicitationSessionsRequest {
+  version: number;
+  resume_authority: string;
+}
+
+export interface QuerymtListPendingElicitationSessionsResponse {
+  version: number;
+  session_ids: string[];
+}
+
+export interface QuerymtAttachPendingElicitationSessionRequest {
+  version: number;
+  session_id: string;
+  resume_authority: string;
+}
+
+export interface QuerymtAttachPendingElicitationSessionResponse {
+  version: number;
+  session_id: string;
+  elicitation_ids: string[];
+}
+
+export interface QuerymtElicitationRecoveryAuthorityNotification {
+  version: number;
+  session_id: string;
+  resume_authority: string;
+}
+
+export interface QuerymtElicitationValidationFailedNotification {
+  session_id: string;
+  elicitation_id: string;
+  message: string;
+}
+
+export interface QuerymtElicitationCompletedNotification {
+  session_id: string;
+  elicitation_id: string;
+  outcome: 'accept' | 'decline' | 'cancel' | 'superseded' | 'completed_elsewhere';
 }
 
 export interface QuerymtProfilesResponse {
@@ -247,8 +315,88 @@ export interface QuerymtSubmitInputRequest {
   expected_run_id?: string;
 }
 
+/** Error thrown when a QueryMT extension response violates its wire contract. */
+export class QuerymtExtensionResponseError extends Error {
+  constructor(method: string) {
+    super(`Malformed response for ${method}.`);
+    this.name = 'QuerymtExtensionResponseError';
+  }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
 export function toAcpExtensionMethod(method: QuerymtLogicalMethod): QuerymtWireMethod {
   return `_${method}`;
+}
+
+/**
+ * Validate the advertised elicitation-recovery contract.
+ *
+ * Returns null when the agent is legacy, the capability is unavailable, or the
+ * advertised version or contract methods are incompatible with this client.
+ */
+export function parseQuerymtElicitationRecoveryCapability(
+  capabilities: CapabilitiesInfo
+): QuerymtElicitationRecoveryCapability | null {
+  const advertised = (
+    capabilities as CapabilitiesInfo & { elicitation_recovery?: unknown }
+  ).elicitation_recovery;
+  if (!advertised || typeof advertised !== 'object') {
+    return null;
+  }
+
+  const candidate = advertised as Partial<QuerymtElicitationRecoveryCapability>;
+  if (
+    candidate.version !== QMT_ELICITATION_RECOVERY_VERSION ||
+    candidate.authority_notification !== QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY ||
+    candidate.list_pending_method !== QMT_METHOD_ELICITATION_LIST_PENDING ||
+    candidate.attach_method !== QMT_METHOD_ELICITATION_ATTACH_SESSION
+  ) {
+    return null;
+  }
+
+  const methods = capabilities.methods ?? [];
+  const notifications = capabilities.notifications ?? [];
+  if (
+    !methods.includes(QMT_METHOD_ELICITATION_LIST_PENDING) ||
+    !methods.includes(QMT_METHOD_ELICITATION_ATTACH_SESSION) ||
+    !notifications.includes(QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY)
+  ) {
+    return null;
+  }
+
+  return {
+    version: candidate.version,
+    authority_notification: candidate.authority_notification,
+    list_pending_method: candidate.list_pending_method,
+    attach_method: candidate.attach_method
+  };
+}
+
+/** Validate a recoveryAuthority notification payload; returns null when malformed. */
+export function parseQuerymtElicitationRecoveryAuthority(
+  params: unknown
+): QuerymtElicitationRecoveryAuthorityNotification | null {
+  if (!params || typeof params !== 'object') {
+    return null;
+  }
+  const candidate = params as Partial<QuerymtElicitationRecoveryAuthorityNotification>;
+  if (
+    candidate.version !== QMT_ELICITATION_RECOVERY_VERSION ||
+    typeof candidate.session_id !== 'string' ||
+    candidate.session_id.length === 0 ||
+    typeof candidate.resume_authority !== 'string' ||
+    candidate.resume_authority.length === 0
+  ) {
+    return null;
+  }
+  return {
+    version: candidate.version,
+    session_id: candidate.session_id,
+    resume_authority: candidate.resume_authority
+  };
 }
 
 export function toLogicalQuerymtMethod(method: string): QuerymtLogicalMethod | null {
@@ -274,6 +422,49 @@ export class QuerymtExtensions {
 
   async capabilities(): Promise<CapabilitiesInfo> {
     return this.call<CapabilitiesInfo>(QMT_METHOD_CAPABILITIES);
+  }
+
+  async listPendingElicitationSessions(
+    request: QuerymtListPendingElicitationSessionsRequest
+  ): Promise<QuerymtListPendingElicitationSessionsResponse> {
+    const response = await this.call<Partial<QuerymtListPendingElicitationSessionsResponse>>(
+      QMT_METHOD_ELICITATION_LIST_PENDING,
+      request
+    );
+    if (
+      !response ||
+      response.version !== QMT_ELICITATION_RECOVERY_VERSION ||
+      !isStringArray(response.session_ids)
+    ) {
+      throw new QuerymtExtensionResponseError(QMT_METHOD_ELICITATION_LIST_PENDING);
+    }
+    return {
+      version: response.version,
+      session_ids: response.session_ids
+    };
+  }
+
+  async attachPendingElicitationSession(
+    request: QuerymtAttachPendingElicitationSessionRequest
+  ): Promise<QuerymtAttachPendingElicitationSessionResponse> {
+    const response = await this.call<Partial<QuerymtAttachPendingElicitationSessionResponse>>(
+      QMT_METHOD_ELICITATION_ATTACH_SESSION,
+      request
+    );
+    if (
+      !response ||
+      response.version !== QMT_ELICITATION_RECOVERY_VERSION ||
+      typeof response.session_id !== 'string' ||
+      !response.session_id ||
+      !isStringArray(response.elicitation_ids)
+    ) {
+      throw new QuerymtExtensionResponseError(QMT_METHOD_ELICITATION_ATTACH_SESSION);
+    }
+    return {
+      version: response.version,
+      session_id: response.session_id,
+      elicitation_ids: response.elicitation_ids
+    };
   }
 
   async models(): Promise<QuerymtModelsResponse> {

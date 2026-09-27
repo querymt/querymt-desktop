@@ -87,9 +87,14 @@ import {
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK,
+  QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY,
   QuerymtExtensions,
+  parseQuerymtElicitationRecoveryAuthority,
+  parseQuerymtElicitationRecoveryCapability,
   type QuerymtAuthResult,
   type QuerymtAuthStartResponse,
+  type QuerymtElicitationRecoveryCapability,
+  type QuerymtExtensionNotification,
   type QuerymtPluginUpdateResponse,
   type QuerymtProfilesResponse,
   type QuerymtSubmitInputRequest,
@@ -97,7 +102,6 @@ import {
   type QuerymtUndoResponse,
   type QuerymtUndoStackResponse,
   toLogicalQuerymtMethod,
-  type QuerymtExtensionNotification,
   type QuerymtLogicalMethod
 } from '$lib/querymt/querymt-extensions';
 import { createTauriAcpStream, createWebSocketAcpStream } from '$lib/querymt/transport';
@@ -107,6 +111,187 @@ import { acpWebSocketUrl } from '$lib/querymt/websocket-url';
 
 const PROTOCOL_VERSION = 1;
 const CONNECT_CANCELLED_MESSAGE = 'ACP connection cancelled.';
+
+/**
+ * Resume authorities keyed by agent id, then session id.
+ *
+ * Secrets live in this process-lifetime map and are mirrored to session-scoped
+ * webview storage (`sessionStorage`) so a UI refresh (a new JavaScript runtime
+ * in the same tab/webview) can restore them and re-prove authority. They are
+ * never written to `localStorage`, logs, URLs, or ACP payloads, and they die
+ * with the tab/webview session. Holding them at module scope (instead of per
+ * instance) keeps them available when the WebSocket transport is replaced by
+ * a new DesktopAcpClient during reconnect.
+ */
+const elicitationResumeAuthorities = new Map<string, Map<string, string>>();
+
+const ELICITATION_AUTHORITY_STORAGE_PREFIX = 'querymt.elicitation.authorities.';
+
+/**
+ * Endpoint-bound scope so a persisted secret issued by one agent endpoint is
+ * never restored for, or offered to, a different one (fail closed).
+ */
+function elicitationAuthorityScope(config: AgentConfig): string {
+  if (config.transport === 'websocket') {
+    const scheme = config.websocketSecure ? 'wss' : 'ws';
+    return `${scheme}://${config.websocketUrl ?? ''}`;
+  }
+  return `stdio://${config.commandLine ?? ''}`;
+}
+
+function elicitationAuthorityStorageKey(agentId: string): string {
+  return `${ELICITATION_AUTHORITY_STORAGE_PREFIX}${agentId}`;
+}
+
+interface StoredElicitationAuthorities {
+  scope: string;
+  authorities: Record<string, string>;
+}
+
+function isSecretMap(value: unknown): value is Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  return Object.entries(value).every(
+    ([sessionId, secret]) => sessionId.length > 0 && typeof secret === 'string' && secret.length > 0
+  );
+}
+
+function readStoredElicitationAuthorities(agentId: string): StoredElicitationAuthorities | null {
+  if (typeof sessionStorage === 'undefined') return null;
+  const key = elicitationAuthorityStorageKey(agentId);
+  let raw: string | null;
+  try {
+    raw = sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const scope = (parsed as StoredElicitationAuthorities | null)?.scope;
+    const authorities = (parsed as StoredElicitationAuthorities | null)?.authorities;
+    if (typeof scope !== 'string' || scope.length === 0 || !isSecretMap(authorities)) {
+      sessionStorage.removeItem(key);
+      return null;
+    }
+    return parsed as StoredElicitationAuthorities;
+  } catch {
+    try {
+      sessionStorage.removeItem(key);
+    } catch {
+      // Storage unavailable: recovery falls back to in-memory only.
+    }
+    return null;
+  }
+}
+
+function writeStoredElicitationAuthorities(
+  agentId: string,
+  record: StoredElicitationAuthorities
+): void {
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    sessionStorage.setItem(elicitationAuthorityStorageKey(agentId), JSON.stringify(record));
+  } catch {
+    // Private mode or full quota: recovery stays in-memory for this session.
+  }
+}
+
+function removeStoredElicitationAuthorities(agentId: string): void {
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    sessionStorage.removeItem(elicitationAuthorityStorageKey(agentId));
+  } catch {
+    // Non-fatal.
+  }
+}
+
+function persistElicitationResumeAuthorities(config: AgentConfig): void {
+  const sessions = elicitationResumeAuthorities.get(config.id);
+  if (!sessions || sessions.size === 0) {
+    removeStoredElicitationAuthorities(config.id);
+    return;
+  }
+  writeStoredElicitationAuthorities(config.id, {
+    scope: elicitationAuthorityScope(config),
+    authorities: Object.fromEntries(sessions)
+  });
+}
+
+/**
+ * Hydrate authorities mirrored before a UI refresh (new JavaScript runtime).
+ *
+ * Only records matching the current endpoint scope are restored; anything
+ * else is dropped so a secret issued by one endpoint is never offered to
+ * another (fail closed).
+ */
+function restoreElicitationResumeAuthorities(config: AgentConfig): void {
+  const record = readStoredElicitationAuthorities(config.id);
+  if (!record) return;
+  if (record.scope !== elicitationAuthorityScope(config)) {
+    removeStoredElicitationAuthorities(config.id);
+    elicitationResumeAuthorities.delete(config.id);
+    return;
+  }
+  let sessions = elicitationResumeAuthorities.get(config.id);
+  if (!sessions) {
+    sessions = new Map<string, string>();
+    elicitationResumeAuthorities.set(config.id, sessions);
+  }
+  for (const [sessionId, secret] of Object.entries(record.authorities)) {
+    sessions.set(sessionId, secret);
+  }
+}
+
+function storeElicitationResumeAuthority(config: AgentConfig, sessionId: string, secret: string): void {
+  let sessions = elicitationResumeAuthorities.get(config.id);
+  if (!sessions) {
+    sessions = new Map<string, string>();
+    elicitationResumeAuthorities.set(config.id, sessions);
+  }
+  sessions.set(sessionId, secret);
+  persistElicitationResumeAuthorities(config);
+}
+
+function hasElicitationResumeAuthority(agentId: string, sessionId: string): boolean {
+  return elicitationResumeAuthorities.get(agentId)?.has(sessionId) ?? false;
+}
+
+function takeElicitationResumeAuthority(agentId: string, sessionId: string): string | null {
+  return elicitationResumeAuthorities.get(agentId)?.get(sessionId) ?? null;
+}
+
+function listElicitationResumeAuthorities(agentId: string): Array<[string, string]> {
+  return [...(elicitationResumeAuthorities.get(agentId)?.entries() ?? [])];
+}
+
+function forgetElicitationResumeAuthority(config: AgentConfig, sessionId: string): void {
+  const sessions = elicitationResumeAuthorities.get(config.id);
+  if (!sessions?.delete(sessionId)) return;
+  persistElicitationResumeAuthorities(config);
+}
+
+/** Authoritative pending-question set for one session after a recovery attach. */
+export interface ElicitationRecoverySnapshot {
+  sessionId: string;
+  elicitationIds: string[];
+}
+
+/** Drop every in-memory resume authority (used by tests and full teardown). */
+export function clearElicitationResumeAuthorities(): void {
+  elicitationResumeAuthorities.clear();
+}
+
+/**
+ * Drop every resume authority held for one agent.
+ *
+ * Called when the agent's endpoint changes: authorities are issued by a
+ * specific agent over its protected channel, so secrets from the previous
+ * endpoint must never be offered to a different one (fail closed).
+ */
+export function clearElicitationResumeAuthoritiesForAgent(agentId: string): void {
+  elicitationResumeAuthorities.delete(agentId);
+  removeStoredElicitationAuthorities(agentId);
+}
 
 export interface LoadedAcpSession {
   response: LoadSessionResponse;
@@ -122,6 +307,8 @@ export class DesktopAcpClient {
   private initializeResponse: InitializeResponse | null = null;
   private querymtExtensions: QuerymtExtensions | null = null;
   private controlCapabilities: CapabilitiesInfo | null = null;
+  private elicitationRecovery: QuerymtElicitationRecoveryCapability | null = null;
+  private authorityListenerRegistered = false;
   private connectionLossHandlers = new Set<(reason: string) => void>();
   private intentionallyDisconnected = false;
   private connectEpoch = 0;
@@ -232,11 +419,117 @@ export class DesktopAcpClient {
       throw connectCancelledError();
     }
 
+    const recoveryOverSecureTransport = supportsElicitationRecoveryTransport(this.config);
+    this.elicitationRecovery =
+      controlCapabilities && recoveryOverSecureTransport
+        ? parseQuerymtElicitationRecoveryCapability(controlCapabilities)
+        : null;
+    if (this.elicitationRecovery) {
+      restoreElicitationResumeAuthorities(this.config);
+      this.ensureElicitationAuthorityListener();
+    }
+
     this.initializeResponse = initializeResponse;
     this.querymtExtensions = querymtExtensions;
     this.controlCapabilities = controlCapabilities;
     this.controlHealth = controlHealth;
     return initializeResponse;
+  }
+
+  /**
+   * Capture per-session resume authorities pushed by the agent.
+   *
+   * Values stay in the module-level in-memory registry; malformed or unknown
+   * payloads are dropped silently. Nothing here logs or serializes secrets.
+   */
+  private ensureElicitationAuthorityListener(): void {
+    if (this.authorityListenerRegistered) {
+      return;
+    }
+    this.authorityListenerRegistered = true;
+    this.browserClient.onExtensionNotification((notification: QuerymtExtensionNotification) => {
+      if (notification.method !== QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY) {
+        return;
+      }
+      if (!this.elicitationRecovery) {
+        return;
+      }
+      const authority = parseQuerymtElicitationRecoveryAuthority(notification.params);
+      if (!authority) {
+        return;
+      }
+      storeElicitationResumeAuthority(this.config, authority.session_id, authority.resume_authority);
+    });
+  }
+
+  getElicitationRecoveryCapability(): QuerymtElicitationRecoveryCapability | null {
+    return this.elicitationRecovery;
+  }
+
+  supportsElicitationRecovery(): boolean {
+    return this.elicitationRecovery !== null;
+  }
+
+  hasElicitationAuthority(sessionId: string): boolean {
+    return hasElicitationResumeAuthority(this.config.id, sessionId);
+  }
+
+  getElicitationAuthority(sessionId: string): string | null {
+    return takeElicitationResumeAuthority(this.config.id, sessionId);
+  }
+
+  /**
+   * Discover and attach pending questions for every held resume authority.
+   *
+   * Returns the authoritative per-session pending sets. An explicit RPC denial
+   * means the agent rejected the authority (expired/revoked): forget it and
+   * report an empty set so stale cards can be cleaned up. Other list failures
+   * and attach failures keep the authority and skip the snapshot, leaving
+   * offline cards pending for a later reconnect instead of fabricating an
+   * authoritative empty set.
+   */
+  async recoverPendingElicitations(): Promise<ElicitationRecoverySnapshot[]> {
+    if (!this.elicitationRecovery || !this.querymtExtensions) {
+      return [];
+    }
+    const version = this.elicitationRecovery.version;
+    const snapshots: ElicitationRecoverySnapshot[] = [];
+    for (const [sessionId, resumeAuthority] of listElicitationResumeAuthorities(this.config.id)) {
+      let sessionIds: string[];
+      try {
+        const discovery = await this.querymtExtensions.listPendingElicitationSessions({
+          version,
+          resume_authority: resumeAuthority
+        });
+        sessionIds = discovery.session_ids;
+      } catch (error) {
+        if (isRpcDenial(error)) {
+          forgetElicitationResumeAuthority(this.config, sessionId);
+          snapshots.push({ sessionId, elicitationIds: [] });
+        }
+        continue;
+      }
+      if (sessionIds.length === 0) {
+        snapshots.push({ sessionId, elicitationIds: [] });
+        continue;
+      }
+      for (const attachedSessionId of sessionIds) {
+        try {
+          const attach = await this.querymtExtensions.attachPendingElicitationSession({
+            version,
+            session_id: attachedSessionId,
+            resume_authority: resumeAuthority
+          });
+          snapshots.push({ sessionId: attachedSessionId, elicitationIds: attach.elicitation_ids });
+        } catch {
+          // Attach failed; keep the authority and leave any offline card pending.
+        }
+      }
+      if (!sessionIds.includes(sessionId)) {
+        snapshots.push({ sessionId, elicitationIds: [] });
+      }
+    }
+    return snapshots;
   }
 
   async listSessions(request: ListSessionsRequest = {}): Promise<ListSessionsResponse> {
@@ -789,6 +1082,7 @@ export class DesktopAcpClient {
     this.initializeResponse = null;
     this.querymtExtensions = null;
     this.controlCapabilities = null;
+    this.elicitationRecovery = null;
     if (stream) {
       await closeAcpStream(stream);
     }
@@ -848,6 +1142,7 @@ export class DesktopAcpClient {
     this.initializeResponse = null;
     this.querymtExtensions = null;
     this.controlCapabilities = null;
+    this.elicitationRecovery = null;
     for (const handler of this.connectionLossHandlers) handler(reason);
   }
 
@@ -889,6 +1184,42 @@ function requireWebSocketUrl(config: AgentConfig): string {
     throw new Error(`Server address is required for ${config.name}.`);
   }
   return url;
+}
+
+const LOOPBACK_WS_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+/**
+ * Recovery binds a process-lifetime resume authority to the endpoint that
+ * issued it. WebSocket authorities may only be exchanged where the protected
+ * channel is guaranteed: TLS, or a loopback endpoint whose traffic never
+ * leaves the machine. Other transports (stdio) are inherently local.
+ */
+function supportsElicitationRecoveryTransport(config: AgentConfig): boolean {
+  if (config.transport !== 'websocket') {
+    return true;
+  }
+  try {
+    const url = new URL(requireWebSocketUrl(config));
+    if (url.protocol === 'wss:') {
+      return true;
+    }
+    if (url.protocol !== 'ws:') {
+      return false;
+    }
+    const host = url.hostname.toLowerCase();
+    return LOOPBACK_WS_HOSTS.has(host) || host.endsWith('.localhost');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether an extension RPC failure is an authoritative JSON-RPC denial from
+ * the agent (e.g. a rejected resume authority) rather than a transport-level
+ * failure. The ACP SDK rejects method errors with a numeric JSON-RPC `code`.
+ */
+function isRpcDenial(error: unknown): boolean {
+  return typeof (error as { code?: unknown } | null)?.code === 'number';
 }
 
 function buildClientCapabilities(): ClientCapabilities {

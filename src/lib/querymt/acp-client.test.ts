@@ -1,16 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DesktopAcpClient } from './acp-client';
+import { DesktopAcpClient, clearElicitationResumeAuthorities, clearElicitationResumeAuthoritiesForAgent } from './acp-client';
+import type { QuerymtExtensionNotification } from './querymt-extensions';
 
 const beginSessionReplay = vi.fn(() => ({ sessionId: 'session-1', notifications: [] }));
 const completeSessionReplay = vi.fn(() => []);
 const abortSessionReplay = vi.fn();
+const extensionNotificationHandlers: Array<(notification: QuerymtExtensionNotification) => void> =
+  [];
 vi.mock('./browser-client', () => ({
   BrowserClient: class {
     beginSessionReplay = beginSessionReplay;
     completeSessionReplay = completeSessionReplay;
     abortSessionReplay = abortSessionReplay;
+    onExtensionNotification(handler: (notification: QuerymtExtensionNotification) => void) {
+      extensionNotificationHandlers.push(handler);
+    }
+    offExtensionNotification(handler: (notification: QuerymtExtensionNotification) => void) {
+      const index = extensionNotificationHandlers.indexOf(handler);
+      if (index !== -1) extensionNotificationHandlers.splice(index, 1);
+    }
   }
 }));
+
+function emitExtensionNotification(notification: QuerymtExtensionNotification): void {
+  for (const handler of [...extensionNotificationHandlers]) {
+    handler(notification);
+  }
+}
 
 const createWebSocketAcpStream = vi.hoisted(() => vi.fn());
 const createTauriAcpStream = vi.hoisted(() => vi.fn());
@@ -195,13 +211,15 @@ function mockAcpStream() {
   };
 }
 
-function websocketClient() {
+function websocketClient(options: { websocketUrl?: string; websocketSecure?: boolean } = {}) {
   return new DesktopAcpClient({
     id: 'agent-1',
     name: 'Agent',
     transport: 'websocket',
     commandLine: '',
-    websocketUrl: 'agent.example',
+    // Loopback by default so recovery-related tests satisfy the secure-transport gate.
+    websocketUrl: options.websocketUrl ?? '127.0.0.1:9000',
+    websocketSecure: options.websocketSecure,
     enabled: true,
     autoStart: true
   });
@@ -231,7 +249,7 @@ describe('DesktopAcpClient connect cancellation', () => {
     const stream = mockAcpStream();
     createWebSocketAcpStream.mockResolvedValueOnce(stream);
 
-    await websocketClient().connect();
+    await websocketClient({ websocketUrl: 'agent.example' }).connect();
 
     expect(createWebSocketAcpStream).toHaveBeenCalledWith(
       'ws://agent.example/acp/ws',
@@ -442,5 +460,445 @@ describe('DesktopAcpClient connect cancellation', () => {
     expect(laterStream.readable.cancel).not.toHaveBeenCalled();
     expect(laterStream.writable.abort).not.toHaveBeenCalled();
     expect(client.getInitializeResponse()).toMatchObject({ protocolVersion: 1 });
+  });
+});
+
+const RECOVERY_CAPABILITY = {
+  elicitation_recovery: {
+    version: 1,
+    authority_notification: 'querymt/elicitation/recoveryAuthority',
+    list_pending_method: 'querymt/elicitation/listPendingSessions',
+    attach_method: 'querymt/elicitation/attachSession'
+  }
+};
+
+function recoveryMethodsFixture(): string[] {
+  return [
+    'querymt/capabilities',
+    'querymt/elicitation/listPendingSessions',
+    'querymt/elicitation/attachSession'
+  ];
+}
+
+function recoveryNotificationsFixture(): string[] {
+  return [
+    'querymt/elicitation/recoveryAuthority',
+    'querymt/elicitation/validationFailed',
+    'querymt/elicitation/completed'
+  ];
+}
+
+function mockRecoveryConnection(options: {
+  list: (params: Record<string, unknown>) => unknown;
+  attach: (params: Record<string, unknown>) => unknown;
+}) {
+  ClientSideConnectionMock.mockImplementation(function ClientSideConnectionMock(this: {
+    initialize: ReturnType<typeof vi.fn>;
+    extMethod: ReturnType<typeof vi.fn>;
+  }) {
+    this.initialize = vi.fn(async () => ({
+      protocolVersion: 1,
+      agentCapabilities: {},
+      authMethods: []
+    }));
+    this.extMethod = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === '_querymt/capabilities') {
+        return {
+          querymt_control_version: 1,
+          agent: { id: 'agent-1', display_name: 'Agent', kind: 'local' },
+          transport: { acp: true, stdio: false, websocket: true, mesh: false },
+          features: { auth: true, models: true, steering: true, schedules: true, mesh: false, mesh_invites: false, remote_sessions: false, remote_schedules: false, profiles: false },
+          methods: recoveryMethodsFixture(),
+          notifications: recoveryNotificationsFixture(),
+          ...RECOVERY_CAPABILITY
+        };
+      }
+      if (method === '_querymt/elicitation/listPendingSessions') {
+        return options.list(params);
+      }
+      if (method === '_querymt/elicitation/attachSession') {
+        return options.attach(params);
+      }
+      throw new Error(`method not found: ${method}`);
+    });
+  });
+}
+
+async function connectedRecoveryClient(options: Parameters<typeof mockRecoveryConnection>[0]) {
+  const stream = mockAcpStream();
+  createWebSocketAcpStream.mockResolvedValueOnce(stream);
+  mockRecoveryConnection(options);
+  const client = websocketClient();
+  await client.connect();
+  emitExtensionNotification({
+    method: 'querymt/elicitation/recoveryAuthority',
+    params: { version: 1, session_id: 'session-1', resume_authority: 'process-secret-1' }
+  });
+  return client;
+}
+
+describe('DesktopAcpClient elicitation recovery', () => {
+  let consoleSpies: Array<ReturnType<typeof vi.spyOn>>;
+
+  beforeEach(() => {
+    clearElicitationResumeAuthorities();
+    globalThis.sessionStorage.clear();
+    extensionNotificationHandlers.length = 0;
+    consoleSpies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
+      vi.spyOn(console, method).mockImplementation(() => undefined)
+    );
+    createWebSocketAcpStream.mockReset();
+    createTauriAcpStream.mockReset();
+    ClientSideConnectionMock.mockReset();
+    ClientSideConnectionMock.mockImplementation(function ClientSideConnectionMock(this: {
+      initialize: ReturnType<typeof vi.fn>;
+      extMethod: ReturnType<typeof vi.fn>;
+    }) {
+      this.initialize = vi.fn(async () => ({
+        protocolVersion: 1,
+        agentCapabilities: {},
+        authMethods: []
+      }));
+      this.extMethod = vi.fn(async (method: string) => {
+        if (method === '_querymt/capabilities') {
+          return {
+            querymt_control_version: 1,
+            agent: { id: 'agent-1', display_name: 'Agent', kind: 'local' },
+            transport: { acp: true, stdio: false, websocket: true, mesh: false },
+            features: { auth: true, models: true, steering: true, schedules: true, mesh: false, mesh_invites: false, remote_sessions: false, remote_schedules: false, profiles: false },
+            methods: recoveryMethodsFixture(),
+            notifications: recoveryNotificationsFixture(),
+            ...RECOVERY_CAPABILITY
+          };
+        }
+        throw new Error(`method not found: ${method}`);
+      });
+    });
+  });
+
+  it('negotiates the v1 recovery contract when the agent advertises it', async () => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+
+    const client = websocketClient();
+    await client.connect();
+
+    expect(client.supportsElicitationRecovery()).toBe(true);
+    expect(client.getElicitationRecoveryCapability()).toEqual(RECOVERY_CAPABILITY.elicitation_recovery);
+    const extMethod = ClientSideConnectionMock.mock.instances[0]?.extMethod as ReturnType<typeof vi.fn>;
+    expect(extMethod).toHaveBeenCalledWith('_querymt/capabilities', {});
+  });
+
+  it('treats legacy and incompatible agents as recovery-unavailable without failing connect', async () => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    ClientSideConnectionMock.mockImplementation(function ClientSideConnectionMock(this: {
+      initialize: ReturnType<typeof vi.fn>;
+      extMethod: ReturnType<typeof vi.fn>;
+    }) {
+      this.initialize = vi.fn(async () => ({ protocolVersion: 1, agentCapabilities: {}, authMethods: [] }));
+      this.extMethod = vi.fn(async () => {
+        throw new Error('method not found');
+      });
+    });
+
+    const client = websocketClient();
+    await expect(client.connect()).resolves.toMatchObject({ protocolVersion: 1 });
+
+    expect(client.supportsElicitationRecovery()).toBe(false);
+    expect(client.getElicitationRecoveryCapability()).toBeNull();
+    expect(client.hasElicitationAuthority('session-1')).toBe(false);
+    expect(client.getControlHealth().state).toBe('legacy');
+  });
+
+  it.each([
+    ['missing capability', (caps: Record<string, unknown>) => {
+      const { elicitation_recovery: _omitted, ...rest } = caps as typeof RECOVERY_CAPABILITY;
+      return rest;
+    }],
+    ['unsupported version', (caps: Record<string, unknown>) => ({
+      ...(caps as typeof RECOVERY_CAPABILITY),
+      elicitation_recovery: { ...(caps as typeof RECOVERY_CAPABILITY).elicitation_recovery, version: 2 }
+    })],
+    ['missing contract method', (caps: Record<string, unknown>) => ({
+      ...(caps as typeof RECOVERY_CAPABILITY),
+      methods: ['querymt/capabilities']
+    })]
+  ])('rejects negotiation when the advertised contract has %s', async (_label, mutate) => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    ClientSideConnectionMock.mockImplementation(function ClientSideConnectionMock(this: {
+      initialize: ReturnType<typeof vi.fn>;
+      extMethod: ReturnType<typeof vi.fn>;
+    }) {
+      this.initialize = vi.fn(async () => ({ protocolVersion: 1, agentCapabilities: {}, authMethods: [] }));
+      this.extMethod = vi.fn(async () => mutate(RECOVERY_CAPABILITY));
+    });
+
+    const client = websocketClient();
+    await expect(client.connect()).resolves.toMatchObject({ protocolVersion: 1 });
+    expect(client.supportsElicitationRecovery()).toBe(false);
+  });
+
+  it('stores resume authority in memory across WebSocket client replacement without logging it', async () => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    const client = websocketClient();
+    await client.connect();
+
+    emitExtensionNotification({
+      method: 'querymt/elicitation/recoveryAuthority',
+      params: { version: 1, session_id: 'session-1', resume_authority: 'process-secret-1' }
+    });
+
+    expect(client.hasElicitationAuthority('session-1')).toBe(true);
+    expect(client.getElicitationAuthority('session-1')).toBe('process-secret-1');
+    expect(
+      JSON.stringify([
+        client.getControlCapabilities(),
+        client.getElicitationRecoveryCapability(),
+        client.getControlHealth()
+      ])
+    ).not.toContain('process-secret-1');
+
+    await client.disconnect();
+    const replacementStream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(replacementStream);
+    const replacement = websocketClient();
+    await replacement.connect();
+
+    expect(replacement.hasElicitationAuthority('session-1')).toBe(true);
+    for (const spy of consoleSpies) {
+      for (const call of spy.mock.calls) {
+        expect(JSON.stringify(call)).not.toContain('process-secret-1');
+      }
+    }
+  });
+
+  it('mirrors authorities to session-scoped webview storage only', async () => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    const client = websocketClient();
+    await client.connect();
+    emitExtensionNotification({
+      method: 'querymt/elicitation/recoveryAuthority',
+      params: { version: 1, session_id: 'session-1', resume_authority: 'process-secret-1' }
+    });
+
+    expect(globalThis.sessionStorage.getItem('querymt.elicitation.authorities.agent-1')).toBe(
+      JSON.stringify({ scope: 'ws://127.0.0.1:9000', authorities: { 'session-1': 'process-secret-1' } })
+    );
+    expect(window.localStorage.getItem('querymt.elicitation.authorities.agent-1')).toBeNull();
+  });
+
+  it('restores persisted authorities after a UI refresh and recovers pending sessions', async () => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    const client = websocketClient();
+    await client.connect();
+    emitExtensionNotification({
+      method: 'querymt/elicitation/recoveryAuthority',
+      params: { version: 1, session_id: 'session-1', resume_authority: 'process-secret-1' }
+    });
+
+    // Simulate a UI refresh: the JavaScript runtime (module registry) is
+    // gone, while session-scoped webview storage is retained.
+    clearElicitationResumeAuthorities();
+    mockRecoveryConnection({
+      list: () => ({ version: 1, session_ids: ['session-1'] }),
+      attach: () => ({ version: 1, session_id: 'session-1', elicitation_ids: ['elicitation-1'] })
+    });
+    createWebSocketAcpStream.mockResolvedValueOnce(mockAcpStream());
+    const refreshed = websocketClient();
+    await refreshed.connect();
+
+    expect(refreshed.hasElicitationAuthority('session-1')).toBe(true);
+    await expect(refreshed.recoverPendingElicitations()).resolves.toEqual([
+      { sessionId: 'session-1', elicitationIds: ['elicitation-1'] }
+    ]);
+  });
+
+  it('drops persisted authorities when the endpoint scope changes', async () => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    const client = websocketClient({ websocketUrl: 'localhost:9000' });
+    await client.connect();
+    emitExtensionNotification({
+      method: 'querymt/elicitation/recoveryAuthority',
+      params: { version: 1, session_id: 'session-1', resume_authority: 'process-secret-1' }
+    });
+
+    await client.disconnect();
+    createWebSocketAcpStream.mockResolvedValueOnce(mockAcpStream());
+    const moved = websocketClient({ websocketUrl: '127.0.0.1:9000' });
+    await moved.connect();
+
+    expect(moved.hasElicitationAuthority('session-1')).toBe(false);
+    expect(globalThis.sessionStorage.getItem('querymt.elicitation.authorities.agent-1')).toBeNull();
+  });
+
+  it('drops persisted authorities when the agent endpoint is reconfigured', async () => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    const client = websocketClient();
+    await client.connect();
+    emitExtensionNotification({
+      method: 'querymt/elicitation/recoveryAuthority',
+      params: { version: 1, session_id: 'session-1', resume_authority: 'process-secret-1' }
+    });
+
+    clearElicitationResumeAuthoritiesForAgent('agent-1');
+
+    expect(client.hasElicitationAuthority('session-1')).toBe(false);
+    expect(globalThis.sessionStorage.getItem('querymt.elicitation.authorities.agent-1')).toBeNull();
+  });
+
+  it('ignores and clears malformed persisted authority records', async () => {
+    const key = 'querymt.elicitation.authorities.agent-1';
+    globalThis.sessionStorage.setItem(key, '{not json');
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    const client = websocketClient();
+    await client.connect();
+    expect(client.hasElicitationAuthority('session-1')).toBe(false);
+    expect(globalThis.sessionStorage.getItem(key)).toBeNull();
+
+    globalThis.sessionStorage.setItem(
+      key,
+      JSON.stringify({ scope: 'ws://127.0.0.1:9000', authorities: { 'session-1': 42 } })
+    );
+    createWebSocketAcpStream.mockResolvedValueOnce(mockAcpStream());
+    const second = websocketClient();
+    await second.connect();
+    expect(second.hasElicitationAuthority('session-1')).toBe(false);
+    expect(globalThis.sessionStorage.getItem(key)).toBeNull();
+  });
+
+  it('drops malformed authority notifications', async () => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    const client = websocketClient();
+    await client.connect();
+
+    emitExtensionNotification({
+      method: 'querymt/elicitation/recoveryAuthority',
+      params: { version: 2, session_id: 'session-1', resume_authority: 'secret' }
+    });
+    emitExtensionNotification({
+      method: 'querymt/elicitation/recoveryAuthority',
+      params: { version: 1, session_id: '', resume_authority: 'secret' }
+    });
+    emitExtensionNotification({
+      method: 'querymt/elicitation/recoveryAuthority',
+      params: { version: 1, session_id: 'session-1' }
+    });
+
+    expect(client.hasElicitationAuthority('session-1')).toBe(false);
+  });
+
+  it.each([
+    ['a plain websocket to loopback', { websocketUrl: '127.0.0.1:9000' }, true],
+    ['ws://localhost', { websocketUrl: 'localhost:9000' }, true],
+    ['wss to any host', { websocketUrl: 'agent.example:9000', websocketSecure: true }, true],
+    ['a plain websocket to a remote host', { websocketUrl: 'agent.example:9000' }, false]
+  ])('enables recovery over %s only', async (_label, options, expected) => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    const client = websocketClient(options);
+    await client.connect();
+
+    expect(client.supportsElicitationRecovery()).toBe(expected);
+  });
+
+  it('ignores authority notifications on insecure remote websockets', async () => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    const client = websocketClient({ websocketUrl: 'agent.example:9000' });
+    await client.connect();
+
+    expect(client.supportsElicitationRecovery()).toBe(false);
+    emitExtensionNotification({
+      method: 'querymt/elicitation/recoveryAuthority',
+      params: { version: 1, session_id: 'session-1', resume_authority: 'remote-secret' }
+    });
+    expect(client.hasElicitationAuthority('session-1')).toBe(false);
+    expect(client.getElicitationAuthority('session-1')).toBeNull();
+  });
+
+  it('forgets the authority only on explicit RPC denial and reports an empty snapshot', async () => {
+    const client = await connectedRecoveryClient({
+      list: () => {
+        throw Object.assign(new Error('resume authority rejected'), { code: -32000 });
+      },
+      attach: () => ({ version: 1, session_id: 'session-1', elicitation_ids: [] })
+    });
+
+    await expect(client.recoverPendingElicitations()).resolves.toEqual([
+      { sessionId: 'session-1', elicitationIds: [] }
+    ]);
+    expect(client.hasElicitationAuthority('session-1')).toBe(false);
+    expect(globalThis.sessionStorage.getItem('querymt.elicitation.authorities.agent-1')).toBeNull();
+  });
+
+  it('keeps the authority and reports nothing when discovery fails without denial', async () => {
+    const client = await connectedRecoveryClient({
+      list: () => {
+        throw new Error('WebSocket closed during discovery.');
+      },
+      attach: () => ({ version: 1, session_id: 'session-1', elicitation_ids: [] })
+    });
+
+    await expect(client.recoverPendingElicitations()).resolves.toEqual([]);
+    expect(client.hasElicitationAuthority('session-1')).toBe(true);
+  });
+
+  it('keeps the authority and skips the snapshot when attach fails', async () => {
+    const client = await connectedRecoveryClient({
+      list: () => ({ version: 1, session_ids: ['session-1'] }),
+      attach: () => {
+        throw new Error('WebSocket closed during attach.');
+      }
+    });
+
+    await expect(client.recoverPendingElicitations()).resolves.toEqual([]);
+    expect(client.hasElicitationAuthority('session-1')).toBe(true);
+  });
+
+  it('reports an empty snapshot for the held session when discovery excludes it', async () => {
+    const client = await connectedRecoveryClient({
+      list: () => ({ version: 1, session_ids: ['session-9'] }),
+      attach: (params) => ({
+        version: 1,
+        session_id: params.session_id,
+        elicitation_ids: ['elicitation-9']
+      })
+    });
+
+    await expect(client.recoverPendingElicitations()).resolves.toEqual([
+      { sessionId: 'session-9', elicitationIds: ['elicitation-9'] },
+      { sessionId: 'session-1', elicitationIds: [] }
+    ]);
+    expect(client.hasElicitationAuthority('session-1')).toBe(true);
+  });
+
+  it('sends the wire version and resume authority on discovery and attach', async () => {
+    const client = await connectedRecoveryClient({
+      list: () => ({ version: 1, session_ids: ['session-1'] }),
+      attach: () => ({ version: 1, session_id: 'session-1', elicitation_ids: ['elicitation-1'] })
+    });
+
+    await expect(client.recoverPendingElicitations()).resolves.toEqual([
+      { sessionId: 'session-1', elicitationIds: ['elicitation-1'] }
+    ]);
+    const extMethod = ClientSideConnectionMock.mock.instances[0]?.extMethod as ReturnType<typeof vi.fn>;
+    expect(extMethod).toHaveBeenCalledWith('_querymt/elicitation/listPendingSessions', {
+      version: 1,
+      resume_authority: 'process-secret-1'
+    });
+    expect(extMethod).toHaveBeenCalledWith('_querymt/elicitation/attachSession', {
+      version: 1,
+      session_id: 'session-1',
+      resume_authority: 'process-secret-1'
+    });
   });
 });

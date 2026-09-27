@@ -3,7 +3,7 @@
   import { Ellipsis, Search } from '@lucide/svelte';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import { formatSessionTimestamp, getSessionWorkspaceName } from '$lib/domain/sessions';
-  import type { RecentSessionSummary } from '$lib/domain/types';
+  import type { DesktopSessionSummary } from '$lib/domain/types';
 
   let {
     sessions,
@@ -17,7 +17,7 @@
     dockedComposerVisible = false,
     onOpenSession = null
   }: {
-    sessions: RecentSessionSummary[];
+    sessions: DesktopSessionSummary[];
     activeAgentId?: string | null;
     activeSessionId?: string | null;
     isMacPlatform?: boolean;
@@ -26,7 +26,7 @@
     alignLeft?: number | null;
     alignWidth?: number | null;
     dockedComposerVisible?: boolean;
-    onOpenSession?: ((session: RecentSessionSummary) => void | Promise<void>) | null;
+    onOpenSession?: ((session: DesktopSessionSummary) => void | Promise<void>) | null;
   } = $props();
 
   let open = $state(false);
@@ -61,7 +61,7 @@
     `recent-session-switcher ${floating ? 'recent-session-switcher-floating' : ''} ${dockedComposerVisible ? 'recent-session-switcher-floating-with-composer' : ''}`
   );
 
-  function isActive(session: RecentSessionSummary): boolean {
+  function isActive(session: DesktopSessionSummary): boolean {
     return session.agentId === activeAgentId && session.sessionId === activeSessionId;
   }
 
@@ -74,7 +74,7 @@
     queueMicrotask(() => searchElement?.focus());
   });
 
-  async function openSession(session: RecentSessionSummary) {
+  async function openSession(session: DesktopSessionSummary) {
     open = false;
     if (onOpenSession) {
       await onOpenSession(session);
@@ -116,9 +116,11 @@
           <span class="recent-session-chip-identicon" aria-hidden="true">
             <svg width={identicon.width} height={identicon.width} viewBox={`0 0 ${identicon.width} ${identicon.width}`} preserveAspectRatio="xMinYMin">
               <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill={identicon.color} />
-              {#each identicon.paths as path}
-                <path d={path} fill={identicon.color} />
-              {/each}
+              <g fill="none" stroke={identicon.color} stroke-linecap="round" stroke-linejoin="round">
+                {#each identicon.arcs as arc}
+                  <path d={arc.d} stroke-width={arc.strokeWidth} />
+                {/each}
+              </g>
             </svg>
           </span>
           <span class="recent-session-chip-main">
@@ -184,9 +186,11 @@
                   <span class="recent-session-chip-identicon" aria-hidden="true">
                     <svg width={identicon.width} height={identicon.width} viewBox={`0 0 ${identicon.width} ${identicon.width}`} preserveAspectRatio="xMinYMin">
                       <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill={identicon.color} />
-                      {#each identicon.paths as path}
-                        <path d={path} fill={identicon.color} />
-                      {/each}
+                      <g fill="none" stroke={identicon.color} stroke-linecap="round" stroke-linejoin="round">
+                        {#each identicon.arcs as arc}
+                          <path d={arc.d} stroke-width={arc.strokeWidth} />
+                        {/each}
+                      </g>
                     </svg>
                   </span>
                   <div class="min-w-0 flex-1">

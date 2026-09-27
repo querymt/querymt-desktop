@@ -35,8 +35,20 @@ function provider(overrides: Partial<AuthProviderEntry> = {}): AuthProviderEntry
 function capabilities(methods: string[]): CapabilitiesInfo {
   return {
     querymt_control_version: 1,
+    agent: { id: 'agent-1', display_name: 'Agent', kind: 'local' },
+    transport: { acp: true, stdio: false, websocket: true, mesh: false, mesh_transport: 'none' },
     methods,
-    features: { models: true, mesh: false, schedules: false, auth: true }
+    notifications: [],
+    features: {
+      models: true,
+      mesh: false,
+      mesh_invites: false,
+      remote_sessions: false,
+      schedules: false,
+      remote_schedules: false,
+      profiles: false,
+      auth: true
+    }
   };
 }
 

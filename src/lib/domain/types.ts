@@ -353,6 +353,8 @@ export interface InboxItem {
   status?: 'pending' | 'resolved';
   resolution?: string | null;
   error?: string | null;
+  /** True while the owning transport is offline: the card is retained but actions are disabled. */
+  offline?: boolean;
   actions?: InboxAction[];
   formFields?: InboxFormField[];
 }

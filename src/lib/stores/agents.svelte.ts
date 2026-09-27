@@ -96,7 +96,7 @@ import {
   setModelConfigOptionRequest,
   setSessionConfigOptionRequest
 } from '$lib/querymt/config-options';
-import { DesktopAcpClient } from '$lib/querymt/acp-client';
+import { DesktopAcpClient, clearElicitationResumeAuthoritiesForAgent } from '$lib/querymt/acp-client';
 import {
   QMT_METHOD_PROFILES,
   QMT_METHOD_SESSION_DELEGATE_MODELS,
@@ -769,6 +769,17 @@ export class AgentsStore {
             ?? (explicitWebSocketScheme ? explicitWebSocketScheme === 'wss' : current?.websocketSecure ?? false)
         }
       : updates;
+    // Resume authorities are issued by a specific agent endpoint; drop them
+    // when that endpoint changes so its secrets are never offered elsewhere.
+    const endpointChanged =
+      current !== undefined &&
+      ((updates.transport !== undefined && updates.transport !== current.transport) ||
+        (normalizedUpdates.websocketUrl !== undefined &&
+          normalizedUpdates.websocketUrl !== current.websocketUrl) ||
+        (updates.commandLine !== undefined && updates.commandLine !== current.commandLine));
+    if (endpointChanged) {
+      clearElicitationResumeAuthoritiesForAgent(agentId);
+    }
     if (current?.transport === 'websocket' && (normalizedUpdates.transport || normalizedUpdates.websocketUrl !== undefined || normalizedUpdates.enabled === false)) {
       this.cancelReconnect(agentId);
       this.invalidateConnectGeneration(agentId);
@@ -1082,6 +1093,7 @@ export class AgentsStore {
           void this.refreshSessionRuntime(config.id, this.activeSessionId, record.client);
         }
       }
+      void this.recoverPendingElicitations(config, record);
     } catch (error) {
       if (error === CONNECT_ABORTED || this.clients.get(agentId) !== record) {
         return;
@@ -1108,6 +1120,30 @@ export class AgentsStore {
       if (config.transport === 'websocket') {
         this.scheduleReconnect(agentId);
       }
+    }
+  }
+
+  /**
+   * After (re)connect, recover pending questions with held resume authorities.
+   *
+   * Re-delivered requests rebind in the inbox; authoritative snapshots clean up
+   * stale cards. Recovery never starts a run and never fabricates user answers;
+   * failures are non-fatal and leave offline cards for the next reconnect.
+   */
+  private async recoverPendingElicitations(config: AgentConfig, record: AgentClientRecord) {
+    try {
+      if (!record.client.supportsElicitationRecovery()) {
+        return;
+      }
+      const snapshots = await record.client.recoverPendingElicitations();
+      if (this.clients.get(config.id) !== record) {
+        return;
+      }
+      for (const snapshot of snapshots) {
+        inboxStore.reconcileReboundElicitations(config.id, snapshot.sessionId, snapshot.elicitationIds);
+      }
+    } catch {
+      // Best-effort recovery: offline cards stay pending for the next reconnect.
     }
   }
 
@@ -4286,7 +4322,9 @@ function applyDelegateModelConfirmation(
   const currentAssignment = state.assignments.find((assignment) => assignment.agent_id === response.agent_id) ??
     state.orphaned_overrides.find((assignment) => assignment.agent_id === response.agent_id);
   const reasoningEffort = confirmedDelegateReasoningEffort(currentAssignment?.reasoning_effort, response.reasoning_effort);
-  const hasAssignment = Boolean(currentAssignment && state.assignments.includes(currentAssignment));
+  const hasAssignment = Boolean(
+    currentAssignment && state.assignments.some((assignment) => assignment === currentAssignment)
+  );
   return {
     ...state,
     revision: response.revision,
