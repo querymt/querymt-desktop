@@ -830,3 +830,228 @@ describe('SessionComposer', () => {
     expect(onDismissError).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('SessionComposer model picker focus and mode cycling', () => {
+  const sessionModeOptions = [
+    {
+      id: 'mode',
+      name: 'Mode',
+      type: 'select',
+      currentValue: 'build',
+      options: [
+        { value: 'build', name: 'Build' },
+        { value: 'plan', name: 'Plan' }
+      ]
+    }
+  ];
+  const singleModeOptions = [
+    {
+      id: 'mode',
+      name: 'Mode',
+      type: 'select',
+      currentValue: 'build',
+      options: [{ value: 'build', name: 'Build' }]
+    }
+  ];
+
+  function pickerRow() {
+    return screen
+      .getAllByRole('button', { name: /Claude Sonnet 4/i })
+      .find((button) => button.classList.contains('app-picker-row'))!;
+  }
+
+  async function closeAndWait() {
+    await vi.waitFor(() => expect(screen.queryByRole('dialog', { name: 'Switch model' })).not.toBeInTheDocument());
+  }
+
+  /** Dispatches a cancelable Tab keydown; returns true when traversal may continue. */
+  function pressTab(target: Element): boolean {
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    target.dispatchEvent(event);
+    return !event.defaultPrevented;
+  }
+
+  it('returns focus to the prompt after selecting a model from a keyboard-opened picker', async () => {
+    const onModelChange = vi.fn();
+    renderComposer({ onModelChange });
+    const prompt = screen.getByPlaceholderText(/Ask QueryMT/i);
+
+    await fireEvent.keyDown(prompt, { key: 'm', metaKey: true });
+    await fireEvent.click(pickerRow());
+    await closeAndWait();
+
+    expect(onModelChange).toHaveBeenCalled();
+    expect(prompt).toHaveFocus();
+  });
+
+  it('returns focus to the prompt when a keyboard-opened picker is cancelled', async () => {
+    renderComposer();
+    const prompt = screen.getByPlaceholderText(/Ask QueryMT/i);
+
+    await fireEvent.keyDown(prompt, { key: 'm', metaKey: true });
+    await fireEvent.keyDown(screen.getByPlaceholderText('Search models, providers, nodes…'), { key: 'Escape' });
+    await closeAndWait();
+
+    expect(prompt).toHaveFocus();
+  });
+
+  it('returns focus to the prompt after selecting a model from a trigger-opened picker', async () => {
+    renderComposer();
+
+    await fireEvent.click(screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0]);
+    await fireEvent.click(pickerRow());
+    await closeAndWait();
+
+    expect(screen.getByPlaceholderText(/Ask QueryMT/i)).toHaveFocus();
+  });
+
+  it('does not force prompt focus when programmatic prompt focus is disabled', async () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false)
+    })));
+    renderComposer();
+    const trigger = screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0];
+    const prompt = screen.getByPlaceholderText(/Ask QueryMT/i);
+
+    await fireEvent.keyDown(prompt, { key: 'm', metaKey: true });
+    await fireEvent.keyDown(screen.getByPlaceholderText('Search models, providers, nodes…'), { key: 'Escape' });
+    await closeAndWait();
+
+    // The small-screen/coarse-pointer guard declines prompt focus; the dialog
+    // falls back to its default (trigger) instead of forcing the keyboard open.
+    expect(prompt).not.toHaveFocus();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('cycles the active session mode on Tab and consumes the keypress', async () => {
+    const onSessionConfigChange = vi.fn();
+    renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      sessionConfigOptions: sessionModeOptions,
+      onSessionConfigChange
+    });
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+
+    const notConsumed = pressTab(prompt);
+
+    expect(notConsumed).toBe(false);
+    expect(onSessionConfigChange).toHaveBeenCalledWith('mode', 'plan');
+  });
+
+  it('does not consume Tab while a mode update is pending', async () => {
+    const onSessionConfigChange = vi.fn();
+    renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      sessionConfigOptions: sessionModeOptions,
+      sessionConfigPending: { mode: true },
+      onSessionConfigChange
+    });
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+
+    const notConsumed = pressTab(prompt);
+
+    expect(notConsumed).toBe(true);
+    expect(onSessionConfigChange).not.toHaveBeenCalled();
+  });
+
+  it('does not consume Tab when fewer than two modes are available', async () => {
+    const onSessionConfigChange = vi.fn();
+    renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      sessionConfigOptions: singleModeOptions,
+      onSessionConfigChange
+    });
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+
+    const notConsumed = pressTab(prompt);
+
+    expect(notConsumed).toBe(true);
+    expect(onSessionConfigChange).not.toHaveBeenCalled();
+  });
+
+  it('does not consume Tab when the session has no mode option', async () => {
+    const onSessionConfigChange = vi.fn();
+    renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      sessionConfigOptions: [],
+      onSessionConfigChange
+    });
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+
+    const notConsumed = pressTab(prompt);
+
+    expect(notConsumed).toBe(true);
+    expect(onSessionConfigChange).not.toHaveBeenCalled();
+  });
+
+  it('cycles launch modes on Tab in the new-session composer', async () => {
+    const onLaunchModeChange = vi.fn();
+    renderComposer({
+      launch: true,
+      launchModeOptions: [
+        { id: 'build', label: 'Build' },
+        { id: 'plan', label: 'Plan' }
+      ],
+      selectedLaunchModeId: 'build',
+      onLaunchModeChange
+    });
+    const prompt = screen.getByPlaceholderText(/Ask QueryMT/i);
+
+    const notConsumed = pressTab(prompt);
+
+    expect(notConsumed).toBe(false);
+    expect(onLaunchModeChange).toHaveBeenCalledWith('plan');
+  });
+
+  it('does not consume Tab when only one launch mode is available', async () => {
+    const onLaunchModeChange = vi.fn();
+    renderComposer({
+      launch: true,
+      launchModeOptions: [{ id: 'build', label: 'Build' }],
+      selectedLaunchModeId: 'build',
+      onLaunchModeChange
+    });
+    const prompt = screen.getByPlaceholderText(/Ask QueryMT/i);
+
+    const notConsumed = pressTab(prompt);
+
+    expect(notConsumed).toBe(true);
+    expect(onLaunchModeChange).not.toHaveBeenCalled();
+  });
+
+  it('supports Ctrl+M model selection then Tab mode cycling end to end', async () => {
+    const onModelChange = vi.fn();
+    const onSessionConfigChange = vi.fn();
+    renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      sessionConfigOptions: sessionModeOptions,
+      onModelChange,
+      onSessionConfigChange
+    });
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+
+    await fireEvent.keyDown(prompt, { key: 'm', ctrlKey: true });
+    await fireEvent.click(pickerRow());
+    await closeAndWait();
+
+    expect(onModelChange).toHaveBeenCalled();
+    expect(prompt).toHaveFocus();
+
+    const notConsumed = pressTab(prompt);
+
+    expect(notConsumed).toBe(false);
+    expect(onSessionConfigChange).toHaveBeenCalledWith('mode', 'plan');
+  });
+});

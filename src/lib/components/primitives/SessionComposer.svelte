@@ -301,6 +301,48 @@
     }
   }
 
+  function getNextLaunchModeValue(): string | null {
+    if (launchModeOptions.length < 2) {
+      return null;
+    }
+
+    const currentIndex = launchModeOptions.findIndex((option) => option.id === selectedLaunchModeId);
+    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % launchModeOptions.length : 0;
+    return launchModeOptions[nextIndex]?.id ?? null;
+  }
+
+  /**
+   * Cycles to the next mode and returns whether a mode was requested. The
+   * caller may only consume the Tab keypress when this resolves true, so
+   * normal focus traversal continues whenever cycling is unavailable.
+   */
+  function cycleMode(): boolean {
+    if (activeSessionId) {
+      const nextValue = getNextConfigValue(modeOption);
+      if (!nextValue || !modeOption) {
+        return false;
+      }
+      void onSessionConfigChange?.(modeOption.id, nextValue);
+      return true;
+    }
+
+    const nextLaunchMode = getNextLaunchModeValue();
+    if (!nextLaunchMode) {
+      return false;
+    }
+    onLaunchModeChange?.(nextLaunchMode);
+    return true;
+  }
+
+  /** Focus callback for the model picker; guards the mobile virtual keyboard. */
+  function requestPromptFocusFromPicker(): boolean {
+    if (!allowsProgrammaticPromptFocus()) {
+      return false;
+    }
+    void focusPrompt();
+    return true;
+  }
+
   function dismissError() {
     onDismissError?.();
   }
@@ -350,8 +392,11 @@
     }
 
     if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key === 'Tab') {
-      event.preventDefault();
-      cycleConfigOption(modeOption);
+      // Consume Tab only when a mode can actually be cycled; otherwise let
+      // normal focus traversal continue.
+      if (cycleMode()) {
+        event.preventDefault();
+      }
     }
   }
 
@@ -577,6 +622,7 @@
         class="composer-control-pill"
         onSelect={(value) => onModelChange?.(value)}
         onRefresh={onRefreshModels}
+        onRequestPromptFocus={requestPromptFocusFromPicker}
       />
        {#if !activeSessionId && launch && launchModeOptions.length > 0}
         <ComposerSplitPillSelect

@@ -24,7 +24,9 @@
     agentLabel = null,
     class: className = '',
     onSelect,
-    onRefresh = null
+    onRefresh = null,
+    /** Returns whether programmatic prompt focus was taken; falsy keeps dialog default focus. */
+    onRequestPromptFocus = null
   }: {
     modelOptions?: ModelEntry[];
     recentModels?: ModelEntry[];
@@ -37,6 +39,7 @@
     class?: string;
     onSelect: (modelId: string) => void | Promise<void>;
     onRefresh?: (() => void | Promise<void>) | null;
+    onRequestPromptFocus?: (() => boolean) | null;
   } = $props();
 
   let open = $state(false);
@@ -44,6 +47,10 @@
   let highlightedIndex = $state(0);
   let searchElement = $state<HTMLInputElement | null>(null);
   let triggerElement = $state<HTMLButtonElement | null>(null);
+  // Where the picker was opened from and whether a selection completed; both
+  // decide where focus returns on close (prompt vs. the dialog's trigger).
+  let openOrigin: 'prompt' | 'trigger' = 'trigger';
+  let selectionCompleted = false;
 
   const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
@@ -99,9 +106,27 @@
     highlightedIndex = clamp(highlightedIndex, 0, Math.max(flatResults.length - 1, 0));
   });
 
+  /** Opens the picker from the prompt keyboard shortcut (Cmd+M / Ctrl+M). */
   export async function openPicker() {
     if (disabled) return;
+    await openFromPrompt();
+  }
+
+  async function openFromPrompt() {
+    openOrigin = 'prompt';
+    selectionCompleted = false;
     open = true;
+    await focusSearchInput();
+  }
+
+  async function openFromTrigger() {
+    openOrigin = 'trigger';
+    selectionCompleted = false;
+    open = true;
+    await focusSearchInput();
+  }
+
+  async function focusSearchInput() {
     await tick();
     searchElement?.focus();
     searchElement?.select();
@@ -115,19 +140,36 @@
     open = nextOpen;
   }
 
+  /**
+   * Returns whether focus should return to the prompt: any close of a
+   * keyboard-opened picker, and any close after a successful selection from
+   * either origin. The composer callback keeps the small-screen/coarse-pointer
+   * guard; when it declines, the dialog falls back to its default (trigger).
+   */
+  function shouldRestorePromptFocus(): boolean {
+    return openOrigin === 'prompt' || selectionCompleted;
+  }
+
+  function handleCloseAutoFocus(event: Event) {
+    if (shouldRestorePromptFocus() && onRequestPromptFocus?.()) {
+      event.preventDefault();
+      return;
+    }
+    // Keep the conventional dialog behavior: restore focus to the trigger
+    // (also the safe default when prompt focus is declined by the guard).
+    event.preventDefault();
+    triggerElement?.focus();
+  }
+
   function focusSearch(event: Event) {
     event.preventDefault();
     searchElement?.focus();
     searchElement?.select();
   }
 
-  function restoreTriggerFocus(event: Event) {
-    event.preventDefault();
-    triggerElement?.focus();
-  }
-
   async function handleSelect(modelId: string) {
     await onSelect(modelId);
+    selectionCompleted = true;
     closePicker();
   }
 
@@ -170,7 +212,7 @@
     class={`composer-model-pill ${className}`}
     disabled={disabled}
     type="button"
-    onclick={openPicker}
+    onclick={openFromTrigger}
   >
     <span class="composer-split-pill-icon" aria-hidden="true">
       {#if loading}
@@ -230,7 +272,7 @@
         class="app-picker app-picker-model"
         data-blocking-overlay="true"
         onOpenAutoFocus={focusSearch}
-        onCloseAutoFocus={restoreTriggerFocus}
+        onCloseAutoFocus={handleCloseAutoFocus}
       >
         <header class="app-picker-header">
           <div class="app-picker-heading">
