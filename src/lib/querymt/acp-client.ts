@@ -158,6 +158,17 @@ export function clearElicitationResumeAuthorities(): void {
   elicitationResumeAuthorities.clear();
 }
 
+/**
+ * Drop every resume authority held for one agent.
+ *
+ * Called when the agent's endpoint changes: authorities are issued by a
+ * specific agent over its protected channel, so secrets from the previous
+ * endpoint must never be offered to a different one (fail closed).
+ */
+export function clearElicitationResumeAuthoritiesForAgent(agentId: string): void {
+  elicitationResumeAuthorities.delete(agentId);
+}
+
 export interface LoadedAcpSession {
   response: LoadSessionResponse;
   replay: SessionNotification[];
@@ -284,9 +295,11 @@ export class DesktopAcpClient {
       throw connectCancelledError();
     }
 
-    this.elicitationRecovery = controlCapabilities
-      ? parseQuerymtElicitationRecoveryCapability(controlCapabilities)
-      : null;
+    const recoveryOverSecureTransport = supportsElicitationRecoveryTransport(this.config);
+    this.elicitationRecovery =
+      controlCapabilities && recoveryOverSecureTransport
+        ? parseQuerymtElicitationRecoveryCapability(controlCapabilities)
+        : null;
     if (this.elicitationRecovery) {
       this.ensureElicitationAuthorityListener();
     }
@@ -343,9 +356,12 @@ export class DesktopAcpClient {
   /**
    * Discover and attach pending questions for every held resume authority.
    *
-   * Returns the authoritative per-session pending sets. Discovery that ends in
-   * denial forgets the expired authority and reports an empty set so stale
-   * cards can be cleaned up. Attach failures likewise report an empty set.
+   * Returns the authoritative per-session pending sets. An explicit RPC denial
+   * means the agent rejected the authority (expired/revoked): forget it and
+   * report an empty set so stale cards can be cleaned up. Other list failures
+   * and attach failures keep the authority and skip the snapshot, leaving
+   * offline cards pending for a later reconnect instead of fabricating an
+   * authoritative empty set.
    */
   async recoverPendingElicitations(): Promise<ElicitationRecoverySnapshot[]> {
     if (!this.elicitationRecovery || !this.querymtExtensions) {
@@ -361,9 +377,11 @@ export class DesktopAcpClient {
           resume_authority: resumeAuthority
         });
         sessionIds = discovery.session_ids;
-      } catch {
-        forgetElicitationResumeAuthority(this.config.id, sessionId);
-        snapshots.push({ sessionId, elicitationIds: [] });
+      } catch (error) {
+        if (isRpcDenial(error)) {
+          forgetElicitationResumeAuthority(this.config.id, sessionId);
+          snapshots.push({ sessionId, elicitationIds: [] });
+        }
         continue;
       }
       if (sessionIds.length === 0) {
@@ -379,8 +397,11 @@ export class DesktopAcpClient {
           });
           snapshots.push({ sessionId: attachedSessionId, elicitationIds: attach.elicitation_ids });
         } catch {
-          snapshots.push({ sessionId: attachedSessionId, elicitationIds: [] });
+          // Attach failed; keep the authority and leave any offline card pending.
         }
+      }
+      if (!sessionIds.includes(sessionId)) {
+        snapshots.push({ sessionId, elicitationIds: [] });
       }
     }
     return snapshots;
@@ -1038,6 +1059,42 @@ function requireWebSocketUrl(config: AgentConfig): string {
     throw new Error(`Server address is required for ${config.name}.`);
   }
   return url;
+}
+
+const LOOPBACK_WS_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+/**
+ * Recovery binds a process-lifetime resume authority to the endpoint that
+ * issued it. WebSocket authorities may only be exchanged where the protected
+ * channel is guaranteed: TLS, or a loopback endpoint whose traffic never
+ * leaves the machine. Other transports (stdio) are inherently local.
+ */
+function supportsElicitationRecoveryTransport(config: AgentConfig): boolean {
+  if (config.transport !== 'websocket') {
+    return true;
+  }
+  try {
+    const url = new URL(requireWebSocketUrl(config));
+    if (url.protocol === 'wss:') {
+      return true;
+    }
+    if (url.protocol !== 'ws:') {
+      return false;
+    }
+    const host = url.hostname.toLowerCase();
+    return LOOPBACK_WS_HOSTS.has(host) || host.endsWith('.localhost');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether an extension RPC failure is an authoritative JSON-RPC denial from
+ * the agent (e.g. a rejected resume authority) rather than a transport-level
+ * failure. The ACP SDK rejects method errors with a numeric JSON-RPC `code`.
+ */
+function isRpcDenial(error: unknown): boolean {
+  return typeof (error as { code?: unknown } | null)?.code === 'number';
 }
 
 function buildClientCapabilities(): ClientCapabilities {

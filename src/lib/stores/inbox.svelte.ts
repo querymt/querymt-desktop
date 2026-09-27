@@ -276,17 +276,22 @@ export class InboxStore {
   }
 
   /**
-   * Retire resolvers tied to a disconnected transport without answering them.
+   * Retire resolvers tied to a disconnected transport.
    *
-   * Cards and drafts stay pending but are marked offline, so a reconnection can
-   * rebind re-delivered questions to the same card instead of answering `cancel`
-   * on a transport that no longer exists.
+   * Permission requests keep their bounded, connection-scoped behavior: the
+   * request belonged to the dead transport, so it settles as cancelled.
+   * Keyed question cards and drafts stay pending but are marked offline, so a
+   * reconnection can rebind re-delivered questions to the same card instead of
+   * answering `cancel` on a transport that no longer exists. Questions without
+   * a stable identity can never rebind and are retired locally without any
+   * fabricated user action.
    */
   private retirePendingRequestsForAgent(agentId: string) {
     for (const [itemId, pending] of this.pendingPermissionRequests) {
       if (pending.agentId !== agentId) continue;
       this.pendingPermissionRequests.delete(itemId);
-      this.markItemOffline(itemId);
+      this.markResolved(itemId, 'Cancelled');
+      pending.resolve({ outcome: { outcome: 'cancelled' } });
     }
 
     for (const pending of [...this.pendingElicitationRequests.values()]) {
@@ -294,8 +299,10 @@ export class InboxStore {
       this.removePendingElicitation(pending);
       if (pending.requestKey) {
         this.offlineElicitationKeys.set(pending.requestKey, pending.itemId);
+        this.markItemOffline(pending.itemId);
+      } else {
+        this.markResolved(pending.itemId, 'No longer pending');
       }
-      this.markItemOffline(pending.itemId);
     }
   }
 

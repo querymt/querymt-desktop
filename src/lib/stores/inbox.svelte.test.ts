@@ -34,12 +34,15 @@ function createClient() {
   };
 }
 
-function elicitation(sessionId = 'session-1'): CreateElicitationRequest {
+function elicitation(sessionId = 'session-1', options: { keyed?: boolean } = {}): CreateElicitationRequest {
+  const keyed = options.keyed ?? true;
   return {
     mode: 'form',
     sessionId,
     message: 'Choose a target',
-    _meta: { querymt: { elicitation_id: `elicit-${sessionId}`, source: 'builtin:question' } },
+    _meta: keyed
+      ? { querymt: { elicitation_id: `elicit-${sessionId}`, source: 'builtin:question' } }
+      : { querymt: { source: 'builtin:question' } },
     requestedSchema: {
       type: 'object',
       title: 'Target',
@@ -52,6 +55,17 @@ function elicitation(sessionId = 'session-1'): CreateElicitationRequest {
       },
       required: ['selection']
     }
+  };
+}
+
+function permission(sessionId = 'session-1'): RequestPermissionRequest {
+  return {
+    sessionId,
+    toolCall: { toolCallId: 'tool-1', title: 'Run tests', kind: 'execute' },
+    options: [
+      { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+      { optionId: 'reject', name: 'Reject', kind: 'reject_once' }
+    ]
   };
 }
 
@@ -231,5 +245,70 @@ describe('InboxStore elicitations', () => {
     // One answer only: a second action cannot re-resolve the rebound card.
     await store.handleAction(item.id, 'decline');
     expect(store.items.find((candidate) => candidate.id === item.id)?.resolution).toBe('Submitted');
+  });
+
+  it('retires unkeyed questions on disconnect without answering them', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    const response = client.elicit(elicitation('session-1', { keyed: false }));
+    let settled: CreateElicitationResponse | null = null;
+    void response.then((value) => {
+      settled = value;
+    });
+
+    const item = store.pendingElicitationsForSession('agent-1', 'session-1')[0];
+    store.updateField(item.id, 'selection', 'prod');
+    store.disconnectAgent('agent-1');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const retired = store.items.find((candidate) => candidate.id === item.id);
+    expect(retired?.status).toBe('resolved');
+    expect(retired?.resolution).toBe('No longer pending');
+    expect(retired?.offline).toBeUndefined();
+    expect(settled).toBeNull();
+    expect(store.pendingCount).toBe(0);
+
+    // A re-delivery cannot rebind (no stable identity) and creates a fresh card.
+    const reconnectedClient = createClient();
+    store.bindClient(reconnectedClient as never, 'agent-1', 'QMTCODE');
+    void reconnectedClient.elicit(elicitation('session-1', { keyed: false }));
+    const fresh = store.pendingElicitationsForSession('agent-1', 'session-1');
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0].id).not.toBe(item.id);
+  });
+});
+
+describe('InboxStore permission requests', () => {
+  it('settles permission requests as cancelled on disconnect instead of leaving them offline', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    const response = client.permission(permission());
+    const item = store.actionableItems[0];
+    expect(item).toBeDefined();
+
+    store.disconnectAgent('agent-1');
+
+    await expect(response).resolves.toEqual({ outcome: { outcome: 'cancelled' } });
+    const resolved = store.items.find((candidate) => candidate.id === item!.id);
+    expect(resolved?.status).toBe('resolved');
+    expect(resolved?.resolution).toBe('Cancelled');
+    expect(resolved?.offline).toBeUndefined();
+    expect(store.pendingCount).toBe(0);
+  });
+
+  it('still resolves a chosen option on the live transport', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    const response = client.permission(permission());
+    const item = store.actionableItems[0]!;
+
+    await store.handleAction(item.id, 'allow');
+
+    await expect(response).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'allow' } });
+    expect(store.pendingCount).toBe(0);
   });
 });

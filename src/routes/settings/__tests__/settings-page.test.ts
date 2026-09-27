@@ -550,7 +550,8 @@ describe('Settings controls', () => {
         has_stored_api_key: false,
         has_env_api_key: false,
         supports_oauth: true,
-        preferred_method: 'oauth'
+        preferred_method: 'oauth',
+        env_var_name: 'ANTHROPIC_API_KEY'
       }
     ];
     agentsStore.startProviderSignIn = vi.fn(async () => ({
@@ -709,7 +710,8 @@ describe('Settings controls', () => {
         has_stored_api_key: false,
         has_env_api_key: false,
         supports_oauth: true,
-        preferred_method: 'oauth'
+        preferred_method: 'oauth',
+        env_var_name: 'ANTHROPIC_API_KEY'
       }
     ];
     agentsStore.disconnectProvider = vi.fn(() => new Promise((resolve) => (resolveDisconnect = resolve))) as any;

@@ -315,6 +315,18 @@ export interface QuerymtSubmitInputRequest {
   expected_run_id?: string;
 }
 
+/** Error thrown when a QueryMT extension response violates its wire contract. */
+export class QuerymtExtensionResponseError extends Error {
+  constructor(method: string) {
+    super(`Malformed response for ${method}.`);
+    this.name = 'QuerymtExtensionResponseError';
+  }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
 export function toAcpExtensionMethod(method: QuerymtLogicalMethod): QuerymtWireMethod {
   return `_${method}`;
 }
@@ -419,9 +431,16 @@ export class QuerymtExtensions {
       QMT_METHOD_ELICITATION_LIST_PENDING,
       request
     );
+    if (
+      !response ||
+      response.version !== QMT_ELICITATION_RECOVERY_VERSION ||
+      !isStringArray(response.session_ids)
+    ) {
+      throw new QuerymtExtensionResponseError(QMT_METHOD_ELICITATION_LIST_PENDING);
+    }
     return {
-      version: response.version ?? request.version,
-      session_ids: response.session_ids ?? []
+      version: response.version,
+      session_ids: response.session_ids
     };
   }
 
@@ -432,10 +451,19 @@ export class QuerymtExtensions {
       QMT_METHOD_ELICITATION_ATTACH_SESSION,
       request
     );
+    if (
+      !response ||
+      response.version !== QMT_ELICITATION_RECOVERY_VERSION ||
+      typeof response.session_id !== 'string' ||
+      !response.session_id ||
+      !isStringArray(response.elicitation_ids)
+    ) {
+      throw new QuerymtExtensionResponseError(QMT_METHOD_ELICITATION_ATTACH_SESSION);
+    }
     return {
-      version: response.version ?? request.version,
-      session_id: response.session_id ?? request.session_id,
-      elicitation_ids: response.elicitation_ids ?? []
+      version: response.version,
+      session_id: response.session_id,
+      elicitation_ids: response.elicitation_ids
     };
   }
 

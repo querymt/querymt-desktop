@@ -96,7 +96,7 @@ import {
   setModelConfigOptionRequest,
   setSessionConfigOptionRequest
 } from '$lib/querymt/config-options';
-import { DesktopAcpClient } from '$lib/querymt/acp-client';
+import { DesktopAcpClient, clearElicitationResumeAuthoritiesForAgent } from '$lib/querymt/acp-client';
 import {
   QMT_METHOD_PROFILES,
   QMT_METHOD_SESSION_DELEGATE_MODELS,
@@ -769,6 +769,17 @@ export class AgentsStore {
             ?? (explicitWebSocketScheme ? explicitWebSocketScheme === 'wss' : current?.websocketSecure ?? false)
         }
       : updates;
+    // Resume authorities are issued by a specific agent endpoint; drop them
+    // when that endpoint changes so its secrets are never offered elsewhere.
+    const endpointChanged =
+      current !== undefined &&
+      ((updates.transport !== undefined && updates.transport !== current.transport) ||
+        (normalizedUpdates.websocketUrl !== undefined &&
+          normalizedUpdates.websocketUrl !== current.websocketUrl) ||
+        (updates.commandLine !== undefined && updates.commandLine !== current.commandLine));
+    if (endpointChanged) {
+      clearElicitationResumeAuthoritiesForAgent(agentId);
+    }
     if (current?.transport === 'websocket' && (normalizedUpdates.transport || normalizedUpdates.websocketUrl !== undefined || normalizedUpdates.enabled === false)) {
       this.cancelReconnect(agentId);
       this.invalidateConnectGeneration(agentId);
@@ -4311,7 +4322,9 @@ function applyDelegateModelConfirmation(
   const currentAssignment = state.assignments.find((assignment) => assignment.agent_id === response.agent_id) ??
     state.orphaned_overrides.find((assignment) => assignment.agent_id === response.agent_id);
   const reasoningEffort = confirmedDelegateReasoningEffort(currentAssignment?.reasoning_effort, response.reasoning_effort);
-  const hasAssignment = Boolean(currentAssignment && state.assignments.includes(currentAssignment));
+  const hasAssignment = Boolean(
+    currentAssignment && state.assignments.some((assignment) => assignment === currentAssignment)
+  );
   return {
     ...state,
     revision: response.revision,

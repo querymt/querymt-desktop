@@ -59,11 +59,14 @@ const mockClient = vi.hoisted(() => {
       sessionId: 'session-1',
       configOptions: []
     })),
-    listSessions: vi.fn(async () => ({ sessions: [] })),
+    listSessions: vi.fn(async (): Promise<{
+      sessions: Array<{ sessionId: string; title: string; cwd: string; updatedAt: string }>
+    }> => ({ sessions: [] })),
     deleteSession: vi.fn(async () => undefined),
     loadSession: vi.fn(async (_sessionId?: string, _cwd?: string): Promise<{
       response: { configOptions: SessionConfigOption[]; _meta?: Record<string, unknown> };
       replay: SessionNotification[];
+      finishReplay?: () => SessionNotification[];
     }> => ({
       response: { configOptions: [] },
       replay: []
@@ -240,6 +243,7 @@ vi.mock('$native', async (importOriginal) => {
 });
 
 vi.mock('$lib/querymt/acp-client', () => ({
+  clearElicitationResumeAuthoritiesForAgent: vi.fn(),
   DesktopAcpClient: vi.fn(function () {
     return mockClient;
   })
@@ -3458,7 +3462,8 @@ describe('AgentsStore prompt session start', () => {
           type: 'resource',
           resource: {
             uri: `attachment:///${encodeURIComponent('att-2')}/${encodeURIComponent('chart.png')}`,
-            mimeType: 'image/png'
+            mimeType: 'image/png',
+            blob: 'Y2hhcnQ='
           }
         },
         messageId: 'authoritative-2'
