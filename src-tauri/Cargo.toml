@@ -13,7 +13,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 shlex = "2"
 futures-util = "0.3"
-tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 tauri = { version = "2", default-features = false, features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
