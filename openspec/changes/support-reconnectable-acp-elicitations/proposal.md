@@ -10,6 +10,7 @@ An unanswered ACP form elicitation currently expires after two minutes and is re
 - Re-deliver unanswered questions as new ACP `elicitation/create` requests when an authorized client reconnects; provide a QueryMT extension to discover pending sessions, not only the open session.
 - Bind recovery and responses to the original verified client/user authority, not merely a supplied `sessionId` or elicitation ID; fail closed where no secure reconnect identity exists.
 - Preserve desktop inbox items and drafts across transport loss; rebind the new ACP request to the same item without silently returning `cancel`, and reconcile already-resolved items.
+- Recover pending questions after a desktop UI refresh (page/webview reload) within the same agent process by retaining the resume authority in session-scoped webview storage; agent-process restart and full application relaunch remain out of scope.
 - Explicit session cancellation and termination of the originating run still finish pending questions. Agent-process restart/run restoration, URL-mode elicitation, and cross-user handoff are out of scope.
 
 ## Capabilities

@@ -32,6 +32,10 @@ The system SHALL allow a client authorized to resume the original interaction to
 - **WHEN** an authorized client reconnects while a question in a non-active session is pending
 - **THEN** the client can discover the pending session and receive a new ACP `elicitation/create` request for the still-unanswered question
 
+#### Scenario: UI refresh while the agent keeps running
+- **WHEN** the desktop UI is refreshed or reloaded while a session question is pending and the agent process and endpoint are unchanged
+- **THEN** the UI restores its session-scoped resume authority, discovers and attaches the pending session, receives a fresh `elicitation/create` request, and the question becomes actionable again without any fabricated user action
+
 #### Scenario: Unrelated client attempts recovery
 - **WHEN** a different client supplies a known session or elicitation ID without valid recovery authority
 - **THEN** it cannot discover the question content, reattach to the question, or answer it

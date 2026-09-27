@@ -5064,5 +5064,40 @@ describe('AgentsStore prompt session start', () => {
         vi.useRealTimers();
       }
     });
+
+    it('recovers pending elicitations after a UI refresh with no retained cards', async () => {
+      vi.useFakeTimers();
+      try {
+        const sessionId = 'refresh-session-1';
+        // A refreshed UI is a new store with an empty inbox; only the agent
+        // and its pending question persist across the reload.
+        const store = websocketStore();
+        const reconnected = createDistinctMockClient();
+        reconnected.supportsElicitationRecovery = vi.fn(() => true);
+        reconnected.recoverPendingElicitations = vi.fn(async () => [
+          { sessionId, elicitationIds: ['elicit-refresh-1'] }
+        ]);
+        vi.mocked(DesktopAcpClient).mockImplementationOnce(function () {
+          return reconnected as never;
+        });
+        await store.connectAgent('agent-1');
+
+        expect(reconnected.recoverPendingElicitations).toHaveBeenCalledTimes(1);
+
+        // The agent re-delivers the question on the fresh connection; a
+        // fresh actionable card appears in the previously empty inbox.
+        const redelivered = reconnected.elicit(recoveryElicitation(sessionId, 'elicit-refresh-1'));
+        const cards = inboxStore.pendingElicitationsForSession('agent-1', sessionId);
+        expect(cards).toHaveLength(1);
+        expect(cards[0].status).toBe('pending');
+        expect(cards[0].offline).toBeUndefined();
+
+        inboxStore.updateField(cards[0].id, 'selection', 'prod');
+        await inboxStore.handleAction(cards[0].id, 'accept');
+        await expect(redelivered).resolves.toEqual({ action: 'accept', content: { selection: 'prod' } });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

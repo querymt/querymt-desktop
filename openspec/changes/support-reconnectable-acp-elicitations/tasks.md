@@ -25,3 +25,8 @@ The agent repository identified by `${QUERYMT_AGENT_REPO}` is outside this repo-
 - [x] 3.1 With separately authorized agent companion work present, run desktop unit/type tests and agent ACP integration tests; verify a multi-hour simulated wait followed by reconnect resumes the *same* tool exactly once.
 - [x] 3.2 Exercise two ACP clients, a dead connection's late response, explicit `accept`/`decline`/`cancel`, run Stop, and an unrelated client with a known session ID; verify only the authorized current delivery can resolve and only explicit user `cancel` is attributed to the user.
 - [x] 3.3 Verify feature-gated deployment against old desktop and old agent versions, secure/non-secure transports, and sessions created before rollout; document cases where recovery is unavailable rather than misreporting cancellation.
+
+## 4. Frontend Refresh Recovery (this repository)
+
+- [x] 4.1 Mirror resume authorities to session-scoped webview storage bound to the agent endpoint scope, restoring them on connect and dropping them on endpoint change, malformed records, or agent denial; verify restore-after-refresh, endpoint-change drop, malformed-record drop, and denial cleanup in `src/lib/querymt/acp-client.test.ts`.
+- [x] 4.2 Verify a refreshed UI (new store instance, no retained cards) recovers pending sessions and creates fresh actionable cards from re-delivered requests without fabricated user actions in `src/lib/stores/agents.svelte.test.ts` and `src/lib/stores/inbox.svelte.test.ts`.

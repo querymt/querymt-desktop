@@ -113,22 +113,143 @@ const PROTOCOL_VERSION = 1;
 const CONNECT_CANCELLED_MESSAGE = 'ACP connection cancelled.';
 
 /**
- * In-memory resume authorities keyed by agent id, then session id.
+ * Resume authorities keyed by agent id, then session id.
  *
- * Secrets exist only in this process-lifetime map: they are never logged and
- * never persisted. Holding them at module scope (instead of per instance)
- * keeps them available when the WebSocket transport is replaced by a new
- * DesktopAcpClient during reconnect.
+ * Secrets live in this process-lifetime map and are mirrored to session-scoped
+ * webview storage (`sessionStorage`) so a UI refresh (a new JavaScript runtime
+ * in the same tab/webview) can restore them and re-prove authority. They are
+ * never written to `localStorage`, logs, URLs, or ACP payloads, and they die
+ * with the tab/webview session. Holding them at module scope (instead of per
+ * instance) keeps them available when the WebSocket transport is replaced by
+ * a new DesktopAcpClient during reconnect.
  */
 const elicitationResumeAuthorities = new Map<string, Map<string, string>>();
 
-function storeElicitationResumeAuthority(agentId: string, sessionId: string, secret: string): void {
-  let sessions = elicitationResumeAuthorities.get(agentId);
+const ELICITATION_AUTHORITY_STORAGE_PREFIX = 'querymt.elicitation.authorities.';
+
+/**
+ * Endpoint-bound scope so a persisted secret issued by one agent endpoint is
+ * never restored for, or offered to, a different one (fail closed).
+ */
+function elicitationAuthorityScope(config: AgentConfig): string {
+  if (config.transport === 'websocket') {
+    const scheme = config.websocketSecure ? 'wss' : 'ws';
+    return `${scheme}://${config.websocketUrl ?? ''}`;
+  }
+  return `stdio://${config.commandLine ?? ''}`;
+}
+
+function elicitationAuthorityStorageKey(agentId: string): string {
+  return `${ELICITATION_AUTHORITY_STORAGE_PREFIX}${agentId}`;
+}
+
+interface StoredElicitationAuthorities {
+  scope: string;
+  authorities: Record<string, string>;
+}
+
+function isSecretMap(value: unknown): value is Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  return Object.entries(value).every(
+    ([sessionId, secret]) => sessionId.length > 0 && typeof secret === 'string' && secret.length > 0
+  );
+}
+
+function readStoredElicitationAuthorities(agentId: string): StoredElicitationAuthorities | null {
+  if (typeof sessionStorage === 'undefined') return null;
+  const key = elicitationAuthorityStorageKey(agentId);
+  let raw: string | null;
+  try {
+    raw = sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const scope = (parsed as StoredElicitationAuthorities | null)?.scope;
+    const authorities = (parsed as StoredElicitationAuthorities | null)?.authorities;
+    if (typeof scope !== 'string' || scope.length === 0 || !isSecretMap(authorities)) {
+      sessionStorage.removeItem(key);
+      return null;
+    }
+    return parsed as StoredElicitationAuthorities;
+  } catch {
+    try {
+      sessionStorage.removeItem(key);
+    } catch {
+      // Storage unavailable: recovery falls back to in-memory only.
+    }
+    return null;
+  }
+}
+
+function writeStoredElicitationAuthorities(
+  agentId: string,
+  record: StoredElicitationAuthorities
+): void {
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    sessionStorage.setItem(elicitationAuthorityStorageKey(agentId), JSON.stringify(record));
+  } catch {
+    // Private mode or full quota: recovery stays in-memory for this session.
+  }
+}
+
+function removeStoredElicitationAuthorities(agentId: string): void {
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    sessionStorage.removeItem(elicitationAuthorityStorageKey(agentId));
+  } catch {
+    // Non-fatal.
+  }
+}
+
+function persistElicitationResumeAuthorities(config: AgentConfig): void {
+  const sessions = elicitationResumeAuthorities.get(config.id);
+  if (!sessions || sessions.size === 0) {
+    removeStoredElicitationAuthorities(config.id);
+    return;
+  }
+  writeStoredElicitationAuthorities(config.id, {
+    scope: elicitationAuthorityScope(config),
+    authorities: Object.fromEntries(sessions)
+  });
+}
+
+/**
+ * Hydrate authorities mirrored before a UI refresh (new JavaScript runtime).
+ *
+ * Only records matching the current endpoint scope are restored; anything
+ * else is dropped so a secret issued by one endpoint is never offered to
+ * another (fail closed).
+ */
+function restoreElicitationResumeAuthorities(config: AgentConfig): void {
+  const record = readStoredElicitationAuthorities(config.id);
+  if (!record) return;
+  if (record.scope !== elicitationAuthorityScope(config)) {
+    removeStoredElicitationAuthorities(config.id);
+    elicitationResumeAuthorities.delete(config.id);
+    return;
+  }
+  let sessions = elicitationResumeAuthorities.get(config.id);
   if (!sessions) {
     sessions = new Map<string, string>();
-    elicitationResumeAuthorities.set(agentId, sessions);
+    elicitationResumeAuthorities.set(config.id, sessions);
+  }
+  for (const [sessionId, secret] of Object.entries(record.authorities)) {
+    sessions.set(sessionId, secret);
+  }
+}
+
+function storeElicitationResumeAuthority(config: AgentConfig, sessionId: string, secret: string): void {
+  let sessions = elicitationResumeAuthorities.get(config.id);
+  if (!sessions) {
+    sessions = new Map<string, string>();
+    elicitationResumeAuthorities.set(config.id, sessions);
   }
   sessions.set(sessionId, secret);
+  persistElicitationResumeAuthorities(config);
 }
 
 function hasElicitationResumeAuthority(agentId: string, sessionId: string): boolean {
@@ -143,8 +264,10 @@ function listElicitationResumeAuthorities(agentId: string): Array<[string, strin
   return [...(elicitationResumeAuthorities.get(agentId)?.entries() ?? [])];
 }
 
-function forgetElicitationResumeAuthority(agentId: string, sessionId: string): void {
-  elicitationResumeAuthorities.get(agentId)?.delete(sessionId);
+function forgetElicitationResumeAuthority(config: AgentConfig, sessionId: string): void {
+  const sessions = elicitationResumeAuthorities.get(config.id);
+  if (!sessions?.delete(sessionId)) return;
+  persistElicitationResumeAuthorities(config);
 }
 
 /** Authoritative pending-question set for one session after a recovery attach. */
@@ -167,6 +290,7 @@ export function clearElicitationResumeAuthorities(): void {
  */
 export function clearElicitationResumeAuthoritiesForAgent(agentId: string): void {
   elicitationResumeAuthorities.delete(agentId);
+  removeStoredElicitationAuthorities(agentId);
 }
 
 export interface LoadedAcpSession {
@@ -301,6 +425,7 @@ export class DesktopAcpClient {
         ? parseQuerymtElicitationRecoveryCapability(controlCapabilities)
         : null;
     if (this.elicitationRecovery) {
+      restoreElicitationResumeAuthorities(this.config);
       this.ensureElicitationAuthorityListener();
     }
 
@@ -333,7 +458,7 @@ export class DesktopAcpClient {
       if (!authority) {
         return;
       }
-      storeElicitationResumeAuthority(this.config.id, authority.session_id, authority.resume_authority);
+      storeElicitationResumeAuthority(this.config, authority.session_id, authority.resume_authority);
     });
   }
 
@@ -379,7 +504,7 @@ export class DesktopAcpClient {
         sessionIds = discovery.session_ids;
       } catch (error) {
         if (isRpcDenial(error)) {
-          forgetElicitationResumeAuthority(this.config.id, sessionId);
+          forgetElicitationResumeAuthority(this.config, sessionId);
           snapshots.push({ sessionId, elicitationIds: [] });
         }
         continue;

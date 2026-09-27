@@ -278,6 +278,12 @@ describe('InboxStore elicitations', () => {
     expect(fresh).toHaveLength(1);
     expect(fresh[0].id).not.toBe(item.id);
   });
+
+  it('treats reconciliation in a refreshed UI with no retained cards as a no-op', () => {
+    const store = new InboxStore();
+    store.reconcileReboundElicitations('agent-1', 'session-1', ['elicit-session-1']);
+    expect(store.items).toEqual([]);
+  });
 });
 
 describe('InboxStore permission requests', () => {
