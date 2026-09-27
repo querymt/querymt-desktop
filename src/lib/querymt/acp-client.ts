@@ -110,6 +110,12 @@ import { isEmbedded } from '$lib/platform/runtime';
 import { acpWebSocketUrl } from '$lib/querymt/websocket-url';
 
 const PROTOCOL_VERSION = 1;
+
+/**
+ * `sessionLoadSnapshot` epoch understood by this client. Must stay in lockstep
+ * with the agent's `QUERYMT_SESSION_LOAD_SNAPSHOT_EPOCH`.
+ */
+const SESSION_LOAD_SNAPSHOT_EPOCH = 1;
 const CONNECT_CANCELLED_MESSAGE = 'ACP connection cancelled.';
 
 /**
@@ -1230,6 +1236,18 @@ function buildClientCapabilities(): ClientCapabilities {
   return {
     elicitation,
     fs: {},
-    terminal: false
+    terminal: false,
+    // `ClientCapabilities` is non-exhaustive in the ACP SDK, so the QueryMT
+    // namespace is advertised through `_meta` (ACP's extensibility escape
+    // hatch). Declaring epoch 1 tells the agent this client hydrates history
+    // from `querymt/sessionLoadSnapshot.v1`, so it does not need historical
+    // `session/update` replay for `session/load`.
+    _meta: {
+      querymt: {
+        sessionLoadSnapshot: {
+          epoch: SESSION_LOAD_SNAPSHOT_EPOCH
+        }
+      }
+    }
   };
 }

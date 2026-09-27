@@ -16,6 +16,10 @@ export interface SessionLoadMetrics {
   replayCapturedNotifications: number;
   replayReactiveNotifications: number;
   historyAssignments: number;
+  /** Loads that hydrated history from the snapshot with no historical replay. */
+  snapshotHydratedSessions: number;
+  /** Loads that received historical `session/update` replay. */
+  replayedSessions: number;
   snapshotEvents: number;
   transcriptItems: number;
   toolCalls: number;
@@ -33,7 +37,9 @@ type CounterName =
   | 'duplicateNotifications'
   | 'replayCapturedNotifications'
   | 'replayReactiveNotifications'
-  | 'historyAssignments';
+  | 'historyAssignments'
+  | 'snapshotHydratedSessions'
+  | 'replayedSessions';
 
 function clock(): number {
   return typeof performance === 'undefined' ? Date.now() : performance.now();
@@ -54,7 +60,9 @@ export class SessionLoadMeasurement {
     duplicateNotifications: 0,
     replayCapturedNotifications: 0,
     replayReactiveNotifications: 0,
-    historyAssignments: 0
+    historyAssignments: 0,
+    snapshotHydratedSessions: 0,
+    replayedSessions: 0
   };
 
   constructor(

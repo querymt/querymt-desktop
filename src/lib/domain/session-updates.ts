@@ -42,12 +42,232 @@ export function reduceSessionReplay(
   sessionId: string,
   notifications: readonly SessionNotification[]
 ): ActiveSessionViewModel {
-  let session = createEmptyActiveSession();
+  // Fast path: replay is one uninterrupted run with no intermediate readers, so
+  // the view model is folded in place in a single pass. The previous
+  // implementation reused the incremental reducer, which clones the entire view
+  // model (transcript, blocks, tools, plans) and rescans for the next event
+  // index on every notification, making long session loads quadratic.
+  const session = createEmptyActiveSession();
   session.sessionId = sessionId;
+
+  // Mirrors `getNextConversationEventIndex`: the index advances only when a
+  // non-merge update records an entry, and merged stream chunks reuse the last
+  // recorded index. Tracking a running maximum keeps this linear.
+  let nextEventIndex = 0;
+
   for (const notification of notifications) {
-    session = applySessionNotification(session, notification);
+    applySessionNotificationInPlace(session, notification, nextEventIndex);
+    nextEventIndex = currentConversationEventIndex(session);
   }
+
   return session;
+}
+
+/** Max recorded `eventIndex` plus one, matching `getNextConversationEventIndex`. */
+function currentConversationEventIndex(session: ActiveSessionViewModel): number {
+  let maxIndex = -1;
+  for (const item of session.transcript) {
+    if (typeof item.eventIndex === 'number') maxIndex = Math.max(maxIndex, item.eventIndex);
+  }
+  for (const tool of session.toolCalls) {
+    if (typeof tool.eventIndex === 'number') maxIndex = Math.max(maxIndex, tool.eventIndex);
+  }
+  return maxIndex + 1;
+}
+
+/**
+ * Applies one notification to `session` by mutating it, for bulk replay.
+ *
+ * `applySessionNotification` clones on every call to stay safe for the
+ * incremental/live path. Replay has no other readers, so mutation is both
+ * equivalent and linear-time. It is only valid to mutate the arrays/objects
+ * that the incremental reducer also cloned via `cloneSession`.
+ */
+function applySessionNotificationInPlace(
+  session: ActiveSessionViewModel,
+  notification: SessionNotification,
+  conversationEventIndex: number
+): void {
+  const update = notification.update;
+
+  if (
+    update.sessionUpdate === 'agent_message_chunk' ||
+    update.sessionUpdate === 'agent_thought_chunk'
+  ) {
+    const messageId = update.messageId ?? null;
+    const reasoningPartId =
+      update.sessionUpdate === 'agent_thought_chunk' ? readReasoningPartId(update) : null;
+    const last = session.transcript.at(-1);
+    if (canMergeStreamChunk(last, update.sessionUpdate, messageId, reasoningPartId)) {
+      // Mirror `mergeStreamChunk`: append the new text, then rebuild blocks.
+      // `last` is the mutable transcript entry owned by this replay pass.
+      const incomingBlocks = normalizeContentBlocks([update.content]);
+      last.text = `${last.text}${getTextContent(update.content)}`;
+      last.blocks = appendTextBlocks(last.blocks, incomingBlocks);
+      last.reasoningPartId = last.reasoningPartId ?? reasoningPartId;
+      last.timestampMs = Date.now();
+      session.sessionId = notification.sessionId;
+      session.runState = update.sessionUpdate === 'agent_message_chunk' ? 'streaming' : 'thinking';
+      session.activityLabel =
+        update.sessionUpdate === 'agent_message_chunk'
+          ? 'Agent is replying\u2026'
+          : 'Agent is thinking\u2026';
+      session.lastError = null;
+      return;
+    }
+  }
+
+  session.events.push({
+    id: `${notification.sessionId}-event-${session.events.length + 1}`,
+    kind: update.sessionUpdate,
+    text: summarizeUpdate(notification),
+    messageId: 'messageId' in update ? (update.messageId ?? null) : null
+  });
+
+  switch (update.sessionUpdate) {
+    case 'user_message_chunk':
+      session.transcript.push({
+        id: `${notification.sessionId}-${session.transcript.length + 1}`,
+        kind: update.sessionUpdate,
+        text: getTextContent(update.content),
+        blocks: normalizeContentBlocks([update.content]),
+        messageId: update.messageId ?? null,
+        clientPromptId: readClientPromptId(update) ?? readClientPromptId(notification),
+        eventIndex: conversationEventIndex,
+        timestampMs: Date.now()
+      });
+      session.runState = 'thinking';
+      session.activityLabel = 'Waiting for the agent to respond\u2026';
+      break;
+    case 'agent_message_chunk':
+      session.transcript.push({
+        id: `${notification.sessionId}-${session.transcript.length + 1}`,
+        kind: update.sessionUpdate,
+        text: getTextContent(update.content),
+        blocks: normalizeContentBlocks([update.content]),
+        messageId: update.messageId ?? null,
+        eventIndex: conversationEventIndex,
+        timestampMs: Date.now()
+      });
+      session.runState = 'streaming';
+      session.activityLabel = 'Agent is replying\u2026';
+      session.lastError = null;
+      break;
+    case 'agent_thought_chunk':
+      session.transcript.push({
+        id: `${notification.sessionId}-${session.transcript.length + 1}`,
+        kind: update.sessionUpdate,
+        text: getTextContent(update.content),
+        blocks: normalizeContentBlocks([update.content]),
+        messageId: update.messageId ?? null,
+        reasoningPartId: readReasoningPartId(update),
+        eventIndex: conversationEventIndex,
+        timestampMs: Date.now()
+      });
+      session.runState = 'thinking';
+      session.activityLabel = 'Agent is thinking\u2026';
+      session.lastError = null;
+      break;
+    case 'tool_call': {
+      const incomingStatus = update.status ?? 'pending';
+      const target = canonicalizeToolCall(session.toolCalls, update.toolCallId);
+      if (target) {
+        target.title = update.title || target.title;
+        target.status = mergeToolStatus(target.status, incomingStatus);
+        target.kind = update.kind ?? target.kind;
+        target.messageId = target.messageId ?? readMessageId(update);
+        target.arguments = stringifyOptional(update.rawInput) ?? target.arguments;
+        target.result = stringifyToolContent(update.rawOutput ?? update.content) ?? target.result;
+        target.eventIndex = target.eventIndex ?? conversationEventIndex;
+      } else {
+        session.toolCalls.push({
+          id: update.toolCallId,
+          title: update.title,
+          status: incomingStatus,
+          kind: update.kind ?? null,
+          messageId: readMessageId(update),
+          arguments: stringifyOptional(update.rawInput),
+          result: stringifyToolContent(update.rawOutput ?? update.content),
+          eventIndex: conversationEventIndex
+        });
+        session.toolCalls = session.toolCalls.slice();
+      }
+      const current = session.toolCalls.find((tool) => tool.id === update.toolCallId);
+      if (current && isTerminalToolStatus(current.status)) {
+        if (session.activeToolCallId === update.toolCallId) session.activeToolCallId = null;
+      } else {
+        session.runState = 'tool-running';
+        session.activeToolCallId = update.toolCallId;
+        session.activityLabel = `Running tool: ${update.title}`;
+        session.lastError = null;
+      }
+      break;
+    }
+    case 'tool_call_update': {
+      let target = canonicalizeToolCall(session.toolCalls, update.toolCallId);
+      if (target) {
+        target.title = update.title ?? target.title;
+        target.status = mergeToolStatus(target.status, update.status ?? target.status);
+        target.kind = update.kind ?? target.kind;
+        target.messageId = target.messageId ?? readMessageId(update);
+        target.result = stringifyToolContent(update.rawOutput ?? update.content) ?? target.result;
+        target.eventIndex = target.eventIndex ?? conversationEventIndex;
+      } else {
+        target = {
+          id: update.toolCallId,
+          title: update.title ?? 'Tool call',
+          status: update.status ?? 'pending',
+          kind: update.kind ?? null,
+          messageId: readMessageId(update),
+          result: stringifyToolContent(update.rawOutput ?? update.content),
+          eventIndex: conversationEventIndex
+        };
+        session.toolCalls.push(target);
+        session.toolCalls = session.toolCalls.slice();
+      }
+      if (target.status === 'completed') {
+        session.runState = 'streaming';
+        session.activeToolCallId = null;
+        session.activityLabel = 'Tool finished. Continuing reply\u2026';
+        session.lastError = null;
+      } else if (target.status === 'failed') {
+        session.runState = 'failed';
+        session.activeToolCallId = update.toolCallId;
+        session.lastError = update.title ? `${update.title} failed.` : 'Tool call failed.';
+        session.activityLabel = session.lastError;
+      } else {
+        session.runState = 'tool-running';
+        session.activeToolCallId = update.toolCallId;
+        session.activityLabel = `Running ${update.title ?? 'tool'}\u2026`;
+      }
+      break;
+    }
+    case 'plan':
+      session.plans = update.entries.map(mapPlanEntry);
+      if (session.runState === 'idle') session.runState = 'thinking';
+      session.activityLabel = 'Working through a plan\u2026';
+      break;
+    case 'config_option_update':
+      session.configOptions = update.configOptions ?? [];
+      break;
+    case 'usage_update':
+      session.usage.contextUsed = readFiniteNumber(update.used) ?? session.usage.contextUsed;
+      session.usage.contextLimit = readPositiveNumber(update.size) ?? session.usage.contextLimit;
+      session.usage.cumulativeCostUsd = readCostUsd(update.cost) ?? session.usage.cumulativeCostUsd;
+      break;
+    case 'plan_update':
+      if (update.plan.type === 'items') {
+        session.plans = update.plan.entries.map(mapPlanEntry);
+      }
+      session.activityLabel = 'Plan updated.';
+      break;
+    case 'plan_removed':
+      session.plans = [];
+      session.activityLabel = 'Plan removed.';
+      break;
+    default:
+      break;
+  }
 }
 
 export function getNextConversationEventIndex(session: ActiveSessionViewModel): number {

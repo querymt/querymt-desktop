@@ -2499,7 +2499,14 @@ export class AgentsStore {
         telemetryStatus = 'cancelled';
         return;
       }
-      const replaySession = reduceSessionReplay(sessionId, replay);
+      // A snapshot-capable agent omits historical replay because this client
+      // advertised that it hydrates history from the load-response snapshot.
+      // Detect that case so we only transform the authoritative representation
+      // instead of building both.
+      const replayIsEmpty = replay.length === 0;
+      const replaySession = replayIsEmpty
+        ? null
+        : reduceSessionReplay(sessionId, replay);
       this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
       const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
       checkpoint('frontend.snapshot_transform');
@@ -2509,14 +2516,22 @@ export class AgentsStore {
       // session_info_update and similar metadata create events without a
       // transcript. Treating those as history overwrites late live updates
       // that arrived after capture closed (first child load, empty chat).
-      this.activeSession = sessionHasVisibleHistory(replaySession)
-        ? replaySession
-        : sessionHasVisibleHistory(snapshotSession)
-          ? snapshotSession
-          : liveHasVisibleHistory
-            ? liveSession
-            : replaySession;
+      //
+      // Preference order: the snapshot is authoritative when the agent served
+      // it without replay; otherwise replay wins because it carries the full
+      // conversation the snapshot may have truncated.
+      this.activeSession =
+        replaySession && sessionHasVisibleHistory(replaySession)
+          ? replaySession
+          : sessionHasVisibleHistory(snapshotSession)
+            ? snapshotSession
+            : liveHasVisibleHistory
+              ? liveSession
+              : (replaySession ?? snapshotSession);
       this.activeLoadMeasurement?.increment('historyAssignments');
+      this.activeLoadMeasurement?.increment(
+        replayIsEmpty ? 'snapshotHydratedSessions' : 'replayedSessions'
+      );
       // Preserve context metrics from the candidates that lost the history
       // selection: replay capture may miss `usage_update` while the load
       // snapshot (or the still-rendered live session) already knows the
@@ -2527,7 +2542,9 @@ export class AgentsStore {
       if (liveSession.sessionId === sessionId && this.activeSession !== liveSession) {
         mergeMissingSessionUsage(this.activeSession, liveSession);
       }
-      if (this.activeSession !== replaySession) mergeMissingSessionUsage(this.activeSession, replaySession);
+      if (replaySession && this.activeSession !== replaySession) {
+        mergeMissingSessionUsage(this.activeSession, replaySession);
+      }
       const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
       checkpoint('frontend.queued_replay');
       if (!this.isSelectedSession(agentId, sessionId)) {
