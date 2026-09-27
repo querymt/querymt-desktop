@@ -103,6 +103,8 @@ flowchart TD
 
 A per-session transition context identifies the target mode while intermediate responses and notifications arrive. Those updates still refresh confirmed runtime state, but they do not overwrite the saved target preference until restoration finishes. On failure, the transition stops, reports the error, and captures only values actually confirmed by the agent. Previously saved values remain available for a later retry.
 
+The skip-if-already-correct optimization applies only to model state that the mode response itself confirmed. A response without model metadata confirms nothing, so the resolved saved or recent model is written even when it matches the previously displayed selection; otherwise an agent that silently switched to its own mode default would leave the desktop showing a stale model. If the model catalog has not loaded when the transition runs, the transition loads it before resolving so restoration cannot be silently skipped by an empty catalog. User config writes issued while a transition is in flight chain behind that transition on the session queue, keeping their recency and preference recording normal.
+
 The model write precedes reasoning because model selection can change the reasoning choices exposed by an agent. Reasoning is validated against the latest choices after the model response, not only those returned by the mode response.
 
 Alternative considered: let the UI issue mode, model, and reasoning writes independently. This cannot reliably serialize rapid transitions or distinguish temporary agent defaults from final user preferences.

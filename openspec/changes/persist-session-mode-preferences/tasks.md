@@ -32,3 +32,4 @@
 
 - [x] 5.1 Run the targeted agent-store and session-composer test suites and verify all persistence, transition ordering, fallback, and focus scenarios pass.
 - [x] 5.2 Run `npm run check` and the complete `npm test` suite, resolving regressions and verifying the final implementation passes project-wide type and behavior checks.
+- [x] 5.3 Harden transition restoration against sparse agent responses: restore writes fire when a mode response omits model metadata, the model catalog is ensured before resolution, and user config writes made during a transition stay serialized while recording recency and preferences normally; verify store and composer tests cover these cases.

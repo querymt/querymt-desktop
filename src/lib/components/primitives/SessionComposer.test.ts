@@ -865,8 +865,8 @@ describe('SessionComposer model picker focus and mode cycling', () => {
   }
 
   /** Dispatches a cancelable Tab keydown; returns true when traversal may continue. */
-  function pressTab(target: Element): boolean {
-    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+  function pressTab(target: Element, modifiers: { shiftKey?: boolean } = {}): boolean {
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true, ...modifiers });
     target.dispatchEvent(event);
     return !event.defaultPrevented;
   }
@@ -1028,6 +1028,70 @@ describe('SessionComposer model picker focus and mode cycling', () => {
 
     expect(notConsumed).toBe(true);
     expect(onLaunchModeChange).not.toHaveBeenCalled();
+  });
+
+  it('keeps Shift+Tab for backward focus traversal in the session composer', async () => {
+    const onSessionConfigChange = vi.fn();
+    renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      sessionConfigOptions: sessionModeOptions,
+      onSessionConfigChange
+    });
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+
+    const notConsumed = pressTab(prompt, { shiftKey: true });
+
+    expect(notConsumed).toBe(true);
+    expect(onSessionConfigChange).not.toHaveBeenCalled();
+  });
+
+  it('keeps Shift+Tab for backward focus traversal in the new-session composer', async () => {
+    const onLaunchModeChange = vi.fn();
+    renderComposer({
+      launch: true,
+      launchModeOptions: [
+        { id: 'build', label: 'Build' },
+        { id: 'plan', label: 'Plan' }
+      ],
+      selectedLaunchModeId: 'build',
+      onLaunchModeChange
+    });
+    const prompt = screen.getByPlaceholderText(/Ask QueryMT/i);
+
+    const notConsumed = pressTab(prompt, { shiftKey: true });
+
+    expect(notConsumed).toBe(true);
+    expect(onLaunchModeChange).not.toHaveBeenCalled();
+  });
+
+  it('does not consume Tab when no session config callback is provided', async () => {
+    renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      sessionConfigOptions: sessionModeOptions
+    });
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+
+    const notConsumed = pressTab(prompt);
+
+    expect(notConsumed).toBe(true);
+  });
+
+  it('does not consume Tab when no launch mode callback is provided', async () => {
+    renderComposer({
+      launch: true,
+      launchModeOptions: [
+        { id: 'build', label: 'Build' },
+        { id: 'plan', label: 'Plan' }
+      ],
+      selectedLaunchModeId: 'build'
+    });
+    const prompt = screen.getByPlaceholderText(/Ask QueryMT/i);
+
+    const notConsumed = pressTab(prompt);
+
+    expect(notConsumed).toBe(true);
   });
 
   it('supports Ctrl+M model selection then Tab mode cycling end to end', async () => {

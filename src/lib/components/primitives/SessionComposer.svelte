@@ -319,18 +319,18 @@
   function cycleMode(): boolean {
     if (activeSessionId) {
       const nextValue = getNextConfigValue(modeOption);
-      if (!nextValue || !modeOption) {
+      if (!nextValue || !modeOption || !onSessionConfigChange) {
         return false;
       }
-      void onSessionConfigChange?.(modeOption.id, nextValue);
+      void onSessionConfigChange(modeOption.id, nextValue);
       return true;
     }
 
     const nextLaunchMode = getNextLaunchModeValue();
-    if (!nextLaunchMode) {
+    if (!nextLaunchMode || !onLaunchModeChange) {
       return false;
     }
-    onLaunchModeChange?.(nextLaunchMode);
+    onLaunchModeChange(nextLaunchMode);
     return true;
   }
 
@@ -391,7 +391,7 @@
       return;
     }
 
-    if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key === 'Tab') {
+    if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key === 'Tab') {
       // Consume Tab only when a mode can actually be cycled; otherwise let
       // normal focus traversal continue.
       if (cycleMode()) {

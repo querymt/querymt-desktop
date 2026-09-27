@@ -216,6 +216,13 @@ const DEFAULT_AGENTS: AgentConfig[] = [
   }
 ];
 
+/** Result of one serialized session config write. */
+type SessionConfigWriteResult = {
+  configOptions: SessionConfigOption[];
+  /** Selection key the response itself confirmed; absent when it carried no model metadata. */
+  confirmedModelKey?: string;
+};
+
 export class AgentsStore {
   private clients = new Map<string, AgentClientRecord>();
   private connectFlights = new Map<string, ConnectFlight>();
@@ -244,7 +251,7 @@ export class AgentsStore {
   private agentLogSubscriptionPending = false;
   private modelInfoCache = new Map<string, ModelInfo | null>();
   private modelInfoRequests = new Map<string, Promise<void>>();
-  private sessionConfigRequests = new Map<string, Promise<SessionConfigOption[]>>();
+  private sessionConfigRequests = new Map<string, Promise<SessionConfigWriteResult>>();
   private sessionConfigOptions = new Map<string, SessionConfigOption[]>();
   private sessionModelIds = $state<Record<string, string>>({});
   // Confirmed active mode per session, tracked separately so model-only
@@ -802,10 +809,12 @@ export class AgentsStore {
     }
 
     const previous = this.sessionConfigRequests.get(key);
-    const request = (async (): Promise<SessionConfigOption[]> => {
+    const request = (async (): Promise<SessionConfigWriteResult> => {
       if (previous) await previous.catch(() => undefined);
       // A newer transition for this session supersedes this request.
-      if (this.sessionModeTransitions.has(key)) return this.getSessionConfigOptions(agentId, sessionId);
+      if (this.sessionModeTransitions.has(key)) {
+        return { configOptions: this.getSessionConfigOptions(agentId, sessionId) };
+      }
       this.sessionModeTransitions.set(key, targetModeId);
       // Values this transition's writes got confirmed by the agent; on partial
       // failure only these are captured into the target preference, leaving
@@ -815,7 +824,19 @@ export class AgentsStore {
       try {
         const modeOptionId =
           findModeConfigOption(this.getSessionConfigOptions(agentId, sessionId))?.id ?? CONFIG_MODE;
-        await this.updateSessionConfigOption(agentId, sessionId, modeOptionId, targetModeId);
+        const modeWrite = await this.updateSessionConfigOption(agentId, sessionId, modeOptionId, targetModeId, {
+          transitionOwned: true
+        });
+
+        // Resolve against a loaded catalog: right after a refresh the model
+        // list may still be loading, which would silently skip restoration.
+        if ((this.modelsByAgent[agentId] ?? []).length === 0) {
+          const record = await this.connectInitializedRecord(agentId);
+          const ensured = record ? await record.client.listModels().catch(() => [] as ModelEntry[]) : [];
+          if (ensured.length > 0 && (this.modelsByAgent[agentId] ?? []).length === 0) {
+            this.modelsByAgent = { ...this.modelsByAgent, [agentId]: ensured };
+          }
+        }
 
         // Resolve the target model: exact saved selection, then the agent's
         // most recent available model, then the agent-confirmed mode value.
@@ -828,9 +849,18 @@ export class AgentsStore {
               .map((selectionKey) => findModelBySelectionKey(models, selectionKey))
               .find((model): model is ModelEntry => Boolean(model));
         const resolvedModel = savedModel ?? recentModel;
-        const confirmedAfterMode = this.captureConfirmedSessionState(agentId, sessionId);
-        if (resolvedModel && getModelSelectionKey(resolvedModel) !== confirmedAfterMode?.modelId) {
-          await this.applySelectedModelToSession(agentId, sessionId, getModelSelectionKey(resolvedModel));
+        // Only skip the restore write when the mode response itself confirmed
+        // the resolved model. A response without model metadata confirms
+        // nothing — the agent may have switched to its own mode default
+        // silently — so the previously displayed selection must not suppress
+        // restoration.
+        const confirmedByModeResponse = modeWrite.confirmedModelKey;
+        if (
+          resolvedModel &&
+          getModelSelectionKey(resolvedModel) !== confirmedByModeResponse &&
+          resolvedModel.id !== confirmedByModeResponse
+        ) {
+          await this.applySelectedModelToSession(agentId, sessionId, getModelSelectionKey(resolvedModel), true);
           confirmedModelKey = getModelSelectionKey(resolvedModel);
         }
 
@@ -844,7 +874,9 @@ export class AgentsStore {
           savedReasoning && choices.some((choice) => choice.value === savedReasoning) ? savedReasoning : undefined;
         const confirmedAfterModel = this.captureConfirmedSessionState(agentId, sessionId);
         if (validSavedReasoning && reasoningOption && validSavedReasoning !== confirmedAfterModel?.reasoningId) {
-          await this.updateSessionConfigOption(agentId, sessionId, reasoningOption.id, validSavedReasoning);
+          await this.updateSessionConfigOption(agentId, sessionId, reasoningOption.id, validSavedReasoning, {
+            transitionOwned: true
+          });
           confirmedReasoningId = validSavedReasoning;
         }
 
@@ -859,7 +891,7 @@ export class AgentsStore {
             reasoningId: confirmedReasoningId ?? (final.reasoningId || undefined)
           });
         }
-        return this.getSessionConfigOptions(agentId, sessionId);
+        return { configOptions: this.getSessionConfigOptions(agentId, sessionId) };
       } catch (error) {
         // Partial failure: report it and capture only the values this
         // transition actually got confirmed — never the rejected request and
@@ -3772,13 +3804,13 @@ export class AgentsStore {
     this.sessionModelIds = { ...this.sessionModelIds, [buildSessionKey(agentId, sessionId)]: modelId };
   }
 
-  private async applySelectedModelToSession(agentId: string, sessionId: string, modelId: string) {
+  private async applySelectedModelToSession(agentId: string, sessionId: string, modelId: string, transitionOwned = false) {
     if (!modelId) return;
     const model = (this.modelsByAgent[agentId] ?? []).find((entry) => getModelSelectionKey(entry) === modelId);
     if (!model) throw new Error(`Selected model is unavailable: ${modelId}`);
 
     const configId = findModelConfigOption(this.getSessionConfigOptions(agentId, sessionId))?.id ?? 'model';
-    await this.updateSessionConfigOption(agentId, sessionId, configId, model.id, { model });
+    await this.updateSessionConfigOption(agentId, sessionId, configId, model.id, { model, transitionOwned });
   }
 
   async setActiveSessionConfigOption(configId: string, value: string) {
@@ -3798,13 +3830,19 @@ export class AgentsStore {
     await this.updateSessionConfigOption(this.activeAgentId, this.activeSessionId, configId, value);
   }
 
+  /**
+   * Applies one session config write. Returns the merged confirmed options
+   * and, when the agent's response carried model metadata, the selection key
+   * it confirmed — absent otherwise, so callers never mistake the previously
+   * displayed selection for an agent confirmation.
+   */
   private async updateSessionConfigOption(
     agentId: string,
     sessionId: string,
     configId: string,
     value: string,
-    options: { model?: ModelEntry } = {}
-  ): Promise<SessionConfigOption[]> {
+    options: { model?: ModelEntry; transitionOwned?: boolean } = {}
+  ): Promise<{ configOptions: SessionConfigOption[]; confirmedModelKey?: string }> {
     const key = buildSessionKey(agentId, sessionId);
     const pending = this.pendingSessionConfigs[key] ?? {};
     this.pendingSessionConfigs = {
@@ -3812,10 +3850,11 @@ export class AgentsStore {
       [key]: { ...pending, [configId]: (pending[configId] ?? 0) + 1 }
     };
     // Serialize mode/model changes for this session; another session can update
-    // independently. A mode transition owns the session queue for its whole
-    // restore sequence, so its inner writes run inline instead of chaining onto
-    // the transition promise (which would deadlock).
-    const ownsQueue = !this.sessionModeTransitions.has(key);
+    // independently. Writes owned by a mode transition run inline inside that
+    // transition instead of chaining onto its own queue entry (which would
+    // deadlock); user writes issued while a transition is in flight still chain
+    // behind it and stay serialized.
+    const ownsQueue = !options.transitionOwned;
     const previous = ownsQueue ? this.sessionConfigRequests.get(key) : null;
     const request = (async () => {
       if (previous) await previous.catch(() => undefined);
@@ -3835,14 +3874,16 @@ export class AgentsStore {
       const confirmedId = getCurrentModelId(response);
       // Selection changes only when the response carries model metadata; a mode
       // change may omit it, in which case the last known selection is kept.
+      let confirmedModelKey: string | undefined;
       if (confirmedId) {
         const previousModel = (this.modelsByAgent[agentId] ?? []).find(
           (model) => getModelSelectionKey(model) === this.getSessionModelId(agentId, sessionId)
         );
         const selectedModel = options.model ?? previousModel;
+        confirmedModelKey = selectedModel?.id === confirmedId ? getModelSelectionKey(selectedModel) : confirmedId;
         this.sessionModelIds = {
           ...this.sessionModelIds,
-          [key]: selectedModel?.id === confirmedId ? getModelSelectionKey(selectedModel) : confirmedId
+          [key]: confirmedModelKey
         };
       } else if (options.model) {
         // Older servers acknowledge the write without returning a model config option.
@@ -3853,20 +3894,20 @@ export class AgentsStore {
         // mode option (older servers ack without config options).
         this.sessionModeIds = { ...this.sessionModeIds, [key]: getCurrentModeId(response) ?? value };
       }
-      // Recency tracks explicit user selections only; restoring a saved
-      // preference during a mode transition must not reorder recent models.
-      if (options.model && !this.sessionModeTransitions.has(key) && (!confirmedId || confirmedId === options.model.id)) {
+      // Recency tracks explicit user selections only; transition-owned restore
+      // writes must not reorder recent models.
+      if (options.model && !options.transitionOwned && (!confirmedId || confirmedId === options.model.id)) {
         this.rememberRecentModel(agentId, options.model);
       }
       // Explicit model/reasoning writes confirm a preference for the currently
       // active mode; transition restore writes are persisted once, at the end.
       if (
-        !this.sessionModeTransitions.has(key) &&
+        !options.transitionOwned &&
         (isModelConfigOptionId(configId) || isReasoningConfigOptionId(configId))
       ) {
         this.persistConfirmedSessionPreference(agentId, sessionId);
       }
-      return configOptions;
+      return { configOptions, confirmedModelKey };
     })();
     if (ownsQueue) this.sessionConfigRequests.set(key, request);
     try {
