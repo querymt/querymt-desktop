@@ -1546,7 +1546,9 @@ export class AgentsStore {
       const update = notification.update;
       if (update.sessionUpdate !== 'session_info_update') continue;
       if (typeof update.title === 'string' && update.title.trim()) title = update.title.trim();
-      if (update.updatedAt !== undefined) replayUpdatedAt = update.updatedAt;
+      if (update.updatedAt !== undefined) {
+        replayUpdatedAt = newestTimestamp(replayUpdatedAt, update.updatedAt);
+      }
     }
 
     const inferred = inferSessionSummaryFromActiveSession(this.activeSession);
@@ -2518,12 +2520,13 @@ export class AgentsStore {
       // Preserve context metrics from the candidates that lost the history
       // selection: replay capture may miss `usage_update` while the load
       // snapshot (or the still-rendered live session) already knows the
-      // context window. Present values win, and later drained/live usage
-      // updates keep overriding these baselines.
+      // context window. The snapshot merges first so its load-time values win
+      // over the stale still-rendered live session; present values win, and
+      // later drained/live usage updates keep overriding these baselines.
+      if (this.activeSession !== snapshotSession) mergeMissingSessionUsage(this.activeSession, snapshotSession);
       if (liveSession.sessionId === sessionId && this.activeSession !== liveSession) {
         mergeMissingSessionUsage(this.activeSession, liveSession);
       }
-      if (this.activeSession !== snapshotSession) mergeMissingSessionUsage(this.activeSession, snapshotSession);
       if (this.activeSession !== replaySession) mergeMissingSessionUsage(this.activeSession, replaySession);
       const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
       checkpoint('frontend.queued_replay');

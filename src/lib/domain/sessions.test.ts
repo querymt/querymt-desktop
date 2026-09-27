@@ -208,10 +208,34 @@ describe('inferSessionStatus', () => {
 });
 
 describe('newestTimestamp', () => {
-  it('returns the lexicographically newer ISO timestamp regardless of argument order', () => {
+  it('returns the newer ISO timestamp regardless of argument order', () => {
     expect(newestTimestamp('2026-06-17T12:00:00Z', '2026-06-17T12:05:00Z')).toBe('2026-06-17T12:05:00Z');
     expect(newestTimestamp('2026-06-17T12:05:00Z', '2026-06-17T12:00:00Z')).toBe('2026-06-17T12:05:00Z');
     expect(newestTimestamp('2026-06-17T12:00:00Z', '2026-06-17T12:00:00Z')).toBe('2026-06-17T12:00:00Z');
+  });
+
+  it('compares by parsed instant when fractional precision differs', () => {
+    expect(newestTimestamp('2026-06-17T12:00:00Z', '2026-06-17T12:00:00.500Z')).toBe(
+      '2026-06-17T12:00:00.500Z'
+    );
+    expect(newestTimestamp('2026-06-17T12:00:00.500Z', '2026-06-17T12:00:00Z')).toBe(
+      '2026-06-17T12:00:00.500Z'
+    );
+  });
+
+  it('compares by parsed instant when timezone offsets differ', () => {
+    // 2026-06-17T12:00:00+02:00 is 10:00Z, which is older than 10:30Z even
+    // though it sorts higher as a raw string.
+    expect(newestTimestamp('2026-06-17T12:00:00+02:00', '2026-06-17T10:30:00Z')).toBe(
+      '2026-06-17T10:30:00Z'
+    );
+    expect(newestTimestamp('2026-06-17T10:30:00Z', '2026-06-17T12:00:00+02:00')).toBe(
+      '2026-06-17T10:30:00Z'
+    );
+    // Equal instants in different offsets keep the current stamp.
+    expect(newestTimestamp('2026-06-17T12:00:00Z', '2026-06-17T14:00:00+02:00')).toBe(
+      '2026-06-17T12:00:00Z'
+    );
   });
 
   it('keeps the known timestamp when the incoming value is missing', () => {

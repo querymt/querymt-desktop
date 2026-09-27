@@ -306,15 +306,21 @@ function compareNullableTimestamps(a: string | null, b: string | null): number {
 /**
  * Newest of two ISO timestamps, ignoring missing values. Live activity stamps
  * and delayed `session/list` responses both flow through this so a summary's
- * displayed activity never moves backwards.
+ * displayed activity never moves backwards. Timestamps are compared by their
+ * parsed instants so mixed fractional precision and timezone offsets order
+ * correctly; an incoming value that fails to parse never displaces current.
  */
 export function newestTimestamp(
   current: string | null | undefined,
   incoming: string | null | undefined
 ): string | null {
   if (!current) return incoming ?? null;
-  if (!incoming || incoming <= current) return current;
-  return incoming;
+  if (!incoming) return current;
+  const currentMs = Date.parse(current);
+  const incomingMs = Date.parse(incoming);
+  if (Number.isNaN(incomingMs)) return current;
+  if (Number.isNaN(currentMs) || incomingMs > currentMs) return incoming;
+  return current;
 }
 
 const MINUTE_MS = 60_000;
