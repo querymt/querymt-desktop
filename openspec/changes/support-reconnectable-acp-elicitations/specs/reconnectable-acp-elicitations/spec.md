@@ -21,6 +21,10 @@ The system SHALL keep a session-scoped form elicitation pending while its origin
 - **WHEN** the authorized client responds with ACP action `cancel`
 - **THEN** the waiting tool receives a cancellation outcome attributed to the user
 
+#### Scenario: Outgoing form request cannot be constructed
+- **WHEN** an elicitation's local schema cannot be converted into a standard ACP form request
+- **THEN** the system reports the delivery failure without synthesizing a user action, leaves the question pending, and continues forwarding unrelated events on the healthy connection
+
 ### Requirement: Authorized recovery across ACP connections
 The system SHALL allow a client authorized to resume the original interaction to discover its outstanding session-scoped form questions, including those in sessions not currently open in the UI. The system MUST bind discovery, delivery, and resolution to the original receiving client authority and, when authentication is available, its verified user identity; knowledge of a `sessionId`, elicitation ID, or unverified self-reported identity alone MUST NOT grant access. If the client cannot establish a secure recovery authority, the system MUST reject recovery rather than reveal a question or accept a response.
 
@@ -35,6 +39,14 @@ The system SHALL allow a client authorized to resume the original interaction to
 #### Scenario: Client lacks elicitation capability
 - **WHEN** a recovered connection has not advertised non-null `clientCapabilities.elicitation.form`
 - **THEN** the agent does not send a form `elicitation/create` request to that connection and leaves the question pending for an eligible client
+
+#### Scenario: Unauthorized session subscriber observes live updates
+- **WHEN** a session subscriber lacks the recovery authority for that session's pending question
+- **THEN** it continues receiving otherwise permitted session updates but receives neither an actionable elicitation request nor the question content
+
+#### Scenario: Authorized connection disconnects
+- **WHEN** a connection authorized for a pending session disconnects
+- **THEN** the system removes that connection from the session's live authorization set while retaining recovery authority for the still-pending question
 
 ### Requirement: Re-delivery follows ACP request semantics
 The agent SHALL issue a fresh standard ACP `elicitation/create` request with a connection-local JSON-RPC request ID for each authorized delivery attempt. It MUST retain a stable opaque question identity across attempts, accept no more than one valid terminal response for each question, and reject or ignore stale or unauthorized delivery responses. For `accept`, it MUST validate submitted form content against the requested schema before completing the waiting tool; invalid content MUST NOT be treated as a user cancellation.
@@ -72,3 +84,7 @@ The system SHALL retire pending questions when the originating run is explicitly
 #### Scenario: Resolved question in history
 - **WHEN** a client reloads a session after its question has already been answered
 - **THEN** it may see historical request and terminal outcome but receives no actionable duplicate
+
+#### Scenario: Final pending question finishes
+- **WHEN** the final pending question for a session resolves or is retired by lifecycle termination
+- **THEN** the system revokes and removes that session's recovery authority so it cannot authorize a later unrelated question

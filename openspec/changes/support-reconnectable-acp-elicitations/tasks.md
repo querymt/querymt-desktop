@@ -2,13 +2,15 @@
 
 ## 1. Coordinate the Agent Contract (external dependency)
 
-The agent repository `/Users/wiking/qmt/querymt` is outside this repo-local change's allowed edit roots. The following tasks require a separately authorized companion change there; do not edit it as part of a desktop-only apply.
+The agent repository identified by `${QUERYMT_AGENT_REPO}` is outside this repo-local change's allowed edit roots; the variable denotes the root of the sibling QueryMT agent checkout. The following tasks require a separately authorized companion change there; do not edit it as part of a desktop-only apply.
 
 - [x] 1.1 Agree on a versioned QueryMT capability and wire contract for issuing in-process resume authority, listing only authorized pending session IDs, and attaching recoverable sessions; verify protocol fixtures cover legacy agents and denied unauthorized clients.
 - [x] 1.2 In the authorized agent companion change, extend session/profile/delegate pending entries with form payload, owner authority, run lifecycle, and delivery generation; verify unit tests cover register, snapshot, and cleanup on tool exit/Stop.
 - [x] 1.3 In the agent companion change, remove wall-clock limits from WebSocket form elicitation delivery without changing permission RPC limits, and stop mapping bridge/stdio transport errors to user `cancel`; verify simulated multi-hour waits and disconnect tests keep the original waiter alive.
 - [x] 1.4 In the agent companion change, implement verified-principal or original-connection-issued secret authority, per-session discovery and authorized attach with secure transport checks; verify guessed session IDs, stolen/stale IDs, capability mismatch, and insecure remote transport cannot recover a question.
 - [x] 1.5 In the agent companion change, re-deliver standard ACP `elicitation/create` on authorized reconnect with fresh JSON-RPC IDs, stable opaque question IDs, atomic single-winner resolution, form validation, and terminal outcome without answer-content replay; verify old-socket races, invalid content, duplicate replies, off-screen sessions, and profile/delegate routing in agent integration tests.
+- [x] 1.6 Classify WebSocket elicitation delivery failures so local request-construction errors preserve the waiter and event loop, transport send failures end only the failed connection's forwarding, and client/malformed response errors preserve the waiter without synthesizing `cancel`; verify each path independently.
+- [x] 1.7 Remove disconnected connection IDs from live authorization sets and retire each session authority after its final pending question finishes; verify disconnect preserves recoverability, unauthorized subscribers receive no question content, and expired authority cannot authorize a later unrelated question.
 
 ## 2. Desktop Reconnect Behavior (this repository)
 

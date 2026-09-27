@@ -25,6 +25,6 @@ None; the desktop OpenSpec root has no existing specs.
 ## Impact
 
 - Desktop: `src/lib/stores/inbox.svelte.ts`, `src/lib/stores/agents.svelte.ts`, ACP client/transport and their tests.
-- Agent (companion work in `/Users/wiking/qmt/querymt`): `crates/agent/src/elicitation.rs`, `crates/agent/src/acp/websocket.rs`, `crates/agent/src/acp/shared.rs`, `crates/agent/src/acp/stdio.rs`, session cancellation, QueryMT extension discovery, and tests.
+- Agent (companion work in the checkout identified by `${QUERYMT_AGENT_REPO}`): `crates/agent/src/elicitation.rs`, `crates/agent/src/acp/websocket.rs`, `crates/agent/src/acp/shared.rs`, `crates/agent/src/acp/stdio.rs`, session cancellation, QueryMT extension discovery, and tests. `${QUERYMT_AGENT_REPO}` denotes the root of the sibling QueryMT agent repository.
 - ACP wire behavior: standard `elicitation/create` on each live connection, plus a versioned QueryMT-only discovery/recovery extension and secure reconnect credential or verified identity. No change to the ACP standard is proposed.
 - This change lives in the **repo-local desktop OpenSpec root**. Its apply scope is limited to querymt-desktop; agent implementation requires a separately authorized/coordinated change in the sibling repository before end-to-end acceptance can pass.
