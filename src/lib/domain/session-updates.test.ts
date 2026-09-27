@@ -6,7 +6,8 @@ import {
   beginSessionWork,
   createEmptyActiveSession,
   endSessionWork,
-  getNextConversationEventIndex
+  getNextConversationEventIndex,
+  mergeMissingSessionUsage
 } from './session-updates';
 
 function notification(update: SessionNotification['update']): SessionNotification {
@@ -168,6 +169,59 @@ describe('session usage updates', () => {
 
     expect(session.usage.activeWorkMs).toBe(3_500);
     expect(session.usage.activeWorkStartedAt).toBeNull();
+  });
+});
+
+describe('mergeMissingSessionUsage', () => {
+  it('fills only the metrics the target is missing', () => {
+    const target = createEmptyActiveSession();
+    target.usage.contextUsed = 48_000;
+    const source = createEmptyActiveSession();
+    source.usage.contextUsed = 12_000;
+    source.usage.contextLimit = 200_000;
+    source.usage.cumulativeCostUsd = 0.5;
+
+    mergeMissingSessionUsage(target, source);
+
+    expect(target.usage).toMatchObject({
+      contextUsed: 48_000,
+      contextLimit: 200_000,
+      cumulativeCostUsd: 0.5
+    });
+    expect(source.usage.contextUsed).toBe(12_000);
+  });
+
+  it('never regresses context usage or cost on the target', () => {
+    const target = createEmptyActiveSession();
+    target.usage.contextUsed = 48_000;
+    target.usage.contextLimit = 200_000;
+    target.usage.cumulativeCostUsd = 0.5;
+    const source = createEmptyActiveSession();
+    source.usage.contextUsed = 1_000;
+    source.usage.contextLimit = 100_000;
+    source.usage.cumulativeCostUsd = 0.01;
+
+    mergeMissingSessionUsage(target, source);
+
+    expect(target.usage).toMatchObject({
+      contextUsed: 48_000,
+      contextLimit: 200_000,
+      cumulativeCostUsd: 0.5
+    });
+  });
+
+  it('leaves active-work timers untouched', () => {
+    const target = createEmptyActiveSession();
+    target.usage.activeWorkMs = 4_000;
+    target.usage.activeWorkStartedAt = 9_000;
+    const source = createEmptyActiveSession();
+    source.usage.activeWorkMs = 99_000;
+    source.usage.activeWorkStartedAt = 1_000;
+
+    mergeMissingSessionUsage(target, source);
+
+    expect(target.usage.activeWorkMs).toBe(4_000);
+    expect(target.usage.activeWorkStartedAt).toBe(9_000);
   });
 });
 

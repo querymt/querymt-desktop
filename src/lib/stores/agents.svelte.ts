@@ -16,6 +16,7 @@ import {
   createEmptyActiveSession,
   applySessionNotification,
   applyDelegationChildSession,
+  mergeMissingSessionUsage,
   reduceSessionReplay,
   beginSessionWork,
   endSessionWork,
@@ -35,6 +36,7 @@ import {
   getWorkspaceRemoteMachines,
   isActiveSessionStatus,
   mapAcpSessionsToDesktopSessions,
+  newestTimestamp,
   type WorkspaceSessionGroup,
   type WorkspaceSessionSource
 } from '$lib/domain/sessions';
@@ -1538,24 +1540,25 @@ export class AgentsStore {
     if (!current) return;
 
     let title = current.title;
-    let updatedAt = current.updatedAt;
+    let replayUpdatedAt: string | null = null;
     for (const notification of replay) {
       if (notification.sessionId !== sessionId) continue;
       const update = notification.update;
       if (update.sessionUpdate !== 'session_info_update') continue;
       if (typeof update.title === 'string' && update.title.trim()) title = update.title.trim();
-      if (update.updatedAt !== undefined) updatedAt = update.updatedAt;
+      if (update.updatedAt !== undefined) replayUpdatedAt = update.updatedAt;
     }
 
     const inferred = inferSessionSummaryFromActiveSession(this.activeSession);
     if (!title || title === 'Session') title = inferred.title ?? title;
-    if (!updatedAt) updatedAt = inferred.updatedAt;
-    if (title === current.title && updatedAt === current.updatedAt) return;
+    // Never let a replayed info update roll the summary's activity backwards.
+    const nextUpdatedAt = newestTimestamp(current.updatedAt, replayUpdatedAt) ?? inferred.updatedAt;
+    if (title === current.title && nextUpdatedAt === current.updatedAt) return;
 
     this.sessionsByAgent = {
       ...this.sessionsByAgent,
       [agentId]: (this.sessionsByAgent[agentId] ?? []).map((session) =>
-        session.sessionId === sessionId ? { ...session, title, updatedAt } : session
+        session.sessionId === sessionId ? { ...session, title, updatedAt: nextUpdatedAt } : session
       )
     };
   }
@@ -2512,6 +2515,16 @@ export class AgentsStore {
             ? liveSession
             : replaySession;
       this.activeLoadMeasurement?.increment('historyAssignments');
+      // Preserve context metrics from the candidates that lost the history
+      // selection: replay capture may miss `usage_update` while the load
+      // snapshot (or the still-rendered live session) already knows the
+      // context window. Present values win, and later drained/live usage
+      // updates keep overriding these baselines.
+      if (liveSession.sessionId === sessionId && this.activeSession !== liveSession) {
+        mergeMissingSessionUsage(this.activeSession, liveSession);
+      }
+      if (this.activeSession !== snapshotSession) mergeMissingSessionUsage(this.activeSession, snapshotSession);
+      if (this.activeSession !== replaySession) mergeMissingSessionUsage(this.activeSession, replaySession);
       const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
       checkpoint('frontend.queued_replay');
       if (!this.isSelectedSession(agentId, sessionId)) {
@@ -4185,11 +4198,17 @@ export class AgentsStore {
         return session;
       }
 
+      // Live activity keeps the newest known stamp, and explicit info updates
+      // only move it forward: delayed notifications must not roll the header
+      // back to an older "x minutes ago".
       return {
         ...session,
         title: infoTitle ?? session.title,
         status: inferredStatus ?? session.status,
-        updatedAt: infoUpdatedAt !== undefined ? infoUpdatedAt : (activityUpdatedAt ?? session.updatedAt)
+        updatedAt: newestTimestamp(
+          session.updatedAt,
+          infoUpdatedAt !== undefined ? infoUpdatedAt : activityUpdatedAt
+        )
       };
     });
 
@@ -4777,7 +4796,11 @@ function deduplicateSessions(sessions: DesktopSessionSummary[]): DesktopSessionS
 function mergeSessions(current: DesktopSessionSummary[], incoming: DesktopSessionSummary[]): DesktopSessionSummary[] {
   const sessions = new Map(current.map((session) => [getSessionKey(session), session]));
   for (const session of incoming) {
-    sessions.set(getSessionKey(session), session);
+    // A delayed session/list response must never roll a summary's activity
+    // timestamp backwards past what live notifications already recorded.
+    const key = getSessionKey(session);
+    const existing = sessions.get(key);
+    sessions.set(key, existing ? { ...session, updatedAt: newestTimestamp(existing.updatedAt, session.updatedAt) } : session);
   }
   return [...sessions.values()].sort(compareSessionsByActivity);
 }

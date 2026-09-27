@@ -5753,3 +5753,140 @@ describe('AgentsStore agent-scoped launch model defaults', () => {
     expect(store.recentModelsByAgent['agent-1']).toEqual([grok.id, sol.id]);
   });
 });
+
+describe('session header freshness and context usage', () => {
+  function summary(updatedAt: string | null) {
+    return {
+      agentId: 'agent-1',
+      agentName: 'QMTCODE',
+      sessionId: 'session-1',
+      title: 'Live',
+      cwd: '/tmp/work',
+      updatedAt,
+      runtimeId: 'agent-1',
+      runtimeName: 'QMTCODE',
+      source: 'acp' as const,
+      status: 'idle' as const
+    };
+  }
+
+  it('keeps live activity timestamps when a stale session list refresh lands', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2020-01-01T00:00:00Z')] };
+    await store.connectAgent('agent-1');
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: 'live-1',
+        content: { type: 'text', text: 'Working' }
+      }
+    });
+
+    const liveStamp = store.sessionsByAgent['agent-1'].find((entry) => entry.sessionId === 'session-1')!.updatedAt;
+    expect(liveStamp).not.toBe('2020-01-01T00:00:00Z');
+
+    mockClient.listSessions.mockResolvedValueOnce({
+      sessions: [{ sessionId: 'session-1', title: 'Live', cwd: '/tmp/work', updatedAt: '2020-01-01T00:00:00Z' }]
+    });
+    await store.refreshSessionsForAgent('agent-1');
+
+    expect(store.sessionsByAgent['agent-1'].find((entry) => entry.sessionId === 'session-1')!.updatedAt).toBe(liveStamp);
+  });
+
+  it('keeps a title-only session info update from erasing the activity stamp', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2026-01-01T00:00:00Z')] };
+    await store.connectAgent('agent-1');
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: { sessionUpdate: 'session_info_update', title: 'Renamed' }
+    });
+
+    const updated = store.sessionsByAgent['agent-1'].find((entry) => entry.sessionId === 'session-1')!;
+    expect(updated.title).toBe('Renamed');
+    expect(updated.updatedAt).toBe('2026-01-01T00:00:00Z');
+
+    // Newer authoritative stamps still move forward.
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: { sessionUpdate: 'session_info_update', title: 'Renamed again', updatedAt: '2026-02-01T00:00:00Z' }
+    });
+    expect(store.sessionsByAgent['agent-1'].find((entry) => entry.sessionId === 'session-1')!.updatedAt).toBe(
+      '2026-02-01T00:00:00Z'
+    );
+  });
+
+  function loadSessionWithSnapshotUsage() {
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: {
+        configOptions: [],
+        _meta: {
+          'querymt/sessionLoadSnapshot.v1': {
+            audit: {
+              events: [
+                { seq: 1, timestamp: 1_000, kind: { type: 'llm_request_start', data: {} } },
+                {
+                  seq: 2,
+                  timestamp: 2_000,
+                  kind: { type: 'llm_request_end', data: { context_tokens: 42_000, cumulative_cost_usd: 0.5 } }
+                },
+                { seq: 3, kind: { type: 'provider_changed', data: { context_limit: 200_000 } } }
+              ]
+            }
+          }
+        }
+      },
+      replay: [{
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'user_message_chunk',
+          messageId: 'm1',
+          content: { type: 'text', text: 'Hello' }
+        }
+      }]
+    });
+  }
+
+  it('preserves snapshot context metrics when replay history wins the load selection', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2026-07-18T17:00:00Z')] };
+    await store.connectAgent('agent-1');
+    loadSessionWithSnapshotUsage();
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activeSession.transcript.some((item) => item.messageId === 'm1')).toBe(true);
+    expect(store.activeSession.usage).toMatchObject({
+      contextUsed: 42_000,
+      contextLimit: 200_000,
+      cumulativeCostUsd: 0.5
+    });
+  });
+
+  it('lets live usage updates override the hydrated snapshot baseline', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2026-07-18T17:00:00Z')] };
+    await store.connectAgent('agent-1');
+    loadSessionWithSnapshotUsage();
+    await store.loadSession('agent-1', 'session-1');
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'usage_update',
+        used: 61_500,
+        size: 200_000,
+        cost: { amount: 0.75, currency: 'USD' }
+      }
+    });
+
+    expect(store.activeSession.usage).toMatchObject({
+      contextUsed: 61_500,
+      contextLimit: 200_000,
+      cumulativeCostUsd: 0.75
+    });
+  });
+});

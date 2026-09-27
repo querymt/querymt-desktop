@@ -606,6 +606,26 @@ export function endSessionWork(session: ActiveSessionViewModel, endedAt = Date.n
   session.usage.activeWorkStartedAt = null;
 }
 
+/**
+ * Fills context metrics missing on `target` from an older `source` model. Used
+ * after a session load picks one history source (replay, snapshot, or live) so
+ * context data captured by the losing candidates is not dropped: replay may
+ * miss `usage_update` while the load snapshot already knows the context
+ * window. Present values always win, later live or drained `usage_update`
+ * notifications keep overriding, and active-work timers are never merged.
+ */
+export function mergeMissingSessionUsage(target: ActiveSessionViewModel, source: ActiveSessionViewModel): void {
+  if (target.usage.contextUsed === null && source.usage.contextUsed !== null) {
+    target.usage.contextUsed = source.usage.contextUsed;
+  }
+  if (target.usage.contextLimit === null && source.usage.contextLimit !== null) {
+    target.usage.contextLimit = source.usage.contextLimit;
+  }
+  if (target.usage.cumulativeCostUsd === null && source.usage.cumulativeCostUsd !== null) {
+    target.usage.cumulativeCostUsd = source.usage.cumulativeCostUsd;
+  }
+}
+
 function readFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }

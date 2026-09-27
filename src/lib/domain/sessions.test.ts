@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
-import { buildListSessionsRequest, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions } from './sessions';
+import { buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 
 function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionId: string }): DesktopSessionSummary {
@@ -204,6 +204,48 @@ describe('inferSessionStatus', () => {
 
   it('falls back to idle when session meta is missing', () => {
     expect(inferSessionStatus(createSession())).toBe('idle');
+  });
+});
+
+describe('newestTimestamp', () => {
+  it('returns the lexicographically newer ISO timestamp regardless of argument order', () => {
+    expect(newestTimestamp('2026-06-17T12:00:00Z', '2026-06-17T12:05:00Z')).toBe('2026-06-17T12:05:00Z');
+    expect(newestTimestamp('2026-06-17T12:05:00Z', '2026-06-17T12:00:00Z')).toBe('2026-06-17T12:05:00Z');
+    expect(newestTimestamp('2026-06-17T12:00:00Z', '2026-06-17T12:00:00Z')).toBe('2026-06-17T12:00:00Z');
+  });
+
+  it('keeps the known timestamp when the incoming value is missing', () => {
+    expect(newestTimestamp('2026-06-17T12:00:00Z', null)).toBe('2026-06-17T12:00:00Z');
+    expect(newestTimestamp('2026-06-17T12:00:00Z', undefined)).toBe('2026-06-17T12:00:00Z');
+    expect(newestTimestamp(null, '2026-06-17T12:00:00Z')).toBe('2026-06-17T12:00:00Z');
+    expect(newestTimestamp(null, null)).toBeNull();
+  });
+});
+
+describe('formatSessionTimestamp', () => {
+  const now = Date.UTC(2026, 5, 17, 12, 30, 0);
+
+  it('formats relative labels against the provided reference time', () => {
+    expect(formatSessionTimestamp('2026-06-17T12:29:30Z', now)).toBe('just now');
+    expect(formatSessionTimestamp('2026-06-17T12:29:00Z', now)).toBe('1 minute ago');
+    expect(formatSessionTimestamp('2026-06-17T12:25:00Z', now)).toBe('5 minutes ago');
+    expect(formatSessionTimestamp('2026-06-17T12:00:00Z', now)).toBe('30 minutes ago');
+    expect(formatSessionTimestamp('2026-06-17T10:00:00Z', now)).toBe('2 hours ago');
+    expect(formatSessionTimestamp('2026-06-14T10:00:00Z', now)).toBe('3 days ago');
+  });
+
+  it('accepts a Date reference for clock-driven rendering', () => {
+    expect(formatSessionTimestamp('2026-06-17T12:20:00Z', new Date(now))).toBe('10 minutes ago');
+  });
+
+  it('falls back to the current clock when no reference is given', () => {
+    const recent = new Date(Date.now() - 30_000).toISOString();
+    expect(formatSessionTimestamp(recent)).toBe('just now');
+  });
+
+  it('keeps legacy behavior for missing and invalid values', () => {
+    expect(formatSessionTimestamp(null)).toBe('No recent activity');
+    expect(formatSessionTimestamp('not-a-date', now)).toBe('not-a-date');
   });
 });
 

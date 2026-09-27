@@ -303,11 +303,30 @@ function compareNullableTimestamps(a: string | null, b: string | null): number {
   return (a ?? '').localeCompare(b ?? '');
 }
 
+/**
+ * Newest of two ISO timestamps, ignoring missing values. Live activity stamps
+ * and delayed `session/list` responses both flow through this so a summary's
+ * displayed activity never moves backwards.
+ */
+export function newestTimestamp(
+  current: string | null | undefined,
+  incoming: string | null | undefined
+): string | null {
+  if (!current) return incoming ?? null;
+  if (!incoming || incoming <= current) return current;
+  return incoming;
+}
+
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 
-export function formatSessionTimestamp(updatedAt: string | null): string {
+/**
+ * Formats a relative label. Callers render against a ticking reference time so
+ * the label advances on its own instead of waiting for the next data change;
+ * tests pass a fixed `now` for deterministic output.
+ */
+export function formatSessionTimestamp(updatedAt: string | null, now: Date | number = new Date()): string {
   if (!updatedAt) {
     return 'No recent activity';
   }
@@ -317,8 +336,8 @@ export function formatSessionTimestamp(updatedAt: string | null): string {
     return updatedAt;
   }
 
-  const now = new Date();
-  const elapsed = now.getTime() - value.getTime();
+  const reference = now instanceof Date ? now : new Date(now);
+  const elapsed = reference.getTime() - value.getTime();
   if (elapsed < MINUTE_MS) {
     return 'just now';
   }
@@ -328,7 +347,7 @@ export function formatSessionTimestamp(updatedAt: string | null): string {
     return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
   }
 
-  const dayDiff = calendarDayDifference(now, value);
+  const dayDiff = calendarDayDifference(reference, value);
   if (dayDiff === 0) {
     const hours = Math.floor(elapsed / HOUR_MS);
     return `${hours} hour${hours === 1 ? '' : 's'} ago`;
@@ -342,7 +361,7 @@ export function formatSessionTimestamp(updatedAt: string | null): string {
     return `${dayDiff} days ago`;
   }
 
-  return formatSessionDate(value, now);
+  return formatSessionDate(value, reference);
 }
 
 function calendarDayDifference(a: Date, b: Date): number {
