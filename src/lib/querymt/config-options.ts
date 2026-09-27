@@ -12,10 +12,27 @@ export const CONFIG_MODE = 'mode' as const;
 export const CONFIG_THOUGHT_LEVEL = 'thought_level' as const;
 
 const REMOTE_MODEL_SELECTION_PREFIX = 'querymt:model:';
-const REASONING_ALIASES = new Set([CONFIG_THOUGHT_LEVEL, 'reasoning', 'reasoning_effort', 'thought', 'thought_level']);
+const MODEL_ALIASES: Set<string> = new Set([CONFIG_MODEL]);
+const MODE_ALIASES: Set<string> = new Set([CONFIG_MODE]);
+const REASONING_ALIASES: Set<string> = new Set([CONFIG_THOUGHT_LEVEL, 'reasoning', 'reasoning_effort', 'thought', 'thought_level']);
 
 function normalize(value: string | null | undefined): string {
   return value?.toLowerCase().replace(/[^a-z0-9]+/g, '_') ?? '';
+}
+
+/** Matches a written config id against the model option (any alias). */
+export function isModelConfigOptionId(configId: string | null | undefined): boolean {
+  return configId != null && MODEL_ALIASES.has(normalize(configId));
+}
+
+/** Matches a written config id against the mode option (any alias). */
+export function isModeConfigOptionId(configId: string | null | undefined): boolean {
+  return configId != null && MODE_ALIASES.has(normalize(configId));
+}
+
+/** Matches a written config id against the reasoning option (any alias). */
+export function isReasoningConfigOptionId(configId: string | null | undefined): boolean {
+  return configId != null && REASONING_ALIASES.has(normalize(configId));
 }
 
 function isSelectOption(option: SessionConfigOption): option is SessionConfigOption & { type: 'select' } {

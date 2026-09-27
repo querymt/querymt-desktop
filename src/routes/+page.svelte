@@ -79,7 +79,7 @@
       activeSessionId={null}
       promptFocusToken={agentsStore.promptFocusToken}
       modelOptions={primaryAgentId ? (agentsStore.modelsByAgent[primaryAgentId] ?? []) : []}
-      selectedModelId={agentsStore.launchModelId}
+      selectedModelId={primaryAgentId ? agentsStore.getLaunchModelId(primaryAgentId) : ''}
       modelInfo={primaryAgentId ? (agentsStore.modelInfoByAgent[primaryAgentId] ?? {}) : {}}
       recentModels={primaryAgentId ? agentsStore.getRecentModels(primaryAgentId) : []}
       modelLoading={primaryAgentId ? !!agentsStore.modelLoadingByAgent[primaryAgentId] : false}
@@ -96,7 +96,9 @@
       selectedTargetId={agentsStore.composerTargetId}
       onCwdInput={(value) => agentsStore.setComposerCwd(value)}
       onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
-      onModelChange={(value) => agentsStore.setLaunchModel(value)}
+      onModelChange={(value) => {
+        if (primaryAgentId) agentsStore.setLaunchModel(primaryAgentId, value);
+      }}
       onRefreshModels={() => primaryAgentId && agentsStore.refreshModelsForAgent(primaryAgentId)}
       onAddAttachments={(attachments) => agentsStore.addPromptAttachments(attachments)}
       onRemoveAttachment={(attachmentId) => agentsStore.removePromptAttachment(attachmentId)}

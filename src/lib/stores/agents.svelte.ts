@@ -84,6 +84,7 @@ import type {
   SubmitInputResult
 } from '$lib/querymt/generated/types';
 import {
+  CONFIG_MODE,
   findModeConfigOption,
   findModelByIdentity,
   findModelBySelectionKey,
@@ -91,8 +92,13 @@ import {
   findReasoningConfigOption,
   getConfigOptionChoices,
   getCurrentModelId,
+  getCurrentModeId,
+  getCurrentReasoningId,
   getModelSelectionKey,
   getProfileChoices,
+  isModeConfigOptionId,
+  isModelConfigOptionId,
+  isReasoningConfigOptionId,
   setModelConfigOptionRequest,
   setSessionConfigOptionRequest
 } from '$lib/querymt/config-options';
@@ -135,6 +141,15 @@ import {
 } from '$native';
 import { inboxStore } from '$lib/stores/inbox.svelte';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
+import {
+  loadSessionModePreferences,
+  persistSessionModePreferences,
+  readSessionModePreference,
+  withSessionModePreference,
+  withoutSessionModePreferences,
+  type SessionModePreferenceDocument,
+  type SessionModePreferencePatch
+} from '$lib/stores/session-mode-preferences';
 import { createEmbeddedAgentConfig, EMBEDDED_AGENT_ID } from '$lib/platform/embedded-agent';
 import { isEmbedded, platformCapabilities } from '$lib/platform/runtime';
 import { normalizeAcpWebSocketEndpoint, usesSecureWebSocket } from '$lib/querymt/websocket-url';
@@ -201,6 +216,13 @@ const DEFAULT_AGENTS: AgentConfig[] = [
   }
 ];
 
+/** Result of one serialized session config write. */
+type SessionConfigWriteResult = {
+  configOptions: SessionConfigOption[];
+  /** Selection key the response itself confirmed; absent when it carried no model metadata. */
+  confirmedModelKey?: string;
+};
+
 export class AgentsStore {
   private clients = new Map<string, AgentClientRecord>();
   private connectFlights = new Map<string, ConnectFlight>();
@@ -229,9 +251,15 @@ export class AgentsStore {
   private agentLogSubscriptionPending = false;
   private modelInfoCache = new Map<string, ModelInfo | null>();
   private modelInfoRequests = new Map<string, Promise<void>>();
-  private sessionConfigRequests = new Map<string, Promise<SessionConfigOption[]>>();
+  private sessionConfigRequests = new Map<string, Promise<SessionConfigWriteResult>>();
   private sessionConfigOptions = new Map<string, SessionConfigOption[]>();
   private sessionModelIds = $state<Record<string, string>>({});
+  // Confirmed active mode per session, tracked separately so model-only
+  // config patches cannot make the current mode unknown.
+  private sessionModeIds = $state<Record<string, string>>({});
+  // Session keys with a desktop-initiated mode transition in flight; the value
+  // is the target mode id. Inner restore writes run under this umbrella.
+  private sessionModeTransitions = new Map<string, string>();
   private pendingSessionConfigs = $state<Record<string, Record<string, number>>>({});
   private delegateAssignmentRequests = new Map<string, Promise<boolean>>();
   private delegateAssignmentRoleRequests = new Map<string, Promise<boolean>>();
@@ -296,7 +324,9 @@ export class AgentsStore {
   lastPromptResponse = $state<PromptResponse | null>(null);
   composerCwd = $state('');
   composerPrompt = $state('');
-  launchModelId = $state<string>('');
+  // Agent-scoped launch model selections, revalidated against each refreshed
+  // model catalog so one agent's selection never leaks into another's.
+  private launchModelIds = $state<Record<string, string>>({});
   composerProfileId = $state<string>('default');
   composerModeId = $state<string>('build');
   composerReasoningId = $state<string>('auto');
@@ -330,6 +360,7 @@ export class AgentsStore {
   lastSessionLoadMetrics = $state<SessionLoadMetrics | null>(null);
   recentModelsByAgent = $state<Record<string, string[]>>(loadRecentModels());
   recentWorkspaces = $state<string[]>(loadRecentWorkspaces());
+  private sessionModePreferences: SessionModePreferenceDocument = loadSessionModePreferences();
 
   get activeSessionRuntime(): SessionRuntimeState | null {
     if (!this.activeAgentId || !this.activeSessionId) return null;
@@ -721,12 +752,24 @@ export class AgentsStore {
     return targets;
   }
 
-  setLaunchModel(modelId: string) {
-    this.launchModelId = modelId;
+  getLaunchModelId(agentId: string | null | undefined): string {
+    if (!agentId) return '';
+    return this.launchModelIds[agentId] ?? '';
+  }
+
+  setLaunchModel(agentId: string | null | undefined, modelId: string) {
+    if (!agentId) return;
+    this.launchModelIds = { ...this.launchModelIds, [agentId]: modelId };
   }
 
   getSessionModelId(agentId: string, sessionId: string): string {
     return this.sessionModelIds[buildSessionKey(agentId, sessionId)] ?? '';
+  }
+
+  /** Confirmed active mode for a session; empty when the agent has not reported one. */
+  getSessionModeId(agentId: string, sessionId: string): string {
+    const key = buildSessionKey(agentId, sessionId);
+    return this.sessionModeIds[key] ?? getCurrentModeId(this.getSessionConfigOptions(agentId, sessionId)) ?? '';
   }
 
   async setSessionModel(agentId: string, sessionId: string, modelId: string) {
@@ -738,6 +781,144 @@ export class AgentsStore {
       if (this.isSelectedSession(agentId, sessionId)) {
         this.error = error instanceof Error ? error.message : 'Failed to change session model.';
       }
+    }
+  }
+
+  /**
+   * Desktop-initiated mode transition. Captures the outgoing mode's confirmed
+   * preference, applies the target mode, and restores the target mode's saved
+   * model and reasoning effort in a fixed order (mode → model → reasoning,
+   * because model selection can change the reasoning choices an agent offers).
+   * The whole sequence joins the session's config write queue, so rapid mode
+   * changes and other config work serialize per session while other sessions
+   * transition independently.
+   */
+  async setSessionMode(agentId: string, sessionId: string, targetModeId: string) {
+    if (this.isSelectedSession(agentId, sessionId)) this.error = null;
+    const key = buildSessionKey(agentId, sessionId);
+
+    // Capture the outgoing confirmed preference before any write. While
+    // another transition is in flight it owns preference persistence, so the
+    // intermediate state here must not be recorded as an outgoing preference.
+    const outgoing = this.captureConfirmedSessionState(agentId, sessionId);
+    if (outgoing && outgoing.modeId !== targetModeId && !this.sessionModeTransitions.has(key)) {
+      this.saveSessionModePreference(agentId, sessionId, outgoing.modeId, {
+        modelId: outgoing.modelId || undefined,
+        reasoningId: outgoing.reasoningId || undefined
+      });
+    }
+
+    const previous = this.sessionConfigRequests.get(key);
+    const request = (async (): Promise<SessionConfigWriteResult> => {
+      if (previous) await previous.catch(() => undefined);
+      // A newer transition for this session supersedes this request.
+      if (this.sessionModeTransitions.has(key)) {
+        return { configOptions: this.getSessionConfigOptions(agentId, sessionId) };
+      }
+      this.sessionModeTransitions.set(key, targetModeId);
+      // Values this transition's writes got confirmed by the agent; on partial
+      // failure only these are captured into the target preference, leaving
+      // previously saved values intact for a later retry.
+      let confirmedModelKey: string | undefined;
+      let confirmedReasoningId: string | undefined;
+      try {
+        const modeOptionId =
+          findModeConfigOption(this.getSessionConfigOptions(agentId, sessionId))?.id ?? CONFIG_MODE;
+        const modeWrite = await this.updateSessionConfigOption(agentId, sessionId, modeOptionId, targetModeId, {
+          transitionOwned: true
+        });
+
+        // Resolve against a loaded catalog: right after a refresh the model
+        // list may still be loading, which would silently skip restoration.
+        if ((this.modelsByAgent[agentId] ?? []).length === 0) {
+          const record = await this.connectInitializedRecord(agentId);
+          const ensured = record ? await record.client.listModels().catch(() => [] as ModelEntry[]) : [];
+          if (ensured.length > 0 && (this.modelsByAgent[agentId] ?? []).length === 0) {
+            this.modelsByAgent = { ...this.modelsByAgent, [agentId]: ensured };
+          }
+        }
+
+        // Resolve the target model: exact saved selection, then the agent's
+        // most recent available model, then the agent-confirmed mode value.
+        const saved = this.getSessionModePreference(agentId, sessionId, targetModeId);
+        const models = this.modelsByAgent[agentId] ?? [];
+        const savedModel = saved?.modelId ? findModelBySelectionKey(models, saved.modelId) : undefined;
+        const recentModel = savedModel
+          ? undefined
+          : (this.recentModelsByAgent[agentId] ?? [])
+              .map((selectionKey) => findModelBySelectionKey(models, selectionKey))
+              .find((model): model is ModelEntry => Boolean(model));
+        const resolvedModel = savedModel ?? recentModel;
+        // Only skip the restore write when the mode response itself confirmed
+        // the resolved model. A response without model metadata confirms
+        // nothing — the agent may have switched to its own mode default
+        // silently — so the previously displayed selection must not suppress
+        // restoration.
+        const confirmedByModeResponse = modeWrite.confirmedModelKey;
+        if (
+          resolvedModel &&
+          getModelSelectionKey(resolvedModel) !== confirmedByModeResponse &&
+          resolvedModel.id !== confirmedByModeResponse
+        ) {
+          await this.applySelectedModelToSession(agentId, sessionId, getModelSelectionKey(resolvedModel), true);
+          confirmedModelKey = getModelSelectionKey(resolvedModel);
+        }
+
+        // Reasoning resolves after the model response, against the refreshed
+        // choices; a saved reasoning effort the agent no longer offers keeps
+        // the agent-confirmed value instead.
+        const reasoningOption = findReasoningConfigOption(this.getSessionConfigOptions(agentId, sessionId));
+        const choices = getConfigOptionChoices(reasoningOption);
+        const savedReasoning = saved?.reasoningId;
+        const validSavedReasoning =
+          savedReasoning && choices.some((choice) => choice.value === savedReasoning) ? savedReasoning : undefined;
+        const confirmedAfterModel = this.captureConfirmedSessionState(agentId, sessionId);
+        if (validSavedReasoning && reasoningOption && validSavedReasoning !== confirmedAfterModel?.reasoningId) {
+          await this.updateSessionConfigOption(agentId, sessionId, reasoningOption.id, validSavedReasoning, {
+            transitionOwned: true
+          });
+          confirmedReasoningId = validSavedReasoning;
+        }
+
+        // Persist the final confirmed target preference once restoration
+        // settles. Values confirmed by this transition's writes take
+        // precedence (a resolving write without returned metadata is still a
+        // confirmation), falling back to the merged confirmed state.
+        const final = this.captureConfirmedSessionState(agentId, sessionId);
+        if (final) {
+          this.saveSessionModePreference(agentId, sessionId, targetModeId, {
+            modelId: confirmedModelKey ?? (final.modelId || undefined),
+            reasoningId: confirmedReasoningId ?? (final.reasoningId || undefined)
+          });
+        }
+        return { configOptions: this.getSessionConfigOptions(agentId, sessionId) };
+      } catch (error) {
+        // Partial failure: report it and capture only the values this
+        // transition actually got confirmed — never the rejected request and
+        // never stale state from before the switch.
+        const confirmed = this.captureConfirmedSessionState(agentId, sessionId);
+        if (confirmed?.modeId === targetModeId && (confirmedModelKey !== undefined || confirmedReasoningId !== undefined)) {
+          this.saveSessionModePreference(agentId, sessionId, targetModeId, {
+            modelId: confirmedModelKey,
+            reasoningId: confirmedReasoningId
+          });
+        }
+        throw error;
+      } finally {
+        if (this.sessionModeTransitions.get(key) === targetModeId) this.sessionModeTransitions.delete(key);
+      }
+    })();
+
+    this.sessionConfigRequests.set(key, request);
+    try {
+      await request;
+      if (this.isSelectedSession(agentId, sessionId)) this.promptFailure = null;
+    } catch (error) {
+      if (this.isSelectedSession(agentId, sessionId)) {
+        this.error = error instanceof Error ? error.message : 'Failed to change session mode.';
+      }
+    } finally {
+      if (this.sessionConfigRequests.get(key) === request) this.sessionConfigRequests.delete(key);
     }
   }
 
@@ -1612,6 +1793,7 @@ export class AgentsStore {
     }
     this.acknowledgeSession(agentId, sessionId);
     const key = buildSessionKey(agentId, sessionId);
+    this.removeSessionModePreferences(agentId, sessionId);
     delete this.delegateAssignmentsBySession[key];
     delete this.delegateAssignmentsLoadingBySession[key];
     delete this.delegateAssignmentsErrorBySession[key];
@@ -1654,7 +1836,7 @@ export class AgentsStore {
       profileId === 'default' ? null : profileId
     );
     this.lastCreatedSession = response;
-    this.sessionConfigOptions.set(buildSessionKey(agentId, response.sessionId), response.configOptions ?? []);
+    this.applySessionConfigOptionsSnapshot(agentId, response.sessionId, response.configOptions ?? []);
     this.restoreSessionModel(agentId, response.sessionId, response.configOptions ?? [], response);
     this.rememberRecentWorkspace(normalizedCwd);
     const summary: DesktopSessionSummary = {
@@ -1693,13 +1875,14 @@ export class AgentsStore {
       profileId: this.composerProfileId,
       modeId: this.composerModeId,
       reasoningId: this.composerReasoningId,
-      modelId: this.launchModelId
+      modelId: this.getLaunchModelId(agentId)
     };
     try {
       if (launch.targetId !== 'local') {
         const sessionId = await this.createAttachedRemoteSession(agentId, launch.targetId, cwd);
         await this.applyComposerLaunchConfig(agentId, sessionId, launch);
         await this.applySelectedModelToSession(agentId, sessionId, launch.modelId);
+        this.captureLaunchSessionPreference(agentId, sessionId, launch);
         return sessionId;
       }
 
@@ -1709,6 +1892,7 @@ export class AgentsStore {
       this.activeSession.configOptions = response.configOptions ?? [];
       await this.applyComposerLaunchConfig(agentId, sessionId, launch);
       await this.applySelectedModelToSession(agentId, sessionId, launch.modelId);
+      this.captureLaunchSessionPreference(agentId, sessionId, launch);
       await this.drainQueuedSessionUpdates(agentId, sessionId);
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
       return sessionId;
@@ -1716,6 +1900,26 @@ export class AgentsStore {
       this.error = error instanceof Error ? error.message : `Failed to create session for ${config.name}.`;
       return null;
     }
+  }
+
+  /**
+   * After a successful session creation the launch writes are confirmed, so
+   * record the launch mode/model/reasoning as the launch mode's preference.
+   * Agent-reported values win where the responses carried them.
+   */
+  private captureLaunchSessionPreference(
+    agentId: string,
+    sessionId: string,
+    launch: { modeId: string; reasoningId: string; modelId: string }
+  ) {
+    const key = buildSessionKey(agentId, sessionId);
+    const configOptions = this.getSessionConfigOptions(agentId, sessionId);
+    const modeId = getCurrentModeId(configOptions) ?? launch.modeId;
+    this.sessionModeIds = { ...this.sessionModeIds, [key]: modeId };
+    this.saveSessionModePreference(agentId, sessionId, modeId, {
+      modelId: this.getSessionModelId(agentId, sessionId) || (launch.modelId || undefined),
+      reasoningId: getCurrentReasoningId(configOptions) ?? (launch.reasoningId || undefined)
+    });
   }
 
   async startSessionWithPrompt(agentId: string): Promise<string | null> {
@@ -2323,9 +2527,12 @@ export class AgentsStore {
         totalEvents: this.activeSession.events.length
       });
 
-      this.activeSession.configOptions = loadedSession.configOptions ?? [];
-      this.sessionConfigOptions.set(sessionKey, this.activeSession.configOptions);
+      this.applySessionConfigOptionsSnapshot(agentId, sessionId, loadedSession.configOptions ?? []);
       this.restoreSessionModel(agentId, sessionId, this.activeSession.configOptions, loadedSession);
+      // The agent's reported configuration is authoritative at load time: seed
+      // the active mode's preference from it without issuing any config write
+      // and without substituting a local model when metadata is missing.
+      this.seedSessionModePreferenceFromLoad(agentId, sessionId);
       if (snapshotSession.runStateFromLifecycle) {
         this.activeSession.runState = snapshotSession.runState;
         this.activeSession.runStateFromLifecycle = true;
@@ -3279,10 +3486,12 @@ export class AgentsStore {
     this.reconcileInputStatesFromSnapshot(agentId, sessionId, {
       _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
     });
-    this.sessionConfigOptions.set(buildSessionKey(agentId, sessionId), configOptions);
+    this.applySessionConfigOptionsSnapshot(agentId, sessionId, configOptions);
     this.restoreSessionModel(agentId, sessionId, configOptions, {
       _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
     });
+    // Remote attach is a load: seed the active mode from agent-reported state.
+    this.seedSessionModePreferenceFromLoad(agentId, sessionId);
 
     const summary: DesktopSessionSummary = {
       agentId,
@@ -3411,17 +3620,27 @@ export class AgentsStore {
       });
   }
 
+  /**
+   * Resolves and keeps the launch model for one agent against the current
+   * catalog: keep an explicit selection while it is still available, else the
+   * first available entry from the agent's recent history, else the catalog
+   * default.
+   */
   private selectLaunchModelForAgent(agentId: string, models: ModelEntry[]) {
     if (models.length === 0) {
       return;
     }
 
-    if (this.launchModelId) return;
+    const selected = this.launchModelIds[agentId];
+    if (selected && findModelBySelectionKey(models, selected)) return;
 
     const recentModel = (this.recentModelsByAgent[agentId] ?? [])
       .map((selectionKey) => findModelBySelectionKey(models, selectionKey))
       .find((model): model is ModelEntry => Boolean(model));
-    this.launchModelId = recentModel ? getModelSelectionKey(recentModel) : getDefaultModelId(models);
+    this.launchModelIds = {
+      ...this.launchModelIds,
+      [agentId]: recentModel ? getModelSelectionKey(recentModel) : getDefaultModelId(models)
+    };
   }
 
   private rememberRecentModel(agentId: string, model: ModelEntry) {
@@ -3433,6 +3652,28 @@ export class AgentsStore {
       [agentId]: next
     };
     persistRecentModels(this.recentModelsByAgent);
+  }
+
+  /** Reads the saved model/reasoning preference for one agent, session, and mode. */
+  getSessionModePreference(agentId: string, sessionId: string, modeId: string) {
+    return readSessionModePreference(this.sessionModePreferences, agentId, sessionId, modeId);
+  }
+
+  /**
+   * Persists a preference patch for a mode. Callers must only pass values the
+   * agent has already confirmed (write responses, authoritative updates, or
+   * session-load state) — requested values are never persisted optimistically.
+   * Model ids are exact selection keys, so mesh copies stay distinct from
+   * local models.
+   */
+  private saveSessionModePreference(agentId: string, sessionId: string, modeId: string, patch: SessionModePreferencePatch) {
+    this.sessionModePreferences = withSessionModePreference(this.sessionModePreferences, agentId, sessionId, modeId, patch);
+    persistSessionModePreferences(this.sessionModePreferences);
+  }
+
+  private removeSessionModePreferences(agentId: string, sessionId: string) {
+    this.sessionModePreferences = withoutSessionModePreferences(this.sessionModePreferences, agentId, sessionId);
+    persistSessionModePreferences(this.sessionModePreferences);
   }
 
   private rememberRecentWorkspace(path: string) {
@@ -3474,6 +3715,78 @@ export class AgentsStore {
       (this.isSelectedSession(agentId, sessionId) ? this.activeSession.configOptions : []);
   }
 
+  /**
+   * Merges a config-option patch by option id into the confirmed snapshot for
+   * a session. Partial responses (mode-only, model-only, reasoning-only) must
+   * not erase unrelated confirmed options or make the active mode unknown.
+   */
+  private mergeSessionConfigOptions(agentId: string, sessionId: string, patch: SessionConfigOption[]): SessionConfigOption[] {
+    const key = buildSessionKey(agentId, sessionId);
+    const existing = this.getSessionConfigOptions(agentId, sessionId);
+    if (existing.length === 0) {
+      return this.applySessionConfigOptionsSnapshot(agentId, sessionId, patch);
+    }
+
+    const patchIds = new Set(patch.map((option) => option.id));
+    const merged = [...existing.filter((option) => !patchIds.has(option.id)), ...patch];
+    this.sessionConfigOptions.set(key, merged);
+    const modeId = getCurrentModeId(merged);
+    if (modeId) this.sessionModeIds = { ...this.sessionModeIds, [key]: modeId };
+    if (this.isSelectedSession(agentId, sessionId)) this.activeSession.configOptions = merged;
+    return merged;
+  }
+
+  /** Applies a complete, authoritative config snapshot (session load or creation). */
+  private applySessionConfigOptionsSnapshot(agentId: string, sessionId: string, configOptions: SessionConfigOption[]): SessionConfigOption[] {
+    const key = buildSessionKey(agentId, sessionId);
+    this.sessionConfigOptions.set(key, configOptions);
+    const modeId = getCurrentModeId(configOptions);
+    if (modeId) this.sessionModeIds = { ...this.sessionModeIds, [key]: modeId };
+    if (this.isSelectedSession(agentId, sessionId)) this.activeSession.configOptions = configOptions;
+    return configOptions;
+  }
+
+  /** Snapshot of the confirmed session configuration used to capture preferences. */
+  private captureConfirmedSessionState(agentId: string, sessionId: string): {
+    modeId: string;
+    modelId: string;
+    reasoningId: string;
+  } | null {
+    const key = buildSessionKey(agentId, sessionId);
+    const configOptions = this.getSessionConfigOptions(agentId, sessionId);
+    const modeId = this.sessionModeIds[key] ?? getCurrentModeId(configOptions) ?? '';
+    if (!modeId) return null;
+    return {
+      modeId,
+      modelId: this.sessionModelIds[key] ?? '',
+      reasoningId: getCurrentReasoningId(configOptions) ?? ''
+    };
+  }
+
+  /**
+   * Saves the confirmed configuration for the active mode. Only confirmed
+   * values are written; unknown fields are left untouched rather than treated
+   * as empty selections.
+   */
+  private persistConfirmedSessionPreference(agentId: string, sessionId: string) {
+    const confirmed = this.captureConfirmedSessionState(agentId, sessionId);
+    if (!confirmed) return;
+    this.saveSessionModePreference(agentId, sessionId, confirmed.modeId, {
+      modelId: confirmed.modelId || undefined,
+      reasoningId: confirmed.reasoningId || undefined
+    });
+  }
+
+  /**
+   * After an existing-session load, the agent-reported active configuration is
+   * the authority: seed the loaded mode's preference from it without issuing
+   * config writes. Fields the agent did not report (e.g. missing model
+   * metadata) stay untouched instead of being substituted with local guesses.
+   */
+  private seedSessionModePreferenceFromLoad(agentId: string, sessionId: string) {
+    this.persistConfirmedSessionPreference(agentId, sessionId);
+  }
+
   private restoreSessionModel(agentId: string, sessionId: string, configOptions: SessionConfigOption[], response?: unknown) {
     const models = this.modelsByAgent[agentId] ?? [];
     const configuredId = getCurrentModelId(configOptions);
@@ -3491,13 +3804,13 @@ export class AgentsStore {
     this.sessionModelIds = { ...this.sessionModelIds, [buildSessionKey(agentId, sessionId)]: modelId };
   }
 
-  private async applySelectedModelToSession(agentId: string, sessionId: string, modelId: string) {
+  private async applySelectedModelToSession(agentId: string, sessionId: string, modelId: string, transitionOwned = false) {
     if (!modelId) return;
     const model = (this.modelsByAgent[agentId] ?? []).find((entry) => getModelSelectionKey(entry) === modelId);
     if (!model) throw new Error(`Selected model is unavailable: ${modelId}`);
 
     const configId = findModelConfigOption(this.getSessionConfigOptions(agentId, sessionId))?.id ?? 'model';
-    await this.updateSessionConfigOption(agentId, sessionId, configId, model.id, { model });
+    await this.updateSessionConfigOption(agentId, sessionId, configId, model.id, { model, transitionOwned });
   }
 
   async setActiveSessionConfigOption(configId: string, value: string) {
@@ -3505,24 +3818,44 @@ export class AgentsStore {
       throw new Error('No active session selected.');
     }
 
+    // Mode controls route through the semantic transition operation so the
+    // outgoing preference is captured and the target mode's preferences are
+    // restored in order.
+    const modeOptionId = findModeConfigOption(this.getSessionConfigOptions(this.activeAgentId, this.activeSessionId))?.id;
+    if (isModeConfigOptionId(configId) || (modeOptionId != null && configId === modeOptionId)) {
+      await this.setSessionMode(this.activeAgentId, this.activeSessionId, value);
+      return;
+    }
+
     await this.updateSessionConfigOption(this.activeAgentId, this.activeSessionId, configId, value);
   }
 
+  /**
+   * Applies one session config write. Returns the merged confirmed options
+   * and, when the agent's response carried model metadata, the selection key
+   * it confirmed — absent otherwise, so callers never mistake the previously
+   * displayed selection for an agent confirmation.
+   */
   private async updateSessionConfigOption(
     agentId: string,
     sessionId: string,
     configId: string,
     value: string,
-    options: { model?: ModelEntry } = {}
-  ): Promise<SessionConfigOption[]> {
+    options: { model?: ModelEntry; transitionOwned?: boolean } = {}
+  ): Promise<{ configOptions: SessionConfigOption[]; confirmedModelKey?: string }> {
     const key = buildSessionKey(agentId, sessionId);
     const pending = this.pendingSessionConfigs[key] ?? {};
     this.pendingSessionConfigs = {
       ...this.pendingSessionConfigs,
       [key]: { ...pending, [configId]: (pending[configId] ?? 0) + 1 }
     };
-    // Serialize mode/model changes for this session; another session can update independently.
-    const previous = this.sessionConfigRequests.get(key);
+    // Serialize mode/model changes for this session; another session can update
+    // independently. Writes owned by a mode transition run inline inside that
+    // transition instead of chaining onto its own queue entry (which would
+    // deadlock); user writes issued while a transition is in flight still chain
+    // behind it and stay serialized.
+    const ownsQueue = !options.transitionOwned;
+    const previous = ownsQueue ? this.sessionConfigRequests.get(key) : null;
     const request = (async () => {
       if (previous) await previous.catch(() => undefined);
       const record = await this.connectInitializedRecord(agentId);
@@ -3532,31 +3865,51 @@ export class AgentsStore {
       const payload = options.model
         ? setModelConfigOptionRequest(sessionId, options.model, configId)
         : setSessionConfigOptionRequest(sessionId, configId, value);
-      const configOptions = await record.client.setSessionConfigOption(payload);
-      this.sessionConfigOptions.set(key, configOptions);
-      const confirmedId = getCurrentModelId(configOptions);
+      const response = await record.client.setSessionConfigOption(payload);
+      // ACP may answer with only the options relevant to the write; merge the
+      // patch by option id so unrelated confirmed options survive.
+      const configOptions = this.mergeSessionConfigOptions(agentId, sessionId, response);
+      // Model confirmation is read from the raw response: an empty patch
+      // carries no model metadata and must not resurrect stale options.
+      const confirmedId = getCurrentModelId(response);
       // Selection changes only when the response carries model metadata; a mode
       // change may omit it, in which case the last known selection is kept.
+      let confirmedModelKey: string | undefined;
       if (confirmedId) {
         const previousModel = (this.modelsByAgent[agentId] ?? []).find(
           (model) => getModelSelectionKey(model) === this.getSessionModelId(agentId, sessionId)
         );
         const selectedModel = options.model ?? previousModel;
+        confirmedModelKey = selectedModel?.id === confirmedId ? getModelSelectionKey(selectedModel) : confirmedId;
         this.sessionModelIds = {
           ...this.sessionModelIds,
-          [key]: selectedModel?.id === confirmedId ? getModelSelectionKey(selectedModel) : confirmedId
+          [key]: confirmedModelKey
         };
       } else if (options.model) {
         // Older servers acknowledge the write without returning a model config option.
         this.sessionModelIds = { ...this.sessionModelIds, [key]: getModelSelectionKey(options.model) };
       }
-      if (options.model && (!confirmedId || confirmedId === options.model.id)) {
+      if (isModeConfigOptionId(configId)) {
+        // A resolved mode write is confirmed even when the response omits the
+        // mode option (older servers ack without config options).
+        this.sessionModeIds = { ...this.sessionModeIds, [key]: getCurrentModeId(response) ?? value };
+      }
+      // Recency tracks explicit user selections only; transition-owned restore
+      // writes must not reorder recent models.
+      if (options.model && !options.transitionOwned && (!confirmedId || confirmedId === options.model.id)) {
         this.rememberRecentModel(agentId, options.model);
       }
-      if (this.isSelectedSession(agentId, sessionId)) this.activeSession.configOptions = configOptions;
-      return configOptions;
+      // Explicit model/reasoning writes confirm a preference for the currently
+      // active mode; transition restore writes are persisted once, at the end.
+      if (
+        !options.transitionOwned &&
+        (isModelConfigOptionId(configId) || isReasoningConfigOptionId(configId))
+      ) {
+        this.persistConfirmedSessionPreference(agentId, sessionId);
+      }
+      return { configOptions, confirmedModelKey };
     })();
-    this.sessionConfigRequests.set(key, request);
+    if (ownsQueue) this.sessionConfigRequests.set(key, request);
     try {
       return await request;
     } finally {
@@ -3565,7 +3918,7 @@ export class AgentsStore {
         ...this.pendingSessionConfigs,
         [key]: { ...pending, [configId]: Math.max(0, (pending[configId] ?? 1) - 1) }
       };
-      if (this.sessionConfigRequests.get(key) === request) this.sessionConfigRequests.delete(key);
+      if (ownsQueue && this.sessionConfigRequests.get(key) === request) this.sessionConfigRequests.delete(key);
     }
   }
 
@@ -3939,9 +4292,13 @@ export class AgentsStore {
     this.activeSession = applySessionNotification(this.activeSession, notification, optimisticEventIndex);
     if (notification.update.sessionUpdate === 'config_option_update') {
       const key = buildSessionKey(agentId, notification.sessionId);
-      const configOptions = notification.update.configOptions;
-      this.sessionConfigOptions.set(key, configOptions);
-      const modelId = getCurrentModelId(configOptions);
+      // Authoritative updates may carry only the options relevant to the
+      // change; merge by option id and keep the confirmed active mode. Model
+      // metadata is read from the raw patch: a patch without a model option
+      // must not resurrect stale model values from the merged snapshot.
+      const patch = notification.update.configOptions ?? [];
+      const configOptions = this.mergeSessionConfigOptions(agentId, notification.sessionId, patch);
+      const modelId = getCurrentModelId(patch);
       const currentModel = (this.modelsByAgent[agentId] ?? []).find(
         (model) => getModelSelectionKey(model) === this.getSessionModelId(agentId, notification.sessionId)
       );
@@ -3952,6 +4309,18 @@ export class AgentsStore {
           ...this.sessionModelIds,
           [key]: currentModel?.id === modelId ? getModelSelectionKey(currentModel) : modelId
         };
+      }
+      // During a desktop-initiated transition, intermediate mode defaults and
+      // racing notifications refresh confirmed UI state but never overwrite
+      // the saved target preference; the transition persists it on completion.
+      if (!this.sessionModeTransitions.has(key)) {
+        this.persistConfirmedSessionPreference(agentId, notification.sessionId);
+      }
+    } else if (notification.update.sessionUpdate === 'current_mode_update') {
+      const key = buildSessionKey(agentId, notification.sessionId);
+      this.sessionModeIds = { ...this.sessionModeIds, [key]: notification.update.currentModeId };
+      if (!this.sessionModeTransitions.has(key)) {
+        this.persistConfirmedSessionPreference(agentId, notification.sessionId);
       }
     }
     this.activeLoadMeasurement?.increment('appliedNotifications');

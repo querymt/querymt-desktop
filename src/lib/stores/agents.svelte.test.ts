@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
 import type { AgentConfig, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
-import { getModelSelectionKey } from '$lib/querymt/config-options';
+import { findModeConfigOption, findReasoningConfigOption, getModelSelectionKey } from '$lib/querymt/config-options';
 import { QMT_METHOD_MESH_NODES, QMT_METHOD_MESH_STATUS } from '$lib/querymt/querymt-extensions';
 import {
   DelegateAssignmentSource,
@@ -953,7 +953,7 @@ describe('AgentsStore connections', () => {
       label: 'GPT-5'
     };
     store.modelsByAgent = { 'agent-1': [anthropic, openai] };
-    store.setLaunchModel('launch-only');
+    store.setLaunchModel('agent-1', 'launch-only');
     store.sessionsByAgent = {
       'agent-1': [
         {
@@ -993,7 +993,7 @@ describe('AgentsStore connections', () => {
     expect(store.getSessionModelId('agent-1', 'session-b')).toBe(openai.id);
     await store.loadSession('agent-1', 'session-a');
     expect(store.getSessionModelId('agent-1', 'session-a')).toBe(anthropic.id);
-    expect(store.launchModelId).toBe('launch-only');
+    expect(store.getLaunchModelId('agent-1')).toBe('launch-only');
     expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
   });
 
@@ -1094,7 +1094,7 @@ describe('AgentsStore session model isolation', () => {
     mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: modelOptions(sol.id) }, replay: [] });
     await store.loadSession('agent-1', 'session-a');
 
-    store.setLaunchModel(grok.id);
+    store.setLaunchModel('agent-1', grok.id);
 
     expect(store.activeSessionId).toBe('session-a');
     expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
@@ -1106,14 +1106,14 @@ describe('AgentsStore session model isolation', () => {
     expect(mockClient.setSessionConfigOption).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'session-b', value: grok.id }));
     expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
     expect(store.getSessionModelId('agent-1', 'session-b')).toBe(grok.id);
-    store.setLaunchModel(glm.id);
+    store.setLaunchModel('agent-1', glm.id);
     expect(mockClient.setSessionConfigOption).toHaveBeenCalledTimes(1);
     expect(store.getSessionModelId('agent-1', 'session-b')).toBe(grok.id);
   });
 
   it('snapshots launch settings before creation and configures mode before model and prompt', async () => {
     const store = setup();
-    store.setLaunchModel(grok.id);
+    store.setLaunchModel('agent-1', grok.id);
     store.setComposerProfile('coding');
     store.setComposerMode('plan');
     let finishCreation!: (response: { sessionId: string; configOptions: SessionConfigOption[] }) => void;
@@ -1128,7 +1128,7 @@ describe('AgentsStore session model isolation', () => {
       return { stopReason: 'end_turn' };
     });
     const creation = store.startSessionWithPrompt('agent-1');
-    store.setLaunchModel(glm.id);
+    store.setLaunchModel('agent-1', glm.id);
     store.setComposerProfile('other');
     store.setComposerMode('build');
     await vi.waitFor(() => expect(finishCreation).toBeDefined());
@@ -1140,13 +1140,13 @@ describe('AgentsStore session model isolation', () => {
     expect(mockClient.setSessionConfigOption).toHaveBeenNthCalledWith(1, expect.objectContaining({ sessionId: 'session-b', configId: 'mode', value: 'plan' }));
     expect(mockClient.setSessionConfigOption).toHaveBeenNthCalledWith(2, expect.objectContaining({ sessionId: 'session-b', configId: 'model', value: grok.id }));
     expect(order).toEqual(['mode', 'model', 'prompt']);
-    expect(store.launchModelId).toBe(glm.id);
+    expect(store.getLaunchModelId('agent-1')).toBe(glm.id);
     expect(store.getSessionModelId('agent-1', 'session-b')).toBe(grok.id);
   });
 
   it('does not send the first prompt when the model write fails', async () => {
     const store = setup();
-    store.setLaunchModel(grok.id);
+    store.setLaunchModel('agent-1', grok.id);
     mockClient.setSessionConfigOption.mockRejectedValueOnce(new Error('Model rejected'));
 
     expect(await store.startSessionWithPrompt('agent-1')).toBeNull();
@@ -1156,7 +1156,7 @@ describe('AgentsStore session model isolation', () => {
 
   it('does not silently use the default model when the launch selection is unavailable', async () => {
     const store = setup();
-    store.setLaunchModel('missing/model');
+    store.setLaunchModel('agent-1', 'missing/model');
 
     expect(await store.startSessionWithPrompt('agent-1')).toBeNull();
     expect(mockClient.sendPrompt).not.toHaveBeenCalled();
@@ -1167,7 +1167,7 @@ describe('AgentsStore session model isolation', () => {
   it('keeps confirmed selection on failure and obeys the server response rather than the requested model', async () => {
     const store = setup();
     await store.setSessionModel('agent-1', 'session-a', sol.id);
-    store.setLaunchModel(glm.id);
+    store.setLaunchModel('agent-1', glm.id);
     mockClient.setSessionConfigOption.mockRejectedValueOnce(new Error('Denied'));
     await store.setSessionModel('agent-1', 'session-a', grok.id);
     expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
@@ -1177,7 +1177,7 @@ describe('AgentsStore session model isolation', () => {
     mockClient.setSessionConfigOption.mockResolvedValueOnce(modelOptions(glm.id));
     await store.setSessionModel('agent-1', 'session-a', grok.id);
     expect(store.getSessionModelId('agent-1', 'session-a')).toBe(glm.id);
-    expect(store.launchModelId).toBe(glm.id);
+    expect(store.getLaunchModelId('agent-1')).toBe(glm.id);
     expect(store.error).toBeNull();
   });
 
@@ -1268,12 +1268,12 @@ describe('AgentsStore session model isolation', () => {
     mockClient.setSessionConfigOption.mockResolvedValueOnce(modeOptions('plan'));
     await store.setActiveSessionConfigOption('mode', 'plan');
     expect(store.getSessionModelId('agent-1', 'session-a')).toBe(grok.id);
-    store.setLaunchModel(glm.id);
+    store.setLaunchModel('agent-1', glm.id);
     mockClient.emitSessionUpdate({ sessionId: 'session-a', update: {
       sessionUpdate: 'config_option_update', configOptions: modelOptions(sol.id)
     } });
     expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
-    expect(store.launchModelId).toBe(glm.id);
+    expect(store.getLaunchModelId('agent-1')).toBe(glm.id);
   });
 
   it('keeps the selected model across live mode-change notifications without model metadata', async () => {
@@ -1290,14 +1290,23 @@ describe('AgentsStore session model isolation', () => {
     expect(store.getSessionModelId('agent-1', 'session-a')).toBe(grok.id);
   });
 
-  it('applies an authoritative model change returned with a mode-change response when the new id differs', async () => {
+  it('treats a mode-change response model default as temporary and restores the recent model for an unseen mode', async () => {
     const store = setup();
     await store.setSessionModel('agent-1', 'session-a', grok.id);
     mockClient.setSessionConfigOption.mockResolvedValueOnce(modeAndModelOptions('plan', glm.id));
     await store.setActiveSessionConfigOption('mode', 'plan');
 
-    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(glm.id);
-    expect(store.activeSession.configOptions).toEqual(modeAndModelOptions('plan', glm.id));
+    // The agent confirmed glm as the plan default, but plan has no saved
+    // preference yet, so the desktop restores the agent's most recent
+    // confirmed available model (grok) with an explicit follow-up write.
+    // (The leading model write is the initial setSessionModel above.)
+    const writes = mockClient.setSessionConfigOption.mock.calls.map((call) => (call[0] as SetSessionConfigOptionRequest).configId);
+    expect(writes).toEqual(['model', 'mode', 'model']);
+    expect(mockClient.setSessionConfigOption).toHaveBeenLastCalledWith(
+      expect.objectContaining({ configId: 'model', value: grok.id })
+    );
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(grok.id);
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'plan')).toEqual({ modelId: grok.id });
   });
 
   it('applies an authoritative model change reported alongside a mode change in a config_option_update', async () => {
@@ -1309,6 +1318,502 @@ describe('AgentsStore session model isolation', () => {
 
     expect(store.getSessionModelId('agent-1', 'session-a')).toBe(glm.id);
     expect(store.activeSession.configOptions).toEqual(modeAndModelOptions('plan', glm.id));
+  });
+});
+
+
+describe('AgentsStore session mode preferences', () => {
+  const sol: ModelEntry = { id: 'codex/gpt-5.6-sol', provider: 'codex', model: 'gpt-5.6-sol', label: 'Sol' };
+  const grok: ModelEntry = { id: 'xai/grok-4.6', provider: 'xai', model: 'grok-4.6', label: 'Grok' };
+  const glm: ModelEntry = { id: 'zai/glm-5.3-flash', provider: 'zai', model: 'glm-5.3-flash', label: 'GLM' };
+  const remoteGrok: ModelEntry = { ...grok, node_id: 'node-1', node_label: 'Build server' };
+
+  const modelOptions = (modelId: string): SessionConfigOption[] => [{
+    id: 'model', name: 'Model', type: 'select', currentValue: modelId,
+    options: [sol, grok, glm].map((model) => ({ value: model.id, name: model.label ?? model.model }))
+  }];
+  const modeOptions = (mode: string): SessionConfigOption[] => [{
+    id: 'mode', name: 'Mode', type: 'select', currentValue: mode,
+    options: [{ value: 'build', name: 'Build' }, { value: 'plan', name: 'Plan' }]
+  }];
+  const reasoningOptions = (value: string): SessionConfigOption[] => [{
+    id: 'thought_level', name: 'Reasoning', type: 'select', currentValue: value,
+    options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }]
+  }];
+  const fullOptions = (mode: string, modelId: string, reasoning: string): SessionConfigOption[] => [
+    ...modeOptions(mode),
+    ...modelOptions(modelId),
+    ...reasoningOptions(reasoning)
+  ];
+  const preferenceFor = (agentId: string, sessionId: string, modeId?: string) =>
+    modeId == null
+      ? JSON.parse(localStorage.getItem('querymt-desktop.session-mode-preferences') ?? '{}')?.agents?.[agentId]?.sessions?.[sessionId]
+      : JSON.parse(localStorage.getItem('querymt-desktop.session-mode-preferences') ?? '{}')?.agents?.[agentId]?.sessions?.[sessionId]?.modes?.[modeId];
+
+  function setup(savedModes: Record<string, unknown> = {}) {
+    localStorage.clear();
+    if (Object.keys(savedModes).length > 0) {
+      localStorage.setItem(
+        'querymt-desktop.session-mode-preferences',
+        JSON.stringify({
+          version: 1,
+          agents: { 'agent-1': { sessions: { 'session-a': { modes: savedModes, updatedAt: '2026-09-01T00:00:00.000Z' } } } }
+        })
+      );
+    }
+    const store = createStore();
+    store.modelsByAgent = { 'agent-1': [sol, grok, glm, remoteGrok] };
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-a';
+    store.activeSession.sessionId = 'session-a';
+    store.sessionsByAgent = {
+      'agent-1': ['session-a', 'session-b'].map((sessionId) => ({
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId, title: sessionId, cwd: '/tmp/work',
+        updatedAt: '2026-09-07T20:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }))
+    };
+    return store;
+  }
+
+  it('captures confirmed model and reasoning per agent, session, and mode in isolation', async () => {
+    const store = setup();
+    mockClient.loadSession.mockImplementation(async () => ({
+      response: { configOptions: fullOptions('build', sol.id, 'low') },
+      replay: []
+    }));
+    await store.loadSession('agent-1', 'session-a');
+    store.activeSessionId = 'session-b';
+    store.activeSession.sessionId = 'session-b';
+    await store.loadSession('agent-1', 'session-b');
+
+    // Session A: explicit model + reasoning writes confirm a build-mode preference.
+    store.activeSessionId = 'session-a';
+    store.activeSession.sessionId = 'session-a';
+    mockClient.setSessionConfigOption.mockImplementation(async (request) =>
+      request.configId === 'model' ? modelOptions(grok.id) : reasoningOptions('high'));
+    await store.setSessionModel('agent-1', 'session-a', grok.id);
+    await store.setActiveSessionConfigOption('thought_level', 'high');
+
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'build')).toEqual({
+      modelId: grok.id,
+      reasoningId: 'high'
+    });
+    // Session B keeps its load-seeded preference, untouched by session A writes.
+    expect(store.getSessionModePreference('agent-1', 'session-b', 'build')).toEqual({
+      modelId: sol.id,
+      reasoningId: 'low'
+    });
+    // Exact selection keys preserve mesh identity separately from local models.
+    expect(preferenceFor('agent-1', 'session-a', 'build')?.modelId).toBe('xai/grok-4.6');
+    expect(preferenceFor('agent-1', 'session-a', 'plan')).toBeUndefined();
+    expect(preferenceFor('agent-1', 'session-b', 'build')?.modelId).toBe(sol.id);
+  });
+
+  it('removes persisted mode entries when the session is deleted', async () => {
+    const store = setup();
+    mockClient.connect.mockImplementation(async (): Promise<InitializeResponse> => ({
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: true, sessionCapabilities: { fork: {}, delete: {} } },
+      authMethods: []
+    }));
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: fullOptions('build', grok.id, 'high') },
+      replay: []
+    });
+    await store.loadSession('agent-1', 'session-a');
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'build')).toEqual({
+      modelId: grok.id,
+      reasoningId: 'high'
+    });
+
+    await store.deleteSession('agent-1', 'session-a');
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'build')).toBeUndefined();
+    expect(preferenceFor('agent-1', 'session-a')).toBeUndefined();
+  });
+
+  it('merges partial config responses by option id without losing the confirmed mode', async () => {
+    const store = setup();
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: fullOptions('build', sol.id, 'low') },
+      replay: []
+    });
+    await store.loadSession('agent-1', 'session-a');
+
+    // Mode-only response: model and reasoning options survive the merge.
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(modeOptions('plan'));
+    await store.setActiveSessionConfigOption('mode', 'plan');
+    expect(store.getSessionModeId('agent-1', 'session-a')).toBe('plan');
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
+    expect(findReasoningConfigOption(store.activeSession.configOptions)?.currentValue).toBe('low');
+
+    // Model-only response: the confirmed active mode stays known.
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(modelOptions(grok.id));
+    await store.setSessionModel('agent-1', 'session-a', grok.id);
+    expect(store.getSessionModeId('agent-1', 'session-a')).toBe('plan');
+    expect(findModeConfigOption(store.activeSession.configOptions)?.currentValue).toBe('plan');
+
+    // Reasoning-only response keeps mode and model.
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(reasoningOptions('high'));
+    await store.setActiveSessionConfigOption('thought_level', 'high');
+    expect(store.getSessionModeId('agent-1', 'session-a')).toBe('plan');
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(grok.id);
+
+    // Full-option response replaces the merged values wholesale.
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(fullOptions('build', glm.id, 'low'));
+    await store.setActiveSessionConfigOption('thought_level', 'low');
+    expect(store.getSessionModeId('agent-1', 'session-a')).toBe('build');
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(glm.id);
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'build')).toEqual({
+      modelId: glm.id,
+      reasoningId: 'low'
+    });
+  });
+
+  it('seeds the loaded active mode from agent state instead of an older local preference', async () => {
+    const store = setup({ build: { modelId: glm.id, reasoningId: 'low' } });
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: fullOptions('build', sol.id, 'high') },
+      replay: []
+    });
+
+    await store.loadSession('agent-1', 'session-a');
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
+    // Agent-confirmed values overwrite the stale local preference.
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'build')).toEqual({
+      modelId: sol.id,
+      reasoningId: 'high'
+    });
+  });
+
+  it('does not substitute a model when a loaded session omits model metadata', async () => {
+    const store = setup({ build: { modelId: glm.id } });
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [...modeOptions('build'), ...reasoningOptions('low')] },
+      replay: []
+    });
+
+    await store.loadSession('agent-1', 'session-a');
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe('');
+    // The saved model stays untouched rather than being presented as confirmed.
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'build')).toEqual({
+      modelId: glm.id,
+      reasoningId: 'low'
+    });
+  });
+});
+
+describe('AgentsStore mode transitions', () => {
+  const sol: ModelEntry = { id: 'codex/gpt-5.6-sol', provider: 'codex', model: 'gpt-5.6-sol', label: 'Sol' };
+  const grok: ModelEntry = { id: 'xai/grok-4.6', provider: 'xai', model: 'grok-4.6', label: 'Grok' };
+  const glm: ModelEntry = { id: 'zai/glm-5.3-flash', provider: 'zai', model: 'glm-5.3-flash', label: 'GLM' };
+  const remoteGrok: ModelEntry = { ...grok, node_id: 'node-1', node_label: 'Build server' };
+
+  const modelOptions = (modelId: string): SessionConfigOption[] => [{
+    id: 'model', name: 'Model', type: 'select', currentValue: modelId,
+    options: [sol, grok, glm].map((model) => ({ value: model.id, name: model.label ?? model.model }))
+  }];
+  const modeOptions = (mode: string): SessionConfigOption[] => [{
+    id: 'mode', name: 'Mode', type: 'select', currentValue: mode,
+    options: [{ value: 'build', name: 'Build' }, { value: 'plan', name: 'Plan' }]
+  }];
+  const reasoningOptions = (value: string, choices: string[] = ['low', 'high']): SessionConfigOption[] => [{
+    id: 'thought_level', name: 'Reasoning', type: 'select', currentValue: value,
+    options: choices.map((choice) => ({ value: choice, name: choice }))
+  }];
+  const fullOptions = (mode: string, modelId: string, reasoning: string): SessionConfigOption[] => [
+    ...modeOptions(mode),
+    ...modelOptions(modelId),
+    ...reasoningOptions(reasoning)
+  ];
+  const configIdsWritten = () =>
+    mockClient.setSessionConfigOption.mock.calls.map((call) => (call[0] as SetSessionConfigOptionRequest).configId);
+  const preferenceFor = (agentId: string, sessionId: string, modeId: string) =>
+    JSON.parse(localStorage.getItem('querymt-desktop.session-mode-preferences') ?? '{}')?.agents?.[agentId]?.sessions?.[sessionId]?.modes?.[modeId];
+
+  function setup(savedModes: Record<string, unknown> = {}) {
+    localStorage.clear();
+    if (Object.keys(savedModes).length > 0) {
+      localStorage.setItem(
+        'querymt-desktop.session-mode-preferences',
+        JSON.stringify({
+          version: 1,
+          agents: { 'agent-1': { sessions: { 'session-a': { modes: savedModes, updatedAt: '2026-09-01T00:00:00.000Z' } } } }
+        })
+      );
+    }
+    const store = createStore();
+    store.modelsByAgent = { 'agent-1': [sol, grok, glm, remoteGrok] };
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-a';
+    store.activeSession.sessionId = 'session-a';
+    store.sessionsByAgent = {
+      'agent-1': ['session-a', 'session-b'].map((sessionId) => ({
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId, title: sessionId, cwd: '/tmp/work',
+        updatedAt: '2026-09-07T20:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }))
+    };
+    mockClient.loadSession.mockResolvedValue({
+      response: { configOptions: fullOptions('build', sol.id, 'low') },
+      replay: []
+    });
+    return store;
+  }
+
+  async function loadActive(store: AgentsStore, sessionId = 'session-a') {
+    store.activeSessionId = sessionId;
+    store.activeSession.sessionId = sessionId;
+    await store.loadSession('agent-1', sessionId);
+  }
+
+  it('restores saved target preferences in mode → model → reasoning order', async () => {
+    const store = setup({ plan: { modelId: glm.id, reasoningId: 'high' } });
+    await loadActive(store);
+    mockClient.setSessionConfigOption
+      .mockResolvedValueOnce(modeOptions('plan'))
+      .mockResolvedValueOnce(modelOptions(glm.id))
+      .mockResolvedValueOnce(reasoningOptions('high'));
+
+    await store.setSessionMode('agent-1', 'session-a', 'plan');
+
+    expect(configIdsWritten()).toEqual(['mode', 'model', 'thought_level']);
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(glm.id);
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'plan')).toEqual({
+      modelId: glm.id,
+      reasoningId: 'high'
+    });
+  });
+
+  it('transitions independent sessions concurrently', async () => {
+    const store = setup();
+    await loadActive(store, 'session-a');
+    await loadActive(store, 'session-b');
+
+    let finishA!: (options: SessionConfigOption[]) => void;
+    mockClient.setSessionConfigOption.mockImplementationOnce(() => new Promise((resolve) => { finishA = resolve; }));
+    const transitionA = store.setSessionMode('agent-1', 'session-a', 'plan');
+    await vi.waitFor(() => expect(finishA).toBeDefined());
+
+    // Session B's transition proceeds while session A's is blocked.
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(modeOptions('plan'));
+    const transitionB = store.setSessionMode('agent-1', 'session-b', 'plan');
+    await transitionB;
+    expect(store.getSessionModeId('agent-1', 'session-b')).toBe('plan');
+    expect(store.getSessionModeId('agent-1', 'session-a')).toBe('build');
+
+    finishA(modeOptions('plan'));
+    await transitionA;
+    expect(store.getSessionModeId('agent-1', 'session-a')).toBe('plan');
+  });
+
+  it('falls back to the recent model when the saved selection is unavailable', async () => {
+    const store = setup({ plan: { modelId: getModelSelectionKey({ ...glm, node_id: 'offline-node' }) } });
+    await loadActive(store);
+    store.recentModelsByAgent = { 'agent-1': [grok.id, sol.id] };
+    mockClient.setSessionConfigOption
+      .mockResolvedValueOnce(modeOptions('plan'))
+      .mockResolvedValueOnce(modelOptions(grok.id));
+
+    await store.setSessionMode('agent-1', 'session-a', 'plan');
+
+    expect(mockClient.setSessionConfigOption).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ configId: 'model', value: grok.id })
+    );
+    expect(configIdsWritten()).toEqual(['mode', 'model']);
+  });
+
+  it('keeps the agent-confirmed model when neither saved nor recent models are available', async () => {
+    const store = setup({ plan: { modelId: getModelSelectionKey({ ...glm, node_id: 'offline-node' }) } });
+    await loadActive(store);
+    store.recentModelsByAgent = { 'agent-1': [getModelSelectionKey({ ...glm, node_id: 'offline-node' })] };
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(
+      [...modeOptions('plan'), ...modelOptions(glm.id)]
+    );
+
+    await store.setSessionMode('agent-1', 'session-a', 'plan');
+
+    expect(configIdsWritten()).toEqual(['mode']);
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(glm.id);
+  });
+
+  it('does not write model or reasoning when the confirmed values already match the saved preferences', async () => {
+    const store = setup({ plan: { modelId: grok.id, reasoningId: 'low' } });
+    await loadActive(store);
+    store.recentModelsByAgent = { 'agent-1': [sol.id] };
+    // The mode response confirms the saved model and reasoning values itself.
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(fullOptions('plan', grok.id, 'low'));
+
+    await store.setSessionMode('agent-1', 'session-a', 'plan');
+
+    expect(configIdsWritten()).toEqual(['mode']);
+  });
+
+  it('resolves reasoning from choices refreshed by the model response', async () => {
+    const store = setup({ plan: { modelId: glm.id, reasoningId: 'high' } });
+    await loadActive(store);
+    // The mode response offers no reasoning choice above 'low'; only after the
+    // model write does the agent expose 'high' among the refreshed choices.
+    mockClient.setSessionConfigOption
+      .mockResolvedValueOnce([...modeOptions('plan'), ...reasoningOptions('low', ['low'])])
+      .mockResolvedValueOnce([...modelOptions(glm.id), ...reasoningOptions('low', ['low', 'high'])])
+      .mockResolvedValueOnce(reasoningOptions('high', ['low', 'high']));
+
+    await store.setSessionMode('agent-1', 'session-a', 'plan');
+
+    expect(configIdsWritten()).toEqual(['mode', 'model', 'thought_level']);
+    expect(mockClient.setSessionConfigOption).toHaveBeenLastCalledWith(
+      expect.objectContaining({ configId: 'thought_level', value: 'high' })
+    );
+  });
+
+  it('retains the confirmed reasoning and replaces a stale saved effort that is no longer offered', async () => {
+    const store = setup({ plan: { modelId: glm.id, reasoningId: 'max' } });
+    await loadActive(store);
+    mockClient.setSessionConfigOption
+      .mockResolvedValueOnce(modeOptions('plan'))
+      .mockResolvedValueOnce(modelOptions(glm.id));
+
+    await store.setSessionMode('agent-1', 'session-a', 'plan');
+
+    expect(configIdsWritten()).toEqual(['mode', 'model']);
+    // The stale 'max' preference is replaced by the agent-confirmed value.
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'plan')).toEqual({
+      modelId: glm.id,
+      reasoningId: 'low'
+    });
+  });
+
+  it('reports partial failure and never records rejected values', async () => {
+    const store = setup({ plan: { modelId: glm.id, reasoningId: 'high' } });
+    await loadActive(store);
+    mockClient.setSessionConfigOption
+      .mockResolvedValueOnce(modeOptions('plan'))
+      .mockRejectedValueOnce(new Error('Model rejected'));
+
+    await store.setSessionMode('agent-1', 'session-a', 'plan');
+
+    expect(store.error).toBe('Model rejected');
+    // Mode confirmed, model rejected: the rejected write and the stale
+    // pre-switch state stay out of persistence; previously saved values remain
+    // available for a later retry.
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'plan')).toEqual({
+      modelId: glm.id,
+      reasoningId: 'high'
+    });
+  });
+
+  it('keeps unsolicited updates during a transition from overwriting saved target preferences', async () => {
+    const store = setup({ plan: { modelId: glm.id, reasoningId: 'high' } });
+    await loadActive(store);
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(modeOptions('plan'));
+    // Block the restore model write so the transition is still in flight.
+    let finishModel!: (options: SessionConfigOption[]) => void;
+    mockClient.setSessionConfigOption.mockImplementationOnce(
+      () => new Promise((resolve) => { finishModel = resolve; })
+    );
+    const transition = store.setSessionMode('agent-1', 'session-a', 'plan');
+    await vi.waitFor(() => expect(finishModel).toBeDefined());
+
+    // Intermediate agent defaults race in while restoration is still pending.
+    mockClient.emitSessionUpdate({ sessionId: 'session-a', update: {
+      sessionUpdate: 'config_option_update', configOptions: [...modelOptions(sol.id), ...reasoningOptions('low')]
+    } });
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'plan')).toEqual({
+      modelId: glm.id,
+      reasoningId: 'high'
+    });
+
+    finishModel(modelOptions(glm.id));
+    await transition;
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(glm.id);
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'plan')).toEqual({
+      modelId: glm.id,
+      reasoningId: 'high'
+    });
+  });
+
+  it('captures the outgoing mode preference before switching', async () => {
+    const store = setup();
+    await loadActive(store);
+    // A confirmed model in the build mode that has not been saved yet.
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(modelOptions(grok.id));
+    await store.setSessionModel('agent-1', 'session-a', grok.id);
+    expect(preferenceFor('agent-1', 'session-a', 'build')).toEqual({ modelId: grok.id, reasoningId: 'low' });
+
+    mockClient.setSessionConfigOption.mockClear();
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(modeOptions('plan'));
+    await store.setSessionMode('agent-1', 'session-a', 'plan');
+
+    // The build preference survived the switch and the plan mode was created.
+    expect(preferenceFor('agent-1', 'session-a', 'build')).toEqual({ modelId: grok.id, reasoningId: 'low' });
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'plan')).toEqual({ modelId: grok.id, reasoningId: 'low' });
+  });
+
+  it('restores the target model when the mode response omits model metadata', async () => {
+    // Regression: the agent may switch its session model to its own mode
+    // default while reporting no model metadata. The previously displayed
+    // selection must not suppress the restore write.
+    const store = setup({ plan: { modelId: sol.id } });
+    await loadActive(store);
+    // The loaded belief (sol) equals the resolved saved model, yet the mode
+    // response confirms nothing; restoration must still write the model.
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(modeOptions('plan'));
+
+    await store.setSessionMode('agent-1', 'session-a', 'plan');
+
+    expect(configIdsWritten()).toEqual(['mode', 'model']);
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(sol.id);
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'plan')).toEqual({
+      modelId: sol.id,
+      reasoningId: 'low'
+    });
+  });
+
+  it('serializes a user model change made during a transition and records it normally', async () => {
+    const store = setup({ plan: { modelId: glm.id } });
+    await loadActive(store);
+    store.recentModelsByAgent = { 'agent-1': [glm.id] };
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(modeOptions('plan'));
+    // Block the transition's restore model write so it is still in flight.
+    let finishModel!: (options: SessionConfigOption[]) => void;
+    mockClient.setSessionConfigOption.mockImplementationOnce(
+      () => new Promise((resolve) => { finishModel = resolve; })
+    );
+    const transition = store.setSessionMode('agent-1', 'session-a', 'plan');
+    await vi.waitFor(() => expect(finishModel).toBeDefined());
+
+    // The user selection must queue behind the in-flight transition instead of
+    // interleaving with it, and must still update recency and persistence.
+    const userWrite = store.setSessionModel('agent-1', 'session-a', grok.id);
+    finishModel(modelOptions(glm.id));
+    await Promise.all([transition, userWrite]);
+
+    expect(mockClient.setSessionConfigOption).toHaveBeenLastCalledWith(
+      expect.objectContaining({ configId: 'model', value: grok.id })
+    );
+    expect(store.recentModelsByAgent['agent-1'][0]).toBe(grok.id);
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(grok.id);
+    expect(store.getSessionModePreference('agent-1', 'session-a', 'plan')).toEqual({
+      modelId: grok.id,
+      reasoningId: 'low'
+    });
+  });
+
+  it('loads the model catalog before resolving restoration when it is empty', async () => {
+    const store = setup({ plan: { modelId: glm.id } });
+    await loadActive(store);
+    // Simulate a refresh where the catalog has not arrived yet.
+    store.modelsByAgent = {};
+    mockClient.listModels.mockResolvedValue([sol, grok, glm]);
+    mockClient.setSessionConfigOption.mockResolvedValueOnce(modeOptions('plan'));
+
+    await store.setSessionMode('agent-1', 'session-a', 'plan');
+
+    expect(mockClient.listModels).toHaveBeenCalled();
+    expect(configIdsWritten()).toEqual(['mode', 'model']);
+    expect(store.getSessionModelId('agent-1', 'session-a')).toBe(glm.id);
   });
 });
 
@@ -5099,5 +5604,152 @@ describe('AgentsStore prompt session start', () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe('AgentsStore agent-scoped launch model defaults', () => {
+  const sol: ModelEntry = { id: 'codex/gpt-5.6-sol', provider: 'codex', model: 'gpt-5.6-sol', label: 'Sol' };
+  const grok: ModelEntry = { id: 'xai/grok-4.6', provider: 'xai', model: 'grok-4.6', label: 'Grok' };
+  const glm: ModelEntry = { id: 'zai/glm-5.3-flash', provider: 'zai', model: 'glm-5.3-flash', label: 'GLM' };
+
+  function setup() {
+    localStorage.clear();
+    const store = createStore();
+    store.composerModeId = 'build';
+    store.composerReasoningId = 'auto';
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-a', title: 'session-a', cwd: '/tmp/work',
+        updatedAt: '2026-09-07T20:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    return store;
+  }
+
+  it('scopes launch model selections per agent without leaking across agents', async () => {
+    const store = setup();
+    store.configs = [
+      ...store.configs,
+      {
+        id: 'agent-2',
+        name: 'SECOND',
+        transport: 'stdio',
+        commandLine: '/usr/local/bin/qmtcode --acp',
+        enabled: true,
+        autoStart: true
+      }
+    ];
+    store.recentModelsByAgent = { 'agent-1': [grok.id], 'agent-2': [glm.id] };
+    mockClient.refreshAndListModels.mockImplementation(async () => [sol, grok, glm]);
+
+    await store.refreshModelsForAgent('agent-1');
+    await store.refreshModelsForAgent('agent-2');
+
+    expect(store.getLaunchModelId('agent-1')).toBe(grok.id);
+    expect(store.getLaunchModelId('agent-2')).toBe(glm.id);
+
+    store.setLaunchModel('agent-1', sol.id);
+    expect(store.getLaunchModelId('agent-1')).toBe(sol.id);
+    expect(store.getLaunchModelId('agent-2')).toBe(glm.id);
+    expect(store.getLaunchModelId(null)).toBe('');
+  });
+
+  it('initializes from the first available recent entry and falls back to the catalog default', async () => {
+    const store = setup();
+    store.recentModelsByAgent = { 'agent-1': [grok.id] };
+    mockClient.refreshAndListModels.mockResolvedValueOnce([sol, grok, glm]);
+    await store.refreshModelsForAgent('agent-1');
+    expect(store.getLaunchModelId('agent-1')).toBe(grok.id);
+
+    // Stale recent history falls back to the catalog default.
+    const store2 = setup();
+    store2.recentModelsByAgent = { 'agent-1': [getModelSelectionKey({ ...grok, node_id: 'offline-node' })] };
+    mockClient.refreshAndListModels.mockResolvedValueOnce([sol, grok, glm]);
+    await store2.refreshModelsForAgent('agent-1');
+    expect(store2.getLaunchModelId('agent-1')).toBe(sol.id);
+
+    // An empty catalog leaves the selection unset.
+    const store3 = setup();
+    store3.recentModelsByAgent = { 'agent-1': [grok.id] };
+    await store3.refreshModelsForAgent('agent-1');
+    expect(store3.getLaunchModelId('agent-1')).toBe('');
+  });
+
+  it('keeps an explicit selection while available and revalidates on catalog refresh', async () => {
+    const store = setup();
+    store.recentModelsByAgent = { 'agent-1': [glm.id] };
+    mockClient.refreshAndListModels.mockResolvedValueOnce([sol, grok, glm]);
+    await store.refreshModelsForAgent('agent-1');
+    store.setLaunchModel('agent-1', grok.id);
+
+    // Refresh where the explicit selection is still available: kept.
+    await store.refreshModelsForAgent('agent-1');
+    expect(store.getLaunchModelId('agent-1')).toBe(grok.id);
+
+    // Refresh where it disappeared: re-resolve through recent history.
+    mockClient.refreshAndListModels.mockResolvedValueOnce([sol, glm]);
+    await store.refreshModelsForAgent('agent-1');
+    expect(store.getLaunchModelId('agent-1')).toBe(glm.id);
+  });
+
+  it('saves the confirmed launch preference after a successful session creation', async () => {
+    const store = setup();
+    store.recentModelsByAgent = { 'agent-1': [grok.id] };
+    mockClient.refreshAndListModels.mockResolvedValueOnce([sol, grok, glm]);
+    await store.refreshModelsForAgent('agent-1');
+    store.setComposerMode('plan');
+    store.setComposerReasoning('high');
+    mockClient.createSession.mockResolvedValueOnce({ sessionId: 'session-b', configOptions: [] });
+    mockClient.setSessionConfigOption.mockResolvedValue([]);
+
+    const sessionId = await store.createSession('agent-1');
+    expect(sessionId).toBe('session-b');
+
+    expect(store.getSessionModePreference('agent-1', 'session-b', 'plan')).toEqual({
+      modelId: grok.id,
+      reasoningId: 'high'
+    });
+    // The explicit launch model write also updated recency.
+    expect(store.recentModelsByAgent['agent-1'][0]).toBe(grok.id);
+  });
+
+  it('does not save launch preferences when the model write is rejected', async () => {
+    const store = setup();
+    store.recentModelsByAgent = { 'agent-1': [grok.id] };
+    mockClient.refreshAndListModels.mockResolvedValueOnce([sol, grok, glm]);
+    await store.refreshModelsForAgent('agent-1');
+    store.setComposerMode('plan');
+    mockClient.createSession.mockResolvedValueOnce({ sessionId: 'session-b', configOptions: [] });
+    mockClient.setSessionConfigOption.mockRejectedValue(new Error('Model rejected'));
+
+    expect(await store.createSession('agent-1')).toBeNull();
+    expect(store.getSessionModePreference('agent-1', 'session-b', 'plan')).toBeUndefined();
+    expect(store.error).toBe('Model rejected');
+  });
+
+  it('does not reorder recent models when a mode transition restores a saved preference', async () => {
+    const store = setup();
+    store.recentModelsByAgent = { 'agent-1': [grok.id, sol.id] };
+    store.modelsByAgent = { 'agent-1': [sol, grok, glm] };
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-a';
+    store.activeSession.sessionId = 'session-a';
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [
+        { id: 'mode', name: 'Mode', type: 'select', currentValue: 'build', options: [{ value: 'build', name: 'Build' }, { value: 'plan', name: 'Plan' }] },
+        { id: 'model', name: 'Model', type: 'select', currentValue: sol.id, options: [sol, grok, glm].map((model) => ({ value: model.id, name: model.label ?? model.model })) }
+      ] },
+      replay: []
+    });
+    await store.loadSession('agent-1', 'session-a');
+    mockClient.setSessionConfigOption
+      .mockResolvedValueOnce({ id: 'mode', name: 'Mode', type: 'select', currentValue: 'plan', options: [{ value: 'build', name: 'Build' }, { value: 'plan', name: 'Plan' }] } as never)
+      .mockResolvedValueOnce({ id: 'model', name: 'Model', type: 'select', currentValue: grok.id, options: [sol, grok, glm].map((model) => ({ value: model.id, name: model.label ?? model.model })) } as never);
+
+    // Saved plan preference restores grok; recency must keep grok first
+    // because restore writes are not explicit user selections.
+    await store.setSessionMode('agent-1', 'session-a', 'plan');
+
+    expect(store.recentModelsByAgent['agent-1']).toEqual([grok.id, sol.id]);
   });
 });

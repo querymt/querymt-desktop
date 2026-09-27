@@ -41,7 +41,7 @@ function createAgentsStore() {
     activeSession: { runState: 'idle' },
     composerCwd: '/tmp/work',
     composerPrompt: '',
-    launchModelId: 'anthropic/claude-sonnet-4',
+    launchModelIds: { 'agent-1': 'anthropic/claude-sonnet-4' } as Record<string, string>,
     composerProfileId: 'default',
     composerModeId: 'build',
     composerReasoningId: 'auto',
@@ -68,8 +68,10 @@ function createAgentsStore() {
     setComposerPrompt: vi.fn((value: string) => {
       agentsStore.composerPrompt = value;
     }),
-    setLaunchModel: vi.fn(async (value: string) => {
-      agentsStore.launchModelId = value;
+    getLaunchModelId: vi.fn((agentId: string | null | undefined) =>
+      agentId ? (agentsStore.launchModelIds[agentId] ?? '') : ''),
+    setLaunchModel: vi.fn(async (agentId: string | null | undefined, value: string) => {
+      if (agentId) agentsStore.launchModelIds[agentId] = value;
     }),
     refreshModelsForAgent: vi.fn(async () => undefined),
     addPromptAttachments: vi.fn(),
@@ -145,7 +147,7 @@ describe('Landing page session start', () => {
       .find((button) => button.classList.contains('app-picker-row'))!;
     await fireEvent.click(modelRow);
 
-    expect(agentsStore.setLaunchModel).toHaveBeenCalledWith('anthropic/claude-sonnet-4');
+    expect(agentsStore.setLaunchModel).toHaveBeenCalledWith('agent-1', 'anthropic/claude-sonnet-4');
     expect(agentsStore.activeSessionId).toBe('previous-session');
   });
 
