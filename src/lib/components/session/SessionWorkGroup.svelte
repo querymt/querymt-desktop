@@ -3,6 +3,7 @@
   import SessionReasoningBlock from '$lib/components/session/SessionReasoningBlock.svelte';
   import SessionToolBlock from '$lib/components/session/SessionToolBlock.svelte';
   import { groupConsecutiveReasoning, type SessionConversationWorkGroup } from '$lib/domain/session-conversation';
+  import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 
   let {
     group,
@@ -21,10 +22,7 @@
   });
   const compactActiveContent = $derived.by(() => {
     if (group.settled || group.content.length <= 3) return group.content;
-    const failed = group.content.filter((item) => item.type === 'tool' && item.tool.status === 'failed');
-    const latest = group.content.slice(-2);
-    const visibleIds = new Set([...failed, ...latest].map((item) => item.id));
-    return group.content.filter((item) => visibleIds.has(item.id));
+    return group.content.slice(-2);
   });
   const visibleContent = $derived(expanded ? group.content : compactActiveContent);
   const visibleGroups = $derived(groupConsecutiveReasoning(visibleContent));
@@ -35,8 +33,9 @@
     if (group.reasoningCount > 0) parts.push(`${group.reasoningCount} reasoning step${group.reasoningCount === 1 ? '' : 's'}`);
     return parts.length > 0 ? `Worked through ${parts.join(' and ')}` : 'Worked';
   });
+  const showFailedCount = $derived(chatPreferencesStore.developerMode && group.failedToolCount > 0);
   const summaryAccessibleLabel = $derived(
-    `${summaryLabel}${group.failedToolCount > 0 ? `, ${group.failedToolCount} failed` : ''}`
+    `${summaryLabel}${showFailedCount ? `, ${group.failedToolCount} failed` : ''}`
   );
 
   function toggleSettled(event: MouseEvent) {
@@ -57,7 +56,7 @@
     <button class="session-work-summary" type="button" aria-label={summaryAccessibleLabel} aria-expanded={expanded} onclick={toggleSettled}>
       <span class="session-work-summary-icon" aria-hidden="true"><Wrench size={14} /></span>
       <span class="session-work-summary-label">{summaryLabel}</span>
-      {#if group.failedToolCount > 0}
+      {#if showFailedCount}
         <span class="session-work-summary-failure"><AlertTriangle size={12} /> {group.failedToolCount} failed</span>
       {/if}
       <ChevronDown class="session-work-summary-chevron" size={14} aria-hidden="true" />

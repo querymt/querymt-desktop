@@ -1,7 +1,9 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, within } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionConversationTurn } from '$lib/domain/session-conversation';
+import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import SessionTurn from './SessionTurn.svelte';
 
 const turn: SessionConversationTurn = {
@@ -59,7 +61,10 @@ const turn: SessionConversationTurn = {
   ]
 };
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  chatPreferencesStore.setDeveloperMode(false);
+});
 
 describe('SessionTurn', () => {
   it('normalizes lines-first fence meta when copying the response', async () => {
@@ -474,6 +479,84 @@ describe('SessionTurn', () => {
     await fireEvent.click(getByRole('button', { name: '+2 previous work entries' }));
     expect(getByRole('button', { name: 'Show fewer work entries' })).toHaveAttribute('aria-expanded', 'true');
     expect(getByRole('region', { name: 'Agent work' })).toHaveTextContent('Inspecting components');
+  });
+
+  it('keeps failed tool calls inside collapsed previous work entries', async () => {
+    const activeTurn: SessionConversationTurn = {
+      id: 'turn-failed-history',
+      forkMessageId: null,
+      content: [
+        {
+          type: 'tool',
+          id: 'tool-failed',
+          tool: {
+            id: 'tool-failed',
+            title: 'read_tool',
+            status: 'failed',
+            kind: 'read_tool'
+          }
+        },
+        {
+          type: 'reasoning',
+          id: 'reasoning-1',
+          html: '<p>Older thought</p>',
+          isLive: false
+        },
+        {
+          type: 'tool',
+          id: 'tool-ok',
+          tool: {
+            id: 'tool-ok',
+            title: 'search',
+            status: 'completed',
+            kind: 'search'
+          }
+        },
+        {
+          type: 'reasoning',
+          id: 'reasoning-2',
+          html: '<p>Latest thought</p>',
+          isLive: true
+        },
+        {
+          type: 'tool',
+          id: 'tool-latest',
+          tool: {
+            id: 'tool-latest',
+            title: 'edit',
+            status: 'in_progress',
+            kind: 'edit'
+          }
+        }
+      ],
+      settled: false
+    };
+
+    const { getByRole, getByText, queryByText } = render(SessionTurn, { turn: activeTurn });
+
+    expect(getByRole('button', { name: '+3 previous work entries' })).toHaveAttribute('aria-expanded', 'false');
+    expect(queryByText('Read file')).not.toBeInTheDocument();
+    expect(queryByText('Older thought')).not.toBeInTheDocument();
+    expect(getByRole('region', { name: 'Agent work' }).querySelector('.session-reasoning-preview')).toHaveTextContent('Latest thought');
+    expect(getByText('Edit file')).toBeInTheDocument();
+
+    await fireEvent.click(getByRole('button', { name: '+3 previous work entries' }));
+    expect(getByRole('button', { name: 'Show fewer work entries' })).toHaveAttribute('aria-expanded', 'true');
+    expect(getByText('Read file')).toBeInTheDocument();
+    expect(getByRole('region', { name: 'Agent work' })).toHaveTextContent('Older thought');
+  });
+
+  it('shows the failed work count only in developer mode', async () => {
+    const { getByRole, queryByText } = render(SessionTurn, { turn: { ...turn, settled: true } });
+
+    expect(getByRole('button', { name: 'Worked through 2 tool calls and 2 reasoning steps' })).toBeInTheDocument();
+    expect(queryByText('1 failed')).not.toBeInTheDocument();
+
+    chatPreferencesStore.setDeveloperMode(true);
+    await tick();
+
+    expect(getByRole('button', { name: 'Worked through 2 tool calls and 2 reasoning steps, 1 failed' })).toBeInTheDocument();
+    expect(queryByText('1 failed')).toBeInTheDocument();
   });
 
   it('collapses consecutive reasoning summaries into one disclosure and previews the latest', async () => {
