@@ -24,7 +24,6 @@
   } from '$lib/domain/session-scroll';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { formatSessionTimestamp, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
-  import { getSessionContextTone } from '$lib/domain/session-mode-tone';
   import {
     findReasoningConfigOption,
     getConfigOptionChoices,
@@ -58,9 +57,6 @@
   });
   const showAgentBadges = $derived(agentsStore.connectedAgents.length > 1);
   const pendingElicitations = $derived(inboxStore.pendingElicitationsForSession(agentId, sessionId));
-  // Confirmed active mode drives the context meter tone; agent mode ids stay opaque.
-  const sessionModeId = $derived(agentId && sessionId ? agentsStore.getSessionModeId(agentId, sessionId) : '');
-  const contextTone = $derived(getSessionContextTone(agentsStore.activeSession.configOptions, sessionModeId));
   // Reference clock for the relative "updated" label so it advances on its own
   // instead of only when session data changes.
   let relativeTimeNow = $state(Date.now());
@@ -529,7 +525,6 @@
     profileLabel={sessionProfileLabel}
     updatedAt={selectedSession ? formatSessionTimestamp(selectedSession.updatedAt, relativeTimeNow) : 'Not loaded'}
     summaryStatus={selectedSession?.status ?? 'idle'}
-    contextTone={contextTone}
     debugLabel={debugEventsTooltip}
     showDebug={chatPreferencesStore.developerMode}
     forkPending={agentsStore.forkPending}
