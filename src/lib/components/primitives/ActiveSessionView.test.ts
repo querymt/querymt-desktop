@@ -425,6 +425,48 @@ describe('ActiveSessionView turn action settle hold', () => {
     expect(screen.getByRole('button', { name: 'Undo to this prompt' })).toBeInTheDocument();
   });
 
+  it('attaches redo only to the current undo frontier turn', async () => {
+    const onRedo = vi.fn();
+    const session = settledConversationSession({
+      undo: { stack: ['user-message-1'], pendingOperation: null, lastRevertedFiles: [], lastMessage: null },
+      transcript: [
+        { id: 'user-1', kind: 'user_message_chunk', text: 'First prompt', messageId: 'user-message-1', eventIndex: 1 },
+        { id: 'assistant-1', kind: 'agent_message_chunk', text: 'First answer', messageId: 'assistant-message-1', eventIndex: 2 },
+        { id: 'user-2', kind: 'user_message_chunk', text: 'Second prompt', messageId: 'user-message-2', eventIndex: 3 },
+        { id: 'assistant-2', kind: 'agent_message_chunk', text: 'Second answer', messageId: 'assistant-message-2', eventIndex: 4 }
+      ]
+    });
+    vi.useFakeTimers();
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(document.documentElement, 'scrollTop', { configurable: true, value: 0 });
+    render(ActiveSessionView, { session, undoSupported: true, onRedo });
+    await tick();
+
+    expect(screen.queryByRole('button', { name: 'Redo this turn' })).not.toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(1200);
+    await tick();
+
+    const redo = screen.getByRole('button', { name: 'Redo this turn' });
+    expect(redo.closest('[data-turn-id]')).toHaveTextContent('First prompt');
+    expect(screen.getAllByRole('button', { name: 'Redo this turn' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Undo to this prompt' })).not.toBeInTheDocument();
+    await fireEvent.click(redo);
+    expect(onRedo).toHaveBeenCalledOnce();
+  });
+
+  it('does not show redo for an assistant-only turn with an empty undo stack', async () => {
+    await renderSettledSession(settledConversationSession({
+      transcript: [
+        { id: 'assistant-1', kind: 'agent_message_chunk', text: 'Standalone answer', messageId: 'assistant-message-1', eventIndex: 1 }
+      ]
+    }));
+    await vi.advanceTimersByTimeAsync(1200);
+    await tick();
+
+    expect(screen.getByText('Standalone answer')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Redo this turn' })).not.toBeInTheDocument();
+  });
+
   it('renders fork and undo only on the final segment of a multi-segment turn', async () => {
     const session = settledConversationSession({
       transcript: [
