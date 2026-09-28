@@ -21,7 +21,7 @@ jobs:
       - run: npm ci
       - run: npm run test:session-load
       - run: npm run bench:session-load:ci
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: session-load-benchmark
           path: .session-load-benchmark.json
