@@ -248,6 +248,6 @@
         </section>
       {/if}
     {/each}
-    {#if presentation.length === 0 && redoAvailable}{@render responseActions()}{/if}
+    {#if presentation.length === 0 && (undoAvailable || redoAvailable)}{@render responseActions()}{/if}
   </div>
 </article>
