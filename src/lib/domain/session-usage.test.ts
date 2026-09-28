@@ -5,7 +5,9 @@ import {
   formatDuration,
   formatTokenCount,
   getActiveWorkMs,
-  getContextPercent
+  getContextPercent,
+  getContextPressure,
+  getContextRemaining
 } from './session-usage';
 
 const usage: SessionUsageStats = {
@@ -28,5 +30,17 @@ describe('session usage formatting', () => {
 
   it('adds an open live span to completed active time', () => {
     expect(getActiveWorkMs({ ...usage, activeWorkStartedAt: 10_000 }, 14_500)).toBe(34_500);
+  });
+
+  it('keeps context pressure quiet until the window is actually tight', () => {
+    expect(getContextPressure(null)).toBe('calm');
+    expect(getContextPressure(69.9)).toBe('calm');
+    expect(getContextPressure(70)).toBe('warm');
+    expect(getContextPressure(84.9)).toBe('warm');
+    expect(getContextPressure(85)).toBe('tight');
+    expect(getContextPressure(94.9)).toBe('tight');
+    expect(getContextPressure(95)).toBe('full');
+    expect(getContextRemaining(usage)).toBe(152_000);
+    expect(getContextRemaining({ ...usage, contextLimit: null })).toBeNull();
   });
 });

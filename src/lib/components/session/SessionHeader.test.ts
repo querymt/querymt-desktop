@@ -34,39 +34,45 @@ describe('SessionHeader', () => {
     expect(within(mobileContext).getByText('querymt-desktop')).toBeInTheDocument();
     expect(within(mobileContext).getByText('session-1')).toBeInTheDocument();
     expect(screen.getByLabelText('Status: Ready')).toBeInTheDocument();
-    expect(screen.getByText('Context')).toBeInTheDocument();
+    expect(document.querySelector('.session-header-context')).toBeNull();
   });
 
-  it('surfaces context usage in the header without opening the details popover', () => {
+  it('packs header widgets left in status, path, id, profile, context, time order', () => {
     render(SessionHeader, {
-      session: session({ usage: usageFixture }),
+      session: session({
+        usage: usageFixture,
+        sessionId: '01a072b3-a266-4c5d-8e9f-102030405060'
+      }),
       title: 'Visible context',
       workspace: 'querymt-desktop',
+      profileLabel: 'def',
       updatedAt: 'Just now'
     });
 
-    expect(document.querySelector('.session-header-context')).not.toBeNull();
-    expect(screen.getByText('24k / 100k')).toBeInTheDocument();
-    expect(screen.getByLabelText('Context window 24% used')).toBeInTheDocument();
-    expect(screen.getByText('24%')).toBeInTheDocument();
+    const header = document.querySelector('.session-header');
+    const meta = document.querySelector('.session-header-meta');
+    const mobile = document.querySelector('.session-header-mobile-meta');
+    expect(header).not.toBeNull();
+    expect(header!.querySelector('.session-header-context')).toBeNull();
+    expect(header!.querySelector(':scope > .session-usage-bar')).toBeNull();
+    expect(meta?.querySelector('.session-header-meta-line')).toBeNull();
 
-    // The popover no longer duplicates the context meter.
-    const contextLabels = screen.getAllByText('Context');
-    expect(contextLabels).toHaveLength(1);
-  });
+    const order = [...(meta?.children ?? [])].map((child) => child.className);
+    expect(order[0]).toContain('session-header-status-wrap');
+    expect(order[1]).toContain('session-header-workspace');
+    expect(order[2]).toContain('session-header-session-id');
+    expect(order[3]).toContain('session-header-meta-desktop');
+    expect(meta?.children[3]?.textContent).toContain('def');
+    expect(order[4]).toContain('session-header-context-slot');
+    expect(order[5]).toContain('session-header-meta-desktop');
+    expect(meta?.children[5]?.textContent).toContain('Just now');
+    expect(meta?.querySelector('.session-context-dial')).toHaveTextContent('24%');
 
-  it('applies the session mode tone to the header context meter', () => {
-    render(SessionHeader, {
-      session: session({ usage: usageFixture }),
-      title: 'Toned context',
-      workspace: 'querymt-desktop',
-      updatedAt: 'Just now',
-      contextTone: 3
-    });
-
-    const bar = document.querySelector<HTMLElement>('.session-header-context .session-usage-bar');
-    expect(bar).not.toBeNull();
-    expect(bar!.classList.contains('session-context-tone-3')).toBe(true);
+    const mobileDial = mobile?.querySelector(':scope > .session-context-dial');
+    const mobileId = mobile?.querySelector('.session-header-mobile-id');
+    expect(mobileId).not.toBeNull();
+    expect(mobileDial).not.toBeNull();
+    expect(mobileId!.nextElementSibling).toBe(mobileDial);
   });
 
   it('keeps cost and active time inside the details popover', async () => {
@@ -82,9 +88,11 @@ describe('SessionHeader', () => {
     expect(panel).not.toBeNull();
     expect(within(panel!).getByText('$0.05')).toBeInTheDocument();
     expect(within(panel!).getByText('12s')).toBeInTheDocument();
-    // The popover carries stats only; the context meter lives in the header row.
+    expect(within(panel!).getByText('24k / 100k')).toBeInTheDocument();
+    const contextStat = within(panel!).getByText('Context').closest('.session-usage-stat');
+    expect(contextStat?.querySelector('svg')).not.toBeNull();
     expect(panel!.querySelector('.session-usage-meter')).toBeNull();
-    expect(panel!.querySelector('.session-usage-context')).toBeNull();
+    expect(panel!.querySelector('.session-context-dial')).toBeNull();
   });
 
   it('shows a short session id chip that copies the full id', async () => {
@@ -176,7 +184,7 @@ describe('SessionHeader', () => {
     expect(details).not.toHaveAttribute('open');
   });
 
-  it('keeps header actions available and context always visible', async () => {
+  it('keeps header actions available without a context banner', async () => {
     const onBack = vi.fn();
     const onRefresh = vi.fn();
     render(SessionHeader, {
@@ -190,7 +198,7 @@ describe('SessionHeader', () => {
     });
 
     expect(screen.getByLabelText('Status: Working')).toBeInTheDocument();
-    expect(screen.getByText('24k / 100k')).toBeInTheDocument();
+    expect(document.querySelector('.session-header-context')).toBeNull();
     expect(screen.queryByRole('button', { name: /Fork latest turn|Undo latest turn|Redo last undone turn/ })).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Refresh session' }));

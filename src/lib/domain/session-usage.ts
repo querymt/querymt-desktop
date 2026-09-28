@@ -5,6 +5,21 @@ export function getContextPercent(usage: SessionUsageStats): number | null {
   return Math.min(100, Math.max(0, (usage.contextUsed / usage.contextLimit) * 100));
 }
 
+export type ContextPressure = 'calm' | 'warm' | 'tight' | 'full';
+
+/** The reading stays quiet until the window is actually under pressure. */
+export function getContextPressure(percent: number | null): ContextPressure {
+  if (percent === null || percent < 70) return 'calm';
+  if (percent < 85) return 'warm';
+  if (percent < 95) return 'tight';
+  return 'full';
+}
+
+export function getContextRemaining(usage: SessionUsageStats): number | null {
+  if (usage.contextUsed === null || usage.contextLimit === null) return null;
+  return Math.max(0, usage.contextLimit - usage.contextUsed);
+}
+
 export function getActiveWorkMs(usage: SessionUsageStats, now = Date.now()): number {
   const liveMs = usage.activeWorkStartedAt === null ? 0 : Math.max(0, now - usage.activeWorkStartedAt);
   return usage.activeWorkMs + liveMs;

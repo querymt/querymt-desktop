@@ -2,6 +2,7 @@
   import { ArrowLeft, Bug, FileCog, Info, RefreshCw } from '@lucide/svelte';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
+  import SessionContextDial from '$lib/components/session/SessionContextDial.svelte';
   import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
   import { autoCollapsePopover } from '$lib/design/details-popover';
   import type { ActiveSessionViewModel, SessionStatus } from '$lib/domain/types';
@@ -15,7 +16,6 @@
     profileLabel = null,
     updatedAt,
     summaryStatus = 'idle',
-    contextTone = null,
     debugLabel = 'Debug events',
     showDebug = false,
     forkPending = false,
@@ -33,8 +33,6 @@
     profileLabel?: string | null;
     updatedAt: string;
     summaryStatus?: SessionStatus;
-    /** Index into the mode tone palette for the context meter; null keeps the default accent. */
-    contextTone?: number | null;
     debugLabel?: string;
     showDebug?: boolean;
     forkPending?: boolean;
@@ -77,6 +75,7 @@
         <span aria-hidden="true">·</span>
         <span class="session-header-mobile-id" title={session.sessionId}>{session.sessionId.slice(0, 13)}</span>
       {/if}
+      <SessionContextDial usage={session.usage} />
     </div>
     <div class="session-header-meta">
       <span class="session-header-status-wrap">
@@ -87,8 +86,8 @@
         <span class="session-row-status-tooltip" role="tooltip">{status.label}</span>
       </span>
       <CopyTextChip class="session-header-workspace" value={workspacePath ?? workspace} display={workspace} title="Copy project path" />
-      {#if agentName}
-        <span class="session-header-meta-desktop"><span aria-hidden="true">·</span><span>{agentName}</span></span>
+      {#if session.sessionId}
+        <span class="session-header-session-id"><span aria-hidden="true">·</span><SessionIdChip sessionId={session.sessionId} /></span>
       {/if}
       {#if profileLabel}
         <span class="session-header-meta-desktop">
@@ -96,9 +95,12 @@
           <span class="session-header-profile" title="Session profile (set at start)"><FileCog size={11} aria-hidden="true" />{profileLabel}</span>
         </span>
       {/if}
+      {#if session.usage.contextUsed !== null}
+        <span class="session-header-context-slot"><span aria-hidden="true">·</span><SessionContextDial usage={session.usage} /></span>
+      {/if}
       <span class="session-header-meta-desktop"><span aria-hidden="true">·</span><span>{updatedAt}</span></span>
-      {#if session.sessionId}
-        <span class="session-header-session-id"><span aria-hidden="true">·</span><SessionIdChip sessionId={session.sessionId} /></span>
+      {#if agentName}
+        <span class="session-header-meta-desktop"><span aria-hidden="true">·</span><span>{agentName}</span></span>
       {/if}
     </div>
   </div>
@@ -133,7 +135,7 @@
               <div><dt>Error</dt><dd>{session.lastError}</dd></div>
             </dl>
           {/if}
-          <SessionUsageBar usage={session.usage} variant="stats" />
+          <SessionUsageBar usage={session.usage} />
         </div>
       </details>
       {#if showDebug}
@@ -145,9 +147,5 @@
         <RefreshCw size={16} />
       </button>
     </div>
-  </div>
-
-  <div class="session-header-context">
-    <SessionUsageBar usage={session.usage} variant="context" tone={contextTone} />
   </div>
 </header>

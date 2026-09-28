@@ -848,7 +848,7 @@
       {/if}
     </div>
   </div>
-{/snippet}
+ {/snippet}
 
 <div
   bind:this={dockElement}

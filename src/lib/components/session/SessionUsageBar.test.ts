@@ -10,48 +10,21 @@ const usage = {
   activeWorkStartedAt: null
 };
 
-function usageBarRoot(): HTMLElement {
-  const root = document.querySelector<HTMLElement>('.session-usage-bar');
-  expect(root).not.toBeNull();
-  return root!;
-}
-
 afterEach(cleanup);
 
 describe('SessionUsageBar', () => {
-  it('renders the full-width context row for the header variant', () => {
-    render(SessionUsageBar, { usage, variant: 'context', tone: 1 });
+  it('renders context, cost, and active work as text stats without a meter', () => {
+    render(SessionUsageBar, { usage });
 
     expect(screen.getByText('48k / 200k')).toBeTruthy();
-    expect(screen.getByLabelText('Context window 24% used')).toBeTruthy();
-    expect(screen.getByText('24%')).toBeTruthy();
-    expect(screen.queryByText('Cost')).toBeNull();
-    expect(screen.queryByText('1m 2s')).toBeNull();
-
-    const root = usageBarRoot();
-    expect(root.classList.contains('session-context-tone-1')).toBe(true);
-    expect(root.classList.contains('session-usage-variant-context')).toBe(true);
-    expect(root.querySelector('.session-usage-meter')).not.toBeNull();
-  });
-
-  it('renders cost and active work without a context meter in the popover variant', () => {
-    render(SessionUsageBar, { usage, variant: 'stats' });
-
+    expect(screen.getByText('Context').closest('.session-usage-stat')?.querySelector('svg')).not.toBeNull();
     expect(screen.getByText('$0.13')).toBeTruthy();
     expect(screen.getByText('1m 2s')).toBeTruthy();
-    expect(screen.queryByText('Context')).toBeNull();
-    expect(screen.queryByText('48k / 200k')).toBeNull();
-    expect(screen.queryByLabelText(/Context window/)).toBeNull();
+    expect(screen.queryByRole('meter')).toBeNull();
     expect(document.querySelector('.session-usage-meter')).toBeNull();
   });
 
-  it('keeps the default accent when no tone is provided', () => {
-    render(SessionUsageBar, { usage, variant: 'context' });
-
-    expect(usageBarRoot().className).not.toContain('session-context-tone');
-  });
-
-  it('uses clear unavailable values before the first usage update', () => {
+  it('omits the context stat before the first usage update', () => {
     render(SessionUsageBar, {
       usage: {
         contextUsed: null,
@@ -59,20 +32,17 @@ describe('SessionUsageBar', () => {
         cumulativeCostUsd: null,
         activeWorkMs: 0,
         activeWorkStartedAt: null
-      },
-      variant: 'context'
+      }
     });
 
-    expect(screen.getByText('No usage yet')).toBeTruthy();
-    expect(screen.queryByText(/%$/)).toBeNull();
-    expect(screen.queryByLabelText(/Context window/)).toBeNull();
-    expect(document.querySelector('.session-usage-meter')).toBeNull();
+    expect(screen.queryByText('Context')).toBeNull();
+    expect(screen.queryByText('No usage yet')).toBeNull();
+    expect(screen.getByText('0s')).toBeTruthy();
   });
 
   it('shows the live indicator while prompts are processing', () => {
     render(SessionUsageBar, {
-      usage: { ...usage, activeWorkStartedAt: Date.now() - 5_000 },
-      variant: 'stats'
+      usage: { ...usage, activeWorkStartedAt: Date.now() - 5_000 }
     });
 
     expect(screen.getByLabelText('Active now')).toBeTruthy();

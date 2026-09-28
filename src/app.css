@@ -59,7 +59,7 @@
   --success: #2ec27e;
   --warn: #f6d32d;
   --danger: #e01b24;
-  /* Session context meter tones, indexed by the agent-advertised mode order
+  /* Session context ring tones, indexed by the agent-advertised mode order
      (see getSessionContextTone). Values stay muted so any tone blends with the
      warm gray surfaces; the dark theme swaps in lighter counterparts. */
   --mode-tone-0: #c05621;
@@ -5502,12 +5502,6 @@ summary:focus-visible {
   -webkit-backdrop-filter: var(--surface-blur);
 }
 
-/* Second header row: the full-width session context meter. */
-.session-header-context {
-  grid-column: 1 / -1;
-  min-width: 0;
-}
-
 .session-header-back {
   flex: 0 0 auto;
 }
@@ -5530,8 +5524,11 @@ summary:focus-visible {
 
 .session-header-meta {
   display: flex;
+  width: max-content;
+  max-width: 100%;
   min-width: 0;
   align-items: center;
+  justify-content: flex-start;
   gap: 0.35rem;
   margin-top: 0.15rem;
   overflow: hidden;
@@ -5545,9 +5542,23 @@ summary:focus-visible {
   display: none;
 }
 
-.session-header-meta span:not([aria-hidden]) {
+.session-header-meta span:not([aria-hidden]):not(.session-context-dial):not(.session-context-dial-figure) {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.session-header-meta > .session-header-session-id,
+.session-header-meta > .session-header-context-slot,
+.session-header-meta > .session-header-status-wrap,
+.session-header-mobile-meta > .session-context-dial {
+  flex: 0 0 auto;
+}
+
+.session-header-context-slot {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .session-header-meta-desktop,
@@ -5556,6 +5567,28 @@ summary:focus-visible {
   min-width: 0;
   align-items: center;
   gap: 0.35rem;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* One line box for the whole meta row. Chips otherwise bring their own
+   font-size, line-height, and padding and the row grows to the tallest. */
+.session-header-meta .session-id-chip,
+.session-header-meta .copy-chip,
+.session-header-meta .session-context-dial,
+.session-header-meta .session-header-profile {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.session-header-meta .session-id-chip,
+.session-header-meta .copy-chip {
+  padding-block: 0;
+}
+
+.session-header-meta .session-header-profile svg {
+  width: 1em;
+  height: 1em;
 }
 
 .session-header-controls,
@@ -6045,7 +6078,6 @@ summary:focus-visible {
 }
 
 .session-usage-bar {
-  --session-context-accent: var(--accent);
   display: grid;
   gap: 0.6rem;
   margin-top: 0.7rem;
@@ -6054,20 +6086,62 @@ summary:focus-visible {
   font-size: 0.7rem;
 }
 
-/* Mode tones: indexes follow the agent-advertised mode order (see
-   getSessionContextTone); the context meter picks the accent up from here. */
-.session-context-tone-0 { --session-context-accent: var(--mode-tone-0); }
-.session-context-tone-1 { --session-context-accent: var(--mode-tone-1); }
-.session-context-tone-2 { --session-context-accent: var(--mode-tone-2); }
-.session-context-tone-3 { --session-context-accent: var(--mode-tone-3); }
-.session-context-tone-4 { --session-context-accent: var(--mode-tone-4); }
-.session-context-tone-5 { --session-context-accent: var(--mode-tone-5); }
-.session-context-tone-6 { --session-context-accent: var(--mode-tone-6); }
-.session-context-tone-7 { --session-context-accent: var(--mode-tone-7); }
-
-.session-usage-bar.session-usage-variant-context {
-  margin-top: 0;
+/* Context is a closed window, not a task bar. The ring is fixed-size so a low
+   reading never stretches into an empty track. The arc stays on the accent hue;
+   pressure only changes how hard that hue reads, never the hue itself. */
+.session-context-dial {
+  --session-context-accent: var(--accent);
+  display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
+  gap: 0.3rem;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: inherit;
+  white-space: nowrap;
+}
+
+.session-context-dial-calm .session-context-dial-arc {
+  opacity: 0.72;
+}
+
+.session-context-dial-warm {
+  color: var(--text);
+}
+
+.session-context-dial-tight {
+  color: var(--status-warn);
+}
+
+.session-context-dial-full {
+  color: var(--status-danger);
+}
+
+.session-context-dial-ring {
+  width: 1lh;
+  height: 1lh;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.session-context-dial-ring circle {
+  fill: none;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+.session-context-dial-track {
+  stroke: color-mix(in srgb, var(--text-dim) 42%, transparent);
+}
+
+.session-context-dial-arc {
+  stroke: var(--session-context-accent);
+  transform: rotate(-90deg);
+  transform-origin: center;
+  transition: stroke-dashoffset 240ms ease, opacity 180ms ease;
 }
 
 .session-usage-meta {
@@ -6077,28 +6151,11 @@ summary:focus-visible {
   gap: 0.7rem;
 }
 
-.session-usage-context {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 0.45rem;
-}
-
-.session-usage-icon,
 .session-usage-stat > svg {
   flex: 0 0 auto;
-}
-
-/* The gauge takes the mode tone; stat icons keep the application accent. */
-.session-usage-icon {
-  color: var(--session-context-accent);
-}
-
-.session-usage-stat > svg {
   color: var(--accent);
 }
 
-.session-usage-label,
 .session-usage-stat > span {
   color: var(--muted);
   font-family: var(--font-sans);
@@ -6108,39 +6165,11 @@ summary:focus-visible {
   text-transform: uppercase;
 }
 
-.session-usage-context strong,
 .session-usage-stat strong {
   color: var(--text);
   font-size: 0.72rem;
   font-weight: 650;
   white-space: nowrap;
-}
-
-.session-usage-meter {
-  position: relative;
-  min-width: 3.75rem;
-  height: 0.28rem;
-  flex: 1 1 8rem;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--session-context-accent) 14%, transparent);
-}
-
-.session-usage-meter span {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: var(--session-context-percent);
-  border-radius: inherit;
-  background: var(--session-context-accent);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--session-context-accent) 35%, transparent);
-  transition: width 240ms ease;
-}
-
-.session-usage-percent {
-  min-width: 2.5rem;
-  color: var(--text);
-  font-weight: 650;
-  text-align: right;
 }
 
 .session-usage-stat {
@@ -10413,6 +10442,10 @@ summary:focus-visible {
     will-change: auto;
   }
 
+  .session-context-dial-arc {
+    transition: none;
+  }
+
   .session-activity-bar-dock,
   .session-scroll-bottom-pill-host {
     transition: none;
@@ -10813,8 +10846,13 @@ summary:focus-visible {
     color: var(--text-dim);
     font-family: var(--font-mono);
     font-size: 0.64rem;
-    line-height: 1.05;
+    line-height: 1.2;
     white-space: nowrap;
+  }
+
+  .app-shell-active-session .session-header-mobile-meta .session-context-dial {
+    font-size: inherit;
+    line-height: inherit;
   }
 
   .app-shell-active-session .session-header-mobile-workspace,
@@ -10830,7 +10868,7 @@ summary:focus-visible {
 
   .app-shell-active-session .session-header-mobile-id {
     min-width: 0;
-    flex: 1 1 auto;
+    flex: 0 1 auto;
   }
 
   .app-shell-active-session .session-header-details-panel {
@@ -10899,21 +10937,8 @@ summary:focus-visible {
     min-height: 1.25rem;
   }
 
-  .app-shell-active-session .session-header-details-panel .session-usage-context {
-    gap: 0.35rem;
-  }
-
-  .app-shell-active-session .session-header-details-panel .session-usage-label,
   .app-shell-active-session .session-header-details-panel .session-usage-stat > span {
     font-size: 0.58rem;
-  }
-
-  .app-shell-active-session .session-header-details-panel .session-usage-meter {
-    min-width: 2.5rem;
-  }
-
-  .app-shell-active-session .session-header-details-panel .session-usage-percent {
-    min-width: 2rem;
   }
 
   .app-shell-active-session .session-page-content {
