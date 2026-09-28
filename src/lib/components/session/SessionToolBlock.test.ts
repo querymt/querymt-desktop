@@ -527,11 +527,17 @@ describe('SessionToolBlock', () => {
     expect(terminal.textContent).toContain('$ ls');
     expect(terminal.textContent).toContain('src\npackage.json');
     const summary = toolGroup!.querySelector('summary')!;
+    expect(summary.querySelector('.session-tool-terminal-exit')).toBeNull();
+    chatPreferencesStore.setDeveloperMode(true);
+    await tick();
     const exit = summary.querySelector('.session-tool-terminal-exit')!;
     expect(exit).toHaveTextContent('exit 0');
     expect(exit).toHaveClass('session-tool-pill');
     expect(exit).not.toHaveClass('session-tool-terminal-exit-failed');
     expect(exit.compareDocumentPosition(summary.querySelector('.session-tool-disclosure')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    chatPreferencesStore.setDeveloperMode(false);
+    await tick();
+    expect(summary.querySelector('.session-tool-terminal-exit')).toBeNull();
     expect(terminal.textContent).not.toContain('exit 0');
     expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
