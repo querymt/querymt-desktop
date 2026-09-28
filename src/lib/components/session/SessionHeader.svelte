@@ -1,10 +1,9 @@
 <script lang="ts">
-  import { ArrowLeft, Bug, FileCog, GitFork, Info, LoaderCircle, Redo2, RefreshCw, Undo2 } from '@lucide/svelte';
+  import { ArrowLeft, Bug, FileCog, Info, RefreshCw } from '@lucide/svelte';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
   import { autoCollapsePopover } from '$lib/design/details-popover';
-  import { formatShortcut } from '$lib/design/platform';
   import type { ActiveSessionViewModel, SessionStatus } from '$lib/domain/types';
 
   let {
@@ -19,18 +18,10 @@
     contextTone = null,
     debugLabel = 'Debug events',
     showDebug = false,
-    canUndo = false,
-    canRedo = false,
-    canFork = false,
-    undoSupported = false,
-    forkSupported = false,
     forkPending = false,
     onBack,
     onRefresh,
-    onDebug,
-    onUndo,
-    onRedo,
-    onFork
+    onDebug
   }: {
     session: ActiveSessionViewModel;
     title: string;
@@ -46,25 +37,11 @@
     contextTone?: number | null;
     debugLabel?: string;
     showDebug?: boolean;
-    canUndo?: boolean;
-    canRedo?: boolean;
-    canFork?: boolean;
-    undoSupported?: boolean;
-    forkSupported?: boolean;
     forkPending?: boolean;
     onBack?: () => void;
     onRefresh?: () => void | Promise<void>;
     onDebug?: () => void;
-    onUndo?: () => void;
-    onRedo?: () => void | Promise<void>;
-    onFork?: () => void;
   } = $props();
-
-  const busy = $derived(
-    forkPending ||
-      session.undo.pendingOperation !== null ||
-      ['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState)
-  );
 
   const status = $derived.by((): { label: string; tone: string; busy: boolean } => {
     if (forkPending) return { label: 'Creating fork', tone: 'running', busy: true };
@@ -127,43 +104,6 @@
   </div>
 
   <div class="session-header-controls">
-    <div class="session-header-action-group" aria-label="Session history actions">
-      {#if forkSupported}
-        <button
-          class="icon-btn"
-          type="button"
-          aria-label="Fork latest turn"
-          title="Fork latest turn"
-          disabled={!canFork || busy}
-          onclick={onFork}
-        >
-          {#if forkPending}<LoaderCircle size={16} class="animate-spin" />{:else}<GitFork size={16} />{/if}
-        </button>
-      {/if}
-      {#if undoSupported}
-        <button
-          class="icon-btn"
-          type="button"
-          aria-label="Undo latest turn"
-          title={`Undo latest turn (${formatShortcut('Z')})`}
-          disabled={!canUndo || busy}
-          onclick={onUndo}
-        >
-          {#if session.undo.pendingOperation === 'undo'}<LoaderCircle size={16} class="animate-spin" />{:else}<Undo2 size={16} />{/if}
-        </button>
-        <button
-          class="icon-btn"
-          type="button"
-          aria-label="Redo last undone turn"
-          title={`Redo last undone turn (${formatShortcut('Shift+Z')})`}
-          disabled={!canRedo || busy}
-          onclick={onRedo}
-        >
-          {#if session.undo.pendingOperation === 'redo'}<LoaderCircle size={16} class="animate-spin" />{:else}<Redo2 size={16} />{/if}
-        </button>
-      {/if}
-    </div>
-
     <div class="session-header-action-group" aria-label="Session actions">
       <details class="session-header-details" use:autoCollapsePopover>
         <summary class="icon-btn" aria-label="Session details" title="Session details"><Info size={16} /></summary>

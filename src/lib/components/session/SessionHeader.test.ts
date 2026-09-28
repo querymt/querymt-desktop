@@ -191,6 +191,7 @@ describe('SessionHeader', () => {
 
     expect(screen.getByLabelText('Status: Working')).toBeInTheDocument();
     expect(screen.getByText('24k / 100k')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Fork latest turn|Undo latest turn|Redo last undone turn/ })).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Refresh session' }));
     await fireEvent.click(screen.getByLabelText('Session details'));

@@ -6213,8 +6213,7 @@ summary:focus-visible {
   }
 
   .session-header-status-wrap,
-  .session-header-meta-desktop,
-  .session-header-action-group[aria-label='Session history actions'] {
+  .session-header-meta-desktop {
     display: none;
   }
 

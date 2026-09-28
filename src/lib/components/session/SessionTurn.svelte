@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, Copy, GitFork, LoaderCircle, Undo2 } from '@lucide/svelte';
+  import { Check, Copy, GitFork, LoaderCircle, Redo2, Undo2 } from '@lucide/svelte';
   import SessionPromptError from '$lib/components/session/SessionPromptError.svelte';
   import SessionAttachmentPreview from '$lib/components/session/SessionAttachmentPreview.svelte';
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
@@ -15,6 +15,7 @@
     failedImageKeys,
     onImageFailure,
     undoAvailable = false,
+    redoAvailable = false,
     forkAvailable = false,
     reverted = false,
     undoPending = false,
@@ -24,6 +25,7 @@
     onRetryPrompt,
     onDismissPromptFailure,
     onUndo,
+    onRedo,
     onFork,
     onDisclosureChange
   }: {
@@ -32,6 +34,7 @@
     failedImageKeys?: ReadonlySet<string>;
     onImageFailure?: ((key: string) => void) | null;
     undoAvailable?: boolean;
+    redoAvailable?: boolean;
     forkAvailable?: boolean;
     reverted?: boolean;
     undoPending?: boolean;
@@ -41,6 +44,7 @@
     onRetryPrompt?: (() => void | Promise<void>) | null;
     onDismissPromptFailure?: (() => void) | null;
     onUndo?: (messageId: string) => void;
+    onRedo?: () => void | Promise<void>;
     onFork?: () => void;
     onDisclosureChange?: (anchor: HTMLElement, expanded: boolean) => void;
   } = $props();
@@ -205,6 +209,17 @@
             <Undo2 size={15} />
           </button>
         {/if}
+        {#if redoAvailable}
+          <button
+            class="session-message-action-btn"
+            type="button"
+            aria-label="Redo this turn"
+            title="Redo workspace changes for this turn"
+            onclick={onRedo}
+          >
+            <Redo2 size={15} />
+          </button>
+        {/if}
         {#if turn.durationMs !== undefined}
           <span class="session-turn-duration">Worked for {formatTurnDuration(turn.durationMs)}</span>
         {/if}
@@ -233,5 +248,6 @@
         </section>
       {/if}
     {/each}
+    {#if presentation.length === 0 && redoAvailable}{@render responseActions()}{/if}
   </div>
 </article>

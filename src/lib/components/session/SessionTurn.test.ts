@@ -384,11 +384,35 @@ describe('SessionTurn', () => {
     expect(onUndo).toHaveBeenCalledWith('message-1');
   });
 
-  it('hides fork and undo when they are not actionable', () => {
+  it('redos from the reverted turn when available', async () => {
+    const onRedo = vi.fn();
+    const { getByRole } = render(SessionTurn, { turn, reverted: true, redoAvailable: true, onRedo });
+
+    await fireEvent.click(getByRole('button', { name: 'Redo this turn' }));
+
+    expect(onRedo).toHaveBeenCalledOnce();
+  });
+
+  it('keeps redo attached to a turn even when no response was recorded', async () => {
+    const onRedo = vi.fn();
+    const { getByRole } = render(SessionTurn, {
+      turn: { ...turn, content: [] },
+      reverted: true,
+      redoAvailable: true,
+      onRedo
+    });
+
+    await fireEvent.click(getByRole('button', { name: 'Redo this turn' }));
+
+    expect(onRedo).toHaveBeenCalledOnce();
+  });
+
+  it('hides fork, undo, and redo when they are not actionable', () => {
     const { queryByRole } = render(SessionTurn, { turn, undoAvailable: false, forkAvailable: false, reverted: true });
 
     expect(queryByRole('button', { name: 'Fork into new session' })).not.toBeInTheDocument();
     expect(queryByRole('button', { name: 'Undo to this prompt' })).not.toBeInTheDocument();
+    expect(queryByRole('button', { name: 'Redo this turn' })).not.toBeInTheDocument();
   });
 
   it('shows only functional message actions', () => {

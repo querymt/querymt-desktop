@@ -260,6 +260,11 @@
               )}
               undoPending={session.undo.pendingOperation === 'undo'}
               {onUndo}
+              redoAvailable={Boolean(
+                undoSupported && !busy && turnActionsSettled && turn.user?.messageId &&
+                  turn.user.messageId === session.undo.stack.at(-1)
+              )}
+              {onRedo}
               {onDisclosureChange}
             />
           {/if}

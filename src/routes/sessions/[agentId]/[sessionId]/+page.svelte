@@ -30,8 +30,8 @@
     getConfigOptionChoices,
     getCurrentProfileId
   } from '$lib/querymt/config-options';
-  import { getForkTarget, getLatestForkTarget, type SessionForkTarget } from '$lib/domain/session-fork';
-  import { getCurrentUndoTarget, getUndoAffectedTurnCount, getUndoableSessionTurns, isTurnReverted } from '$lib/domain/session-undo';
+  import { getForkTarget, type SessionForkTarget } from '$lib/domain/session-fork';
+  import { getUndoAffectedTurnCount, getUndoableSessionTurns } from '$lib/domain/session-undo';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { sidebarStore } from '$lib/stores/sidebar.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
@@ -121,21 +121,6 @@
     undoTargetMessageId ? getUndoAffectedTurnCount(agentsStore.activeSession, undoTargetMessageId) : 0
   );
   const latestVisible = $derived(chatPresentationState === 'fixed-free-compact');
-  const sessionTurns = $derived(buildSessionConversation(agentsStore.activeSession));
-  const currentUndoTarget = $derived(getCurrentUndoTarget(agentsStore.activeSession));
-  const revertedMessageIds = $derived(
-    new Set(
-      sessionTurns
-        .filter((turn) => turn.user?.messageId && isTurnReverted(agentsStore.activeSession, turn.user.messageId))
-        .map((turn) => turn.user!.messageId!)
-    )
-  );
-  const latestForkTarget = $derived(getLatestForkTarget(sessionTurns, revertedMessageIds));
-  const sessionOperationBusy = $derived(
-    ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession.runState) ||
-      agentsStore.activeSession.undo.pendingOperation !== null ||
-      agentsStore.forkPending
-  );
   const latestContentSignature = $derived.by(() => {
     const transcript = agentsStore.activeSession.transcript;
     const lastTranscriptItem = transcript.at(-1);
@@ -547,18 +532,10 @@
     contextTone={contextTone}
     debugLabel={debugEventsTooltip}
     showDebug={chatPreferencesStore.developerMode}
-    {undoSupported}
-    {forkSupported}
     forkPending={agentsStore.forkPending}
-    canUndo={undoSupported && currentUndoTarget !== null && !sessionOperationBusy}
-    canRedo={undoSupported && agentsStore.activeSession.undo.stack.length > 0 && !sessionOperationBusy}
-    canFork={forkSupported && latestForkTarget !== null && !sessionOperationBusy}
     onBack={() => goto('/sessions')}
     onRefresh={() => refreshSession()}
     onDebug={() => (debugEventsOpen = true)}
-    onUndo={() => currentUndoTarget && openUndoDialog(currentUndoTarget.messageId)}
-    onRedo={() => void agentsStore.redoActiveSession()}
-    onFork={() => latestForkTarget && openForkDialog(latestForkTarget.messageId)}
   />
 
   <SessionTechnicalDetails session={agentsStore.activeSession} bind:open={debugEventsOpen} />
