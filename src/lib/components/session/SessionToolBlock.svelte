@@ -214,7 +214,7 @@
       {#if chatPreferencesStore.developerMode && readOutputView?.truncated}
         <span class="session-tool-pill session-tool-read-truncated">truncated</span>
       {/if}
-      {#if terminalExitCode !== null}
+      {#if terminalExitCode !== null && (terminalExitCode !== 0 || chatPreferencesStore.developerMode)}
         <span class="session-tool-pill session-tool-terminal-exit" class:session-tool-terminal-exit-failed={terminalExitCode !== 0}>exit {terminalExitCode}</span>
       {/if}
       {#if expandable}
