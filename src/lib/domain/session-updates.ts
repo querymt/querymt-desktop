@@ -49,11 +49,26 @@ export function reduceSessionReplay(
   // index on every notification, making long session loads quadratic.
   const session = createEmptyActiveSession();
   session.sessionId = sessionId;
+  return appendSessionReplay(session, notifications);
+}
 
+/**
+ * Folds a captured replay window onto `session` in place and returns it.
+ *
+ * Same linear pass as `reduceSessionReplay`, but starts from an existing view
+ * model so a snapshot-backed load can keep the snapshot as its baseline and
+ * merge the captured live updates into it exactly once. Tool calls merge by id
+ * and stream chunks append by kind + message id, so replayed updates extend
+ * the baseline instead of duplicating it.
+ */
+export function appendSessionReplay(
+  session: ActiveSessionViewModel,
+  notifications: readonly SessionNotification[]
+): ActiveSessionViewModel {
   // Mirrors `getNextConversationEventIndex`: the index advances only when a
   // non-merge update records an entry, and merged stream chunks reuse the last
   // recorded index. Tracking a running maximum keeps this linear.
-  let nextEventIndex = 0;
+  let nextEventIndex = getNextConversationEventIndex(session);
 
   for (const notification of notifications) {
     applySessionNotificationInPlace(session, notification, nextEventIndex);

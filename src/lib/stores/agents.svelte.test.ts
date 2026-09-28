@@ -5870,6 +5870,49 @@ describe('session header freshness and context usage', () => {
     });
   });
 
+  it('keeps the snapshot as the history baseline and merges one captured live update into it', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2026-07-18T17:00:00Z')] };
+    await store.connectAgent('agent-1');
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: {
+        configOptions: [],
+        _meta: {
+          'querymt/sessionLoadSnapshot.v1': {
+            audit: {
+              events: [
+                { seq: 1, timestamp: 1_000, kind: { type: 'prompt_received', data: { content: 'Plan the work' } } },
+                {
+                  seq: 2,
+                  timestamp: 2_000,
+                  kind: { type: 'assistant_message_stored', data: { message_id: 'm1', content: 'Here is the plan' } }
+                }
+              ]
+            }
+          }
+        }
+      },
+      replay: [{
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          messageId: 'm2',
+          content: { type: 'text', text: 'Streaming answer' }
+        }
+      }]
+    });
+
+    await store.loadSession('agent-1', 'session-1');
+
+    // The full snapshot stays the baseline; the captured live update is merged
+    // into it exactly once instead of replacing the snapshot history.
+    expect(store.activeSession.transcript.map((item) => item.text)).toEqual([
+      'Plan the work',
+      'Here is the plan',
+      'Streaming answer'
+    ]);
+  });
+
   it('lets live usage updates override the hydrated snapshot baseline', async () => {
     const store = createStore();
     store.sessionsByAgent = { 'agent-1': [summary('2026-07-18T17:00:00Z')] };

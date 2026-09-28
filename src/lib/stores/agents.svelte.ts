@@ -14,6 +14,7 @@ import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotProvi
 import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
 import {
   createEmptyActiveSession,
+  appendSessionReplay,
   applySessionNotification,
   applyDelegationChildSession,
   mergeMissingSessionUsage,
@@ -2510,6 +2511,17 @@ export class AgentsStore {
       this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
       const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
       checkpoint('frontend.snapshot_transform');
+      // The lifecycle override below must read the snapshot's pristine run
+      // verdict; folding the captured updates into the baseline mutates it in
+      // place, so capture those values before the fold.
+      const snapshotLifecycle = snapshotSession.runStateFromLifecycle
+        ? {
+            runState: snapshotSession.runState,
+            activityLabel: snapshotSession.activityLabel,
+            activeToolCallId: snapshotSession.activeToolCallId,
+            lastError: snapshotSession.lastError
+          }
+        : null;
       const liveSession = this.activeSession;
       const liveHasVisibleHistory =
         liveSession.sessionId === sessionId && sessionHasVisibleHistory(liveSession);
@@ -2517,17 +2529,23 @@ export class AgentsStore {
       // transcript. Treating those as history overwrites late live updates
       // that arrived after capture closed (first child load, empty chat).
       //
-      // Preference order: the snapshot is authoritative when the agent served
-      // it without replay; otherwise replay wins because it carries the full
-      // conversation the snapshot may have truncated.
-      this.activeSession =
-        replaySession && sessionHasVisibleHistory(replaySession)
-          ? replaySession
-          : sessionHasVisibleHistory(snapshotSession)
-            ? snapshotSession
-            : liveHasVisibleHistory
-              ? liveSession
-              : (replaySession ?? snapshotSession);
+      // Preference order: when the agent served a snapshot, the snapshot is
+      // the history baseline and the captured live updates are folded into it
+      // exactly once (the capture window only holds updates observed while the
+      // load was in flight, never the full conversation, so a visible replay
+      // alone must not replace the snapshot). Replay stays authoritative when
+      // the agent served no snapshot, so there is no baseline to extend.
+      if (sessionHasVisibleHistory(snapshotSession)) {
+        this.activeSession = replayIsEmpty
+          ? snapshotSession
+          : appendSessionReplay(snapshotSession, replay);
+      } else if (replaySession && sessionHasVisibleHistory(replaySession)) {
+        this.activeSession = replaySession;
+      } else if (liveHasVisibleHistory) {
+        this.activeSession = liveSession;
+      } else {
+        this.activeSession = replaySession ?? snapshotSession;
+      }
       this.activeLoadMeasurement?.increment('historyAssignments');
       this.activeLoadMeasurement?.increment(
         replayIsEmpty ? 'snapshotHydratedSessions' : 'replayedSessions'
@@ -2566,12 +2584,12 @@ export class AgentsStore {
       // the active mode's preference from it without issuing any config write
       // and without substituting a local model when metadata is missing.
       this.seedSessionModePreferenceFromLoad(agentId, sessionId);
-      if (snapshotSession.runStateFromLifecycle) {
-        this.activeSession.runState = snapshotSession.runState;
+      if (snapshotLifecycle) {
+        this.activeSession.runState = snapshotLifecycle.runState;
         this.activeSession.runStateFromLifecycle = true;
-        this.activeSession.activityLabel = snapshotSession.activityLabel;
-        this.activeSession.activeToolCallId = snapshotSession.activeToolCallId;
-        this.activeSession.lastError = snapshotSession.lastError;
+        this.activeSession.activityLabel = snapshotLifecycle.activityLabel;
+        this.activeSession.activeToolCallId = snapshotLifecycle.activeToolCallId;
+        this.activeSession.lastError = snapshotLifecycle.lastError;
       }
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });
       checkpoint('frontend.normalize');
