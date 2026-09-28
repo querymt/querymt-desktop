@@ -60,7 +60,7 @@ import type {
 import { DelegateAssignmentSource, SessionInputDelivery, SessionInputState } from '$lib/querymt/generated/types';
 import type {
   AuthMethod,
-  AuthProviderEntry,
+  AuthProviderStatus,
   CapabilitiesInfo,
   CreateMeshInviteRequest,
   CreateScheduleControlRequest,
@@ -81,7 +81,7 @@ import type {
   ScheduleInfo,
   ScheduleListInfo,
   SessionInputStateNotification,
-  SessionRuntimeState,
+  SessionRuntimeStatus,
   SetDelegateModelResponse,
   SubmitInputResult
 } from '$lib/querymt/generated/types';
@@ -238,7 +238,7 @@ export class AgentsStore {
   private sessionRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private sessionRuntimeRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private sessionRuntimeRefreshGenerations = new Map<string, number>();
-  private sessionRuntimeRefreshPromises = new Map<string, Promise<SessionRuntimeState | null>>();
+  private sessionRuntimeRefreshPromises = new Map<string, Promise<SessionRuntimeStatus | null>>();
   private inputSubmissionsBySession = new Map<string, number>();
   private inputNotificationsDuringSubmit = new Map<string, SessionInputStateNotification>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -285,7 +285,7 @@ export class AgentsStore {
   meshStatusByAgent = $state<Record<string, MeshStatusInfo | null>>({});
   meshNodesByAgent = $state<Record<string, MeshNodesInfo | null>>({});
   meshInvitesByAgent = $state<Record<string, MeshInviteListInfo | null>>({});
-  authProvidersByAgent = $state<Record<string, AuthProviderEntry[]>>({});
+  authProvidersByAgent = $state<Record<string, AuthProviderStatus[]>>({});
   authLoadingByAgent = $state<Record<string, boolean>>({});
   authErrorsByAgent = $state<Record<string, string | null>>({});
   remoteSessionsByAgent = $state<Record<string, Record<string, RemoteSessionListInfo | undefined>>>({});
@@ -340,7 +340,7 @@ export class AgentsStore {
     return Object.fromEntries(Object.entries(this.pendingSessionConfigs[key] ?? {}).map(([id, count]) => [id, count > 0]));
   }
   promptAttachments = $state<PromptAttachment[]>([]);
-  sessionRuntimeBySession = $state<Record<string, SessionRuntimeState | null>>({});
+  sessionRuntimeBySession = $state<Record<string, SessionRuntimeStatus | null>>({});
   pendingInputsBySession = $state<Record<string, PendingSessionInput[]>>({});
   composerInputDeliveryBySession = $state<Record<string, SessionInputDeliveryMode>>({});
   inputSubmitPending = $state(false);
@@ -364,7 +364,7 @@ export class AgentsStore {
   recentWorkspaces = $state<string[]>(loadRecentWorkspaces());
   private sessionModePreferences: SessionModePreferenceDocument = loadSessionModePreferences();
 
-  get activeSessionRuntime(): SessionRuntimeState | null {
+  get activeSessionRuntime(): SessionRuntimeStatus | null {
     if (!this.activeAgentId || !this.activeSessionId) return null;
     return this.sessionRuntimeBySession[buildSessionKey(this.activeAgentId, this.activeSessionId)] ?? null;
   }
@@ -2069,7 +2069,7 @@ export class AgentsStore {
     agentId: string,
     sessionId: string,
     client: DesktopAcpClient,
-    runtime: SessionRuntimeState,
+    runtime: SessionRuntimeStatus,
     delivery: SessionInputDeliveryMode,
     prompt: string,
     attachments: PromptAttachment[],
@@ -2146,7 +2146,7 @@ export class AgentsStore {
   private inputDeliveryForSession(
     agentId: string,
     sessionId: string,
-    runtime: SessionRuntimeState,
+    runtime: SessionRuntimeStatus,
     prompt: string
   ): SessionInputDeliveryMode {
     if (prompt.trimStart().startsWith('/')) return 'queue';
@@ -2258,7 +2258,7 @@ export class AgentsStore {
     agentId = this.activeAgentId,
     sessionId = this.activeSessionId,
     client?: DesktopAcpClient
-  ): Promise<SessionRuntimeState | null> {
+  ): Promise<SessionRuntimeStatus | null> {
     if (!agentId || !sessionId) return null;
     const record = client ? null : await this.connectInitializedRecord(agentId);
     const resolvedClient = client ?? record?.client;
@@ -2266,7 +2266,7 @@ export class AgentsStore {
     const key = buildSessionKey(agentId, sessionId);
     const generation = (this.sessionRuntimeRefreshGenerations.get(key) ?? 0) + 1;
     this.sessionRuntimeRefreshGenerations.set(key, generation);
-    const refresh = resolvedClient.getSessionRuntimeState(sessionId).then((runtime) => {
+    const refresh = resolvedClient.getSessionRuntimeStatus(sessionId).then((runtime) => {
       if (this.sessionRuntimeRefreshGenerations.get(key) !== generation) {
         return this.sessionRuntimeRefreshPromises.get(key) ?? this.sessionRuntimeBySession[key] ?? null;
       }

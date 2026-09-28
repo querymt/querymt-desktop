@@ -23,7 +23,7 @@ import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAtta
 import type {
   AttachRemoteSessionRequest,
   AuthMethod,
-  AuthProviderEntry,
+  AuthProviderStatus,
   CapabilitiesInfo,
   CreateMeshInviteRequest,
   DelegateAssignmentsInfo,
@@ -48,7 +48,7 @@ import type {
   PluginUpdateResult,
   SetDelegateModelRequest,
   SetDelegateModelResponse,
-  SessionRuntimeState,
+  SessionRuntimeStatus,
   DiscardQueuedInputResult,
   SubmitInputResult
 } from '$lib/querymt/generated/types';
@@ -844,7 +844,7 @@ export class DesktopAcpClient {
     return this.querymtExtensions!.deleteSchedule(request);
   }
 
-  async listAuthProviders(): Promise<AuthProviderEntry[]> {
+  async listAuthProviders(): Promise<AuthProviderStatus[]> {
     if (!this.querymtExtensions) {
       await this.connect();
     }
@@ -999,7 +999,7 @@ export class DesktopAcpClient {
     return this.querymtExtensions!.discardQueuedInput(sessionId, inputId);
   }
 
-  async getSessionRuntimeState(sessionId: string): Promise<SessionRuntimeState> {
+  async getSessionRuntimeStatus(sessionId: string): Promise<SessionRuntimeStatus> {
     if (!this.querymtExtensions) await this.connect();
     this.assertQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE);
     return this.querymtExtensions!.sessionRuntimeState(sessionId);

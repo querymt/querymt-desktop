@@ -1,7 +1,7 @@
 import type { ModelEntry, ModelInfo } from '$lib/domain/types';
 import type {
   AuthMethod,
-  AuthProviderEntry,
+  AuthProviderStatus,
   CapabilitiesInfo,
   MeshStatusInfo,
   MeshNodesInfo,
@@ -35,16 +35,23 @@ import type {
   MeshJoinedNotification,
   MeshNodesChangedNotification,
   MeshPeerExpiredNotification,
-  OAuthFlowKindTs,
   PluginUpdateResult,
   SchedulesChangedNotification,
   SessionInputStateNotification,
-  SessionRuntimeState,
+  SessionRuntimeStatus,
   DiscardQueuedInputResult,
   SubmitInputResult,
-  UndoStackFrame
+  UndoStackFrameResponse
 } from '$lib/querymt/generated/types';
 import type { ClientSideConnection } from '@agentclientprotocol/sdk';
+
+/** OAuth flow kinds reported by `querymt/auth/start` (`flow_kind` on the wire). */
+export enum OAuthFlowKind {
+  /** Redirect/callback flow where the user pastes the callback URL or code. */
+  RedirectCode = 'redirect_code',
+  /** Device flow where the backend polls the provider's token endpoint. */
+  DevicePoll = 'device_poll'
+}
 
 export type QuerymtLogicalMethod = `querymt/${string}`;
 export type QuerymtWireMethod = QuerymtLogicalMethod | `_${QuerymtLogicalMethod}`;
@@ -271,14 +278,14 @@ export function normalizeQuerymtModelInfoResponse(response: QuerymtModelInfoWire
 }
 
 export interface QuerymtAuthStatusResponse {
-  providers: AuthProviderEntry[];
+  providers: AuthProviderStatus[];
 }
 
 export interface QuerymtAuthStartResponse {
   flow_id: string;
   provider: string;
   authorization_url?: string;
-  flow_kind?: OAuthFlowKindTs;
+  flow_kind?: OAuthFlowKind;
 }
 
 export interface QuerymtAuthResult {
@@ -292,7 +299,7 @@ export interface QuerymtPluginUpdateResponse {
 }
 
 export interface QuerymtUndoStackResponse {
-  undo_stack: UndoStackFrame[];
+  undo_stack: UndoStackFrameResponse[];
 }
 
 export interface QuerymtUndoResponse extends QuerymtUndoStackResponse {
@@ -608,8 +615,8 @@ export class QuerymtExtensions {
     });
   }
 
-  async sessionRuntimeState(session_id: string): Promise<SessionRuntimeState> {
-    return this.call<SessionRuntimeState>(QMT_METHOD_SESSION_RUNTIME_STATE, { session_id });
+  async sessionRuntimeState(session_id: string): Promise<SessionRuntimeStatus> {
+    return this.call<SessionRuntimeStatus>(QMT_METHOD_SESSION_RUNTIME_STATE, { session_id });
   }
 
   async undoStack(session_id: string): Promise<QuerymtUndoStackResponse> {

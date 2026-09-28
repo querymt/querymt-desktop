@@ -4,7 +4,7 @@ import {
   QMT_METHOD_AUTH_SET_API_TOKEN,
   QMT_METHOD_AUTH_SET_METHOD
 } from '$lib/querymt/querymt-extensions';
-import { AuthMethod, OAuthStatus, type AuthProviderEntry, type CapabilitiesInfo } from '$lib/querymt/generated/types';
+import { AuthMethod, OAuthStatus, type AuthProviderStatus, type CapabilitiesInfo } from '$lib/querymt/generated/types';
 import {
   NO_PROVIDER_AUTH_CAPABILITIES,
   canEditAuthMethod,
@@ -18,7 +18,7 @@ import {
   sortProvidersByAction
 } from './provider-auth';
 
-function provider(overrides: Partial<AuthProviderEntry> = {}): AuthProviderEntry {
+function provider(overrides: Partial<AuthProviderStatus> = {}): AuthProviderStatus {
   return {
     provider: 'anthropic',
     display_name: 'Anthropic',
@@ -47,7 +47,8 @@ function capabilities(methods: string[]): CapabilitiesInfo {
       schedules: false,
       remote_schedules: false,
       profiles: false,
-      auth: true
+      auth: true,
+      steering: false
     }
   };
 }

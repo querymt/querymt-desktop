@@ -1,9 +1,21 @@
 import type { ListSessionsRequest, SessionInfo } from '@agentclientprotocol/sdk';
 import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
 import {
-  SessionRuntimeStatus as QuerymtSessionRuntimeStatus,
-  type SessionMeta as QuerymtSessionMeta
+  type SessionMeta as QuerymtSessionMeta,
+  SessionRuntimePhase as QuerymtSessionRuntimePhase
 } from '$lib/querymt/generated/types';
+
+/**
+ * Fork-hierarchy fields ride in ACP session `_meta` alongside the typed
+ * {@link QuerymtSessionMeta} payload but are not part of its DTO.
+ */
+interface QuerymtSessionRelationshipFields {
+  parentSessionId?: unknown;
+  forkOrigin?: unknown;
+  sessionKind?: unknown;
+  hasChildren?: unknown;
+  forkCount?: unknown;
+}
 
 export type SessionRailTone = 'attention' | 'active' | 'recent';
 export type SessionListScope = 'all' | 'root' | 'forks' | 'delegates' | 'children';
@@ -122,14 +134,17 @@ export function inferSessionStatus(session: SessionInfo): SessionStatus {
     return 'idle';
   }
 
-  switch (meta.runtimeStatus) {
-    case QuerymtSessionRuntimeStatus.Running:
+  switch (meta.runtimeStatus.phase) {
+    case QuerymtSessionRuntimePhase.Starting:
+    case QuerymtSessionRuntimePhase.Model:
+    case QuerymtSessionRuntimePhase.Tools:
       return 'thinking';
-    case QuerymtSessionRuntimeStatus.Waiting:
+    case QuerymtSessionRuntimePhase.Waiting:
       return 'waiting';
-    case QuerymtSessionRuntimeStatus.CancelRequested:
+    case QuerymtSessionRuntimePhase.CancelRequested:
       return 'cancelling';
-    case QuerymtSessionRuntimeStatus.Idle:
+    case QuerymtSessionRuntimePhase.Idle:
+    case QuerymtSessionRuntimePhase.Closing:
     default:
       return meta.userMessageCount > 0 ? 'completed' : 'idle';
   }
@@ -146,7 +161,7 @@ function readOperationalSessionMeta(session: SessionInfo): QuerymtSessionMeta | 
     typeof candidate.messageCount !== 'number' ||
     typeof candidate.userMessageCount !== 'number' ||
     typeof candidate.hasErrors !== 'boolean' ||
-    typeof candidate.runtimeStatus !== 'string'
+    typeof candidate.runtimeStatus?.phase !== 'string'
   ) {
     return null;
   }
@@ -160,7 +175,7 @@ export function readSessionRelationshipMeta(session: SessionInfo): SessionRelati
     return emptySessionRelationshipMeta();
   }
 
-  const candidate = meta as Partial<QuerymtSessionMeta>;
+  const candidate = meta as Partial<QuerymtSessionMeta> & QuerymtSessionRelationshipFields;
   return {
     parentSessionId: readNonEmptyString(candidate.parentSessionId),
     forkOrigin: readNonEmptyString(candidate.forkOrigin),

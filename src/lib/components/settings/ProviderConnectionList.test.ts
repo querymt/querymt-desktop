@@ -6,9 +6,9 @@ import {
   FULL_PROVIDER_AUTH_CAPABILITIES,
   NO_PROVIDER_AUTH_CAPABILITIES
 } from '$lib/domain/provider-auth';
-import { AuthMethod, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
+import { AuthMethod, OAuthStatus, type AuthProviderStatus } from '$lib/querymt/generated/types';
 
-function provider(overrides: Partial<AuthProviderEntry>): AuthProviderEntry {
+function provider(overrides: Partial<AuthProviderStatus>): AuthProviderStatus {
   return {
     provider: 'anthropic',
     display_name: 'Anthropic',

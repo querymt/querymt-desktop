@@ -31,6 +31,10 @@ function createSession(meta?: Record<string, unknown>): SessionInfo {
   } as SessionInfo;
 }
 
+function runtimeMeta(phase: string): Record<string, unknown> {
+  return { phase, steerable: phase !== 'idle', pending_steering_count: 0, queued_input_count: 0 };
+}
+
 describe('session list request meta', () => {
   it('defaults ACP session/list requests to root scope meta', () => {
     expect(buildListSessionsRequest()).toEqual({
@@ -52,7 +56,7 @@ describe('session relationship metadata', () => {
           messageCount: 2,
           userMessageCount: 1,
           hasErrors: false,
-          runtimeStatus: 'idle',
+          runtimeStatus: runtimeMeta('idle'),
           parentSessionId: 'parent-1',
           forkOrigin: 'user',
           sessionKind: 'custom',
@@ -137,14 +141,14 @@ describe('workspace location', () => {
 });
 
 describe('inferSessionStatus', () => {
-  it('maps running runtimeStatus to thinking', () => {
+  it('maps active runtime phases to thinking', () => {
     expect(
       inferSessionStatus(
         createSession({
           messageCount: 2,
           userMessageCount: 1,
           hasErrors: false,
-          runtimeStatus: 'running'
+          runtimeStatus: runtimeMeta('model')
         })
       )
     ).toBe('thinking');
@@ -157,7 +161,7 @@ describe('inferSessionStatus', () => {
           messageCount: 2,
           userMessageCount: 1,
           hasErrors: false,
-          runtimeStatus: 'waiting'
+          runtimeStatus: runtimeMeta('waiting')
         })
       )
     ).toBe('waiting');
@@ -170,7 +174,7 @@ describe('inferSessionStatus', () => {
           messageCount: 2,
           userMessageCount: 1,
           hasErrors: false,
-          runtimeStatus: 'cancel_requested'
+          runtimeStatus: runtimeMeta('cancel_requested')
         })
       )
     ).toBe('cancelling');
@@ -183,7 +187,7 @@ describe('inferSessionStatus', () => {
           messageCount: 2,
           userMessageCount: 1,
           hasErrors: false,
-          runtimeStatus: 'idle'
+          runtimeStatus: runtimeMeta('idle')
         })
       )
     ).toBe('completed');
@@ -196,7 +200,7 @@ describe('inferSessionStatus', () => {
           messageCount: 0,
           userMessageCount: 0,
           hasErrors: false,
-          runtimeStatus: 'idle'
+          runtimeStatus: runtimeMeta('idle')
         })
       )
     ).toBe('idle');
