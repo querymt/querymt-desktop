@@ -180,7 +180,7 @@ export type AgentEventKind =
 	message_count: number;
 }}
 	| { type: "llm_request_end", data: {
-	usage?: UsageInfo;
+	usage?: Usage;
 	tool_calls: number;
 	finish_reason?: string;
 	/** Cost information for this request in USD */
@@ -351,7 +351,7 @@ export type AgentEventKind =
 }}
 	/** Emitted at session start and whenever available tools change */
 	| { type: "tools_available", data: {
-	tools: ToolInfo[];
+	tools: Tool[];
 	tools_hash: string;
 }}
 	/** Emitted when duplicate/similar code is detected in newly written code */
@@ -952,12 +952,16 @@ export interface FileIndexEntry {
 	is_dir: boolean;
 }
 
-/** Mirror of `querymt::chat::FunctionTool` for typeshare generation. */
-export interface FunctionToolInfo {
+/** Represents a function definition for a tool */
+export interface FunctionTool {
+	/** The name of the function */
 	name: string;
+	/** Description of what the function does */
 	description: string;
-	/** JSON Schema for the function parameters */
+	/** The parameters schema for the function */
 	parameters: any;
+	/** Whether the provider should enforce strict schema adherence. */
+	strict?: boolean;
 }
 
 export interface GetScheduleControlRequest {
@@ -992,13 +996,20 @@ export interface LogoutResult {
 	message: string;
 }
 
-/** Mirror of `crate::config::McpServerConfig` for typeshare generation. */
+/**
+ * MCP configuration as emitted in the session event stream.
+ * 
+ * This flat DTO preserves the serialized `McpServerConfig` shape while avoiding
+ * Typeshare's lack of support for internally tagged enums.
+ */
 export interface McpServerInfo {
+	transport: string;
 	name: string;
-	/** Transport protocol: "http" or "stdio" */
-	protocol: string;
-	/** URL for HTTP transport, command for stdio transport */
-	endpoint: string;
+	command?: string;
+	args?: string[];
+	env?: Record<string, string>;
+	url?: string;
+	headers?: Record<string, string>;
 }
 
 export interface MeshInviteCreatedInfo {
@@ -1382,12 +1393,12 @@ export interface StartFlowResult {
 	flow_kind: string;
 }
 
-/** Mirror of `querymt::chat::Tool` for typeshare generation. */
-export interface ToolInfo {
+/** Represents a tool that can be used in chat */
+export interface Tool {
 	/** The type of tool (e.g. "function") */
 	type: string;
-	/** The function definition */
-	function: FunctionToolInfo;
+	/** The function definition if this is a function tool */
+	function: FunctionTool;
 }
 
 export interface UndoSessionResponse {
@@ -1402,15 +1413,17 @@ export interface UndoStackResponse {
 	undo_stack: UndoStackFrameResponse[];
 }
 
-/**
- * Mirror of `querymt::Usage` for typeshare generation.
- * Fields match the serialized JSON shape of the upstream type.
- */
-export interface UsageInfo {
+/** Represents the usage of tokens in a tool call, supporting multiple JSON formats. */
+export interface Usage {
+	/** Number of input tokens. */
 	input_tokens?: number;
+	/** Number of output tokens. */
 	output_tokens?: number;
+	/** Reasoning/thinking output tokens. */
 	reasoning_tokens?: number;
+	/** Tokens served from a cached prefix. */
 	cache_read?: number;
+	/** Tokens used to create a new cache entry. */
 	cache_write?: number;
 }
 
