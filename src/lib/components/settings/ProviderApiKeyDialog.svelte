@@ -1,7 +1,7 @@
 <script lang="ts">
   import AppDialog from '$lib/components/primitives/AppDialog.svelte';
   import { restoreProviderDialogFocus, type ProviderDialogFocusTarget } from './provider-dialog-focus';
-  import type { AuthProviderEntry } from '$lib/querymt/generated/types';
+  import type { AuthProviderStatus } from '$lib/querymt/generated/types';
 
   let {
     open,
@@ -14,7 +14,7 @@
     onSubmit
   }: {
     open: boolean;
-    provider?: AuthProviderEntry | null;
+    provider?: AuthProviderStatus | null;
     focusTarget?: ProviderDialogFocusTarget | null;
     portalTarget?: HTMLElement | null;
     value: string;

@@ -1,9 +1,21 @@
 import type { ListSessionsRequest, SessionInfo } from '@agentclientprotocol/sdk';
 import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
 import {
-  SessionRuntimeStatus as QuerymtSessionRuntimeStatus,
-  type SessionMeta as QuerymtSessionMeta
+  type SessionMeta as QuerymtSessionMeta,
+  SessionRuntimePhase as QuerymtSessionRuntimePhase
 } from '$lib/querymt/generated/types';
+
+/**
+ * Fork-hierarchy fields ride in ACP session `_meta` alongside the typed
+ * {@link QuerymtSessionMeta} payload but are not part of its DTO.
+ */
+interface QuerymtSessionRelationshipFields {
+  parentSessionId?: unknown;
+  forkOrigin?: unknown;
+  sessionKind?: unknown;
+  hasChildren?: unknown;
+  forkCount?: unknown;
+}
 
 export type SessionRailTone = 'attention' | 'active' | 'recent';
 export type SessionListScope = 'all' | 'root' | 'forks' | 'delegates' | 'children';
@@ -122,14 +134,17 @@ export function inferSessionStatus(session: SessionInfo): SessionStatus {
     return 'idle';
   }
 
-  switch (meta.runtimeStatus) {
-    case QuerymtSessionRuntimeStatus.Running:
+  switch (meta.runtimeStatus.phase) {
+    case QuerymtSessionRuntimePhase.Starting:
+    case QuerymtSessionRuntimePhase.Model:
+    case QuerymtSessionRuntimePhase.Tools:
       return 'thinking';
-    case QuerymtSessionRuntimeStatus.Waiting:
+    case QuerymtSessionRuntimePhase.Waiting:
       return 'waiting';
-    case QuerymtSessionRuntimeStatus.CancelRequested:
+    case QuerymtSessionRuntimePhase.CancelRequested:
       return 'cancelling';
-    case QuerymtSessionRuntimeStatus.Idle:
+    case QuerymtSessionRuntimePhase.Idle:
+    case QuerymtSessionRuntimePhase.Closing:
     default:
       return meta.userMessageCount > 0 ? 'completed' : 'idle';
   }
@@ -146,7 +161,7 @@ function readOperationalSessionMeta(session: SessionInfo): QuerymtSessionMeta | 
     typeof candidate.messageCount !== 'number' ||
     typeof candidate.userMessageCount !== 'number' ||
     typeof candidate.hasErrors !== 'boolean' ||
-    typeof candidate.runtimeStatus !== 'string'
+    typeof candidate.runtimeStatus?.phase !== 'string'
   ) {
     return null;
   }
@@ -160,7 +175,7 @@ export function readSessionRelationshipMeta(session: SessionInfo): SessionRelati
     return emptySessionRelationshipMeta();
   }
 
-  const candidate = meta as Partial<QuerymtSessionMeta>;
+  const candidate = meta as Partial<QuerymtSessionMeta> & QuerymtSessionRelationshipFields;
   return {
     parentSessionId: readNonEmptyString(candidate.parentSessionId),
     forkOrigin: readNonEmptyString(candidate.forkOrigin),
@@ -303,11 +318,36 @@ function compareNullableTimestamps(a: string | null, b: string | null): number {
   return (a ?? '').localeCompare(b ?? '');
 }
 
+/**
+ * Newest of two ISO timestamps, ignoring missing values. Live activity stamps
+ * and delayed `session/list` responses both flow through this so a summary's
+ * displayed activity never moves backwards. Timestamps are compared by their
+ * parsed instants so mixed fractional precision and timezone offsets order
+ * correctly; an incoming value that fails to parse never displaces current.
+ */
+export function newestTimestamp(
+  current: string | null | undefined,
+  incoming: string | null | undefined
+): string | null {
+  if (!current) return incoming ?? null;
+  if (!incoming) return current;
+  const currentMs = Date.parse(current);
+  const incomingMs = Date.parse(incoming);
+  if (Number.isNaN(incomingMs)) return current;
+  if (Number.isNaN(currentMs) || incomingMs > currentMs) return incoming;
+  return current;
+}
+
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 
-export function formatSessionTimestamp(updatedAt: string | null): string {
+/**
+ * Formats a relative label. Callers render against a ticking reference time so
+ * the label advances on its own instead of waiting for the next data change;
+ * tests pass a fixed `now` for deterministic output.
+ */
+export function formatSessionTimestamp(updatedAt: string | null, now: Date | number = new Date()): string {
   if (!updatedAt) {
     return 'No recent activity';
   }
@@ -317,8 +357,8 @@ export function formatSessionTimestamp(updatedAt: string | null): string {
     return updatedAt;
   }
 
-  const now = new Date();
-  const elapsed = now.getTime() - value.getTime();
+  const reference = now instanceof Date ? now : new Date(now);
+  const elapsed = reference.getTime() - value.getTime();
   if (elapsed < MINUTE_MS) {
     return 'just now';
   }
@@ -328,7 +368,7 @@ export function formatSessionTimestamp(updatedAt: string | null): string {
     return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
   }
 
-  const dayDiff = calendarDayDifference(now, value);
+  const dayDiff = calendarDayDifference(reference, value);
   if (dayDiff === 0) {
     const hours = Math.floor(elapsed / HOUR_MS);
     return `${hours} hour${hours === 1 ? '' : 's'} ago`;
@@ -342,7 +382,7 @@ export function formatSessionTimestamp(updatedAt: string | null): string {
     return `${dayDiff} days ago`;
   }
 
-  return formatSessionDate(value, now);
+  return formatSessionDate(value, reference);
 }
 
 function calendarDayDifference(a: Date, b: Date): number {

@@ -5,7 +5,7 @@
     sortProvidersByAction,
     type ProviderAuthCapabilities
   } from '$lib/domain/provider-auth';
-  import type { AuthProviderEntry } from '$lib/querymt/generated/types';
+  import type { AuthProviderStatus } from '$lib/querymt/generated/types';
 
   let {
     providers,
@@ -21,17 +21,17 @@
     onAuthMethodChange,
     onDialogTrigger
   }: {
-    providers: AuthProviderEntry[];
+    providers: AuthProviderStatus[];
     authCapabilities?: ProviderAuthCapabilities;
     pendingAction?: { provider: string; action: string } | null;
     messages?: Record<string, string | undefined>;
     errors?: Record<string, string | undefined>;
-    onSignIn: (provider: AuthProviderEntry) => void;
-    onCancelSignIn: (provider: AuthProviderEntry) => void;
-    onDisconnect: (provider: AuthProviderEntry) => void;
-    onSetApiKey: (provider: AuthProviderEntry) => void;
-    onClearApiKey: (provider: AuthProviderEntry) => void;
-    onAuthMethodChange: (provider: AuthProviderEntry, method: string) => void;
+    onSignIn: (provider: AuthProviderStatus) => void;
+    onCancelSignIn: (provider: AuthProviderStatus) => void;
+    onDisconnect: (provider: AuthProviderStatus) => void;
+    onSetApiKey: (provider: AuthProviderStatus) => void;
+    onClearApiKey: (provider: AuthProviderStatus) => void;
+    onAuthMethodChange: (provider: AuthProviderStatus, method: string) => void;
     onDialogTrigger: (event: MouseEvent) => void;
   } = $props();
 

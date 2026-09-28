@@ -16,6 +16,7 @@
     profileLabel = null,
     updatedAt,
     summaryStatus = 'idle',
+    contextTone = null,
     debugLabel = 'Debug events',
     showDebug = false,
     canUndo = false,
@@ -41,6 +42,8 @@
     profileLabel?: string | null;
     updatedAt: string;
     summaryStatus?: SessionStatus;
+    /** Index into the mode tone palette for the context meter; null keeps the default accent. */
+    contextTone?: number | null;
     debugLabel?: string;
     showDebug?: boolean;
     canUndo?: boolean;
@@ -190,7 +193,7 @@
               <div><dt>Error</dt><dd>{session.lastError}</dd></div>
             </dl>
           {/if}
-          <SessionUsageBar usage={session.usage} />
+          <SessionUsageBar usage={session.usage} variant="stats" />
         </div>
       </details>
       {#if showDebug}
@@ -202,5 +205,9 @@
         <RefreshCw size={16} />
       </button>
     </div>
+  </div>
+
+  <div class="session-header-context">
+    <SessionUsageBar usage={session.usage} variant="context" tone={contextTone} />
   </div>
 </header>

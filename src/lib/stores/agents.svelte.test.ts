@@ -6,7 +6,7 @@ import { QMT_METHOD_MESH_NODES, QMT_METHOD_MESH_STATUS } from '$lib/querymt/quer
 import {
   DelegateAssignmentSource,
   DelegateReasoningEffort,
-  type AuthProviderEntry,
+  type AuthProviderStatus,
   type DelegateAssignmentsInfo,
   type MeshInviteListInfo,
   type MeshNodesInfo,
@@ -16,7 +16,7 @@ import {
   SessionInputState,
   SessionRuntimePhase,
   type SessionInputStateNotification,
-  type SessionRuntimeState,
+  type SessionRuntimeStatus,
   type SetDelegateModelResponse,
   type DiscardQueuedInputResult,
   type SubmitInputResult
@@ -102,7 +102,7 @@ const mockClient = vi.hoisted(() => {
       status: 'discarded',
       data: { input_id: inputId }
     })),
-    getSessionRuntimeState: vi.fn(async (): Promise<SessionRuntimeState> => ({
+    getSessionRuntimeStatus: vi.fn(async (): Promise<SessionRuntimeStatus> => ({
       phase: SessionRuntimePhase.Idle,
       active_run_id: undefined,
       steerable: false,
@@ -277,7 +277,7 @@ function createDistinctMockClient() {
       sessions: []
     })),
     listModels: vi.fn(async (): Promise<ModelEntry[]> => []),
-    listAuthProviders: vi.fn(async (): Promise<AuthProviderEntry[]> => []),
+    listAuthProviders: vi.fn(async (): Promise<AuthProviderStatus[]> => []),
     listMeshStatus: vi.fn(async (): Promise<MeshStatusInfo> => ({
       enabled: false,
       known_peer_count: 0,
@@ -427,7 +427,7 @@ beforeEach(() => {
     status: 'discarded',
     data: { input_id: inputId }
   }));
-  mockClient.getSessionRuntimeState.mockReset().mockResolvedValue({
+  mockClient.getSessionRuntimeStatus.mockReset().mockResolvedValue({
     phase: SessionRuntimePhase.Idle,
     active_run_id: undefined,
     steerable: false,
@@ -547,7 +547,7 @@ describe('AgentsStore connections', () => {
         status: 'idle'
       }]
     };
-    mockClient.getSessionRuntimeState.mockRejectedValueOnce(new Error('runtime unavailable'));
+    mockClient.getSessionRuntimeStatus.mockRejectedValueOnce(new Error('runtime unavailable'));
     await store.connectAgent('agent-1');
 
     await store.loadSession('agent-1', 'session-1');
@@ -2095,12 +2095,13 @@ describe('AgentsStore delegate model assignments', () => {
   it('rejects reasoning writes but preserves model-only cleanup for an older backend', async () => {
     const store = createStore();
     selectSession(store);
-    const oldBackendState: DelegateAssignmentsInfo = {
+    // Legacy backend payload: predates the reasoning-effort fields.
+    const oldBackendState = {
       ...assignmentState,
       reasoning_effort_supported: undefined,
       assignments: [],
       orphaned_overrides: [{ agent_id: 'removed-role', model: { model_id: 'legacy/model' } }]
-    };
+    } as unknown as DelegateAssignmentsInfo;
     store.delegateAssignmentsBySession = { 'agent-1:session-1': oldBackendState };
 
     await expect(store.setActiveDelegateModel('removed-role', null, null)).resolves.toBe(false);
@@ -2113,7 +2114,8 @@ describe('AgentsStore delegate model assignments', () => {
       model: null,
       revision: 3,
       durable: true
-    });
+    // Legacy backend confirmation: predates the reasoning-effort fields.
+    } as SetDelegateModelResponse);
     mockClient.getDelegateModels.mockResolvedValueOnce({
       ...oldBackendState,
       revision: 3,
@@ -2188,7 +2190,8 @@ describe('AgentsStore delegate model assignments', () => {
       model: { model_id: 'xai/grok-4.6' },
       revision: 3,
       durable: true
-    });
+    // Model-only confirmation: reasoning_effort omitted means "keep current".
+    } as SetDelegateModelResponse);
     mockClient.getDelegateModels.mockRejectedValueOnce(new Error('Failed to load delegate models.'));
 
     await expect(store.setActiveDelegateModel('coder', { model_id: 'xai/grok-4.6' })).resolves.toBe(true);
@@ -2222,7 +2225,8 @@ describe('AgentsStore delegate model assignments', () => {
       model: { model_id: 'xai/grok-4.6' },
       revision: 3,
       durable: true
-    });
+    // Model-only confirmation: reasoning_effort omitted means "keep current".
+    } as SetDelegateModelResponse);
     mockClient.getDelegateModels.mockRejectedValueOnce(new Error('Failed to load delegate models.'));
 
     await expect(store.setActiveDelegateModel('removed-role', { model_id: 'xai/grok-4.6' })).resolves.toBe(true);
@@ -2855,9 +2859,9 @@ describe('AgentsStore mesh node availability', () => {
 describe('AgentsStore prompt session start', () => {
   it('does not redirect an input when the selected session changes during runtime refresh', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
-    let resolveRuntime!: (runtime: SessionRuntimeState) => void;
-    mockClient.getSessionRuntimeState.mockReturnValueOnce(
-      new Promise<SessionRuntimeState>((resolve) => { resolveRuntime = resolve; })
+    let resolveRuntime!: (runtime: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus.mockReturnValueOnce(
+      new Promise<SessionRuntimeStatus>((resolve) => { resolveRuntime = resolve; })
     );
     const store = createStore();
     store.activeAgentId = 'agent-1';
@@ -2867,7 +2871,7 @@ describe('AgentsStore prompt session start', () => {
     await store.connectAgent('agent-1');
 
     const send = store.sendPromptToActiveSession();
-    await vi.waitFor(() => expect(mockClient.getSessionRuntimeState).toHaveBeenCalledWith('session-1'));
+    await vi.waitFor(() => expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledWith('session-1'));
     store.activeSessionId = 'session-2';
     store.activeSession.sessionId = 'session-2';
     resolveRuntime({
@@ -2906,18 +2910,18 @@ describe('AgentsStore prompt session start', () => {
   });
 
   it('keeps the newest runtime response when refreshes resolve out of order', async () => {
-    let resolveOlder!: (runtime: SessionRuntimeState) => void;
-    let resolveNewer!: (runtime: SessionRuntimeState) => void;
-    mockClient.getSessionRuntimeState
-      .mockImplementationOnce(() => new Promise<SessionRuntimeState>((resolve) => { resolveOlder = resolve; }))
-      .mockImplementationOnce(() => new Promise<SessionRuntimeState>((resolve) => { resolveNewer = resolve; }));
+    let resolveOlder!: (runtime: SessionRuntimeStatus) => void;
+    let resolveNewer!: (runtime: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus
+      .mockImplementationOnce(() => new Promise<SessionRuntimeStatus>((resolve) => { resolveOlder = resolve; }))
+      .mockImplementationOnce(() => new Promise<SessionRuntimeStatus>((resolve) => { resolveNewer = resolve; }));
     const store = createStore();
     await store.connectAgent('agent-1');
 
     const older = store.refreshSessionRuntime('agent-1', 'session-1');
     const newer = store.refreshSessionRuntime('agent-1', 'session-1');
-    await vi.waitFor(() => expect(mockClient.getSessionRuntimeState).toHaveBeenCalledTimes(2));
-    const authoritative: SessionRuntimeState = {
+    await vi.waitFor(() => expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2));
+    const authoritative: SessionRuntimeStatus = {
       phase: SessionRuntimePhase.Idle,
       active_run_id: undefined,
       steerable: false,
@@ -3085,7 +3089,7 @@ describe('AgentsStore prompt session start', () => {
 
   it('uses the canonical user chunk for applied steering instead of the lifecycle notification', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
-    mockClient.getSessionRuntimeState.mockResolvedValue({
+    mockClient.getSessionRuntimeStatus.mockResolvedValue({
       phase: SessionRuntimePhase.Model,
       active_run_id: 'run-1',
       steerable: true,
@@ -3161,7 +3165,7 @@ describe('AgentsStore prompt session start', () => {
     { delivery: 'queue' as const, notificationState: SessionInputState.Started }
   ])('does not regress $delivery state when a lifecycle notification precedes the submit response', async ({ delivery, notificationState }) => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
-    mockClient.getSessionRuntimeState.mockResolvedValue({
+    mockClient.getSessionRuntimeStatus.mockResolvedValue({
       phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: delivery === 'steer',
@@ -3212,7 +3216,7 @@ describe('AgentsStore prompt session start', () => {
 
   it('does not resurrect a rekeyed queue item finalized before the submit response', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
-    mockClient.getSessionRuntimeState.mockResolvedValue({
+    mockClient.getSessionRuntimeStatus.mockResolvedValue({
       phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: false,
@@ -3255,7 +3259,7 @@ describe('AgentsStore prompt session start', () => {
 
   it('removes queued input through the backend and clears local pending state', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
-    mockClient.getSessionRuntimeState.mockResolvedValue({
+    mockClient.getSessionRuntimeStatus.mockResolvedValue({
       phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: false,
@@ -3281,7 +3285,7 @@ describe('AgentsStore prompt session start', () => {
 
   it('does not surface a failed discard after switching sessions', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
-    mockClient.getSessionRuntimeState.mockResolvedValue({
+    mockClient.getSessionRuntimeStatus.mockResolvedValue({
       phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: false,
@@ -3316,7 +3320,7 @@ describe('AgentsStore prompt session start', () => {
 
   it('reconciles an already-started queue item as no longer pending', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
-    mockClient.getSessionRuntimeState.mockResolvedValue({
+    mockClient.getSessionRuntimeStatus.mockResolvedValue({
       phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: false,
@@ -3344,7 +3348,7 @@ describe('AgentsStore prompt session start', () => {
 
   it('rekeys queued input when the server returns a different input id', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
-    mockClient.getSessionRuntimeState.mockResolvedValue({
+    mockClient.getSessionRuntimeStatus.mockResolvedValue({
       phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: false,
@@ -3404,7 +3408,7 @@ describe('AgentsStore prompt session start', () => {
     { name: 'discarded', state: SessionInputState.Discarded }
   ])('removes queued input when its $name lifecycle notification arrives', async ({ state }) => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
-    mockClient.getSessionRuntimeState.mockResolvedValue({
+    mockClient.getSessionRuntimeStatus.mockResolvedValue({
       phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: false,
@@ -3438,7 +3442,7 @@ describe('AgentsStore prompt session start', () => {
 
   it('queues slash commands instead of steering an active run', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
-    mockClient.getSessionRuntimeState.mockResolvedValue({
+    mockClient.getSessionRuntimeStatus.mockResolvedValue({
       phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: true,
@@ -5038,7 +5042,7 @@ describe('AgentsStore prompt session start', () => {
             messageCount: 2,
             userMessageCount: 1,
             hasErrors: false,
-            runtimeStatus: 'running'
+            runtimeStatus: { phase: 'model', steerable: true, pending_steering_count: 0, queued_input_count: 0 }
           }
         }
       ] })
@@ -5052,7 +5056,7 @@ describe('AgentsStore prompt session start', () => {
             messageCount: 3,
             userMessageCount: 1,
             hasErrors: false,
-            runtimeStatus: 'idle'
+            runtimeStatus: { phase: 'idle', steerable: false, pending_steering_count: 0, queued_input_count: 0 }
           }
         }
       ] });
@@ -5078,7 +5082,7 @@ describe('AgentsStore prompt session start', () => {
             messageCount: 2,
             userMessageCount: 1,
             hasErrors: false,
-            runtimeStatus: 'running'
+            runtimeStatus: { phase: 'model', steerable: true, pending_steering_count: 0, queued_input_count: 0 }
           }
         }
       ] })
@@ -5092,7 +5096,7 @@ describe('AgentsStore prompt session start', () => {
             messageCount: 3,
             userMessageCount: 1,
             hasErrors: false,
-            runtimeStatus: 'idle'
+            runtimeStatus: { phase: 'idle', steerable: false, pending_steering_count: 0, queued_input_count: 0 }
           }
         }
       ] });
@@ -5751,5 +5755,185 @@ describe('AgentsStore agent-scoped launch model defaults', () => {
     await store.setSessionMode('agent-1', 'session-a', 'plan');
 
     expect(store.recentModelsByAgent['agent-1']).toEqual([grok.id, sol.id]);
+  });
+});
+
+describe('session header freshness and context usage', () => {
+  function summary(updatedAt: string | null) {
+    return {
+      agentId: 'agent-1',
+      agentName: 'QMTCODE',
+      sessionId: 'session-1',
+      title: 'Live',
+      cwd: '/tmp/work',
+      updatedAt,
+      runtimeId: 'agent-1',
+      runtimeName: 'QMTCODE',
+      source: 'acp' as const,
+      status: 'idle' as const
+    };
+  }
+
+  it('keeps live activity timestamps when a stale session list refresh lands', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2020-01-01T00:00:00Z')] };
+    await store.connectAgent('agent-1');
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: 'live-1',
+        content: { type: 'text', text: 'Working' }
+      }
+    });
+
+    const liveStamp = store.sessionsByAgent['agent-1'].find((entry) => entry.sessionId === 'session-1')!.updatedAt;
+    expect(liveStamp).not.toBe('2020-01-01T00:00:00Z');
+
+    mockClient.listSessions.mockResolvedValueOnce({
+      sessions: [{ sessionId: 'session-1', title: 'Live', cwd: '/tmp/work', updatedAt: '2020-01-01T00:00:00Z' }]
+    });
+    await store.refreshSessionsForAgent('agent-1');
+
+    expect(store.sessionsByAgent['agent-1'].find((entry) => entry.sessionId === 'session-1')!.updatedAt).toBe(liveStamp);
+  });
+
+  it('keeps a title-only session info update from erasing the activity stamp', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2026-01-01T00:00:00Z')] };
+    await store.connectAgent('agent-1');
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: { sessionUpdate: 'session_info_update', title: 'Renamed' }
+    });
+
+    const updated = store.sessionsByAgent['agent-1'].find((entry) => entry.sessionId === 'session-1')!;
+    expect(updated.title).toBe('Renamed');
+    expect(updated.updatedAt).toBe('2026-01-01T00:00:00Z');
+
+    // Newer authoritative stamps still move forward.
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: { sessionUpdate: 'session_info_update', title: 'Renamed again', updatedAt: '2026-02-01T00:00:00Z' }
+    });
+    expect(store.sessionsByAgent['agent-1'].find((entry) => entry.sessionId === 'session-1')!.updatedAt).toBe(
+      '2026-02-01T00:00:00Z'
+    );
+  });
+
+  function loadSessionWithSnapshotUsage() {
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: {
+        configOptions: [],
+        _meta: {
+          'querymt/sessionLoadSnapshot.v1': {
+            audit: {
+              events: [
+                { seq: 1, timestamp: 1_000, kind: { type: 'llm_request_start', data: {} } },
+                {
+                  seq: 2,
+                  timestamp: 2_000,
+                  kind: { type: 'llm_request_end', data: { context_tokens: 42_000, cumulative_cost_usd: 0.5 } }
+                },
+                { seq: 3, kind: { type: 'provider_changed', data: { context_limit: 200_000 } } }
+              ]
+            }
+          }
+        }
+      },
+      replay: [{
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'user_message_chunk',
+          messageId: 'm1',
+          content: { type: 'text', text: 'Hello' }
+        }
+      }]
+    });
+  }
+
+  it('preserves snapshot context metrics when replay history wins the load selection', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2026-07-18T17:00:00Z')] };
+    await store.connectAgent('agent-1');
+    loadSessionWithSnapshotUsage();
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activeSession.transcript.some((item) => item.messageId === 'm1')).toBe(true);
+    expect(store.activeSession.usage).toMatchObject({
+      contextUsed: 42_000,
+      contextLimit: 200_000,
+      cumulativeCostUsd: 0.5
+    });
+  });
+
+  it('keeps the snapshot as the history baseline and merges one captured live update into it', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2026-07-18T17:00:00Z')] };
+    await store.connectAgent('agent-1');
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: {
+        configOptions: [],
+        _meta: {
+          'querymt/sessionLoadSnapshot.v1': {
+            audit: {
+              events: [
+                { seq: 1, timestamp: 1_000, kind: { type: 'prompt_received', data: { content: 'Plan the work' } } },
+                {
+                  seq: 2,
+                  timestamp: 2_000,
+                  kind: { type: 'assistant_message_stored', data: { message_id: 'm1', content: 'Here is the plan' } }
+                }
+              ]
+            }
+          }
+        }
+      },
+      replay: [{
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          messageId: 'm2',
+          content: { type: 'text', text: 'Streaming answer' }
+        }
+      }]
+    });
+
+    await store.loadSession('agent-1', 'session-1');
+
+    // The full snapshot stays the baseline; the captured live update is merged
+    // into it exactly once instead of replacing the snapshot history.
+    expect(store.activeSession.transcript.map((item) => item.text)).toEqual([
+      'Plan the work',
+      'Here is the plan',
+      'Streaming answer'
+    ]);
+  });
+
+  it('lets live usage updates override the hydrated snapshot baseline', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2026-07-18T17:00:00Z')] };
+    await store.connectAgent('agent-1');
+    loadSessionWithSnapshotUsage();
+    await store.loadSession('agent-1', 'session-1');
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'usage_update',
+        used: 61_500,
+        size: 200_000,
+        cost: { amount: 0.75, currency: 'USD' }
+      }
+    });
+
+    expect(store.activeSession.usage).toMatchObject({
+      contextUsed: 61_500,
+      contextLimit: 200_000,
+      cumulativeCostUsd: 0.75
+    });
   });
 });

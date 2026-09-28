@@ -14,8 +14,10 @@ import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotProvi
 import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
 import {
   createEmptyActiveSession,
+  appendSessionReplay,
   applySessionNotification,
   applyDelegationChildSession,
+  mergeMissingSessionUsage,
   reduceSessionReplay,
   beginSessionWork,
   endSessionWork,
@@ -35,6 +37,7 @@ import {
   getWorkspaceRemoteMachines,
   isActiveSessionStatus,
   mapAcpSessionsToDesktopSessions,
+  newestTimestamp,
   type WorkspaceSessionGroup,
   type WorkspaceSessionSource
 } from '$lib/domain/sessions';
@@ -58,7 +61,7 @@ import type {
 import { DelegateAssignmentSource, SessionInputDelivery, SessionInputState } from '$lib/querymt/generated/types';
 import type {
   AuthMethod,
-  AuthProviderEntry,
+  AuthProviderStatus,
   CapabilitiesInfo,
   CreateMeshInviteRequest,
   CreateScheduleControlRequest,
@@ -79,7 +82,7 @@ import type {
   ScheduleInfo,
   ScheduleListInfo,
   SessionInputStateNotification,
-  SessionRuntimeState,
+  SessionRuntimeStatus,
   SetDelegateModelResponse,
   SubmitInputResult
 } from '$lib/querymt/generated/types';
@@ -236,7 +239,7 @@ export class AgentsStore {
   private sessionRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private sessionRuntimeRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private sessionRuntimeRefreshGenerations = new Map<string, number>();
-  private sessionRuntimeRefreshPromises = new Map<string, Promise<SessionRuntimeState | null>>();
+  private sessionRuntimeRefreshPromises = new Map<string, Promise<SessionRuntimeStatus | null>>();
   private inputSubmissionsBySession = new Map<string, number>();
   private inputNotificationsDuringSubmit = new Map<string, SessionInputStateNotification>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -283,7 +286,7 @@ export class AgentsStore {
   meshStatusByAgent = $state<Record<string, MeshStatusInfo | null>>({});
   meshNodesByAgent = $state<Record<string, MeshNodesInfo | null>>({});
   meshInvitesByAgent = $state<Record<string, MeshInviteListInfo | null>>({});
-  authProvidersByAgent = $state<Record<string, AuthProviderEntry[]>>({});
+  authProvidersByAgent = $state<Record<string, AuthProviderStatus[]>>({});
   authLoadingByAgent = $state<Record<string, boolean>>({});
   authErrorsByAgent = $state<Record<string, string | null>>({});
   remoteSessionsByAgent = $state<Record<string, Record<string, RemoteSessionListInfo | undefined>>>({});
@@ -338,7 +341,7 @@ export class AgentsStore {
     return Object.fromEntries(Object.entries(this.pendingSessionConfigs[key] ?? {}).map(([id, count]) => [id, count > 0]));
   }
   promptAttachments = $state<PromptAttachment[]>([]);
-  sessionRuntimeBySession = $state<Record<string, SessionRuntimeState | null>>({});
+  sessionRuntimeBySession = $state<Record<string, SessionRuntimeStatus | null>>({});
   pendingInputsBySession = $state<Record<string, PendingSessionInput[]>>({});
   composerInputDeliveryBySession = $state<Record<string, SessionInputDeliveryMode>>({});
   inputSubmitPending = $state(false);
@@ -362,7 +365,7 @@ export class AgentsStore {
   recentWorkspaces = $state<string[]>(loadRecentWorkspaces());
   private sessionModePreferences: SessionModePreferenceDocument = loadSessionModePreferences();
 
-  get activeSessionRuntime(): SessionRuntimeState | null {
+  get activeSessionRuntime(): SessionRuntimeStatus | null {
     if (!this.activeAgentId || !this.activeSessionId) return null;
     return this.sessionRuntimeBySession[buildSessionKey(this.activeAgentId, this.activeSessionId)] ?? null;
   }
@@ -1538,24 +1541,27 @@ export class AgentsStore {
     if (!current) return;
 
     let title = current.title;
-    let updatedAt = current.updatedAt;
+    let replayUpdatedAt: string | null = null;
     for (const notification of replay) {
       if (notification.sessionId !== sessionId) continue;
       const update = notification.update;
       if (update.sessionUpdate !== 'session_info_update') continue;
       if (typeof update.title === 'string' && update.title.trim()) title = update.title.trim();
-      if (update.updatedAt !== undefined) updatedAt = update.updatedAt;
+      if (update.updatedAt !== undefined) {
+        replayUpdatedAt = newestTimestamp(replayUpdatedAt, update.updatedAt);
+      }
     }
 
     const inferred = inferSessionSummaryFromActiveSession(this.activeSession);
     if (!title || title === 'Session') title = inferred.title ?? title;
-    if (!updatedAt) updatedAt = inferred.updatedAt;
-    if (title === current.title && updatedAt === current.updatedAt) return;
+    // Never let a replayed info update roll the summary's activity backwards.
+    const nextUpdatedAt = newestTimestamp(current.updatedAt, replayUpdatedAt) ?? inferred.updatedAt;
+    if (title === current.title && nextUpdatedAt === current.updatedAt) return;
 
     this.sessionsByAgent = {
       ...this.sessionsByAgent,
       [agentId]: (this.sessionsByAgent[agentId] ?? []).map((session) =>
-        session.sessionId === sessionId ? { ...session, title, updatedAt } : session
+        session.sessionId === sessionId ? { ...session, title, updatedAt: nextUpdatedAt } : session
       )
     };
   }
@@ -2064,7 +2070,7 @@ export class AgentsStore {
     agentId: string,
     sessionId: string,
     client: DesktopAcpClient,
-    runtime: SessionRuntimeState,
+    runtime: SessionRuntimeStatus,
     delivery: SessionInputDeliveryMode,
     prompt: string,
     attachments: PromptAttachment[],
@@ -2141,7 +2147,7 @@ export class AgentsStore {
   private inputDeliveryForSession(
     agentId: string,
     sessionId: string,
-    runtime: SessionRuntimeState,
+    runtime: SessionRuntimeStatus,
     prompt: string
   ): SessionInputDeliveryMode {
     if (prompt.trimStart().startsWith('/')) return 'queue';
@@ -2253,7 +2259,7 @@ export class AgentsStore {
     agentId = this.activeAgentId,
     sessionId = this.activeSessionId,
     client?: DesktopAcpClient
-  ): Promise<SessionRuntimeState | null> {
+  ): Promise<SessionRuntimeStatus | null> {
     if (!agentId || !sessionId) return null;
     const record = client ? null : await this.connectInitializedRecord(agentId);
     const resolvedClient = client ?? record?.client;
@@ -2261,7 +2267,7 @@ export class AgentsStore {
     const key = buildSessionKey(agentId, sessionId);
     const generation = (this.sessionRuntimeRefreshGenerations.get(key) ?? 0) + 1;
     this.sessionRuntimeRefreshGenerations.set(key, generation);
-    const refresh = resolvedClient.getSessionRuntimeState(sessionId).then((runtime) => {
+    const refresh = resolvedClient.getSessionRuntimeStatus(sessionId).then((runtime) => {
       if (this.sessionRuntimeRefreshGenerations.get(key) !== generation) {
         return this.sessionRuntimeRefreshPromises.get(key) ?? this.sessionRuntimeBySession[key] ?? null;
       }
@@ -2494,24 +2500,69 @@ export class AgentsStore {
         telemetryStatus = 'cancelled';
         return;
       }
-      const replaySession = reduceSessionReplay(sessionId, replay);
+      // A snapshot-capable agent omits historical replay because this client
+      // advertised that it hydrates history from the load-response snapshot.
+      // Detect that case so we only transform the authoritative representation
+      // instead of building both.
+      const replayIsEmpty = replay.length === 0;
+      const replaySession = replayIsEmpty
+        ? null
+        : reduceSessionReplay(sessionId, replay);
       this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
       const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
       checkpoint('frontend.snapshot_transform');
+      // The lifecycle override below must read the snapshot's pristine run
+      // verdict; folding the captured updates into the baseline mutates it in
+      // place, so capture those values before the fold.
+      const snapshotLifecycle = snapshotSession.runStateFromLifecycle
+        ? {
+            runState: snapshotSession.runState,
+            activityLabel: snapshotSession.activityLabel,
+            activeToolCallId: snapshotSession.activeToolCallId,
+            lastError: snapshotSession.lastError
+          }
+        : null;
       const liveSession = this.activeSession;
       const liveHasVisibleHistory =
         liveSession.sessionId === sessionId && sessionHasVisibleHistory(liveSession);
       // session_info_update and similar metadata create events without a
       // transcript. Treating those as history overwrites late live updates
       // that arrived after capture closed (first child load, empty chat).
-      this.activeSession = sessionHasVisibleHistory(replaySession)
-        ? replaySession
-        : sessionHasVisibleHistory(snapshotSession)
+      //
+      // Preference order: when the agent served a snapshot, the snapshot is
+      // the history baseline and the captured live updates are folded into it
+      // exactly once (the capture window only holds updates observed while the
+      // load was in flight, never the full conversation, so a visible replay
+      // alone must not replace the snapshot). Replay stays authoritative when
+      // the agent served no snapshot, so there is no baseline to extend.
+      if (sessionHasVisibleHistory(snapshotSession)) {
+        this.activeSession = replayIsEmpty
           ? snapshotSession
-          : liveHasVisibleHistory
-            ? liveSession
-            : replaySession;
+          : appendSessionReplay(snapshotSession, replay);
+      } else if (replaySession && sessionHasVisibleHistory(replaySession)) {
+        this.activeSession = replaySession;
+      } else if (liveHasVisibleHistory) {
+        this.activeSession = liveSession;
+      } else {
+        this.activeSession = replaySession ?? snapshotSession;
+      }
       this.activeLoadMeasurement?.increment('historyAssignments');
+      this.activeLoadMeasurement?.increment(
+        replayIsEmpty ? 'snapshotHydratedSessions' : 'replayedSessions'
+      );
+      // Preserve context metrics from the candidates that lost the history
+      // selection: replay capture may miss `usage_update` while the load
+      // snapshot (or the still-rendered live session) already knows the
+      // context window. The snapshot merges first so its load-time values win
+      // over the stale still-rendered live session; present values win, and
+      // later drained/live usage updates keep overriding these baselines.
+      if (this.activeSession !== snapshotSession) mergeMissingSessionUsage(this.activeSession, snapshotSession);
+      if (liveSession.sessionId === sessionId && this.activeSession !== liveSession) {
+        mergeMissingSessionUsage(this.activeSession, liveSession);
+      }
+      if (replaySession && this.activeSession !== replaySession) {
+        mergeMissingSessionUsage(this.activeSession, replaySession);
+      }
       const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
       checkpoint('frontend.queued_replay');
       if (!this.isSelectedSession(agentId, sessionId)) {
@@ -2533,12 +2584,12 @@ export class AgentsStore {
       // the active mode's preference from it without issuing any config write
       // and without substituting a local model when metadata is missing.
       this.seedSessionModePreferenceFromLoad(agentId, sessionId);
-      if (snapshotSession.runStateFromLifecycle) {
-        this.activeSession.runState = snapshotSession.runState;
+      if (snapshotLifecycle) {
+        this.activeSession.runState = snapshotLifecycle.runState;
         this.activeSession.runStateFromLifecycle = true;
-        this.activeSession.activityLabel = snapshotSession.activityLabel;
-        this.activeSession.activeToolCallId = snapshotSession.activeToolCallId;
-        this.activeSession.lastError = snapshotSession.lastError;
+        this.activeSession.activityLabel = snapshotLifecycle.activityLabel;
+        this.activeSession.activeToolCallId = snapshotLifecycle.activeToolCallId;
+        this.activeSession.lastError = snapshotLifecycle.lastError;
       }
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });
       checkpoint('frontend.normalize');
@@ -4185,11 +4236,17 @@ export class AgentsStore {
         return session;
       }
 
+      // Live activity keeps the newest known stamp, and explicit info updates
+      // only move it forward: delayed notifications must not roll the header
+      // back to an older "x minutes ago".
       return {
         ...session,
         title: infoTitle ?? session.title,
         status: inferredStatus ?? session.status,
-        updatedAt: infoUpdatedAt !== undefined ? infoUpdatedAt : (activityUpdatedAt ?? session.updatedAt)
+        updatedAt: newestTimestamp(
+          session.updatedAt,
+          infoUpdatedAt !== undefined ? infoUpdatedAt : activityUpdatedAt
+        )
       };
     });
 
@@ -4777,7 +4834,11 @@ function deduplicateSessions(sessions: DesktopSessionSummary[]): DesktopSessionS
 function mergeSessions(current: DesktopSessionSummary[], incoming: DesktopSessionSummary[]): DesktopSessionSummary[] {
   const sessions = new Map(current.map((session) => [getSessionKey(session), session]));
   for (const session of incoming) {
-    sessions.set(getSessionKey(session), session);
+    // A delayed session/list response must never roll a summary's activity
+    // timestamp backwards past what live notifications already recorded.
+    const key = getSessionKey(session);
+    const existing = sessions.get(key);
+    sessions.set(key, existing ? { ...session, updatedAt: newestTimestamp(existing.updatedAt, session.updatedAt) } : session);
   }
   return [...sessions.values()].sort(compareSessionsByActivity);
 }

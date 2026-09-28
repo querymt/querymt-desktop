@@ -1,7 +1,7 @@
 <script lang="ts">
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
   import { restoreProviderDialogFocus, type ProviderDialogFocusTarget } from './provider-dialog-focus';
-  import type { AuthProviderEntry } from '$lib/querymt/generated/types';
+  import type { AuthProviderStatus } from '$lib/querymt/generated/types';
 
   let {
     open,
@@ -13,7 +13,7 @@
     onConfirm
   }: {
     open: boolean;
-    provider?: AuthProviderEntry | null;
+    provider?: AuthProviderStatus | null;
     focusTarget?: ProviderDialogFocusTarget | null;
     portalTarget?: HTMLElement | null;
     pending?: boolean;

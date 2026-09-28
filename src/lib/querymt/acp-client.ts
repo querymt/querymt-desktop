@@ -23,7 +23,7 @@ import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAtta
 import type {
   AttachRemoteSessionRequest,
   AuthMethod,
-  AuthProviderEntry,
+  AuthProviderStatus,
   CapabilitiesInfo,
   CreateMeshInviteRequest,
   DelegateAssignmentsInfo,
@@ -48,7 +48,7 @@ import type {
   PluginUpdateResult,
   SetDelegateModelRequest,
   SetDelegateModelResponse,
-  SessionRuntimeState,
+  SessionRuntimeStatus,
   DiscardQueuedInputResult,
   SubmitInputResult
 } from '$lib/querymt/generated/types';
@@ -110,6 +110,12 @@ import { isEmbedded } from '$lib/platform/runtime';
 import { acpWebSocketUrl } from '$lib/querymt/websocket-url';
 
 const PROTOCOL_VERSION = 1;
+
+/**
+ * `sessionLoadSnapshot` epoch understood by this client. Must stay in lockstep
+ * with the agent's `QUERYMT_SESSION_LOAD_SNAPSHOT_EPOCH`.
+ */
+const SESSION_LOAD_SNAPSHOT_EPOCH = 1;
 const CONNECT_CANCELLED_MESSAGE = 'ACP connection cancelled.';
 
 /**
@@ -838,7 +844,7 @@ export class DesktopAcpClient {
     return this.querymtExtensions!.deleteSchedule(request);
   }
 
-  async listAuthProviders(): Promise<AuthProviderEntry[]> {
+  async listAuthProviders(): Promise<AuthProviderStatus[]> {
     if (!this.querymtExtensions) {
       await this.connect();
     }
@@ -993,7 +999,7 @@ export class DesktopAcpClient {
     return this.querymtExtensions!.discardQueuedInput(sessionId, inputId);
   }
 
-  async getSessionRuntimeState(sessionId: string): Promise<SessionRuntimeState> {
+  async getSessionRuntimeStatus(sessionId: string): Promise<SessionRuntimeStatus> {
     if (!this.querymtExtensions) await this.connect();
     this.assertQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE);
     return this.querymtExtensions!.sessionRuntimeState(sessionId);
@@ -1230,6 +1236,18 @@ function buildClientCapabilities(): ClientCapabilities {
   return {
     elicitation,
     fs: {},
-    terminal: false
+    terminal: false,
+    // `ClientCapabilities` is non-exhaustive in the ACP SDK, so the QueryMT
+    // namespace is advertised through `_meta` (ACP's extensibility escape
+    // hatch). Declaring epoch 1 tells the agent this client hydrates history
+    // from `querymt/sessionLoadSnapshot.v1`, so it does not need historical
+    // `session/update` replay for `session/load`.
+    _meta: {
+      querymt: {
+        sessionLoadSnapshot: {
+          epoch: SESSION_LOAD_SNAPSHOT_EPOCH
+        }
+      }
+    }
   };
 }

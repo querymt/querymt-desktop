@@ -13,7 +13,7 @@
     providerPrimaryAction,
     type ProviderAuthCapabilities
   } from '$lib/domain/provider-auth';
-  import { OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
+  import { OAuthStatus, type AuthProviderStatus } from '$lib/querymt/generated/types';
 
   let {
     provider,
@@ -29,17 +29,17 @@
     onAuthMethodChange,
     onDialogTrigger
   }: {
-    provider: AuthProviderEntry;
+    provider: AuthProviderStatus;
     authCapabilities?: ProviderAuthCapabilities;
     pendingAction?: string | null;
     message?: string | null;
     error?: string | null;
-    onSignIn: (provider: AuthProviderEntry) => void;
-    onCancelSignIn: (provider: AuthProviderEntry) => void;
-    onDisconnect: (provider: AuthProviderEntry) => void;
-    onSetApiKey: (provider: AuthProviderEntry) => void;
-    onClearApiKey: (provider: AuthProviderEntry) => void;
-    onAuthMethodChange: (provider: AuthProviderEntry, method: string) => void;
+    onSignIn: (provider: AuthProviderStatus) => void;
+    onCancelSignIn: (provider: AuthProviderStatus) => void;
+    onDisconnect: (provider: AuthProviderStatus) => void;
+    onSetApiKey: (provider: AuthProviderStatus) => void;
+    onClearApiKey: (provider: AuthProviderStatus) => void;
+    onAuthMethodChange: (provider: AuthProviderStatus, method: string) => void;
     onDialogTrigger: (event: MouseEvent) => void;
   } = $props();
 
@@ -60,7 +60,7 @@
     detailsOpen = !detailsOpen;
   }
 
-  function openDialog(event: MouseEvent, action: (provider: AuthProviderEntry) => void) {
+  function openDialog(event: MouseEvent, action: (provider: AuthProviderStatus) => void) {
     onDialogTrigger(event);
     action(provider);
   }

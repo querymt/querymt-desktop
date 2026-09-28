@@ -13,6 +13,15 @@ export type AgentEventKind =
 	content: string;
 	message_id?: string;
 }}
+	/**
+	 * Transient structured prompt block for live ACP delivery. Durable prompt
+	 * content remains in MessagePart::Prompt rather than the event journal.
+	 */
+	| { type: "user_prompt_block", data: {
+	message_id: string;
+	client_prompt_id?: string;
+	block: any;
+}}
 	| { type: "user_message_stored", data: {
 	content: string;
 }}
@@ -62,9 +71,39 @@ export type AgentEventKind =
 	input_id: string;
 	reason: string;
 }}
+	| { type: "objective_initialized", data: {
+	run_id: string;
+	revision: number;
+	source: string;
+	source_ref?: string;
+}}
+	| { type: "objective_updated", data: {
+	run_id: string;
+	revision: number;
+	source: string;
+	source_ref?: string;
+}}
+	| { type: "objective_checkpoint", data: {
+	run_id: string;
+	reason: string;
+	action: string;
+	objective_revision?: number;
+	current_task_id?: string;
+	current_task_revision?: number;
+}}
+	| { type: "task_completion_guard_triggered", data: {
+	run_id: string;
+	task_id: string;
+}}
+	| { type: "task_completion_guard_exhausted", data: {
+	run_id: string;
+	task_id: string;
+}}
 	| { type: "assistant_message_stored", data: {
 	content: string;
 	thinking?: string;
+	/** Visible summary parts. Historical events omit this and keep `thinking`. */
+	reasoning_parts?: ReasoningPartStored[];
 	message_id?: string;
 }}
 	/**
@@ -82,6 +121,8 @@ export type AgentEventKind =
 	| { type: "assistant_thinking_delta", data: {
 	content: string;
 	message_id: string;
+	/** Stable summary part. The same id appends; a new id is a new part. */
+	part_id?: string;
 }}
 	/** Ephemeral transport signal for remote streaming over mesh. */
 	| { type: "remote_stream_disconnected", data: {
@@ -98,6 +139,22 @@ export type AgentEventKind =
 	message: string;
 	node_id?: string;
 }}
+	/**
+	 * Ephemeral signal emitted when cursor-based event backfill for a remote
+	 * session finishes after (re)connect (plan §10/§16). Connection and sync
+	 * progress are transient state, never durable history.
+	 */
+	| { type: "remote_session_sync_completed", data: {
+	/** Number of durable events newly persisted by the backfill. */
+	backfilled: number;
+	/**
+	 * True when no source cursor existed (legacy boundary): no exact
+	 * backfill was possible and history may be missing events emitted
+	 * before the first post-upgrade attachment.
+	 */
+	boundary: boolean;
+	node_id?: string;
+}}
 	/** Ephemeral signal emitted when a remote provider host reports liveness while waiting. */
 	| { type: "remote_provider_heartbeat", data: {
 	phase: string;
@@ -107,8 +164,8 @@ export type AgentEventKind =
 	message_id?: string;
 }}
 	/**
-	 * Ephemeral signal emitted when mid-stream transport error is detected.
-	 * Accumulated text is discarded and a new stream is being created.
+	 * Ephemeral signal emitted when a retryable mid-stream error recreates the stream.
+	 * Accumulated server-side state is discarded before the fresh request.
 	 */
 	| { type: "stream_recovering", data: {
 	/** Human-readable error message that triggered the retry */
@@ -123,7 +180,7 @@ export type AgentEventKind =
 	message_count: number;
 }}
 	| { type: "llm_request_end", data: {
-	usage?: UsageInfo;
+	usage?: Usage;
 	tool_calls: number;
 	finish_reason?: string;
 	/** Cost information for this request in USD */
@@ -234,6 +291,7 @@ export type AgentEventKind =
 }}
 	| { type: "delegation_requested", data: {
 	delegation: Delegation;
+	tool_call_id?: string;
 }}
 	| { type: "delegation_completed", data: {
 	delegation_id: string;
@@ -293,7 +351,7 @@ export type AgentEventKind =
 }}
 	/** Emitted at session start and whenever available tools change */
 	| { type: "tools_available", data: {
-	tools: ToolInfo[];
+	tools: Tool[];
 	tools_hash: string;
 }}
 	/** Emitted when duplicate/similar code is detected in newly written code */
@@ -312,7 +370,10 @@ export type AgentEventKind =
 	| { type: "session_mode_changed", data: {
 	mode: string;
 }}
-	/** LLM request was rate limited, execution is paused and waiting */
+	/**
+	 * LLM request was rate limited, execution is paused and waiting.
+	 * Retained as a stable wire event for rate-limit-specific UI behavior.
+	 */
 	| { type: "rate_limited", data: {
 	/** Human-readable message from the provider */
 	message: string;
@@ -325,16 +386,34 @@ export type AgentEventKind =
 	/** Maximum retry attempts configured */
 	max_attempts: number;
 }}
-	/** Rate limit wait completed, resuming execution */
+	/** Rate limit wait completed, resuming execution. */
 	| { type: "rate_limit_resume", data: {
+	/** Which attempt is now being made */
+	attempt: number;
+}}
+	/** A non-rate-limit retryable LLM failure is waiting before the next attempt. */
+	| { type: "llm_retry_wait", data: {
+	/** Human-readable error that triggered the retry */
+	message: string;
+	/** Seconds until retry will be attempted */
+	wait_secs: number;
+	/** When the wait started (Unix timestamp in seconds) */
+	started_at: number;
+	/** Current retry attempt (1-indexed) */
+	attempt: number;
+	/** Maximum retry attempts configured */
+	max_attempts: number;
+}}
+	/** Non-rate-limit LLM retry wait completed, resuming execution. */
+	| { type: "llm_retry_resume", data: {
 	/** Which attempt is now being made */
 	attempt: number;
 }}
 	/**
 	 * Emitted on the remote node once its workspace index has finished
 	 * building and is available via `GetFileIndex`.  Flows through the
-	 * EventForwarder → EventRelayActor → local EventSink chain so the
-	 * local UI server can react without polling.
+	 * EventForwarder → EventRelayActor → local EventSink chain so local
+	 * clients can react without polling.
 	 */
 	| { type: "workspace_index_ready", data: {
 	workspace_root: string;
@@ -445,17 +524,28 @@ export interface Artifact {
 	created_at: string;
 }
 
+/**
+ * Attaches the current connection to one authorized pending session.
+ * 
+ * A successful response is followed by fresh standard ACP `elicitation/create` requests.
+ * Deliberately omits `Debug` to keep the authority out of ordinary logs.
+ */
+export interface AttachPendingElicitationSessionRequest {
+	version: number;
+	session_id: string;
+	resume_authority: string;
+}
+
+export interface AttachPendingElicitationSessionResponse {
+	version: number;
+	session_id: string;
+	/** Stable opaque identities used by the desktop to reconcile its inbox snapshot. */
+	elicitation_ids: string[];
+}
+
 export interface AttachRemoteSessionRequest {
 	node_id: string;
 	session_id: string;
-}
-
-/** An audio-capable model entry returned in [`UiServerMessage::AudioCapabilities`]. */
-export interface AudioModelInfo {
-	/** Provider name (e.g. "izwi") */
-	provider: string;
-	/** Model name (e.g. "Qwen3-ASR-0.6B") */
-	model: string;
 }
 
 /** Task kind determines lifecycle and completion semantics */
@@ -483,18 +573,25 @@ export interface Task {
 	status: TaskStatus;
 	expected_deliverable?: string;
 	acceptance_criteria?: string;
+	revision: number;
+	creation_key?: string;
+	completion_evidence?: string;
+	completed_at?: string;
 	created_at: string;
 	updated_at: string;
 }
 
 /** Snapshot of current user intent at a point in time (internal only) */
 export interface IntentSnapshot {
-	/** Authoritative summary of what the user wants */
+	/** Stable descriptive summary used for continuity and search, not execution authority. */
 	summary: string;
-	/** Constraints or boundaries */
+	/** Durable descriptive constraints known to the session. */
 	constraints?: string;
-	/** Hint for next action */
+	/** Latest accepted user directive useful for recovery. */
 	next_step_hint?: string;
+	revision: number;
+	source: string;
+	source_ref?: string;
 	created_at: string;
 }
 
@@ -572,6 +669,19 @@ export interface AuditView {
 	generated_at: string;
 }
 
+/**
+ * Result of API-token / auth-method mutations (`set_api_token`, `clear_api_token`,
+ * `set_auth_method`).
+ * 
+ * Same wire shape as [`LogoutResult`] / [`CompleteFlowResult`] so ACP clients and
+ * the dashboard can treat auth mutations uniformly.
+ */
+export interface AuthMutationResult {
+	provider: string;
+	success: boolean;
+	message: string;
+}
+
 /** OAuth authentication status for a provider. */
 export enum OAuthStatus {
 	NotAuthenticated = "not_authenticated",
@@ -579,35 +689,17 @@ export enum OAuthStatus {
 	Connected = "connected",
 }
 
-/**
- * Preferred authentication method for a provider.
- * 
- * Stored in the system keyring under `auth_method_{provider}` and used by
- * the credential resolution logic to determine the order in which OAuth,
- * stored API key, and environment variable sources are tried.
- */
-export enum AuthMethod {
-	OAuth = "oauth",
-	ApiKey = "api_key",
-	EnvVar = "env_var",
-}
-
-/** Provider entry for dashboard auth UI (supports both OAuth and API token auth). */
-export interface AuthProviderEntry {
+/** Auth status entry for a single provider. */
+export interface AuthProviderStatus {
 	provider: string;
 	display_name: string;
-	/** OAuth status (`None` if provider has no OAuth support) */
+	/** `None` if the provider has no OAuth support. */
 	oauth_status?: OAuthStatus;
-	/** Whether a manually-entered API key is stored in the keyring */
 	has_stored_api_key: boolean;
-	/** Whether the environment variable for this provider is set */
 	has_env_api_key: boolean;
-	/** The environment variable name for this provider (e.g. "OPENAI_API_KEY") */
 	env_var_name?: string;
-	/** Whether this provider supports OAuth flows */
 	supports_oauth: boolean;
-	/** User's preferred auth method (`None` = auto/default) */
-	preferred_method?: AuthMethod;
+	preferred_method?: string;
 }
 
 export interface ControlAgentInfo {
@@ -634,7 +726,15 @@ export interface ControlFeatureInfo {
 	profiles: boolean;
 	auth: boolean;
 	models: boolean;
-	steering?: boolean;
+	steering: boolean;
+}
+
+/** Advertised only when the agent has the complete recovery implementation enabled. */
+export interface ElicitationRecoveryCapability {
+	version: number;
+	authority_notification: string;
+	list_pending_method: string;
+	attach_method: string;
 }
 
 export interface CapabilitiesInfo {
@@ -644,16 +744,14 @@ export interface CapabilitiesInfo {
 	features: ControlFeatureInfo;
 	methods: string[];
 	notifications: string[];
+	elicitation_recovery?: ElicitationRecoveryCapability;
 }
 
-/** Knowledge consolidation DTO for the UI (read-only). */
-export interface ConsolidationInfo {
-	public_id: string;
-	scope: string;
-	summary: string;
-	insight: string;
-	source_count: number;
-	created_at: string;
+/** Result of `complete_flow`. */
+export interface CompleteFlowResult {
+	provider: string;
+	success: boolean;
+	message: string;
 }
 
 export interface CreateMeshInviteRequest {
@@ -690,23 +788,18 @@ export interface DelegateAssignmentInfo {
 	model: DelegateModelOverride | null;
 	source: DelegateAssignmentSource;
 	configured_default_model_id: string | null;
-	reasoning_effort?: DelegateReasoningEffort | null;
-}
-
-export interface DelegateModelOverride {
-	model_id: string;
-	node_id?: string;
+	reasoning_effort: DelegateReasoningEffort | null;
 }
 
 export interface OrphanedDelegateAssignment {
 	agent_id: string;
 	model: DelegateModelOverride | null;
-	reasoning_effort?: DelegateReasoningEffort | null;
+	reasoning_effort: DelegateReasoningEffort | null;
 }
 
 export interface DelegateAssignmentsInfo {
 	version: number;
-	reasoning_effort_supported?: boolean;
+	reasoning_effort_supported: boolean;
 	session_id: string;
 	profile_id: string;
 	revision: number | null;
@@ -714,6 +807,11 @@ export interface DelegateAssignmentsInfo {
 	editable: boolean;
 	assignments: DelegateAssignmentInfo[];
 	orphaned_overrides: OrphanedDelegateAssignment[];
+}
+
+export interface DelegateModelOverride {
+	model_id: string;
+	node_id?: string;
 }
 
 export interface DelegateModelsChangedNotification {
@@ -724,6 +822,34 @@ export interface DelegateModelsChangedNotification {
 
 export interface DelegateModelsRequest {
 	session_id: string;
+}
+
+export enum DelegationUpdateState {
+	Requested = "requested",
+	Forked = "forked",
+	Completed = "completed",
+	Failed = "failed",
+	Cancelled = "cancelled",
+}
+
+export interface DelegationUpdateNotification {
+	version: number;
+	sessionId: string;
+	delegationId: string;
+	toolCallId?: string;
+	state: DelegationUpdateState;
+	targetAgentId: string;
+	objective: string;
+	childSessionId?: string;
+	/** Confirmed child model, not the parent's current preference. */
+	selectedModelId?: string;
+	selectedProviderNodeId?: string;
+	requestedAt: number;
+	forkedAt?: number;
+	finishedAt?: number;
+	updatedAt: number;
+	resultSummary?: string;
+	error?: string;
 }
 
 export interface DismissRemoteSessionRequest {
@@ -773,6 +899,29 @@ export interface DurableEvent {
 }
 
 /**
+ * Sent only on the protected connection that originally received the question.
+ * 
+ * Deliberately omits `Debug`: the authority is an in-memory bearer secret and must not be logged.
+ */
+export interface ElicitationRecoveryAuthorityNotification {
+	version: number;
+	session_id: string;
+	resume_authority: string;
+}
+
+export enum ElicitationRecoveryDenialReason {
+	Unauthorized = "unauthorized",
+	AuthorityExpired = "authority_expired",
+	InsecureTransport = "insecure_transport",
+	CapabilityMismatch = "capability_mismatch",
+}
+
+export interface ElicitationRecoveryErrorData {
+	category: string;
+	reason: ElicitationRecoveryDenialReason;
+}
+
+/**
  * An ephemeral event — live delivery only, no persistence, no sequence.
  * Typeshare-annotated: generated for TypeScript and Swift.
  */
@@ -803,15 +952,16 @@ export interface FileIndexEntry {
 	is_dir: boolean;
 }
 
-/**
- * Mirror of `querymt::chat::FunctionTool` for typeshare generation.
- * Note: kept for typeshare output; may be unused in Rust code paths.
- */
-export interface FunctionToolInfo {
+/** Represents a function definition for a tool */
+export interface FunctionTool {
+	/** The name of the function */
 	name: string;
+	/** Description of what the function does */
 	description: string;
-	/** JSON Schema for the function parameters */
+	/** The parameters schema for the function */
 	parameters: any;
+	/** Whether the provider should enforce strict schema adherence. */
+	strict?: boolean;
 }
 
 export interface GetScheduleControlRequest {
@@ -819,17 +969,19 @@ export interface GetScheduleControlRequest {
 	schedule_public_id: string;
 }
 
-/** Knowledge entry DTO for the UI (read-only). */
-export interface KnowledgeEntryInfo {
-	public_id: string;
-	scope: string;
-	source: string;
-	summary: string;
-	entities: string[];
-	topics: string[];
-	importance: number;
-	consolidated_at?: string;
-	created_at: string;
+/**
+ * Requests the pending session IDs authorized by a process-lifetime bearer secret.
+ * 
+ * Deliberately omits `Debug` to keep the authority out of ordinary logs.
+ */
+export interface ListPendingElicitationSessionsRequest {
+	version: number;
+	resume_authority: string;
+}
+
+export interface ListPendingElicitationSessionsResponse {
+	version: number;
+	session_ids: string[];
 }
 
 export interface ListSchedulesControlRequest {
@@ -837,16 +989,27 @@ export interface ListSchedulesControlRequest {
 	session_id?: string;
 }
 
+/** Result of `logout`. */
+export interface LogoutResult {
+	provider: string;
+	success: boolean;
+	message: string;
+}
+
 /**
- * Mirror of `querymt::mcp::config::McpServerConfig` for typeshare generation.
- * Note: kept for typeshare output; may be unused in Rust code paths.
+ * MCP configuration as emitted in the session event stream.
+ * 
+ * This flat DTO preserves the serialized `McpServerConfig` shape while avoiding
+ * Typeshare's lack of support for internally tagged enums.
  */
 export interface McpServerInfo {
+	transport: string;
 	name: string;
-	/** Transport protocol: "http" or "stdio" */
-	protocol: string;
-	/** URL for HTTP transport, command for stdio transport */
-	endpoint: string;
+	command?: string;
+	args?: string[];
+	env?: Record<string, string>;
+	url?: string;
+	headers?: Record<string, string>;
 }
 
 export interface MeshInviteCreatedInfo {
@@ -960,24 +1123,34 @@ export interface ModelsChangedNotification {
 	reason: string;
 }
 
-/** Result of updating a single OCI plugin, reported in `PluginUpdateComplete`. */
+/** Result of updating a single OCI plugin. */
 export interface PluginUpdateResult {
 	plugin_name: string;
 	success: boolean;
 	message?: string;
 }
 
-export interface ProviderCapabilityEntry {
-	provider: string;
-	supports_custom_models: boolean;
+/**
+ * One visible reasoning part stored with an assistant message.
+ * 
+ * Summary titles use `:summary:N`. Plaintext reasoning uses `:content:N`.
+ * Encrypted continuation is not included. The same `id` appends; a new `id`
+ * is a new part.
+ */
+export interface ReasoningPartStored {
+	id: string;
+	text: string;
 }
 
-/** Recent model usage entry from event history. */
-export interface RecentModelEntry {
-	provider: string;
-	model: string;
-	last_used: string;
-	use_count: number;
+/** A single entry of a session's undo stack. */
+export interface UndoStackFrameResponse {
+	message_id: string;
+}
+
+export interface RedoSessionResponse {
+	success: boolean;
+	message?: string;
+	undo_stack: UndoStackFrameResponse[];
 }
 
 export interface RemoteSessionAttachInfo {
@@ -1064,6 +1237,19 @@ export interface SchedulesChangedNotification {
 	schedule?: ScheduleInfo;
 }
 
+/**
+ * Explicit transport connectivity for a remote session (plan §12).
+ * 
+ * Local sessions carry no transport connectivity and omit the field. The
+ * legacy `attached` flag remains and is derived from this state
+ * (`attached = connection_state == connected`) for compatibility.
+ */
+export enum RemoteSessionConnectionState {
+	Connecting = "connecting",
+	Connected = "connected",
+	Disconnected = "disconnected",
+}
+
 export interface SessionSummary {
 	session_id: string;
 	name?: string;
@@ -1079,6 +1265,7 @@ export interface SessionSummary {
 	node?: string;
 	node_id?: string;
 	attached?: boolean;
+	connection_state?: RemoteSessionConnectionState;
 	runtime_state?: string;
 }
 
@@ -1088,38 +1275,6 @@ export interface SessionGroup {
 	latest_activity?: string;
 	total_count: number;
 	next_cursor?: string;
-}
-
-/**
- * Session limits configuration (exposed to UI)
- * Typeshare-annotated: generated for TypeScript and Swift.
- */
-export interface SessionLimits {
-	/** Maximum number of LLM calls */
-	max_steps?: number;
-	/** Maximum number of user/assistant turns */
-	max_turns?: number;
-	/** Maximum cost in USD */
-	max_cost_usd?: number;
-}
-
-export interface StreamCursor {
-	local_seq: number;
-	remote_seq_by_source: Record<string, number>;
-}
-
-export interface SessionLoadSnapshot {
-	audit: AuditView;
-	cursor: StreamCursor;
-}
-
-/** High-level runtime state for stop/resume orchestration. */
-export enum DelegateReasoningEffort {
-	Auto = "auto",
-	Low = "low",
-	Medium = "medium",
-	High = "high",
-	Max = "max",
 }
 
 export enum SessionInputDelivery {
@@ -1148,11 +1303,37 @@ export interface SessionInputStateNotification {
 	latency_ms?: number;
 }
 
-export enum SessionRuntimeStatus {
-	Idle = "idle",
-	Running = "running",
-	Waiting = "waiting",
-	CancelRequested = "cancel_requested",
+/**
+ * Session limits configuration (exposed to UI)
+ * Typeshare-annotated: generated for TypeScript and Swift.
+ */
+export interface SessionLimits {
+	/** Maximum number of LLM calls */
+	max_steps?: number;
+	/** Maximum number of user/assistant turns */
+	max_turns?: number;
+	/** Maximum cost in USD */
+	max_cost_usd?: number;
+}
+
+export interface StreamCursor {
+	local_seq: number;
+	remote_seq_by_source: Record<string, number>;
+}
+
+export interface UserPromptRecord {
+	messageId: string;
+	/** Zero-based position in persisted message history; this is not an event sequence. */
+	messageOrder: number;
+	timestamp: number;
+	blocks: any;
+}
+
+export interface SessionLoadSnapshot {
+	audit: AuditView;
+	cursor: StreamCursor;
+	delegationUpdates: DelegationUpdateNotification[];
+	userPrompts?: UserPromptRecord[];
 }
 
 export enum SessionRuntimePhase {
@@ -1165,7 +1346,8 @@ export enum SessionRuntimePhase {
 	CancelRequested = "cancel_requested",
 }
 
-export interface SessionRuntimeState {
+/** High-level runtime state for stop/resume and steering orchestration. */
+export interface SessionRuntimeStatus {
 	phase: SessionRuntimePhase;
 	active_run_id?: string;
 	steerable: boolean;
@@ -1174,107 +1356,105 @@ export interface SessionRuntimeState {
 	run_started_at_ms?: number;
 }
 
-export type DiscardQueuedInputResult =
-	| { status: "discarded", data: {
-	input_id: string;
-}}
-	| { status: "not_pending", data: {
-	input_id: string;
-}};
-
-export type SubmitInputResult =
-	| { status: "steered", data: {
-	run_id: string;
-	input_id: string;
-	position: number;
-}}
-	| { status: "queued", data: {
-	input_id: string;
-	position: number;
-}}
-	| { status: "started", data: {
-	run_id: string;
-	input_id: string;
-}};
-
 export interface SessionMeta {
 	messageCount: number;
 	userMessageCount: number;
 	hasErrors: boolean;
 	runtimeStatus: SessionRuntimeStatus;
-	parentSessionId?: string;
-	forkOrigin?: string;
-	sessionKind?: string;
-	hasChildren?: boolean;
-	forkCount?: number;
 }
 
 export interface SetDelegateModelRequest {
 	session_id: string;
 	agent_id: string;
+	/** Present and null clears the override. Omitted is invalid, not a wipe. */
 	model_id: string | null;
 	node_id?: string | null;
+	/** Omitted preserves the current setting; null restores parent-session inheritance. */
 	reasoning_effort?: DelegateReasoningEffort | null;
 	expected_revision?: number | null;
 }
 
 export interface SetDelegateModelResponse {
 	version: number;
-	reasoning_effort_supported?: boolean;
+	reasoning_effort_supported: boolean;
 	session_id: string;
 	agent_id: string;
 	model: DelegateModelOverride | null;
-	reasoning_effort?: DelegateReasoningEffort | null;
+	reasoning_effort: DelegateReasoningEffort | null;
 	revision: number | null;
 	durable: boolean;
 }
 
-/**
- * Mirror of `querymt::chat::Tool` for typeshare generation.
- * Note: kept for typeshare output; may be unused in Rust code paths.
- */
-export interface ToolInfo {
+/** Result of `start_flow`. */
+export interface StartFlowResult {
+	flow_id: string;
+	provider: string;
+	authorization_url: string;
+	flow_kind: string;
+}
+
+/** Represents a tool that can be used in chat */
+export interface Tool {
 	/** The type of tool (e.g. "function") */
 	type: string;
-	/** The function definition */
-	function: FunctionToolInfo;
+	/** The function definition if this is a function tool */
+	function: FunctionTool;
 }
 
-/** Information about an available agent for the UI. */
-export interface UiAgentInfo {
-	id: string;
-	name: string;
-	description: string;
-	capabilities: string[];
+export interface UndoSessionResponse {
+	success: boolean;
+	message?: string;
+	reverted_files: string[];
+	message_id?: string;
+	undo_stack: UndoStackFrameResponse[];
 }
 
-export interface UiProfileInfo {
-	id: string;
-	name: string;
-	description?: string;
-	tags: string[];
-	config_kind?: string;
-	source: string;
-	fingerprint?: string;
+export interface UndoStackResponse {
+	undo_stack: UndoStackFrameResponse[];
 }
 
-export interface UndoStackFrame {
-	message_id: string;
+/** Represents the usage of tokens in a tool call, supporting multiple JSON formats. */
+export interface Usage {
+	/** Number of input tokens. */
+	input_tokens?: number;
+	/** Number of output tokens. */
+	output_tokens?: number;
+	/** Reasoning/thinking output tokens. */
+	reasoning_tokens?: number;
+	/** Tokens served from a cached prefix. */
+	cache_read?: number;
+	/** Tokens used to create a new cache entry. */
+	cache_write?: number;
 }
 
 /**
- * Mirror of `querymt::Usage` for typeshare generation.
- * Fields match the serialized JSON shape of the upstream type.
+ * Preferred authentication method for a provider.
  * 
- * Note: kept for typeshare output; may be unused in Rust code paths.
+ * Stored in the system keyring under `auth_method_{provider}` and used by
+ * the credential resolution logic to determine the order in which OAuth,
+ * stored API key, and environment variable sources are tried.
  */
-export interface UsageInfo {
-	input_tokens?: number;
-	output_tokens?: number;
-	reasoning_tokens?: number;
-	cache_read?: number;
-	cache_write?: number;
+export enum AuthMethod {
+	OAuth = "oauth",
+	ApiKey = "api_key",
+	EnvVar = "env_var",
 }
+
+export enum DelegateReasoningEffort {
+	Auto = "auto",
+	Low = "low",
+	Medium = "medium",
+	High = "high",
+	Max = "max",
+}
+
+export type DiscardQueuedInputResult = 
+	| { status: "discarded", data: {
+	input_id: string;
+}}
+	| { status: "not_pending", data: {
+	input_id: string;
+}};
 
 /**
  * Whether an event must be persisted to the journal (durable) or is
@@ -1296,24 +1476,6 @@ export type EventEnvelope =
 	| { type: "durable", data: DurableEvent }
 	| { type: "ephemeral", data: EphemeralEvent };
 
-/**
- * Known values for `EventOrigin`, exposed for TypeScript/Swift type safety.
- * 
- * The real `EventOrigin` has a custom Serialize/Deserialize impl that
- * serializes to plain strings (`"local"`, `"remote"`, or any other string
- * for the `Unknown` variant). The `Unknown(String)` catch-all prevents
- * standard serde enum derivation, so `#[typeshare]` can't be applied to
- * the original type. The `origin` fields on events use
- * `serialized_as = "string"` because any string value is valid at runtime.
- * 
- * This enum provides the known discriminants for TS/Swift code to compare against.
- * Note: kept for typeshare output; may be unused in Rust code paths.
- */
-export enum EventOriginKind {
-	Local = "local",
-	Remote = "remote",
-}
-
 /** Fork origin (why the fork happened) */
 export enum ForkOrigin {
 	User = "user",
@@ -1324,23 +1486,6 @@ export enum ForkOrigin {
 export enum ForkPointType {
 	MessageIndex = "message_index",
 	ProgressEntry = "progress_entry",
-}
-
-/**
- * Mirror of `querymt_utils::OAuthFlowKind` for typeshare generation.
- * Matches the serialized JSON values of the upstream enum.
- * Note: kept for typeshare output; may be unused in Rust code paths.
- */
-export enum OAuthFlowKindTs {
-	/** Redirect/callback flow where the user pastes the callback URL or code. */
-	RedirectCode = "redirect_code",
-	/** Device flow where the backend polls the provider's token endpoint. */
-	DevicePoll = "device_poll",
-}
-
-export enum RoutingMode {
-	Single = "single",
-	Broadcast = "broadcast",
 }
 
 export enum SessionScope {
@@ -1374,568 +1519,18 @@ export enum StopType {
 	Other = "other",
 }
 
-/**
- * Messages from UI client to server.
- * Typeshare-annotated: generated for TypeScript and Swift.
- */
-export type UiClientMessage = 
-	| { type: "init", data?: undefined }
-	| { type: "set_active_agent", data: {
-	agent_id: string;
-}}
-	| { type: "set_active_profile", data: {
-	profile_id: string;
-}}
-	| { type: "list_profiles", data?: undefined }
-	| { type: "set_routing_mode", data: {
-	mode: RoutingMode;
-}}
-	| { type: "new_session", data: {
-	cwd?: string;
-	request_id?: string;
-	profile_id?: string;
-}}
-	| { type: "prompt", data: {
-	prompt: UiPromptBlock[];
-}}
-	| { type: "list_sessions", data: {
-	/** Query mode: browse (default), group, or search. */
-	mode?: string;
-	/** Opaque pagination cursor (offset as string for now). */
-	cursor?: string;
-	/** Max number of sessions to return. */
-	limit?: number;
-	/** Group key for mode=group (cwd path or null-group marker). */
-	cwd?: string;
-	/** Search query for mode=search. */
-	query?: string;
-	/** Session scope filter: all (default), root, forks, delegates, or children. */
-	session_scope?: SessionScope;
-	/**
-	 * When true, merge remote mesh sessions into the response.
-	 * Defaults to false so local session opening is never blocked on
-	 * remote discovery. The frontend sets this explicitly when the
-	 * session picker needs remote sessions.
-	 */
-	include_remote?: boolean;
-}}
-	| { type: "list_session_children", data: {
-	parent_session_id: string;
-	/** Opaque pagination cursor (offset as string for now). */
-	cursor?: string;
-	/** Max number of child sessions to return. */
-	limit?: number;
-	/** Child scope filter. Defaults to forks; delegates are never returned here. */
-	session_scope?: SessionScope;
-}}
-	| { type: "load_session", data: {
-	session_id: string;
-}}
-	| { type: "delete_session", data: {
-	session_id: string;
-}}
-	| { type: "list_all_models", data: {
-	refresh?: boolean;
-}}
-	| { type: "set_session_model", data: {
-	session_id: string;
-	model_id: string;
-	/** Optional mesh node id (PeerId string) that owns the provider. `None` = local. */
-	node_id?: string;
-}}
-	/** Get recent models from event history */
-	| { type: "get_recent_models", data: {
-	limit_per_workspace?: number;
-}}
-	/** Request file index for @ mentions */
-	| { type: "get_file_index", data?: undefined }
-	/** Request LLM config details by config_id */
-	| { type: "get_llm_config", data: {
-	config_id: number;
-}}
-	/** Cancel the active session for the current agent */
-	| { type: "cancel_session", data?: undefined }
-	/** Undo filesystem changes to a specific message point */
-	| { type: "undo", data: {
-	message_id: string;
-}}
-	/** Redo: restore filesystem to pre-undo state */
-	| { type: "redo", data?: undefined }
-	/** Fork the active session at a specific message boundary. */
-	| { type: "fork_session", data: {
-	message_id: string;
-}}
-	/** Subscribe to a session's event stream */
-	| { type: "subscribe_session", data: {
-	session_id: string;
-	agent_id?: string;
-}}
-	/** Unsubscribe from a session's event stream */
-	| { type: "unsubscribe_session", data: {
-	session_id: string;
-}}
-	/** Respond to an elicitation request */
-	| { type: "elicitation_response", data: {
-	elicitation_id: string;
-	session_id?: string;
-	action: string;
-	content: any;
-}}
-	/** List configured OAuth-capable providers and their auth status */
-	| { type: "list_auth_providers", data?: undefined }
-	/** Start OAuth login flow for provider */
-	| { type: "start_oauth_login", data: {
-	provider: string;
-}}
-	/** Complete OAuth login flow using pasted callback URL/code */
-	| { type: "complete_oauth_login", data: {
-	flow_id: string;
-	response: string;
-}}
-	/** Disconnect OAuth credentials for provider */
-	| { type: "disconnect_oauth", data: {
-	provider: string;
-}}
-	/** Set the agent's operating mode (build/plan/review) */
-	| { type: "set_agent_mode", data: {
-	mode: string;
-}}
-	/** Get the current agent mode */
-	| { type: "get_agent_mode", data?: undefined }
-	/** Set the reasoning effort level for the current session */
-	| { type: "set_reasoning_effort", data: {
-	reasoning_effort: string;
-}}
-	/** Get the current reasoning effort level */
-	| { type: "get_reasoning_effort", data?: undefined }
-	/** List remote nodes discovered in the kameo mesh */
-	| { type: "list_remote_nodes", data?: undefined }
-	/** List sessions on a specific remote node */
-	| { type: "list_remote_sessions", data: {
-	/** Stable node id (PeerId string) identifying the target node */
-	node_id: string;
-	/** Number of sessions to skip (default 0) */
-	offset?: number;
-	/** Maximum sessions to return (default 20, clamped to 1..100) */
-	limit?: number;
-}}
-	/** Create a new session on a specific remote node */
-	| { type: "create_remote_session", data: {
-	/** Stable node id (PeerId string) identifying the target node */
-	node_id: string;
-	/** Working directory on the remote machine (optional) */
-	cwd?: string;
-	/** Client-generated request ID for correlating the response */
-	request_id?: string;
-}}
-	/** Attach an existing remote session to the local dashboard */
-	| { type: "attach_remote_session", data: {
-	/** Stable node id (PeerId string) identifying the target node */
-	node_id: string;
-	/** Session ID to attach */
-	session_id: string;
-}}
-	/** Remove a persisted remote session bookmark and detach if currently attached */
-	| { type: "dismiss_remote_session", data: {
-	session_id: string;
-}}
-	| { type: "add_custom_model_from_hf", data: {
-	provider: string;
-	repo: string;
-	filename: string;
-	display_name?: string;
-}}
-	| { type: "add_custom_model_from_file", data: {
-	provider: string;
-	file_path: string;
-	display_name?: string;
-}}
-	| { type: "delete_custom_model", data: {
-	provider: string;
-	model_id: string;
-}}
-	/** Set an API token for a provider (stored in SecretStore) */
-	| { type: "set_api_token", data: {
-	provider: string;
-	api_key: string;
-}}
-	/** Clear a stored API token for a provider */
-	| { type: "clear_api_token", data: {
-	provider: string;
-}}
-	/** Set the preferred auth method for a provider */
-	| { type: "set_auth_method", data: {
-	provider: string;
-	method: AuthMethod;
-}}
-	/** Trigger an update of all OCI provider plugins. */
-	| { type: "update_plugins", data?: undefined }
-	/** Create a new schedule (recurring task + schedule trigger) */
-	| { type: "create_schedule", data: {
-	session_id: string;
-	/** Optional remote node that owns the session/schedule. */
-	node_id?: string;
-	/** Prompt text for each cycle (becomes the task's expected_deliverable) */
-	prompt: string;
-	/** Trigger configuration as JSON (ScheduleTrigger) */
-	trigger: any;
-	/** Optional execution limits */
-	max_steps?: number;
-	max_cost_usd?: number;
-	/** Optional max runs before exhaustion */
-	max_runs?: number;
-}}
-	/** List schedules for a session (or all if session_id is None) */
-	| { type: "list_schedules", data: {
-	session_id?: string;
-	node_id?: string;
-}}
-	/** Pause a schedule */
-	| { type: "pause_schedule", data: {
-	schedule_public_id: string;
-	session_id?: string;
-	node_id?: string;
-}}
-	/** Resume a paused schedule */
-	| { type: "resume_schedule", data: {
-	schedule_public_id: string;
-	session_id?: string;
-	node_id?: string;
-}}
-	/** Trigger a schedule to fire immediately */
-	| { type: "trigger_schedule", data: {
-	schedule_public_id: string;
-	session_id?: string;
-	node_id?: string;
-}}
-	/** Delete a schedule */
-	| { type: "delete_schedule", data: {
-	schedule_public_id: string;
-	session_id?: string;
-	node_id?: string;
-}}
-	/** Create a new mesh invite token */
-	| { type: "create_mesh_invite", data: {
-	/** Optional human-readable mesh name */
-	mesh_name?: string;
-	/** TTL as human string: "24h", "7d", "none". Default: "24h". */
-	ttl?: string;
-	/** Max uses (0 = unlimited, default 1) */
-	max_uses?: number;
-}}
-	/** List active (pending) mesh invites */
-	| { type: "list_mesh_invites", data?: undefined }
-	/** Revoke a mesh invite by ID */
-	| { type: "revoke_mesh_invite", data: {
-	invite_id: string;
-}}
-	/** Query the knowledge store */
-	| { type: "query_knowledge", data: {
-	scope: string;
-	question: string;
-	limit?: number;
-}}
-	/** List knowledge entries for a scope */
-	| { type: "list_knowledge", data: {
-	scope: string;
-	/** Optional filter as JSON (topics, entities, since, consolidated, limit) */
-	filter?: any;
-}}
-	/** Get knowledge stats for a scope */
-	| { type: "knowledge_stats", data: {
-	scope: string;
-}}
-	/**
-	 * Transcribe audio to text (STT).
-	 * 
-	 * Sent as a **binary WebSocket frame** with a length-prefixed JSON header
-	 * (this struct) followed by raw audio bytes. The JSON header is parsed
-	 * separately by `parse_binary_frame`; the audio payload is passed directly
-	 * to the handler.
-	 */
-	| { type: "transcribe", data: {
-	/** Provider name (e.g. "izwi") */
-	provider: string;
-	/** Model name (e.g. "Qwen3-ASR-0.6B") */
-	model: string;
-	/** MIME type of the audio payload (e.g. "audio/wav", "audio/webm"). */
-	mime_type?: string;
-}}
-	/**
-	 * Synthesize speech from text (TTS).
-	 * 
-	 * Sent as a normal JSON text frame. The response (`speech_result`) is a
-	 * binary frame containing a JSON header + raw audio bytes.
-	 */
-	| { type: "speech", data: {
-	/** Provider name (e.g. "izwi") */
-	provider: string;
-	/** Model name (e.g. "Kokoro-82M") */
-	model: string;
-	/** Text to synthesize */
-	text: string;
-	/** Optional voice/speaker preset name */
-	voice?: string;
-	/** Target audio format: "wav" (default) */
-	format?: string;
-}};
-
-/**
- * A block of content in a UI prompt (text or resource reference).
- * Typeshare-annotated: generated for TypeScript and Swift.
- */
-export type UiPromptBlock = 
-	| { type: "text", data: {
-	text: string;
-}}
-	| { type: "resource_link", data: {
-	name: string;
-	uri: string;
-	description?: string;
-}};
-
-/**
- * Messages from server to UI client.
- * Typeshare-annotated: generated for TypeScript and Swift.
- */
-export type UiServerMessage = 
-	| { type: "state", data: {
-	routing_mode: RoutingMode;
-	active_agent_id: string;
-	active_session_id?: string;
-	default_cwd?: string;
-	agents: UiAgentInfo[];
-	profiles: UiProfileInfo[];
-	active_profile_id?: string;
-	sessions_by_agent: Record<string, string>;
-	agent_mode: string;
-	reasoning_effort?: string;
-}}
-	| { type: "session_created", data: {
-	agent_id: string;
-	profile_id?: string;
-	session_id: string;
-	request_id?: string;
-}}
-	| { type: "event", data: {
-	agent_id: string;
-	profile_id?: string;
-	session_id: string;
-	event: EventEnvelope;
-}}
-	| { type: "session_events", data: {
-	session_id: string;
-	agent_id: string;
-	profile_id?: string;
-	events: EventEnvelope[];
-	cursor: StreamCursor;
-}}
-	| { type: "error", data: {
-	message: string;
-}}
-	| { type: "session_list", data: {
-	groups: SessionGroup[];
-	next_cursor?: string;
-	total_count: number;
-}}
-	| { type: "session_children", data: {
-	parent_session_id: string;
-	sessions: SessionSummary[];
-	next_cursor?: string;
-	total_count: number;
-}}
-	| { type: "session_loaded", data: {
-	session_id: string;
-	agent_id: string;
-	profile_id?: string;
-	node_id?: string;
-	audit: AuditView;
-	undo_stack: UndoStackFrame[];
-	cursor: StreamCursor;
-}}
-	| { type: "workspace_index_status", data: {
-	session_id: string;
-	status: string;
-	message?: string;
-}}
-	| { type: "all_models_list", data: {
-	models: ModelEntry[];
-}}
-	/** Recent models from event history, grouped by workspace */
-	| { type: "recent_models", data: {
-	by_workspace: Record<string, RecentModelEntry[]>;
-}}
-	| { type: "provider_capabilities", data: {
-	providers: ProviderCapabilityEntry[];
-}}
-	/** File index for autocomplete */
-	| { type: "file_index", data: {
-	files: FileIndexEntry[];
-	generated_at: number;
-}}
-	/** LLM config details response */
-	| { type: "llm_config", data: {
-	config_id: number;
-	provider: string;
-	model: string;
-	params: any;
-}}
-	/** Result of an undo operation */
-	| { type: "undo_result", data: {
-	success: boolean;
-	message?: string;
-	reverted_files: string[];
-	message_id?: string;
-	undo_stack: UndoStackFrame[];
-}}
-	/** Result of a redo operation */
-	| { type: "redo_result", data: {
-	success: boolean;
-	message?: string;
-	undo_stack: UndoStackFrame[];
-}}
-	/** Result of a fork operation. */
-	| { type: "fork_result", data: {
-	success: boolean;
-	source_session_id?: string;
-	forked_session_id?: string;
-	message?: string;
-}}
-	/** Current agent mode notification */
-	| { type: "agent_mode", data: {
-	mode: string;
-}}
-	/** Current reasoning effort notification */
-	| { type: "reasoning_effort", data: {
-	reasoning_effort?: string;
-}}
-	/** OAuth-capable providers and current authentication status */
-	| { type: "auth_providers", data: {
-	providers: AuthProviderEntry[];
-}}
-	/** OAuth flow started; frontend should open authorization_url */
-	| { type: "oauth_flow_started", data: {
-	flow_id: string;
-	provider: string;
-	authorization_url: string;
-	flow_kind: OAuthFlowKindTs;
-}}
-	/** OAuth flow completion result */
-	| { type: "oauth_result", data: {
-	provider: string;
-	success: boolean;
-	message: string;
-}}
-	/** List of remote nodes discovered in the kameo mesh */
-	| { type: "remote_nodes", data: {
-	nodes: RemoteNodeInfo[];
-}}
-	/** Sessions available on a specific remote node */
-	| { type: "remote_sessions", data: {
-	/** Stable node id (PeerId string) */
-	node_id: string;
-	/** Sessions on that node */
-	sessions: RemoteSessionInfo[];
-	/** Offset for the next page; omitted when there are no more pages */
-	next_offset?: number;
-	/** Total sessions across all pages */
-	total_count?: number;
-}}
-	/** Newly created mesh invite */
-	| { type: "mesh_invite_created", data: {
-	invite_id: string;
-	url: string;
-	qr_code?: string;
-	expires_at: number;
-	max_uses: number;
-	mesh_name?: string;
-}}
-	/** List of mesh invites */
-	| { type: "mesh_invite_list", data: {
-	invites: MeshInviteInfo[];
-}}
-	/** Invite revocation result */
-	| { type: "mesh_invite_revoked", data: {
-	invite_id: string;
-	success: boolean;
-	message?: string;
-}}
-	| { type: "model_download_status", data: {
-	provider: string;
-	model_id: string;
-	status: string;
-	bytes_downloaded: number;
-	bytes_total?: number;
-	percent?: number;
-	speed_bps?: number;
-	eta_seconds?: number;
-	message?: string;
-}}
-	/** Progress update for an OCI plugin update operation. */
-	| { type: "plugin_update_status", data: {
-	plugin_name: string;
-	image_reference: string;
-	phase: string;
-	bytes_downloaded: number;
-	bytes_total?: number;
-	percent?: number;
-	message?: string;
-}}
-	/** All OCI plugin updates have completed. */
-	| { type: "plugin_update_complete", data: {
-	results: PluginUpdateResult[];
-}}
-	/** Result of setting/clearing an API token */
-	| { type: "api_token_result", data: {
-	provider: string;
-	success: boolean;
-	message: string;
-}}
-	/** Schedule list response */
-	| { type: "schedule_list", data: {
-	schedules: ScheduleInfo[];
-	session_id?: string;
-	node_id?: string;
-}}
-	/** Schedule created successfully */
-	| { type: "schedule_created_result", data: {
-	success: boolean;
-	schedule_public_id?: string;
-	node_id?: string;
-	message?: string;
-}}
-	/** Schedule action result (pause/resume/trigger/delete) */
-	| { type: "schedule_action_result", data: {
-	success: boolean;
-	schedule_public_id: string;
-	action: string;
-	node_id?: string;
-	message?: string;
-}}
-	/** Knowledge query result (entries + consolidations) */
-	| { type: "knowledge_query_result", data: {
-	entries: KnowledgeEntryInfo[];
-	consolidations: ConsolidationInfo[];
-}}
-	/** Knowledge list result */
-	| { type: "knowledge_list_result", data: {
-	entries: KnowledgeEntryInfo[];
-}}
-	/** Knowledge stats result */
-	| { type: "knowledge_stats_result", data: {
-	total_entries: number;
-	unconsolidated_entries: number;
-	total_consolidations: number;
-	latest_entry_at?: string;
-	latest_consolidation_at?: string;
-}}
-	/** STT transcription result (text frame) */
-	| { type: "transcribe_result", data: {
-	text: string;
-}}
-	/** Audio provider capabilities (sent during init) */
-	| { type: "audio_capabilities", data: {
-	stt_models: AudioModelInfo[];
-	tts_models: AudioModelInfo[];
+export type SubmitInputResult = 
+	| { status: "steered", data: {
+	run_id: string;
+	input_id: string;
+	position: number;
+}}
+	| { status: "queued", data: {
+	input_id: string;
+	position: number;
+}}
+	| { status: "started", data: {
+	run_id: string;
+	input_id: string;
 }};
 

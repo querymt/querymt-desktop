@@ -146,7 +146,7 @@ describe('DelegateModelDialog', () => {
           reasoning_effort_supported: undefined,
           assignments: assignments.assignments.map(({ reasoning_effort: _, ...assignment }) => assignment),
           orphaned_overrides: assignments.orphaned_overrides.map(({ reasoning_effort: _, ...assignment }) => assignment)
-        },
+        } as unknown as DelegateAssignmentsInfo,
         models,
         onAssign,
         onRefresh: vi.fn()

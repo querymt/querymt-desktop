@@ -22,7 +22,9 @@
     hasUsableProviderCredential,
     providerAuthCapabilitiesFromAgent
   } from '$lib/domain/provider-auth';
-  import { AuthMethod, OAuthFlowKindTs, OAuthStatus, type AuthProviderEntry } from '$lib/querymt/generated/types';
+  import { AuthMethod, OAuthStatus } from '$lib/querymt/generated/types';
+  import type { AuthProviderStatus } from '$lib/querymt/generated/types';
+  import { OAuthFlowKind } from '$lib/querymt/querymt-extensions';
   import { openExternalUrl } from '$native';
   import { platformCapabilities } from '$lib/platform/runtime';
 
@@ -30,19 +32,19 @@
   let actionLoading = $state<string | null>(null);
   let pageError = $state<string | null>(null);
   let pageMessage = $state<string | null>(null);
-  let tokenDialogProvider = $state<AuthProviderEntry | null>(null);
+  let tokenDialogProvider = $state<AuthProviderStatus | null>(null);
   let tokenDialogValue = $state('');
-  let manualOAuthProvider = $state<AuthProviderEntry | null>(null);
+  let manualOAuthProvider = $state<AuthProviderStatus | null>(null);
   let manualOAuthFlowId = $state('');
-  let manualOAuthFlowKind = $state<OAuthFlowKindTs | null>(null);
+  let manualOAuthFlowKind = $state<OAuthFlowKind | null>(null);
   let manualOAuthAuthorizationUrl = $state('');
   let manualOAuthUrlCopied = $state(false);
   let manualOAuthNeedsCallbackInput = $state(false);
   let manualOAuthValue = $state('');
   let oauthCancelRequested = $state(false);
   let oauthCancelResolver: (() => void) | null = null;
-  let disconnectProviderPending = $state<AuthProviderEntry | null>(null);
-  let clearKeyProviderPending = $state<AuthProviderEntry | null>(null);
+  let disconnectProviderPending = $state<AuthProviderStatus | null>(null);
+  let clearKeyProviderPending = $state<AuthProviderStatus | null>(null);
   let providerDialogFocusTarget = $state<ProviderDialogFocusTarget | null>(null);
   let selectedSection = $state<SettingsSectionId>('general');
   let refreshingProviders = $state(false);
@@ -91,7 +93,7 @@
     selectedAgentId ? agentsStore.pluginUpdateStatusByAgent[selectedAgentId] ?? null : null
   );
   const lastPluginUpdate = $derived.by(() => (selectedAgentId ? agentsStore.lastPluginUpdateByAgent[selectedAgentId] ?? null : null));
-  const manualOAuthIsDevicePoll = $derived(manualOAuthFlowKind === OAuthFlowKindTs.DevicePoll);
+  const manualOAuthIsDevicePoll = $derived(manualOAuthFlowKind === OAuthFlowKind.DevicePoll);
 
   type OAuthPollResult = 'connected' | 'timeout' | 'cancelled';
 
@@ -116,33 +118,33 @@
     actionLoading = value;
   }
 
-  function startProviderAction(provider: AuthProviderEntry, action: string) {
+  function startProviderAction(provider: AuthProviderStatus, action: string) {
     providerPendingAction = { provider: provider.provider, action };
     providerMessages = { ...providerMessages, [provider.provider]: undefined };
     providerErrors = { ...providerErrors, [provider.provider]: undefined };
   }
 
-  function finishProviderAction(provider: AuthProviderEntry, action: string) {
+  function finishProviderAction(provider: AuthProviderStatus, action: string) {
     if (providerPendingAction?.provider === provider.provider && providerPendingAction.action === action) {
       providerPendingAction = null;
     }
   }
 
-  function setProviderMessage(provider: AuthProviderEntry, message: string) {
+  function setProviderMessage(provider: AuthProviderStatus, message: string) {
     providerMessages = { ...providerMessages, [provider.provider]: message };
     providerErrors = { ...providerErrors, [provider.provider]: undefined };
   }
 
-  function setProviderError(provider: AuthProviderEntry, message: string) {
+  function setProviderError(provider: AuthProviderStatus, message: string) {
     providerErrors = { ...providerErrors, [provider.provider]: message };
     providerMessages = { ...providerMessages, [provider.provider]: undefined };
   }
 
-  function isOAuthLoading(provider: AuthProviderEntry) {
+  function isOAuthLoading(provider: AuthProviderStatus) {
     return actionLoading === `oauth:${provider.provider}`;
   }
 
-  function isOAuthCompleting(provider: AuthProviderEntry) {
+  function isOAuthCompleting(provider: AuthProviderStatus) {
     return actionLoading === `oauth-complete:${provider.provider}`;
   }
 
@@ -153,7 +155,7 @@
     return !manualOAuthIsDevicePoll && !manualOAuthValue.trim();
   }
 
-  function requestOAuthCancel(provider: AuthProviderEntry) {
+  function requestOAuthCancel(provider: AuthProviderStatus) {
     if (!isOAuthLoading(provider)) return;
 
     // UI-side cancellation only: QueryMT ACP auth has no cancel endpoint yet.
@@ -217,9 +219,9 @@
   }
 
   function showOAuthDialog(
-    provider: AuthProviderEntry,
+    provider: AuthProviderStatus,
     flowId: string,
-    flowKind: OAuthFlowKindTs | null | undefined,
+    flowKind: OAuthFlowKind | null | undefined,
     authorizationUrl: string | null | undefined,
     needsCallbackInput = false
   ) {
@@ -457,7 +459,7 @@
     }
   }
 
-  async function handleOAuth(provider: AuthProviderEntry) {
+  async function handleOAuth(provider: AuthProviderStatus) {
     if (!selectedAgentId) return;
     const agentId = selectedAgentId;
     setBusy(`oauth:${provider.provider}`);
@@ -471,8 +473,8 @@
       const providerName = start.provider || provider.provider;
 
       const flowKind = start.flow_kind ?? null;
-      const waitsForRedirectCallback = Boolean(start.authorization_url && flowKind === OAuthFlowKindTs.RedirectCode);
-      const showsCallbackInput = flowKind !== OAuthFlowKindTs.DevicePoll;
+      const waitsForRedirectCallback = Boolean(start.authorization_url && flowKind === OAuthFlowKind.RedirectCode);
+      const showsCallbackInput = flowKind !== OAuthFlowKind.DevicePoll;
 
       showOAuthDialog(provider, start.flow_id, flowKind, start.authorization_url, showsCallbackInput);
 
@@ -514,20 +516,20 @@
     providerDialogFocusTarget = captureProviderDialogFocusTarget(event);
   }
 
-  function handleDisconnect(provider: AuthProviderEntry) {
+  function handleDisconnect(provider: AuthProviderStatus) {
     disconnectProviderPending = provider;
   }
 
-  function handleSetApiToken(provider: AuthProviderEntry) {
+  function handleSetApiToken(provider: AuthProviderStatus) {
     tokenDialogProvider = provider;
     tokenDialogValue = '';
   }
 
-  function handleClearApiToken(provider: AuthProviderEntry) {
+  function handleClearApiToken(provider: AuthProviderStatus) {
     clearKeyProviderPending = provider;
   }
 
-  async function handleAuthMethodChange(provider: AuthProviderEntry, value: string) {
+  async function handleAuthMethodChange(provider: AuthProviderStatus, value: string) {
     if (!selectedAgentId || value === 'auto') return;
     setBusy(`method:${provider.provider}`);
     startProviderAction(provider, 'method');

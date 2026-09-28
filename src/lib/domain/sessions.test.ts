@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
-import { buildListSessionsRequest, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions } from './sessions';
+import { buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 
 function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionId: string }): DesktopSessionSummary {
@@ -31,6 +31,10 @@ function createSession(meta?: Record<string, unknown>): SessionInfo {
   } as SessionInfo;
 }
 
+function runtimeMeta(phase: string): Record<string, unknown> {
+  return { phase, steerable: phase !== 'idle', pending_steering_count: 0, queued_input_count: 0 };
+}
+
 describe('session list request meta', () => {
   it('defaults ACP session/list requests to root scope meta', () => {
     expect(buildListSessionsRequest()).toEqual({
@@ -52,7 +56,7 @@ describe('session relationship metadata', () => {
           messageCount: 2,
           userMessageCount: 1,
           hasErrors: false,
-          runtimeStatus: 'idle',
+          runtimeStatus: runtimeMeta('idle'),
           parentSessionId: 'parent-1',
           forkOrigin: 'user',
           sessionKind: 'custom',
@@ -137,14 +141,14 @@ describe('workspace location', () => {
 });
 
 describe('inferSessionStatus', () => {
-  it('maps running runtimeStatus to thinking', () => {
+  it('maps active runtime phases to thinking', () => {
     expect(
       inferSessionStatus(
         createSession({
           messageCount: 2,
           userMessageCount: 1,
           hasErrors: false,
-          runtimeStatus: 'running'
+          runtimeStatus: runtimeMeta('model')
         })
       )
     ).toBe('thinking');
@@ -157,7 +161,7 @@ describe('inferSessionStatus', () => {
           messageCount: 2,
           userMessageCount: 1,
           hasErrors: false,
-          runtimeStatus: 'waiting'
+          runtimeStatus: runtimeMeta('waiting')
         })
       )
     ).toBe('waiting');
@@ -170,7 +174,7 @@ describe('inferSessionStatus', () => {
           messageCount: 2,
           userMessageCount: 1,
           hasErrors: false,
-          runtimeStatus: 'cancel_requested'
+          runtimeStatus: runtimeMeta('cancel_requested')
         })
       )
     ).toBe('cancelling');
@@ -183,7 +187,7 @@ describe('inferSessionStatus', () => {
           messageCount: 2,
           userMessageCount: 1,
           hasErrors: false,
-          runtimeStatus: 'idle'
+          runtimeStatus: runtimeMeta('idle')
         })
       )
     ).toBe('completed');
@@ -196,7 +200,7 @@ describe('inferSessionStatus', () => {
           messageCount: 0,
           userMessageCount: 0,
           hasErrors: false,
-          runtimeStatus: 'idle'
+          runtimeStatus: runtimeMeta('idle')
         })
       )
     ).toBe('idle');
@@ -204,6 +208,72 @@ describe('inferSessionStatus', () => {
 
   it('falls back to idle when session meta is missing', () => {
     expect(inferSessionStatus(createSession())).toBe('idle');
+  });
+});
+
+describe('newestTimestamp', () => {
+  it('returns the newer ISO timestamp regardless of argument order', () => {
+    expect(newestTimestamp('2026-06-17T12:00:00Z', '2026-06-17T12:05:00Z')).toBe('2026-06-17T12:05:00Z');
+    expect(newestTimestamp('2026-06-17T12:05:00Z', '2026-06-17T12:00:00Z')).toBe('2026-06-17T12:05:00Z');
+    expect(newestTimestamp('2026-06-17T12:00:00Z', '2026-06-17T12:00:00Z')).toBe('2026-06-17T12:00:00Z');
+  });
+
+  it('compares by parsed instant when fractional precision differs', () => {
+    expect(newestTimestamp('2026-06-17T12:00:00Z', '2026-06-17T12:00:00.500Z')).toBe(
+      '2026-06-17T12:00:00.500Z'
+    );
+    expect(newestTimestamp('2026-06-17T12:00:00.500Z', '2026-06-17T12:00:00Z')).toBe(
+      '2026-06-17T12:00:00.500Z'
+    );
+  });
+
+  it('compares by parsed instant when timezone offsets differ', () => {
+    // 2026-06-17T12:00:00+02:00 is 10:00Z, which is older than 10:30Z even
+    // though it sorts higher as a raw string.
+    expect(newestTimestamp('2026-06-17T12:00:00+02:00', '2026-06-17T10:30:00Z')).toBe(
+      '2026-06-17T10:30:00Z'
+    );
+    expect(newestTimestamp('2026-06-17T10:30:00Z', '2026-06-17T12:00:00+02:00')).toBe(
+      '2026-06-17T10:30:00Z'
+    );
+    // Equal instants in different offsets keep the current stamp.
+    expect(newestTimestamp('2026-06-17T12:00:00Z', '2026-06-17T14:00:00+02:00')).toBe(
+      '2026-06-17T12:00:00Z'
+    );
+  });
+
+  it('keeps the known timestamp when the incoming value is missing', () => {
+    expect(newestTimestamp('2026-06-17T12:00:00Z', null)).toBe('2026-06-17T12:00:00Z');
+    expect(newestTimestamp('2026-06-17T12:00:00Z', undefined)).toBe('2026-06-17T12:00:00Z');
+    expect(newestTimestamp(null, '2026-06-17T12:00:00Z')).toBe('2026-06-17T12:00:00Z');
+    expect(newestTimestamp(null, null)).toBeNull();
+  });
+});
+
+describe('formatSessionTimestamp', () => {
+  const now = Date.UTC(2026, 5, 17, 12, 30, 0);
+
+  it('formats relative labels against the provided reference time', () => {
+    expect(formatSessionTimestamp('2026-06-17T12:29:30Z', now)).toBe('just now');
+    expect(formatSessionTimestamp('2026-06-17T12:29:00Z', now)).toBe('1 minute ago');
+    expect(formatSessionTimestamp('2026-06-17T12:25:00Z', now)).toBe('5 minutes ago');
+    expect(formatSessionTimestamp('2026-06-17T12:00:00Z', now)).toBe('30 minutes ago');
+    expect(formatSessionTimestamp('2026-06-17T10:00:00Z', now)).toBe('2 hours ago');
+    expect(formatSessionTimestamp('2026-06-14T10:00:00Z', now)).toBe('3 days ago');
+  });
+
+  it('accepts a Date reference for clock-driven rendering', () => {
+    expect(formatSessionTimestamp('2026-06-17T12:20:00Z', new Date(now))).toBe('10 minutes ago');
+  });
+
+  it('falls back to the current clock when no reference is given', () => {
+    const recent = new Date(Date.now() - 30_000).toISOString();
+    expect(formatSessionTimestamp(recent)).toBe('just now');
+  });
+
+  it('keeps legacy behavior for missing and invalid values', () => {
+    expect(formatSessionTimestamp(null)).toBe('No recent activity');
+    expect(formatSessionTimestamp('not-a-date', now)).toBe('not-a-date');
   });
 });
 

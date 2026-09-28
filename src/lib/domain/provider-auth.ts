@@ -3,7 +3,7 @@ import {
   QMT_METHOD_AUTH_SET_API_TOKEN,
   QMT_METHOD_AUTH_SET_METHOD
 } from '$lib/querymt/querymt-extensions';
-import { AuthMethod, OAuthStatus, type AuthProviderEntry, type CapabilitiesInfo } from '$lib/querymt/generated/types';
+import { AuthMethod, OAuthStatus, type AuthProviderStatus, type CapabilitiesInfo } from '$lib/querymt/generated/types';
 
 export type ProviderConnectionState = 'attention' | 'setup' | 'connected';
 export type ProviderPrimaryAction = 'reconnect' | 'setup' | 'manage';
@@ -39,19 +39,19 @@ export function providerAuthCapabilitiesFromAgent(
 }
 
 /** Provider exposes a named API-key storage target (keyring / env var). */
-export function providerSupportsApiKey(provider: AuthProviderEntry): boolean {
+export function providerSupportsApiKey(provider: AuthProviderStatus): boolean {
   return Boolean(provider.env_var_name?.trim());
 }
 
 export function canShowSetApiKey(
-  provider: AuthProviderEntry,
+  provider: AuthProviderStatus,
   capabilities: ProviderAuthCapabilities = FULL_PROVIDER_AUTH_CAPABILITIES
 ): boolean {
   return providerSupportsApiKey(provider) && capabilities.canSetApiToken;
 }
 
 export function canShowClearApiKey(
-  provider: AuthProviderEntry,
+  provider: AuthProviderStatus,
   capabilities: ProviderAuthCapabilities = FULL_PROVIDER_AUTH_CAPABILITIES
 ): boolean {
   return provider.has_stored_api_key && providerSupportsApiKey(provider) && capabilities.canClearApiToken;
@@ -63,17 +63,17 @@ export function canEditAuthMethod(
   return capabilities.canSetAuthMethod;
 }
 
-export function hasUsableProviderCredential(provider: AuthProviderEntry): boolean {
+export function hasUsableProviderCredential(provider: AuthProviderStatus): boolean {
   return provider.oauth_status === OAuthStatus.Connected || provider.has_stored_api_key || provider.has_env_api_key;
 }
 
-export function providerConnectionState(provider: AuthProviderEntry): ProviderConnectionState {
+export function providerConnectionState(provider: AuthProviderStatus): ProviderConnectionState {
   if (hasUsableProviderCredential(provider)) return 'connected';
   if (provider.oauth_status === OAuthStatus.Expired) return 'attention';
   return 'setup';
 }
 
-export function providerConnectionSummary(provider: AuthProviderEntry): string {
+export function providerConnectionSummary(provider: AuthProviderStatus): string {
   if (provider.oauth_status === OAuthStatus.Connected) return 'Connected with OAuth';
   if (provider.has_stored_api_key) return 'Using a key stored in Desktop';
   if (provider.has_env_api_key) return provider.env_var_name ? `Using ${provider.env_var_name}` : 'Using an environment key';
@@ -82,14 +82,14 @@ export function providerConnectionSummary(provider: AuthProviderEntry): string {
   return 'Authentication required';
 }
 
-export function providerPrimaryAction(provider: AuthProviderEntry): ProviderPrimaryAction {
+export function providerPrimaryAction(provider: AuthProviderStatus): ProviderPrimaryAction {
   const state = providerConnectionState(provider);
   if (state === 'attention' && provider.supports_oauth) return 'reconnect';
   if (state === 'setup') return 'setup';
   return 'manage';
 }
 
-export function sortProvidersByAction(entries: AuthProviderEntry[]): AuthProviderEntry[] {
+export function sortProvidersByAction(entries: AuthProviderStatus[]): AuthProviderStatus[] {
   const rank: Record<ProviderConnectionState, number> = { attention: 0, setup: 1, connected: 2 };
   return [...entries].sort((left, right) => {
     const stateDifference = rank[providerConnectionState(left)] - rank[providerConnectionState(right)];
@@ -97,7 +97,7 @@ export function sortProvidersByAction(entries: AuthProviderEntry[]): AuthProvide
   });
 }
 
-export function providerAuthMethodOptions(provider: AuthProviderEntry): Array<{ value: AuthMethod | 'auto'; label: string }> {
+export function providerAuthMethodOptions(provider: AuthProviderStatus): Array<{ value: AuthMethod | 'auto'; label: string }> {
   const options: Array<{ value: AuthMethod | 'auto'; label: string }> = [
     { value: 'auto', label: 'Auto' },
     { value: AuthMethod.ApiKey, label: 'API key' }

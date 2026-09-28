@@ -59,6 +59,17 @@
   --success: #2ec27e;
   --warn: #f6d32d;
   --danger: #e01b24;
+  /* Session context meter tones, indexed by the agent-advertised mode order
+     (see getSessionContextTone). Values stay muted so any tone blends with the
+     warm gray surfaces; the dark theme swaps in lighter counterparts. */
+  --mode-tone-0: #c05621;
+  --mode-tone-1: #1a5fa8;
+  --mode-tone-2: #1a7f47;
+  --mode-tone-3: #7c3aad;
+  --mode-tone-4: #0f766e;
+  --mode-tone-5: #be185d;
+  --mode-tone-6: #a16207;
+  --mode-tone-7: #4f46e5;
   --body-bg-base: #f6f5f4;
   --body-bg-image: linear-gradient(180deg, #ffffff 0%, #f7f6f4 46%, #eeeeec 100%);
   --body-bg-size: auto;
@@ -138,6 +149,14 @@
   --status-muted-bg: rgba(255, 255, 255, 0.045);
   --status-muted-border: rgba(255, 255, 255, 0.13);
   --agents-active-text: var(--status-success);
+  --mode-tone-0: #fda36b;
+  --mode-tone-1: #93c5fd;
+  --mode-tone-2: #86efac;
+  --mode-tone-3: #c4b5fd;
+  --mode-tone-4: #5eead4;
+  --mode-tone-5: #f9a8d4;
+  --mode-tone-6: #ffd27a;
+  --mode-tone-7: #a5b4fc;
   --inline-code-bg: rgba(255, 255, 255, 0.075);
   --inline-code-text: #e5e5e5;
   --body-bg-base: #1b1b1b;
@@ -5473,7 +5492,7 @@ summary:focus-visible {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   min-height: 3.5rem;
-  gap: 0.75rem;
+  gap: 0.4rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--nav-bg);
@@ -5481,6 +5500,12 @@ summary:focus-visible {
   box-shadow: var(--shadow-sm);
   backdrop-filter: var(--surface-blur);
   -webkit-backdrop-filter: var(--surface-blur);
+}
+
+/* Second header row: the full-width session context meter. */
+.session-header-context {
+  grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .session-header-back {
@@ -6020,12 +6045,29 @@ summary:focus-visible {
 }
 
 .session-usage-bar {
+  --session-context-accent: var(--accent);
   display: grid;
   gap: 0.6rem;
   margin-top: 0.7rem;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 0.7rem;
+}
+
+/* Mode tones: indexes follow the agent-advertised mode order (see
+   getSessionContextTone); the context meter picks the accent up from here. */
+.session-context-tone-0 { --session-context-accent: var(--mode-tone-0); }
+.session-context-tone-1 { --session-context-accent: var(--mode-tone-1); }
+.session-context-tone-2 { --session-context-accent: var(--mode-tone-2); }
+.session-context-tone-3 { --session-context-accent: var(--mode-tone-3); }
+.session-context-tone-4 { --session-context-accent: var(--mode-tone-4); }
+.session-context-tone-5 { --session-context-accent: var(--mode-tone-5); }
+.session-context-tone-6 { --session-context-accent: var(--mode-tone-6); }
+.session-context-tone-7 { --session-context-accent: var(--mode-tone-7); }
+
+.session-usage-bar.session-usage-variant-context {
+  margin-top: 0;
+  align-items: center;
 }
 
 .session-usage-meta {
@@ -6045,6 +6087,14 @@ summary:focus-visible {
 .session-usage-icon,
 .session-usage-stat > svg {
   flex: 0 0 auto;
+}
+
+/* The gauge takes the mode tone; stat icons keep the application accent. */
+.session-usage-icon {
+  color: var(--session-context-accent);
+}
+
+.session-usage-stat > svg {
   color: var(--accent);
 }
 
@@ -6073,7 +6123,7 @@ summary:focus-visible {
   flex: 1 1 8rem;
   overflow: hidden;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--border-strong) 50%, transparent);
+  background: color-mix(in srgb, var(--session-context-accent) 14%, transparent);
 }
 
 .session-usage-meter span {
@@ -6081,8 +6131,8 @@ summary:focus-visible {
   inset: 0 auto 0 0;
   width: var(--session-context-percent);
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent), var(--status-running));
-  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--session-context-accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--session-context-accent) 35%, transparent);
   transition: width 240ms ease;
 }
 
