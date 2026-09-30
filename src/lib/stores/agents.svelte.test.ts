@@ -940,6 +940,67 @@ describe('AgentsStore connections', () => {
     expect(store.sessionHistoryLoading).toBe(false);
   });
 
+  it.each(['connection', 'rpc', 'identity'] as const)('clears loading after an explicit attach fails during %s', async (failure) => {
+    const store = createStore();
+    let resolveLoad!: (value: { response: { configOptions: SessionConfigOption[] }; replay: SessionNotification[] }) => void;
+    mockClient.loadSession.mockImplementationOnce(() => new Promise((resolve) => { resolveLoad = resolve; }));
+    const loading = store.loadSession('agent-1', 'local-session-2');
+    await vi.waitFor(() => expect(mockClient.loadSession).toHaveBeenCalled());
+    if (failure === 'connection') {
+      vi.spyOn(store as unknown as { connectInitializedRecord(): Promise<undefined> }, 'connectInitializedRecord')
+        .mockResolvedValueOnce(undefined);
+    } else if (failure === 'rpc') {
+      mockClient.attachRemoteSession.mockRejectedValueOnce(new Error('Attach unavailable'));
+    } else {
+      mockClient.attachRemoteSession.mockResolvedValueOnce({ session_id: 'wrong-session', node_id: 'node-1', attached: true,
+        config_options: [], snapshot: { audit: { events: [] } } });
+    }
+    await expect(store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1')).rejects.toThrow();
+    expect(store.activeSessionId).toBe('local-session-2');
+    expect(store.sessionHistoryLoading).toBe(false);
+    resolveLoad({ response: { configOptions: [] }, replay: [] });
+    await loading;
+    expect(store.sessionHistoryLoading).toBe(false);
+  });
+
+  it('does not clear a newer pending load when an older explicit attach fails', async () => {
+    const store = createStore();
+    let rejectAttach!: (error: Error) => void;
+    let resolveLoad!: (value: { response: { configOptions: SessionConfigOption[] }; replay: SessionNotification[] }) => void;
+    mockClient.attachRemoteSession.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectAttach = reject; }));
+    const attaching = store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+    await vi.waitFor(() => expect(mockClient.attachRemoteSession).toHaveBeenCalled());
+    mockClient.loadSession.mockImplementationOnce(() => new Promise((resolve) => { resolveLoad = resolve; }));
+    const loading = store.loadSession('agent-1', 'local-session-2');
+    await vi.waitFor(() => expect(mockClient.loadSession).toHaveBeenCalled());
+    rejectAttach(new Error('Late attach failure'));
+    await expect(attaching).rejects.toThrow('Late attach failure');
+    expect(store.sessionHistoryLoading).toBe(true);
+    expect(store.activeSessionId).toBe('local-session-2');
+    resolveLoad({ response: { configOptions: [] }, replay: [] });
+    await loading;
+    expect(store.sessionHistoryLoading).toBe(false);
+  });
+
+  it('leaves fallback attachment failure cleanup to the initiating load', async () => {
+    const store = createStore();
+    store.remoteSessionsByAgent = { 'agent-1': { 'node-1': {
+      node_id: 'node-1', total_count: 1, sessions: [{ id: 'remote-session-1', node_id: 'node-1' }]
+    } } };
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32602, 'Invalid params', { message: 'session not found' }));
+    mockClient.attachRemoteSession.mockRejectedValueOnce(new Error('Owner offline'));
+    const attach = store.attachRemoteSession.bind(store);
+    vi.spyOn(store, 'attachRemoteSession').mockImplementationOnce(async (...args) => {
+      try { return await attach(...args); }
+      finally { expect(store.sessionHistoryLoading).toBe(true); }
+    });
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(store.activeSession.lastError).toBe('Owner offline');
+    expect(store.sessionHistoryLoading).toBe(false);
+  });
+
   it('ignores an older attach when navigating away and back to the same remote session', async () => {
     const store = createStore();
     let resolveAttach!: (value: RemoteSessionAttachInfo) => void;

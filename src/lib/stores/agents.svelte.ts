@@ -3679,15 +3679,25 @@ export class AgentsStore {
   async attachRemoteSession(agentId: string, node_id: string, session_id: string, expectedGeneration?: number) {
     const generation = expectedGeneration ?? ++this.sessionSelectionGeneration;
     const remoteSession = this.remoteSessionsByAgent[agentId]?.[node_id]?.sessions.find((session) => session.id === session_id);
-    const record = await this.connectInitializedRecord(agentId);
-    if (!record) {
-      throw new Error('Failed to connect to the agent.');
-    }
-    if (generation !== this.sessionSelectionGeneration) return session_id;
-    const result = await record.client.attachRemoteSession({ node_id, session_id });
-    if (generation !== this.sessionSelectionGeneration) return session_id;
-    if (result.session_id !== session_id || result.node_id !== node_id) {
-      throw new Error('Remote attachment identity does not match the requested session.');
+    let result: RemoteSessionAttachInfo;
+    try {
+      const record = await this.connectInitializedRecord(agentId);
+      if (generation !== this.sessionSelectionGeneration) return session_id;
+      if (!record) {
+        throw new Error('Failed to connect to the agent.');
+      }
+      result = await record.client.attachRemoteSession({ node_id, session_id });
+      if (generation !== this.sessionSelectionGeneration) return session_id;
+      if (result.session_id !== session_id || result.node_id !== node_id) {
+        throw new Error('Remote attachment identity does not match the requested session.');
+      }
+    } catch (error) {
+      // A fallback load owns its cleanup; only an explicit attachment can
+      // inherit loading from the operation it superseded.
+      if (expectedGeneration === undefined && generation === this.sessionSelectionGeneration) {
+        this.sessionHistoryLoading = false;
+      }
+      throw error;
     }
     this.lastRemoteAttachByAgent = {
       ...this.lastRemoteAttachByAgent,
