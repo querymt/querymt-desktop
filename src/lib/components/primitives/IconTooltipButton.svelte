@@ -6,6 +6,7 @@
     icon: Icon,
     label,
     disabled = false,
+    ariaDisabled = false,
     tone = 'default',
     controlSize = 'standard',
     size = undefined,
@@ -15,6 +16,7 @@
     icon: Component<{ size?: number; strokeWidth?: number; class?: string }>;
     label: string;
     disabled?: boolean;
+    ariaDisabled?: boolean;
     tone?: 'default' | 'accent' | 'primary' | 'danger';
     controlSize?: 'compact' | 'standard';
     size?: number;
@@ -23,16 +25,21 @@
   } = $props();
 
   const iconSize = $derived(size ?? (controlSize === 'compact' ? 14 : 16));
+  const tooltipDisabled = $derived(disabled);
 </script>
 
 <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
-  <Tooltip.Root disableHoverableContent disabled={disabled}>
+  <Tooltip.Root disableHoverableContent disabled={tooltipDisabled}>
     <Tooltip.Trigger
       class={`icon-btn ${controlSize === 'compact' ? 'icon-btn-compact' : ''} ${tone === 'primary' ? 'icon-btn-primary' : tone === 'accent' ? 'icon-btn-accent' : tone === 'danger' ? 'icon-btn-danger' : ''}`}
       type="button"
       aria-label={label}
-      {disabled}
-      onclick={() => onclick?.()}
+      disabled={disabled}
+      aria-disabled={ariaDisabled ? 'true' : undefined}
+      onclick={() => {
+        if (disabled || ariaDisabled) return;
+        onclick?.();
+      }}
     >
       <Icon size={iconSize} strokeWidth={2} class={iconClass} />
     </Tooltip.Trigger>
