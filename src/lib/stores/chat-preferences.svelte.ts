@@ -83,11 +83,13 @@ export class ChatPreferencesStore {
     this.initialized = true;
   }
 
+  /** Persist remote catalog visibility without discarding the selected peer set. */
   setShowRemoteSessions(enabled: boolean) {
     this.showRemoteSessions = enabled;
     writeStorage(showRemoteSessionsKey, String(enabled));
   }
 
+  /** Persist an idempotent inclusion preference, not a remote authorization grant. */
   setRemoteSessionPeer(nodeId: string, enabled: boolean) {
     this.remoteSessionPeers = enabled
       ? [...new Set([...this.remoteSessionPeers, nodeId])]

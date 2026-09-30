@@ -251,6 +251,7 @@ export class AgentsStore {
   private workspaceDiscoveryPromises = new Map<string, Promise<void>>();
   private sessionListRefreshChain = new Map<string, Promise<void>>();
   private hydratedRemoteSessionKeys = new Set<string>();
+  private sessionSelectionGeneration = 0;
   private unlistenAgentLogs: UnlistenFn | null = null;
   private agentLogSubscriptionPending = false;
   private modelInfoCache = new Map<string, ModelInfo | null>();
@@ -581,6 +582,7 @@ export class AgentsStore {
   }
 
   dispose() {
+    this.sessionSelectionGeneration += 1;
     this.cancelPendingSessionNotifications();
     for (const agentId of [...this.sessionRefreshTimers.keys()]) {
       this.clearScheduledSessionRefresh(agentId);
@@ -1528,12 +1530,14 @@ export class AgentsStore {
     }
   }
 
+  /** Include remote peers only when the catalog preference explicitly enables them. */
   private buildSessionListRequest(input: { cwd?: string | null; cursor?: string | null } = {}) {
     chatPreferencesStore.initialize();
     const remoteNodeIds = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers : [];
     return buildListSessionsRequest({ ...input, remoteNodeIds });
   }
 
+  /** Seed a missing local summary only after the backend has accepted its load. */
   private ensureSessionLoadTarget(agentId: string, sessionId: string): DesktopSessionSummary | null {
     const existing = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
     if (existing) return existing;
@@ -1569,7 +1573,8 @@ export class AgentsStore {
     return fallback;
   }
 
-  private async findRemoteNodeForMissingSession(agentId: string, sessionId: string, client: DesktopAcpClient): Promise<string | null> {
+  /** Search selected peers until this load finds its owner or loses selection. */
+  private async findRemoteNodeForMissingSession(agentId: string, sessionId: string, client: DesktopAcpClient, isCurrentLoad: () => boolean): Promise<string | null> {
     chatPreferencesStore.initialize();
     const selectedPeers = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers : [];
     if (selectedPeers.length === 0) return null;
@@ -1589,9 +1594,9 @@ export class AgentsStore {
     const seenCursors = new Set<string>();
     let cursor: string | null = null;
     do {
-      if (!this.isSelectedSession(agentId, sessionId)) return null;
+      if (!isCurrentLoad()) return null;
       const page = await client.listSessions(this.buildSessionListRequest({ cursor }));
-      if (!this.isSelectedSession(agentId, sessionId)) return null;
+      if (!isCurrentLoad()) return null;
       const match = page.sessions.find((session) => session.sessionId === sessionId &&
         session._meta?.location === 'remote' && typeof session._meta.nodeId === 'string' &&
         selectedPeers.includes(session._meta.nodeId));
@@ -1611,6 +1616,7 @@ export class AgentsStore {
     return null;
   }
 
+  /** Replace load metadata and move a corrected summary to its current workspace. */
   private syncLoadedSessionSummary(agentId: string, summary: DesktopSessionSummary) {
     const previous = getSessionById(this.sessionsByAgent[agentId] ?? [], summary.sessionId);
     this.sessionsByAgent = {
@@ -2484,7 +2490,11 @@ export class AgentsStore {
     }
   }
 
+  /** Load history only while this selection generation still owns the view. */
   async loadSession(agentId: string, sessionId: string, pendingOperation: 'undo' | 'redo' | null = null) {
+    const selectionGeneration = ++this.sessionSelectionGeneration;
+    const isCurrentLoad = () => selectionGeneration === this.sessionSelectionGeneration &&
+      this.isSelectedSession(agentId, sessionId);
     const sessionKey = buildSessionKey(agentId, sessionId);
     if (
       pendingOperation === null &&
@@ -2502,6 +2512,7 @@ export class AgentsStore {
     this.acknowledgeSession(agentId, sessionId);
 
     const record = await this.connectInitializedRecord(agentId);
+    if (selectionGeneration !== this.sessionSelectionGeneration) return;
     if (!record) {
       this.error = 'Failed to connect to the agent.';
       return;
@@ -2543,6 +2554,10 @@ export class AgentsStore {
       // screen and still has content, keep the transcript rendered while the
       // fresh history loads. Resetting here collapses the scrollable content,
       // which un-pins the sticky header and makes the top panel jump vertically.
+      if (selectionGeneration !== this.sessionSelectionGeneration) {
+        telemetryStatus = 'cancelled';
+        return;
+      }
       const keepStaleContent =
         this.isSelectedSession(agentId, sessionId) &&
         (this.activeSession.transcript.length > 0 ||
@@ -2553,7 +2568,7 @@ export class AgentsStore {
         const staleRecord = this.ensureClientRecord(agentId);
         staleRecord.recentSessionUpdateKeys = [];
       } else {
-        this.resetActiveSession(agentId, sessionId);
+        this.resetActiveSession(agentId, sessionId, true);
       }
       this.activeSession.undo.pendingOperation = pendingOperation;
       // Distinguish "history is loading" from a live prompt run: both set
@@ -2563,6 +2578,10 @@ export class AgentsStore {
       this.activeSession.activityLabel = 'Loading session history...';
       this.activeSession.lastError = null;
       await tick();
+      if (!isCurrentLoad()) {
+        telemetryStatus = 'cancelled';
+        return;
+      }
       checkpoint('frontend.prepare');
       let loaded;
       try {
@@ -2576,12 +2595,13 @@ export class AgentsStore {
           ? (error.data as Record<string, unknown>).message : null;
         if (error instanceof RequestError && error.code === -32602 &&
           (message === 'session not found' || message === 'Session has no profile binding') &&
-          target?.location !== 'local' && this.isSelectedSession(agentId, sessionId)) {
+          target?.location !== 'local' && isCurrentLoad()) {
           const nodeId = target?.location === 'remote' && target.remoteNodeId
             ? target.remoteNodeId
-            : await this.findRemoteNodeForMissingSession(agentId, sessionId, record.client);
-          if (nodeId && this.isSelectedSession(agentId, sessionId)) {
-            await this.attachRemoteSession(agentId, nodeId, sessionId);
+            : await this.findRemoteNodeForMissingSession(agentId, sessionId, record.client, isCurrentLoad);
+          if (nodeId && isCurrentLoad()) {
+            await this.attachRemoteSession(agentId, nodeId, sessionId, selectionGeneration);
+            if (!isCurrentLoad()) telemetryStatus = 'cancelled';
             return;
           }
         }
@@ -2593,7 +2613,7 @@ export class AgentsStore {
         finishReplay = loaded.finishReplay;
       }
       checkpoint('frontend.acp_wait');
-      if (!this.isSelectedSession(agentId, sessionId)) {
+      if (!isCurrentLoad()) {
         telemetryStatus = 'cancelled';
         return;
       }
@@ -2640,7 +2660,7 @@ export class AgentsStore {
         replay = finishReplay();
         finishReplay = null;
       }
-      if (!this.isSelectedSession(agentId, sessionId)) {
+      if (!isCurrentLoad()) {
         telemetryStatus = 'cancelled';
         return;
       }
@@ -2709,7 +2729,7 @@ export class AgentsStore {
       }
       const drainedCount = await this.drainQueuedSessionUpdates(agentId, sessionId);
       checkpoint('frontend.queued_replay');
-      if (!this.isSelectedSession(agentId, sessionId)) {
+      if (!isCurrentLoad()) {
         telemetryStatus = 'cancelled';
         return;
       }
@@ -2741,14 +2761,14 @@ export class AgentsStore {
       this.reconcileInputStatesFromSnapshot(agentId, sessionId, loadedSession);
       if (record.client.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE)) {
         await this.refreshSessionRuntime(agentId, sessionId, record.client).catch(() => null);
-        if (!this.isSelectedSession(agentId, sessionId)) {
+        if (!isCurrentLoad()) {
           telemetryStatus = 'cancelled';
           return;
         }
       }
       await this.hydrateUndoStack(agentId, sessionId, record.client);
       checkpoint('frontend.undo_hydrate');
-      if (!this.isSelectedSession(agentId, sessionId)) {
+      if (!isCurrentLoad()) {
         telemetryStatus = 'cancelled';
         return;
       }
@@ -2775,6 +2795,10 @@ export class AgentsStore {
         debugEvents: this.activeSession.events.length
       });
     } catch (error) {
+      if (!isCurrentLoad()) {
+        telemetryStatus = 'cancelled';
+        return;
+      }
       telemetryStatus = 'error';
       const message = error instanceof Error ? error.message : 'Failed to load ACP session.';
       this.activeSession.runState = 'failed';
@@ -2783,7 +2807,7 @@ export class AgentsStore {
       this.error = message;
     } finally {
       finishReplay?.();
-      this.sessionHistoryLoading = false;
+      if (isCurrentLoad()) this.sessionHistoryLoading = false;
       if (heartbeat) clearInterval(heartbeat);
       await telemetryQueue;
       await finishSessionLoadTelemetry(telemetryOperationId, telemetryStatus, telemetryCounters());
@@ -3651,13 +3675,20 @@ export class AgentsStore {
     return result;
   }
 
-  async attachRemoteSession(agentId: string, node_id: string, session_id: string) {
+  /** Attach without letting a delayed response replace a newer selection. */
+  async attachRemoteSession(agentId: string, node_id: string, session_id: string, expectedGeneration?: number) {
+    const generation = expectedGeneration ?? ++this.sessionSelectionGeneration;
     const remoteSession = this.remoteSessionsByAgent[agentId]?.[node_id]?.sessions.find((session) => session.id === session_id);
     const record = await this.connectInitializedRecord(agentId);
     if (!record) {
       throw new Error('Failed to connect to the agent.');
     }
+    if (generation !== this.sessionSelectionGeneration) return session_id;
     const result = await record.client.attachRemoteSession({ node_id, session_id });
+    if (generation !== this.sessionSelectionGeneration) return session_id;
+    if (result.session_id !== session_id || result.node_id !== node_id) {
+      throw new Error('Remote attachment identity does not match the requested session.');
+    }
     this.lastRemoteAttachByAgent = {
       ...this.lastRemoteAttachByAgent,
       [agentId]: result
@@ -3666,21 +3697,23 @@ export class AgentsStore {
     return this.hydrateRemoteAttach(agentId, node_id, result, remoteSession ?? {
       id: session_id, node_id, title: discovered?.title, cwd: discovered?.cwd, updated_at: discovered?.updatedAt ?? undefined,
       profile_id: discovered?.remoteProfileId, profile_label: discovered?.remoteProfileLabel
-    });
+    }, true);
   }
 
+  /** Publish the owner's snapshot and metadata after attachment validation. */
   private async hydrateRemoteAttach(
     agentId: string,
     nodeId: string,
     result: RemoteSessionAttachInfo,
     remoteSession: { id: string; node_id: string; title?: string; cwd?: string; updated_at?: string;
-      profile_id?: string | null; profile_label?: string | null }
+      profile_id?: string | null; profile_label?: string | null },
+    preserveSelectionGeneration = false
   ): Promise<string> {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) throw new Error(`Unable to locate agent ${agentId}.`);
 
     const sessionId = result.session_id;
-    this.resetActiveSession(agentId, sessionId);
+    this.resetActiveSession(agentId, sessionId, preserveSelectionGeneration);
     const configOptions = result.config_options ?? [];
     const snapshot = activeSessionFromLoadResponse(sessionId, {
       _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
@@ -4220,11 +4253,14 @@ export class AgentsStore {
     this.pendingInputsBySession = { ...this.pendingInputsBySession, [key]: pending };
   }
 
-  private resetActiveSession(agentId: string, sessionId: string) {
+  /** Reset the view, invalidating prior loads unless this operation already owns a generation. */
+  private resetActiveSession(agentId: string, sessionId: string, preserveSelectionGeneration = false) {
+    if (!preserveSelectionGeneration) this.sessionSelectionGeneration += 1;
     this.activeAgentId = agentId;
     this.activeSessionId = sessionId;
     this.activeSession = createEmptyActiveSession();
     this.activeSession.sessionId = sessionId;
+    this.sessionHistoryLoading = false;
     this.promptFailure = null;
 
     const record = this.ensureClientRecord(agentId);

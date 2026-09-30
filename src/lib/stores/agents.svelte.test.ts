@@ -444,6 +444,10 @@ afterEach(() => {
   while (createdStores.length > 0) {
     createdStores.pop()?.dispose();
   }
+  chatPreferencesStore.setShowRemoteSessions(false);
+  for (const nodeId of chatPreferencesStore.remoteSessionPeers) {
+    chatPreferencesStore.setRemoteSessionPeer(nodeId, false);
+  }
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -797,8 +801,6 @@ describe('AgentsStore connections', () => {
     expect(store.workspaceSessionGroupsForLocation('remote')[0].sessions[0].title).toBe(expectedTitle);
     expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
     expect(mockClient.attachRemoteSession).not.toHaveBeenCalled();
-    chatPreferencesStore.setShowRemoteSessions(false);
-    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
   });
 
   it('uses the owner profile from remote load metadata without inventing local config options', async () => {
@@ -866,6 +868,125 @@ describe('AgentsStore connections', () => {
     expect(store.activeSession.configOptions).toEqual([]);
   });
 
+  it.each(['fallback', 'explicit'] as const)('ignores a delayed %s attach after navigating to another session', async (kind) => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.remoteSessionsByAgent = { 'agent-1': { 'node-1': {
+      node_id: 'node-1', total_count: 1,
+      sessions: [{ id: 'remote-session-1', node_id: 'node-1', cwd: '/remote' }]
+    } } };
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    let resolveAttach!: (value: RemoteSessionAttachInfo) => void;
+    mockClient.attachRemoteSession.mockImplementationOnce(() => new Promise((resolve) => { resolveAttach = resolve; }));
+    if (kind === 'fallback') {
+      mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32602, 'Invalid params', { message: 'session not found' }));
+    }
+    const attaching = kind === 'fallback'
+      ? store.loadSession('agent-1', 'remote-session-1')
+      : store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+    await vi.waitFor(() => expect(mockClient.attachRemoteSession).toHaveBeenCalled());
+    await store.loadSession('agent-1', 'local-session-2');
+    const selected = store.activeSession;
+    resolveAttach({
+      session_id: 'remote-session-1', node_id: 'node-1', attached: true,
+      config_options: [], snapshot: { audit: { events: [] } }
+    });
+    await attaching;
+    expect(store.activeSessionId).toBe('local-session-2');
+    expect(store.activeSession).toBe(selected);
+    expect(store.lastRemoteAttachByAgent['agent-1']).toBeUndefined();
+    store.setComposerPrompt('Stay on the selected host');
+    await store.sendPromptToActiveSession();
+    expect(mockClient.sendPrompt).toHaveBeenCalledWith('local-session-2', 'Stay on the selected host', [], expect.any(Object));
+  });
+
+  it('does not let an older load failure or cleanup change a newer pending load', async () => {
+    const store = createStore();
+    let rejectOlder!: (error: Error) => void;
+    let resolveNewer!: (value: { response: { configOptions: SessionConfigOption[] }; replay: SessionNotification[] }) => void;
+    mockClient.loadSession
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOlder = reject; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNewer = resolve; }));
+    const older = store.loadSession('agent-1', 'older');
+    await vi.waitFor(() => expect(mockClient.loadSession).toHaveBeenCalledTimes(1));
+    const newer = store.loadSession('agent-1', 'newer');
+    await vi.waitFor(() => expect(mockClient.loadSession).toHaveBeenCalledTimes(2));
+    rejectOlder(new Error('Old session unavailable'));
+    await older;
+    expect(store.activeSessionId).toBe('newer');
+    expect(store.activeSession.runState).toBe('thinking');
+    expect(store.activeSession.lastError).toBeNull();
+    expect(store.sessionHistoryLoading).toBe(true);
+    expect(store.error).toBeNull();
+    resolveNewer({ response: { configOptions: [] }, replay: [] });
+    await newer;
+    expect(store.sessionHistoryLoading).toBe(false);
+  });
+
+  it('clears history loading when an explicit attach supersedes a pending load', async () => {
+    const store = createStore();
+    let resolveLoad!: (value: { response: { configOptions: SessionConfigOption[] }; replay: SessionNotification[] }) => void;
+    mockClient.loadSession.mockImplementationOnce(() => new Promise((resolve) => { resolveLoad = resolve; }));
+    const loading = store.loadSession('agent-1', 'local-session-2');
+    await vi.waitFor(() => expect(mockClient.loadSession).toHaveBeenCalled());
+    expect(store.sessionHistoryLoading).toBe(true);
+    await store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+    expect(store.activeSessionId).toBe('remote-session-1');
+    expect(store.sessionHistoryLoading).toBe(false);
+    resolveLoad({ response: { configOptions: [] }, replay: [] });
+    await loading;
+    expect(store.activeSessionId).toBe('remote-session-1');
+    expect(store.sessionHistoryLoading).toBe(false);
+  });
+
+  it('ignores an older attach when navigating away and back to the same remote session', async () => {
+    const store = createStore();
+    let resolveAttach!: (value: RemoteSessionAttachInfo) => void;
+    mockClient.attachRemoteSession.mockImplementationOnce(() => new Promise((resolve) => { resolveAttach = resolve; }));
+    const attaching = store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+    await vi.waitFor(() => expect(mockClient.attachRemoteSession).toHaveBeenCalled());
+    await store.loadSession('agent-1', 'local-session-2');
+    await store.loadSession('agent-1', 'remote-session-1');
+    const selected = store.activeSession;
+    resolveAttach({ session_id: 'remote-session-1', node_id: 'node-1', attached: true,
+      config_options: [], snapshot: { audit: { events: [] } } });
+    await attaching;
+    expect(store.activeSessionId).toBe('remote-session-1');
+    expect(store.activeSession).toBe(selected);
+  });
+
+  it('keeps a newer snapshot when an older load for the same session completes last', async () => {
+    const store = createStore();
+    let resolveLoad!: (value: { response: { configOptions: SessionConfigOption[] }; replay: SessionNotification[] }) => void;
+    mockClient.loadSession.mockImplementationOnce(() => new Promise((resolve) => { resolveLoad = resolve; }));
+    const older = store.loadSession('agent-1', 'remote-session-1');
+    await vi.waitFor(() => expect(mockClient.loadSession).toHaveBeenCalledTimes(1));
+    await store.loadSession('agent-1', 'local-session-2');
+    await store.loadSession('agent-1', 'remote-session-1');
+    const selected = store.activeSession;
+    resolveLoad({ response: { configOptions: [] }, replay: [] });
+    await older;
+    expect(store.activeSession).toBe(selected);
+    expect(store.activeSessionId).toBe('remote-session-1');
+  });
+
+  it.each([
+    { session_id: 'unexpected-session', node_id: 'node-1' },
+    { session_id: 'remote-session-1', node_id: 'unexpected-node' }
+  ])('rejects an attach response with mismatched identity ($session_id / $node_id)', async (identity) => {
+    const store = createStore();
+    await store.loadSession('agent-1', 'local-session-2');
+    const selected = store.activeSession;
+    mockClient.attachRemoteSession.mockResolvedValueOnce({ ...identity, attached: true,
+      config_options: [], snapshot: { audit: { events: [] } } });
+    await expect(store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1'))
+      .rejects.toThrow('Remote attachment identity does not match the requested session.');
+    expect(store.activeSession).toBe(selected);
+    expect(store.activeSessionId).toBe('local-session-2');
+    expect(store.lastRemoteAttachByAgent['agent-1']).toBeUndefined();
+  });
+
   it('shows the owner mode on remote load and updates it from a confirmed write and reload', async () => {
     const store = createStore();
     const modeOption = (mode: string): SessionConfigOption => ({
@@ -921,8 +1042,6 @@ describe('AgentsStore connections', () => {
     expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
       expect.objectContaining({ sessionId: 'local-session-1', location: 'local' })
     ]));
-    chatPreferencesStore.setShowRemoteSessions(false);
-    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
   });
 
   it('does not scan remote peers after a known local session is missing', async () => {
@@ -941,8 +1060,6 @@ describe('AgentsStore connections', () => {
     expect(mockClient.attachRemoteSession).not.toHaveBeenCalled();
     expect(store.sessionsByAgent['agent-1'][0].location).toBe('local');
     expect(store.activeSession.lastError).toBe('Invalid params');
-    chatPreferencesStore.setShowRemoteSessions(false);
-    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
   });
 
   it('uses an explicit local load result over stale remote catalog metadata', async () => {
@@ -979,8 +1096,6 @@ describe('AgentsStore connections', () => {
     expect(store.workspaceSessionGroupsForLocation('local')).toEqual(expect.arrayContaining([
       expect.objectContaining({ cwd: '/local' })
     ]));
-    chatPreferencesStore.setShowRemoteSessions(false);
-    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
   });
 
   it('uses the direct load metadata to correct a stale local catalog entry', async () => {
@@ -1036,8 +1151,6 @@ describe('AgentsStore connections', () => {
     expect(mockClient.loadSession.mock.invocationCallOrder[0]).toBeLessThan(mockClient.listSessions.mock.invocationCallOrder[0]);
     expect(mockClient.listSessions.mock.invocationCallOrder[0]).toBeLessThan(mockClient.attachRemoteSession.mock.invocationCallOrder[0]);
     expect(mockClient.attachRemoteSession).toHaveBeenCalledWith({ node_id: 'node-1', session_id: 'remote-session-1' });
-    chatPreferencesStore.setShowRemoteSessions(false);
-    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
   });
 
   it('stops remote discovery at the matching page without loading the full catalog or models', async () => {
@@ -1060,8 +1173,6 @@ describe('AgentsStore connections', () => {
     expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
       expect.objectContaining({ sessionId: 'remote-session-1', location: 'remote', remoteNodeId: 'node-1', cwd: '/remote' })
     ]));
-    chatPreferencesStore.setShowRemoteSessions(false);
-    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
   });
 
   it('uses a cached remote listing before making another catalog request', async () => {
@@ -1077,8 +1188,6 @@ describe('AgentsStore connections', () => {
     await store.loadSession('agent-1', 'remote-session-1');
     expect(mockClient.listSessions).not.toHaveBeenCalled();
     expect(mockClient.attachRemoteSession).toHaveBeenCalledWith({ node_id: 'node-1', session_id: 'remote-session-1' });
-    chatPreferencesStore.setShowRemoteSessions(false);
-    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
   });
 
   it('discovers selected remote sessions and attaches only when direct load finds no bookmark', async () => {
@@ -1107,8 +1216,6 @@ describe('AgentsStore connections', () => {
     expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
     expect(mockClient.loadSession.mock.invocationCallOrder[0]).toBeLessThan(mockClient.attachRemoteSession.mock.invocationCallOrder[0]);
     expect(mockClient.attachRemoteSession).toHaveBeenCalledWith({ node_id: 'node-1', session_id: 'remote-session-1' });
-    chatPreferencesStore.setShowRemoteSessions(false);
-    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
   });
 
   it('hydrates and activates an attached remote session without reloading it immediately', async () => {
@@ -1154,8 +1261,6 @@ describe('AgentsStore connections', () => {
 
     await store.loadSession('agent-1', 'remote-session-1');
     expect(mockClient.loadSession).not.toHaveBeenCalled();
-    chatPreferencesStore.setShowRemoteSessions(false);
-    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
   });
 
   it('forks at the selected message, refreshes sessions, and inserts a fallback summary', async () => {

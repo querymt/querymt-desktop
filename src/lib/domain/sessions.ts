@@ -84,6 +84,7 @@ export function buildSessionKey(agentId: string, sessionId: string): string {
   return `${agentId}:${sessionId}`;
 }
 
+/** Build a root-session catalog request with optional workspace and selected remote peers. */
 export function buildListSessionsRequest(input: {
   cwd?: string | null;
   cursor?: string | null;
@@ -110,6 +111,7 @@ export function isRootSession(session: Pick<DesktopSessionSummary, 'parentSessio
   return !session.parentSessionId?.trim();
 }
 
+/** Preserve owner-sourced location, profile, and availability metadata in desktop summaries. */
 export function mapAcpSessionsToDesktopSessions(
   sessions: SessionInfo[],
   agent: { agentId: string; agentName: string }
