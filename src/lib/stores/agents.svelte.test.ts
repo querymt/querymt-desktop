@@ -1048,6 +1048,50 @@ describe('AgentsStore connections', () => {
     expect(store.lastRemoteAttachByAgent['agent-1']).toBeUndefined();
   });
 
+  it.each(['fallback', 'explicit'] as const)('keeps a successful %s attachment usable when catalog refresh fails', async (kind) => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.remoteSessionsByAgent = { 'agent-1': { 'node-1': {
+      node_id: 'node-1', total_count: 1, sessions: [{ id: 'remote-session-1', node_id: 'node-1' }]
+    } } };
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    if (kind === 'fallback') {
+      mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32602, 'Invalid params', { message: 'session not found' }));
+    }
+    mockClient.attachRemoteSession.mockResolvedValueOnce({
+      session_id: 'remote-session-1', node_id: 'node-1', attached: true, config_options: [],
+      snapshot: { audit: { events: [{ seq: 1, timestamp: 1, kind: { type: 'prompt_received', data: {
+        message_id: 'm1', content: 'Usable owner snapshot'
+      } } }] } }
+    });
+    const refreshError = new Error('Catalog unavailable');
+    mockClient.listRemoteSessions.mockRejectedValueOnce(refreshError);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const attaching = kind === 'fallback'
+        ? store.loadSession('agent-1', 'remote-session-1')
+        : store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+      await expect(attaching).resolves.toBe(kind === 'fallback' ? undefined : 'remote-session-1');
+      expect(store.activeSessionId).toBe('remote-session-1');
+      expect(store.activeSession.runState).not.toBe('failed');
+      expect(store.activeSession.lastError).toBeNull();
+      expect(store.error).toBeNull();
+      expect(store.activeSession.transcript).toEqual(expect.arrayContaining([
+        expect.objectContaining({ text: 'Usable owner snapshot' })
+      ]));
+      expect(warn).toHaveBeenCalledWith('Remote session attached, but catalog refresh failed', refreshError);
+      await store.loadSession('agent-1', 'remote-session-1');
+      expect(mockClient.loadSession).toHaveBeenCalledTimes(kind === 'fallback' ? 1 : 0);
+      expect(store.activeSession.lastError).toBeNull();
+      mockClient.listRemoteSessions.mockResolvedValueOnce({ node_id: 'node-1', total_count: 0, sessions: [] });
+      await store.refreshRemoteSessionsForAgent('agent-1', 'node-1');
+      expect(store.remoteSessionsByAgent['agent-1']['node-1']?.sessions).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('shows the owner mode on remote load and updates it from a confirmed write and reload', async () => {
     const store = createStore();
     const modeOption = (mode: string): SessionConfigOption => ({

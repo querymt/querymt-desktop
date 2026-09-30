@@ -3765,7 +3765,10 @@ export class AgentsStore {
     };
     this.updateWorkspaceDiscovery(config, [summary], false);
     this.hydratedRemoteSessionKeys.add(buildSessionKey(agentId, sessionId));
-    await this.refreshRemoteSessionsForAgent(agentId, nodeId);
+    // Attachment is committed; a retryable catalog refresh must not fail its load.
+    await this.refreshRemoteSessionsForAgent(agentId, nodeId).catch((error) => {
+      console.warn('Remote session attached, but catalog refresh failed', error);
+    });
     return sessionId;
   }
 
