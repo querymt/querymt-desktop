@@ -7,6 +7,8 @@ const storageKey = 'querymt.sendShortcut';
 const imageModeStorageKey = 'querymt.imageAttachmentMode';
 const developerModeStorageKey = 'querymt.developerMode';
 const inputDeliveryStorageKey = 'querymt.inputDelivery';
+const showRemoteSessionsKey = 'querymt.showRemoteSessions';
+const remoteSessionPeersKey = 'querymt.remoteSessionPeers';
 
 function isSendShortcut(value: string | null): value is SendShortcut {
   return value === 'enter' || value === 'shift-enter' || value === 'ctrl-enter' || value === 'cmd-enter';
@@ -45,6 +47,8 @@ export class ChatPreferencesStore {
   imageSendMode = $state<ImageSendMode>('image');
   developerMode = $state(false);
   inputDelivery = $state<SessionInputDeliveryMode>('steer');
+  showRemoteSessions = $state(false);
+  remoteSessionPeers = $state<string[]>([]);
   initialized = $state(false);
 
   initialize() {
@@ -69,7 +73,26 @@ export class ChatPreferencesStore {
       this.inputDelivery = savedInputDelivery;
     }
 
+    this.showRemoteSessions = readStorage(showRemoteSessionsKey) === 'true';
+    try {
+      const peers: unknown = JSON.parse(readStorage(remoteSessionPeersKey) ?? '[]');
+      if (Array.isArray(peers)) this.remoteSessionPeers = peers.filter((id): id is string => typeof id === 'string' && id.length > 0);
+    } catch {
+      this.remoteSessionPeers = [];
+    }
     this.initialized = true;
+  }
+
+  setShowRemoteSessions(enabled: boolean) {
+    this.showRemoteSessions = enabled;
+    writeStorage(showRemoteSessionsKey, String(enabled));
+  }
+
+  setRemoteSessionPeer(nodeId: string, enabled: boolean) {
+    this.remoteSessionPeers = enabled
+      ? [...new Set([...this.remoteSessionPeers, nodeId])]
+      : this.remoteSessionPeers.filter((id) => id !== nodeId);
+    writeStorage(remoteSessionPeersKey, JSON.stringify(this.remoteSessionPeers));
   }
 
   setSendShortcut(shortcut: SendShortcut) {

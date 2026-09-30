@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
-import type { AgentConfig, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
+import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionInfo, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
+import type { AgentConfig, DesktopSessionSummary, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { findModeConfigOption, findReasoningConfigOption, getModelSelectionKey } from '$lib/querymt/config-options';
 import { QMT_METHOD_MESH_NODES, QMT_METHOD_MESH_STATUS } from '$lib/querymt/querymt-extensions';
 import {
@@ -11,6 +11,7 @@ import {
   type MeshInviteListInfo,
   type MeshNodesInfo,
   type MeshStatusInfo,
+  type RemoteSessionAttachInfo,
   type SetDelegateModelRequest,
   SessionInputDelivery,
   SessionInputState,
@@ -25,6 +26,7 @@ import { tick } from 'svelte';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
 import { startAgent } from '$native';
 import { AgentsStore } from './agents.svelte';
+import { chatPreferencesStore } from './chat-preferences.svelte';
 import { inboxStore } from './inbox.svelte';
 import { DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
 
@@ -59,9 +61,7 @@ const mockClient = vi.hoisted(() => {
       sessionId: 'session-1',
       configOptions: []
     })),
-    listSessions: vi.fn(async (): Promise<{
-      sessions: Array<{ sessionId: string; title: string; cwd: string; updatedAt: string }>
-    }> => ({ sessions: [] })),
+    listSessions: vi.fn(async (): Promise<{ sessions: SessionInfo[]; nextCursor?: string }> => ({ sessions: [] })),
     deleteSession: vi.fn(async () => undefined),
     loadSession: vi.fn(async (_sessionId?: string, _cwd?: string): Promise<{
       response: { configOptions: SessionConfigOption[]; _meta?: Record<string, unknown> };
@@ -212,7 +212,7 @@ const mockClient = vi.hoisted(() => {
     })),
     listMeshNodes: vi.fn(async (): Promise<MeshNodesInfo> => ({ nodes: [] })),
     listMeshInvites: vi.fn(async (): Promise<MeshInviteListInfo> => ({ invites: [] })),
-    attachRemoteSession: vi.fn(async () => ({
+    attachRemoteSession: vi.fn(async (): Promise<RemoteSessionAttachInfo> => ({
       session_id: 'remote-session-1',
       node_id: 'node-1',
       attached: true,
@@ -435,6 +435,7 @@ beforeEach(() => {
     queued_input_count: 0,
     run_started_at_ms: undefined
   });
+  mockClient.listSessions.mockReset().mockResolvedValue({ sessions: [] });
   mockClient.loadSession.mockReset().mockResolvedValue({ response: { configOptions: [] }, replay: [] });
   mockClient.createSession.mockReset().mockResolvedValue({ sessionId: 'session-1', configOptions: [] });
 });
@@ -448,6 +449,25 @@ afterEach(() => {
 });
 
 describe('AgentsStore connections', () => {
+  it('keeps a selected workspace peer visible as the target when it goes offline', () => {
+    const store = createStore();
+    store.setComposerAgent('agent-1');
+    store.setComposerTarget('peer-offline');
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'remote-1', title: 'Remote task',
+        cwd: '/remote/work', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'QMTCODE',
+        source: 'acp', location: 'remote', remoteNodeId: 'peer-offline',
+        remoteNodeLabel: 'Laptop', status: 'idle'
+      } satisfies DesktopSessionSummary]
+    };
+
+    expect(store.getTargetOptions('agent-1')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'peer-offline', label: 'Laptop' })
+    ]));
+    expect(store.getTargetOptions(null).map((target) => target.id)).toEqual(['local']);
+  });
+
   it('subscribes to live agent logs and retains the latest 200 entries', async () => {
     type LogEvent = { payload: { agentId: string; entry: { timestamp: string; stream: 'system'; message: string } } };
     let handleLog: ((event: LogEvent) => void) | undefined;
@@ -593,8 +613,8 @@ describe('AgentsStore connections', () => {
     await store.connectAgent('agent-1');
     await store.loadSession('agent-1', 'session-child');
 
-    expect(mockClient.listSessions).toHaveBeenCalledWith(listSessionsRequest());
-    expect(mockClient.loadSession).toHaveBeenCalledWith('session-child', '/tmp/work');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.loadSession).toHaveBeenCalledWith('session-child', '');
     expect(store.error).toBeNull();
     expect(store.activeSessionId).toBe('session-child');
     expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
@@ -653,7 +673,7 @@ describe('AgentsStore connections', () => {
     await store.connectAgent('agent-1');
     await store.loadSession('agent-1', 'session-child');
 
-    expect(mockClient.listSessions).toHaveBeenCalledWith(listSessionsRequest());
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
     expect(store.error).toBeNull();
     expect(store.activeSessionId).toBe('session-child');
     expect(store.activeSession.transcript).toEqual([
@@ -714,8 +734,387 @@ describe('AgentsStore connections', () => {
     ]);
   });
 
+  it('loads a bookmarked remote deep link without scanning the session catalog', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [], _meta: {
+        location: 'remote', nodeId: 'node-1', nodeLabel: 'Laptop',
+        cwd: '/remote/work', title: 'Remote task',
+        'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+          { seq: 1, timestamp: 1, kind: { type: 'prompt_received', data: { message_id: 'm1', content: 'Remote prompt' } } }
+        ] } }
+      } }, replay: []
+    });
+
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(mockClient.loadSession).toHaveBeenCalledWith('remote-session-1', '');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.attachRemoteSession).not.toHaveBeenCalled();
+    expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: 'remote-session-1', location: 'remote', remoteNodeId: 'node-1', cwd: '/remote/work' })
+    ]));
+    expect(store.activeSession.transcript).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: 'Remote prompt' })
+    ]));
+
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(mockClient.loadSession).toHaveBeenCalledTimes(2);
+    expect(mockClient.attachRemoteSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { responseTitle: null, expectedTitle: 'Catalog title' },
+    { responseTitle: 'Response title', expectedTitle: 'Response title' }
+  ])('keeps the right remote title when discovery finishes during load ($expectedTitle)', async ({ responseTitle, expectedTitle }) => {
+    const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    await store.connectAgent('agent-1');
+
+    let resolveLoad!: (value: {
+      response: { configOptions: SessionConfigOption[]; _meta?: Record<string, unknown> };
+      replay: SessionNotification[];
+    }) => void;
+    mockClient.loadSession.mockImplementationOnce(() => new Promise((resolve) => { resolveLoad = resolve; }));
+    const loading = store.loadSession('agent-1', 'remote-session-1');
+    await vi.waitFor(() => expect(mockClient.loadSession).toHaveBeenCalledWith('remote-session-1', ''));
+
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{
+      sessionId: 'remote-session-1', title: 'Catalog title', cwd: '/remote/work',
+      _meta: { location: 'remote', nodeId: 'node-1' }
+    }] });
+    await store.refreshSessionsForAgent('agent-1', true);
+    expect(store.sessionsByAgent['agent-1'][0].title).toBe('Catalog title');
+
+    resolveLoad({ response: { configOptions: [], _meta: {
+      location: 'remote', nodeId: 'node-1', title: responseTitle, cwd: '/remote/work'
+    } }, replay: [] });
+    await loading;
+
+    expect(store.sessionsByAgent['agent-1'][0]).toMatchObject({
+      title: expectedTitle, location: 'remote', remoteNodeId: 'node-1'
+    });
+    expect(store.workspaceSessionGroupsForLocation('remote')[0].sessions[0].title).toBe(expectedTitle);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+    expect(mockClient.attachRemoteSession).not.toHaveBeenCalled();
+    chatPreferencesStore.setShowRemoteSessions(false);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
+  });
+
+  it('uses the owner profile from remote load metadata without inventing local config options', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      location: 'remote', nodeId: 'node-1', profileId: 'owner-profile', profileLabel: 'Owner Profile'
+    } }, replay: [] });
+
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(store.sessionsByAgent['agent-1'][0]).toMatchObject({
+      remoteProfileId: 'owner-profile', remoteProfileLabel: 'Owner Profile'
+    });
+    expect(store.activeSession.configOptions).toEqual([]);
+    expect(store.getProfileOptions().some((option) => option.id === 'owner-profile')).toBe(false);
+  });
+
+  it('clears a stale remote profile when the owner reports no binding', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [{
+      agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'remote-session-1', title: 'Remote task',
+      cwd: '/remote', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'QMTCODE',
+      source: 'acp', location: 'remote', remoteNodeId: 'node-1',
+      remoteProfileId: 'stale', remoteProfileLabel: 'Stale', status: 'idle'
+    }] };
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      location: 'remote', nodeId: 'node-1', profileId: null, profileLabel: null
+    } }, replay: [] });
+
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(store.sessionsByAgent['agent-1'][0].remoteProfileId).toBeUndefined();
+    expect(store.sessionsByAgent['agent-1'][0].remoteProfileLabel).toBeUndefined();
+  });
+
+  it('does not reuse an old profile label when the owner reports a different ID', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [{
+      agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'remote-session-1', title: 'Remote task',
+      cwd: '/remote', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'QMTCODE',
+      source: 'acp', location: 'remote', remoteNodeId: 'node-1',
+      remoteProfileId: 'old', remoteProfileLabel: 'Old Profile', status: 'idle'
+    }] };
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      location: 'remote', nodeId: 'node-1', profileId: 'new'
+    } }, replay: [] });
+
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(store.sessionsByAgent['agent-1'][0].remoteProfileId).toBe('new');
+    expect(store.sessionsByAgent['agent-1'][0].remoteProfileLabel).toBeUndefined();
+  });
+
+  it('uses the owner profile from remote attach without local profile options', async () => {
+    const store = createStore();
+    mockClient.attachRemoteSession.mockResolvedValueOnce({
+      session_id: 'remote-session-1', node_id: 'node-1', attached: true,
+      config_options: [], profile_id: 'owner-profile', profile_label: 'Owner Profile',
+      snapshot: { audit: { events: [{ seq: 1, timestamp: 1, kind: { type: 'prompt_received', data: {
+        message_id: 'm1', content: 'Review deployment'
+      } } }] } }
+    });
+
+    await store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+    expect(store.sessionsByAgent['agent-1'][0]).toMatchObject({
+      remoteProfileId: 'owner-profile', remoteProfileLabel: 'Owner Profile'
+    });
+    expect(store.activeSession.configOptions).toEqual([]);
+  });
+
+  it('shows the owner mode on remote load and updates it from a confirmed write and reload', async () => {
+    const store = createStore();
+    const modeOption = (mode: string): SessionConfigOption => ({
+      id: 'mode', name: 'Session Mode', type: 'select', currentValue: mode,
+      options: [{ value: 'build', name: 'Build' }, { value: 'plan', name: 'Plan' }, { value: 'review', name: 'Review' }]
+    });
+    mockClient.loadSession.mockResolvedValueOnce({ response: {
+      configOptions: [modeOption('plan')], _meta: { location: 'remote', nodeId: 'node-1' }
+    }, replay: [] });
+
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(store.activeSession.configOptions).toEqual([modeOption('plan')]);
+    expect(store.getSessionModeId('agent-1', 'remote-session-1')).toBe('plan');
+
+    mockClient.setSessionConfigOption.mockResolvedValueOnce([modeOption('review')]);
+    await store.setActiveSessionConfigOption('mode', 'review');
+    expect(mockClient.setSessionConfigOption).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'remote-session-1', configId: 'mode', value: 'review'
+    }));
+    expect(store.getSessionModeId('agent-1', 'remote-session-1')).toBe('review');
+
+    mockClient.loadSession.mockResolvedValueOnce({ response: {
+      configOptions: [modeOption('review')], _meta: { location: 'remote', nodeId: 'node-1' }
+    }, replay: [] });
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(store.activeSession.configOptions).toEqual([modeOption('review')]);
+    expect(store.getSessionModeId('agent-1', 'remote-session-1')).toBe('review');
+  });
+
+  it('shows the confirmed owner mode after remote attach', async () => {
+    const store = createStore();
+    const modeOption: SessionConfigOption = {
+      id: 'mode', name: 'Session Mode', type: 'select', currentValue: 'plan',
+      options: [{ value: 'build', name: 'Build' }, { value: 'plan', name: 'Plan' }]
+    };
+    mockClient.attachRemoteSession.mockResolvedValueOnce({
+      session_id: 'remote-session-1', node_id: 'node-1', attached: true,
+      config_options: [modeOption], snapshot: { audit: { events: [] } }
+    });
+
+    await store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+    expect(store.activeSession.configOptions).toEqual([modeOption]);
+    expect(store.getSessionModeId('agent-1', 'remote-session-1')).toBe('plan');
+  });
+
+  it('loads an unknown local deep link without remote discovery even when peers are selected', async () => {
+    const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    await store.loadSession('agent-1', 'local-session-1');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.loadSession).toHaveBeenCalled();
+    expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: 'local-session-1', location: 'local' })
+    ]));
+    chatPreferencesStore.setShowRemoteSessions(false);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
+  });
+
+  it('does not scan remote peers after a known local session is missing', async () => {
+    const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    store.sessionsByAgent = { 'agent-1': [{
+      agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'local-session-1', title: 'Local task',
+      cwd: '/tmp/work', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'QMTCODE',
+      source: 'acp', location: 'local', status: 'idle'
+    }] };
+    mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32602, 'Invalid params', { message: 'session not found' }));
+
+    await store.loadSession('agent-1', 'local-session-1');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.attachRemoteSession).not.toHaveBeenCalled();
+    expect(store.sessionsByAgent['agent-1'][0].location).toBe('local');
+    expect(store.activeSession.lastError).toBe('Invalid params');
+    chatPreferencesStore.setShowRemoteSessions(false);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
+  });
+
+  it('uses an explicit local load result over stale remote catalog metadata', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [{
+      agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Task',
+      cwd: '/tmp/work', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'QMTCODE',
+      source: 'acp', location: 'remote', remoteNodeId: 'node-1', status: 'idle'
+    }] };
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: { location: 'local' } }, replay: [] });
+
+    await store.loadSession('agent-1', 'session-1');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.attachRemoteSession).not.toHaveBeenCalled();
+    expect(store.sessionsByAgent['agent-1'][0]).toMatchObject({ location: 'local', remoteNodeId: undefined });
+  });
+
+  it('moves a corrected local session out of its stale remote workspace', async () => {
+    const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{
+      sessionId: 'session-1', title: 'Remote task', cwd: '/remote',
+      _meta: { location: 'remote', nodeId: 'node-1' }
+    }] });
+    await store.refreshSessionsForAgent('agent-1', true);
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      location: 'local', title: 'Local task', cwd: '/local'
+    } }, replay: [] });
+
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.sessionsByAgent['agent-1'][0]).toMatchObject({ location: 'local', cwd: '/local', title: 'Local task' });
+    expect(store.workspaceSessionGroupsForLocation('remote')).toEqual([]);
+    expect(store.workspaceSessionGroupsForLocation('local')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ cwd: '/local' })
+    ]));
+    chatPreferencesStore.setShowRemoteSessions(false);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
+  });
+
+  it('uses the direct load metadata to correct a stale local catalog entry', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [{
+      agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Local task',
+      cwd: '/local', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'QMTCODE',
+      source: 'acp', location: 'local', status: 'idle'
+    }] };
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      location: 'remote', nodeId: 'node-1', nodeLabel: 'Laptop', title: 'Remote task', cwd: '/remote'
+    } }, replay: [] });
+
+    await store.loadSession('agent-1', 'session-1');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.attachRemoteSession).not.toHaveBeenCalled();
+    expect(store.sessionsByAgent['agent-1'][0]).toMatchObject({
+      location: 'remote', remoteNodeId: 'node-1', title: 'Remote task', cwd: '/remote'
+    });
+  });
+
+  it('does not turn an offline remote into a local session or scan peers', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [{
+      agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'remote-session-1', title: 'Remote task',
+      cwd: '/remote/work', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'QMTCODE',
+      source: 'acp', location: 'remote', remoteNodeId: 'node-1', status: 'idle'
+    }] };
+    mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32603, 'Remote node unavailable', {
+      category: 'remote_session_connect', code: 'node_unavailable'
+    }));
+
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.attachRemoteSession).not.toHaveBeenCalled();
+    expect(store.sessionsByAgent['agent-1'][0]).toMatchObject({ location: 'remote', remoteNodeId: 'node-1' });
+    expect(store.activeSession.lastError).toBe('Remote node unavailable');
+  });
+
+  it('discovers an unbookmarked remote only after the direct load reports it missing', async () => {
+    const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32602, 'Invalid params', { message: 'session not found' }));
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{
+      sessionId: 'remote-session-1', title: 'Remote task', cwd: '/remote/work',
+      _meta: { location: 'remote', nodeId: 'node-1', nodeLabel: 'Laptop' }
+    }] });
+
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(mockClient.loadSession).toHaveBeenCalledTimes(1);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+    expect(mockClient.loadSession.mock.invocationCallOrder[0]).toBeLessThan(mockClient.listSessions.mock.invocationCallOrder[0]);
+    expect(mockClient.listSessions.mock.invocationCallOrder[0]).toBeLessThan(mockClient.attachRemoteSession.mock.invocationCallOrder[0]);
+    expect(mockClient.attachRemoteSession).toHaveBeenCalledWith({ node_id: 'node-1', session_id: 'remote-session-1' });
+    chatPreferencesStore.setShowRemoteSessions(false);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
+  });
+
+  it('stops remote discovery at the matching page without loading the full catalog or models', async () => {
+    const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32602, 'Invalid params', { message: 'session not found' }));
+    mockClient.listSessions
+      .mockResolvedValueOnce({ sessions: [{ sessionId: 'remote-session-1', title: 'Local collision', cwd: '/local' }], nextCursor: 'next' })
+      .mockResolvedValueOnce({ sessions: [{ sessionId: 'remote-session-1', title: 'Remote task', cwd: '/remote',
+        _meta: { location: 'remote', nodeId: 'node-1' } }], nextCursor: 'more' });
+
+    await store.connectAgent('agent-1');
+    mockClient.listModels.mockClear();
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { _meta: { session_scope: 'root', remoteNodeIds: ['node-1'] }, cursor: 'next' });
+    expect(mockClient.attachRemoteSession).toHaveBeenCalledWith({ node_id: 'node-1', session_id: 'remote-session-1' });
+    expect(mockClient.listModels).not.toHaveBeenCalled();
+    expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: 'remote-session-1', location: 'remote', remoteNodeId: 'node-1', cwd: '/remote' })
+    ]));
+    chatPreferencesStore.setShowRemoteSessions(false);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
+  });
+
+  it('uses a cached remote listing before making another catalog request', async () => {
+    const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    store.remoteSessionsByAgent = { 'agent-1': { 'node-1': {
+      node_id: 'node-1', total_count: 1,
+      sessions: [{ id: 'remote-session-1', node_id: 'node-1', title: 'Cached task', cwd: '/remote' }]
+    } } };
+    mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32602, 'Invalid params', { message: 'session not found' }));
+
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.attachRemoteSession).toHaveBeenCalledWith({ node_id: 'node-1', session_id: 'remote-session-1' });
+    chatPreferencesStore.setShowRemoteSessions(false);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
+  });
+
+  it('discovers selected remote sessions and attaches only when direct load finds no bookmark', async () => {
+    const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    mockClient.listSessions.mockResolvedValueOnce({
+      sessions: [{
+        sessionId: 'remote-session-1', title: 'Review deployment', cwd: '/srv/app',
+        updatedAt: '2026-07-29T22:30:00Z',
+        _meta: { location: 'remote', nodeId: 'node-1', nodeLabel: 'Laptop', connectionState: 'available' }
+      }]
+    });
+
+    await store.refreshSessionsForAgent('agent-1', true);
+    expect(mockClient.listSessions).toHaveBeenCalledWith({
+      _meta: { session_scope: 'root', remoteNodeIds: ['node-1'] }
+    });
+    expect(store.workspaceSessionGroupsForLocation('remote')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ cwd: '/srv/app', location: 'remote' })
+    ]));
+    expect(store.workspaceSessionGroupsForLocation('local')).toEqual([]);
+    mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32602, 'Invalid params', { message: 'session not found' }));
+    await store.loadSession('agent-1', 'remote-session-1');
+    expect(mockClient.loadSession).toHaveBeenCalledWith('remote-session-1', '/srv/app');
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+    expect(mockClient.loadSession.mock.invocationCallOrder[0]).toBeLessThan(mockClient.attachRemoteSession.mock.invocationCallOrder[0]);
+    expect(mockClient.attachRemoteSession).toHaveBeenCalledWith({ node_id: 'node-1', session_id: 'remote-session-1' });
+    chatPreferencesStore.setShowRemoteSessions(false);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
+  });
+
   it('hydrates and activates an attached remote session without reloading it immediately', async () => {
     const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
     store.remoteSessionsByAgent = {
       'agent-1': {
         'node-1': {
@@ -755,6 +1154,8 @@ describe('AgentsStore connections', () => {
 
     await store.loadSession('agent-1', 'remote-session-1');
     expect(mockClient.loadSession).not.toHaveBeenCalled();
+    chatPreferencesStore.setShowRemoteSessions(false);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', false);
   });
 
   it('forks at the selected message, refreshes sessions, and inserts a fallback summary', async () => {
@@ -1976,6 +2377,45 @@ describe('AgentsStore delegate model assignments', () => {
     await store.refreshDelegateAssignments('agent-1', 'session-1');
 
     expect(store.activeDelegateAssignmentsError).toBeNull();
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
+  });
+
+  it('does not offer delegate routing for a remote session when the local assignment read fails', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [{
+      agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Remote task',
+      cwd: '/remote', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'QMTCODE',
+      source: 'acp', location: 'remote', remoteNodeId: 'node-1', status: 'idle'
+    }] };
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      location: 'remote', nodeId: 'node-1'
+    } }, replay: [] });
+    mockClient.getDelegateModels.mockRejectedValue(new Error('session is not bound to an available profile'));
+
+    await store.loadSession('agent-1', 'session-1');
+    await vi.waitFor(() => expect(store.activeDelegateAssignmentsError).toBe('session is not bound to an available profile'));
+    expect(mockClient.getDelegateModels).toHaveBeenCalledWith({ session_id: 'session-1' });
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(false);
+  });
+
+  it('keeps routing available for confirmed remote roles or saved routes despite a refresh error', async () => {
+    const store = createStore();
+    selectSession(store);
+    store.sessionsByAgent = { 'agent-1': [{
+      agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Remote task',
+      cwd: '/remote', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'QMTCODE',
+      source: 'acp', location: 'remote', remoteNodeId: 'node-1', status: 'idle'
+    }] };
+    mockClient.getDelegateModels.mockRejectedValueOnce(new Error('Transient failure'));
+    await store.connectAgent('agent-1');
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(false);
+
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': assignmentState };
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': {
+      ...assignmentState, assignments: [],
+      orphaned_overrides: [{ agent_id: 'removed-role', model: { model_id: 'legacy/model' }, reasoning_effort: null }]
+    } };
     expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
   });
 
@@ -4433,7 +4873,7 @@ describe('AgentsStore prompt session start', () => {
     expect(mockClient.connect).toHaveBeenCalledTimes(1);
     expect(mockClient.disconnect).not.toHaveBeenCalled();
     expect(mockClient.listSessions).toHaveBeenCalled();
-    expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '/tmp/work');
+    expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '');
     expect(store.loading).toBe(false);
     expect(store.connectionStates['remote-agent']).toBe('initialized');
     expect(store.error).toBeNull();
@@ -4482,7 +4922,7 @@ describe('AgentsStore prompt session start', () => {
     expect(mockClient.connect).toHaveBeenCalledTimes(1);
     expect(mockClient.disconnect).not.toHaveBeenCalled();
     expect(mockClient.listSessions).toHaveBeenCalled();
-    expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '/tmp/work');
+    expect(mockClient.loadSession).toHaveBeenCalledWith('session-1', '');
     expect(store.loading).toBe(false);
     expect(store.connectionStates['remote-agent']).toBe('initialized');
     expect(store.error).toBeNull();

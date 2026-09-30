@@ -45,10 +45,35 @@ describe('session list request meta', () => {
       cwd: '/tmp/work',
       cursor: '10'
     });
+    expect(buildListSessionsRequest({ remoteNodeIds: ['node-1'] })._meta).toEqual({
+      session_scope: 'root', remoteNodeIds: ['node-1']
+    });
   });
 });
 
 describe('session relationship metadata', () => {
+  it('maps remote location and peer identity without attachment', () => {
+    const [session] = mapAcpSessionsToDesktopSessions(
+      [createSession({ location: 'remote', nodeId: 'peer-1', nodeLabel: 'Laptop', connectionState: 'disconnected' })],
+      { agentId: 'agent-1', agentName: 'QueryMT' }
+    );
+    expect(session).toMatchObject({ location: 'remote', remoteNodeId: 'peer-1', remoteNodeLabel: 'Laptop', remoteConnectionState: 'disconnected' });
+  });
+
+  it('maps only owner-supplied remote profile metadata', () => {
+    const [remote] = mapAcpSessionsToDesktopSessions(
+      [createSession({ location: 'remote', nodeId: 'peer-1', profileId: 'owner-profile', profileLabel: 'Owner Profile' })],
+      { agentId: 'agent-1', agentName: 'QueryMT' }
+    );
+    expect(remote).toMatchObject({ remoteProfileId: 'owner-profile', remoteProfileLabel: 'Owner Profile' });
+    const [local] = mapAcpSessionsToDesktopSessions(
+      [createSession({ profileId: 'owner-profile', profileLabel: 'Owner Profile' })],
+      { agentId: 'agent-1', agentName: 'QueryMT' }
+    );
+    expect(local.remoteProfileId).toBeUndefined();
+    expect(local.remoteProfileLabel).toBeUndefined();
+  });
+
   it('maps durable fork hierarchy metadata from ACP session info', () => {
     const [session] = mapAcpSessionsToDesktopSessions(
       [

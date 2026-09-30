@@ -87,10 +87,12 @@ export function buildSessionKey(agentId: string, sessionId: string): string {
 export function buildListSessionsRequest(input: {
   cwd?: string | null;
   cursor?: string | null;
+  remoteNodeIds?: string[];
 } = {}): ListSessionsRequest {
   const request: ListSessionsRequest = {
     _meta: { session_scope: DEFAULT_SESSION_LIST_SCOPE }
   };
+  if (input.remoteNodeIds?.length) request._meta = { ...request._meta, remoteNodeIds: input.remoteNodeIds };
   if (input.cwd) request.cwd = input.cwd;
   if (input.cursor) request.cursor = input.cursor;
   return request;
@@ -122,7 +124,13 @@ export function mapAcpSessionsToDesktopSessions(
     runtimeId: agent.agentId,
     runtimeName: agent.agentName,
     source: 'acp',
-    location: 'local',
+    location: session._meta?.location === 'remote' && typeof session._meta.nodeId === 'string' ? 'remote' : 'local',
+    remoteNodeId: typeof session._meta?.nodeId === 'string' ? session._meta.nodeId : undefined,
+    remoteNodeLabel: typeof session._meta?.nodeLabel === 'string' ? session._meta.nodeLabel : undefined,
+    remoteProfileId: session._meta?.location === 'remote' && typeof session._meta.profileId === 'string' ? session._meta.profileId : undefined,
+    remoteProfileLabel: session._meta?.location === 'remote' && typeof session._meta.profileLabel === 'string' ? session._meta.profileLabel : undefined,
+    remoteConnectionState: session._meta?.connectionState === 'disconnected' ? 'disconnected' :
+      session._meta?.connectionState === 'available' ? 'available' : undefined,
     status: inferSessionStatus(session),
     ...readSessionRelationshipMeta(session)
   }));

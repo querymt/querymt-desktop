@@ -1,3 +1,4 @@
+import { RequestError } from '@agentclientprotocol/sdk';
 import type {
   InitializeResponse,
   ListSessionsResponse,
@@ -334,6 +335,7 @@ export class AgentsStore {
   composerModeId = $state<string>('build');
   composerReasoningId = $state<string>('auto');
   composerTargetId = $state<string>('local');
+  composerAgentId = $state<string | null>(null);
   get sessionConfigPending(): Record<string, boolean> {
     const key = this.activeAgentId && this.activeSessionId
       ? buildSessionKey(this.activeAgentId, this.activeSessionId)
@@ -446,8 +448,13 @@ export class AgentsStore {
     return this.delegateAssignmentConflictBySession[key] ?? false;
   }
 
+  private sessionVisibleInCatalog(session: DesktopSessionSummary): boolean {
+    return session.location !== 'remote' || (chatPreferencesStore.showRemoteSessions &&
+      chatPreferencesStore.remoteSessionPeers.includes(session.remoteNodeId ?? ''));
+  }
+
   get sessions(): DesktopSessionSummary[] {
-    return Object.values(this.sessionsByAgent).flat().sort((a, b) => {
+    return Object.values(this.sessionsByAgent).flat().filter((session) => this.sessionVisibleInCatalog(session)).sort((a, b) => {
       const aValue = a.updatedAt ?? '';
       const bValue = b.updatedAt ?? '';
       return bValue.localeCompare(aValue);
@@ -455,6 +462,10 @@ export class AgentsStore {
   }
 
   get workspaceSessionGroups(): WorkspaceSessionGroup[] {
+    return this.workspaceSessionGroupsForLocation('all');
+  }
+
+  workspaceSessionGroupsForLocation(location: 'all' | 'local' | 'remote'): WorkspaceSessionGroup[] {
     const sourceGroups = new Map<string, WorkspaceSessionSource[]>();
     for (const sourcesByWorkspace of Object.values(this.workspaceSessionSources)) {
       for (const source of Object.values(sourcesByWorkspace)) {
@@ -466,9 +477,13 @@ export class AgentsStore {
 
     return [...sourceGroups.entries()]
       .map(([cwd, sources]) => {
-        const sessions = deduplicateSessions(sources.flatMap((source) => source.sessions)).sort(compareSessionsByActivity);
+        const sessions = deduplicateSessions(sources.flatMap((source) => source.sessions))
+          .filter((session) => {
+            return this.sessionVisibleInCatalog(session) &&
+              (location === 'all' || (location === 'remote' ? session.location === 'remote' : session.location !== 'remote'));
+          }).sort(compareSessionsByActivity);
         const visibleLimit = this.workspaceVisibleLimits[cwd] ?? WORKSPACE_SESSION_PAGE_SIZE;
-        const latestActivity = maxTimestamp(sources.map((source) => source.latestActivity));
+        const latestActivity = maxTimestamp(sessions.map((session) => session.updatedAt));
         return {
           key: getSessionWorkspaceKey(cwd),
           cwd,
@@ -488,6 +503,7 @@ export class AgentsStore {
           )
         };
       })
+      .filter((group) => group.sessions.length > 0)
       .sort((a, b) => (b.latestActivity ?? '').localeCompare(a.latestActivity ?? ''));
   }
 
@@ -547,11 +563,12 @@ export class AgentsStore {
     if (this.activeAgentId !== agentId) return false;
     const client = this.clients.get(agentId)?.client;
     const assignments = this.activeDelegateAssignments;
+    const isRemoteSession = getSessionById(this.sessionsByAgent[agentId] ?? [], this.activeSessionId ?? '')?.location === 'remote';
     return Boolean(
       client?.supportsQuerymtMethod(QMT_METHOD_SESSION_DELEGATE_MODELS) &&
         client.supportsQuerymtMethod(QMT_METHOD_SESSION_SET_DELEGATE_MODEL) &&
         (
-          this.activeDelegateAssignmentsError !== null ||
+          (!isRemoteSession && this.activeDelegateAssignmentsError !== null) ||
           (assignments &&
             (assignments.assignments.length > 0 || assignments.orphaned_overrides.length > 0))
         )
@@ -678,6 +695,10 @@ export class AgentsStore {
     this.composerTargetId = targetId;
   }
 
+  setComposerAgent(agentId: string | null) {
+    this.composerAgentId = agentId;
+  }
+
     addPromptAttachments(attachments: PromptAttachment[]) {
     const existingIds = new Set(this.promptAttachments.map((attachment) => attachment.id));
     this.promptAttachments = [...this.promptAttachments, ...attachments.filter((attachment) => !existingIds.has(attachment.id))];
@@ -738,7 +759,7 @@ export class AgentsStore {
 
   getTargetOptions(agentId: string | null): ComposerOption[] {
     const targets: ComposerOption[] = [isEmbedded
-      ? { id: 'local', label: 'qmtcode server', description: 'Create the session on the serving qmtcode instance.' }
+      ? { id: 'local', label: 'Local', description: 'Create the session on the serving qmtcode instance.' }
       : { id: 'local', label: 'Local', description: 'Create the session on this machine.' }];
     if (!agentId) {
       return targets;
@@ -749,6 +770,16 @@ export class AgentsStore {
         id: node.id,
         label: node.label || node.id,
         description: `${node.transport}${node.active_sessions ? ` · ${node.active_sessions} active` : ''}`
+      });
+    }
+
+    if (agentId === this.composerAgentId && this.composerTargetId !== 'local' &&
+      !targets.some((target) => target.id === this.composerTargetId)) {
+      const knownSession = this.sessionsByAgent[agentId]?.find((session) => session.remoteNodeId === this.composerTargetId);
+      targets.push({
+        id: this.composerTargetId,
+        label: knownSession?.remoteNodeLabel || this.composerTargetId,
+        description: 'Remote peer is currently unavailable.'
       });
     }
 
@@ -1498,7 +1529,9 @@ export class AgentsStore {
   }
 
   private buildSessionListRequest(input: { cwd?: string | null; cursor?: string | null } = {}) {
-    return buildListSessionsRequest(input);
+    chatPreferencesStore.initialize();
+    const remoteNodeIds = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers : [];
+    return buildListSessionsRequest({ ...input, remoteNodeIds });
   }
 
   private ensureSessionLoadTarget(agentId: string, sessionId: string): DesktopSessionSummary | null {
@@ -1534,6 +1567,70 @@ export class AgentsStore {
       [agentId]: mergeSessions(knownSessions, [fallback])
     };
     return fallback;
+  }
+
+  private async findRemoteNodeForMissingSession(agentId: string, sessionId: string, client: DesktopAcpClient): Promise<string | null> {
+    chatPreferencesStore.initialize();
+    const selectedPeers = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers : [];
+    if (selectedPeers.length === 0) return null;
+
+    for (const nodeId of selectedPeers) {
+      if (this.remoteSessionsByAgent[agentId]?.[nodeId]?.sessions.some((session) => session.id === sessionId)) {
+        return nodeId;
+      }
+    }
+
+    if (this.completedWorkspaceDiscoveries.has(agentId)) return null;
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) return null;
+
+    // Search only until the requested remote ID is found; a full catalog
+    // refresh also fetches every page and models before returning.
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    do {
+      if (!this.isSelectedSession(agentId, sessionId)) return null;
+      const page = await client.listSessions(this.buildSessionListRequest({ cursor }));
+      if (!this.isSelectedSession(agentId, sessionId)) return null;
+      const match = page.sessions.find((session) => session.sessionId === sessionId &&
+        session._meta?.location === 'remote' && typeof session._meta.nodeId === 'string' &&
+        selectedPeers.includes(session._meta.nodeId));
+      if (match) {
+        const summary = mapAcpSessionsToDesktopSessions([match], { agentId, agentName: config.name })[0];
+        this.sessionsByAgent = {
+          ...this.sessionsByAgent,
+          [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [summary])
+        };
+        this.upsertWorkspaceSessions(agentId, [summary]);
+        return summary.remoteNodeId ?? null;
+      }
+      cursor = page.nextCursor ?? null;
+      if (cursor && seenCursors.has(cursor)) break;
+      if (cursor) seenCursors.add(cursor);
+    } while (cursor);
+    return null;
+  }
+
+  private syncLoadedSessionSummary(agentId: string, summary: DesktopSessionSummary) {
+    const previous = getSessionById(this.sessionsByAgent[agentId] ?? [], summary.sessionId);
+    this.sessionsByAgent = {
+      ...this.sessionsByAgent,
+      [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [summary])
+    };
+    if (previous && previous.cwd !== summary.cwd) {
+      const source = this.workspaceSessionSources[agentId]?.[previous.cwd];
+      if (source) {
+        const sessions = source.sessions.filter((session) => session.sessionId !== summary.sessionId);
+        this.workspaceSessionSources = {
+          ...this.workspaceSessionSources,
+          [agentId]: {
+            ...this.workspaceSessionSources[agentId],
+            [previous.cwd]: { ...source, sessions, latestActivity: maxTimestamp(sessions.map((session) => session.updatedAt)) }
+          }
+        };
+      }
+    }
+    this.upsertWorkspaceSessions(agentId, [summary]);
   }
 
   private hydrateLoadedSessionSummary(agentId: string, sessionId: string, replay: SessionNotification[]) {
@@ -2399,17 +2496,9 @@ export class AgentsStore {
       return;
     }
 
-    const summary = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
-    if (!summary) {
-      await this.refreshSessionsForAgent(agentId);
-    }
-
-    const target = this.ensureSessionLoadTarget(agentId, sessionId);
-    if (!target) {
-      this.error = `Unable to locate session ${sessionId}.`;
-      return;
-    }
-
+    // A deep link may arrive before catalog discovery. Do not create a local
+    // placeholder or scan every peer before the backend checks the bookmark.
+    let target = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
     this.acknowledgeSession(agentId, sessionId);
 
     const record = await this.connectInitializedRecord(agentId);
@@ -2417,6 +2506,7 @@ export class AgentsStore {
       this.error = 'Failed to connect to the agent.';
       return;
     }
+    target ??= getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
 
     if (!record.initializeResponse?.agentCapabilities?.loadSession) {
       this.error = 'This agent does not support session/load.';
@@ -2474,9 +2564,29 @@ export class AgentsStore {
       this.activeSession.lastError = null;
       await tick();
       checkpoint('frontend.prepare');
-      const loaded = telemetryOperationId
-        ? await record.client.loadSession(target.sessionId, target.cwd, telemetryOperationId)
-        : await record.client.loadSession(target.sessionId, target.cwd);
+      let loaded;
+      try {
+        loaded = telemetryOperationId
+          ? await record.client.loadSession(sessionId, target?.cwd ?? '', telemetryOperationId)
+          : await record.client.loadSession(sessionId, target?.cwd ?? '');
+      } catch (error) {
+        // A never-attached remote session has no bookmark yet. Only if the
+        // direct load reports a missing ID do we fall back to discovery.
+        const message = error instanceof RequestError && error.data && typeof error.data === 'object'
+          ? (error.data as Record<string, unknown>).message : null;
+        if (error instanceof RequestError && error.code === -32602 &&
+          (message === 'session not found' || message === 'Session has no profile binding') &&
+          target?.location !== 'local' && this.isSelectedSession(agentId, sessionId)) {
+          const nodeId = target?.location === 'remote' && target.remoteNodeId
+            ? target.remoteNodeId
+            : await this.findRemoteNodeForMissingSession(agentId, sessionId, record.client);
+          if (nodeId && this.isSelectedSession(agentId, sessionId)) {
+            await this.attachRemoteSession(agentId, nodeId, sessionId);
+            return;
+          }
+        }
+        throw error;
+      }
       const loadedSession = 'response' in loaded ? loaded.response : (loaded as unknown as LoadSessionResponse);
       let replay = 'replay' in loaded ? loaded.replay : [];
       if ('finishReplay' in loaded && typeof loaded.finishReplay === 'function') {
@@ -2488,6 +2598,40 @@ export class AgentsStore {
         return;
       }
       this.lastLoadedSession = loadedSession;
+      const loadMeta = loadedSession._meta;
+      if (loadMeta?.location === 'remote' && typeof loadMeta.nodeId === 'string') {
+        const config = this.configs.find((candidate) => candidate.id === agentId);
+        if (config) {
+          // Discovery may have populated or refreshed the summary while session/load was in flight.
+          const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId) ?? target;
+          const summary: DesktopSessionSummary = {
+            agentId, agentName: config.name, sessionId,
+            title: typeof loadMeta.title === 'string' ? loadMeta.title : current?.title ?? sessionId,
+            cwd: typeof loadMeta.cwd === 'string' ? loadMeta.cwd : current?.cwd ?? '',
+            updatedAt: current?.updatedAt ?? null, runtimeId: agentId,
+            runtimeName: config.name, source: 'acp', location: 'remote',
+            remoteNodeId: loadMeta.nodeId,
+            remoteNodeLabel: typeof loadMeta.nodeLabel === 'string' ? loadMeta.nodeLabel : current?.remoteNodeLabel,
+            remoteProfileId: loadMeta.profileId === undefined ? current?.remoteProfileId :
+              typeof loadMeta.profileId === 'string' ? loadMeta.profileId : undefined,
+            remoteProfileLabel: loadMeta.profileLabel === undefined &&
+              (loadMeta.profileId === undefined || loadMeta.profileId === current?.remoteProfileId)
+              ? current?.remoteProfileLabel : typeof loadMeta.profileLabel === 'string' ? loadMeta.profileLabel : undefined,
+            status: current?.status ?? 'idle'
+          };
+          this.syncLoadedSessionSummary(agentId, summary);
+        }
+      } else if (loadMeta?.location === 'local' && target?.location === 'remote') {
+        this.syncLoadedSessionSummary(agentId, {
+          ...target, location: 'local',
+          title: typeof loadMeta.title === 'string' ? loadMeta.title : target.title,
+          cwd: typeof loadMeta.cwd === 'string' ? loadMeta.cwd : target.cwd,
+          remoteNodeId: undefined, remoteNodeLabel: undefined, remoteConnectionState: undefined,
+          remoteProfileId: undefined, remoteProfileLabel: undefined
+        });
+      } else if (!target) {
+        this.ensureSessionLoadTarget(agentId, sessionId);
+      }
       await Promise.resolve();
       await tick();
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -3122,6 +3266,10 @@ export class AgentsStore {
           notification.method === 'querymt/mesh/peerExpired'
         ) {
           void this.refreshMeshAvailability(agentId);
+          chatPreferencesStore.initialize();
+          if (chatPreferencesStore.showRemoteSessions && chatPreferencesStore.remoteSessionPeers.length > 0) {
+            void this.refreshSessionsForAgent(agentId, true);
+          }
         }
         if (notification.method.startsWith('querymt/auth/')) {
           void this.refreshAuthProviders(agentId);
@@ -3514,14 +3662,19 @@ export class AgentsStore {
       ...this.lastRemoteAttachByAgent,
       [agentId]: result
     };
-    return this.hydrateRemoteAttach(agentId, node_id, result, remoteSession ?? { id: session_id, node_id });
+    const discovered = this.sessionsByAgent[agentId]?.find((session) => session.sessionId === session_id && session.remoteNodeId === node_id);
+    return this.hydrateRemoteAttach(agentId, node_id, result, remoteSession ?? {
+      id: session_id, node_id, title: discovered?.title, cwd: discovered?.cwd, updated_at: discovered?.updatedAt ?? undefined,
+      profile_id: discovered?.remoteProfileId, profile_label: discovered?.remoteProfileLabel
+    });
   }
 
   private async hydrateRemoteAttach(
     agentId: string,
     nodeId: string,
     result: RemoteSessionAttachInfo,
-    remoteSession: { id: string; node_id: string; title?: string; cwd?: string; updated_at?: string }
+    remoteSession: { id: string; node_id: string; title?: string; cwd?: string; updated_at?: string;
+      profile_id?: string | null; profile_label?: string | null }
   ): Promise<string> {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) throw new Error(`Unable to locate agent ${agentId}.`);
@@ -3557,13 +3710,16 @@ export class AgentsStore {
       location: 'remote',
       remoteNodeId: nodeId,
       remoteNodeLabel: this.meshNodesByAgent[agentId]?.nodes.find((node) => node.id === nodeId)?.label,
+      remoteProfileId: result.profile_id === undefined ? remoteSession.profile_id ?? undefined : result.profile_id ?? undefined,
+      remoteProfileLabel: result.profile_label === undefined &&
+        (result.profile_id === undefined || result.profile_id === remoteSession.profile_id)
+        ? remoteSession.profile_label ?? undefined : result.profile_label ?? undefined,
       status: 'idle'
     };
     this.sessionsByAgent = {
       ...this.sessionsByAgent,
       [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [summary])
     };
-    // Remote workspace origin is runtime-only until session/list exposes persisted remote bookmarks.
     this.updateWorkspaceDiscovery(config, [summary], false);
     this.hydratedRemoteSessionKeys.add(buildSessionKey(agentId, sessionId));
     await this.refreshRemoteSessionsForAgent(agentId, nodeId);

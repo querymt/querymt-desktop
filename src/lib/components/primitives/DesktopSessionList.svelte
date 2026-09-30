@@ -1,11 +1,11 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { Accordion } from 'bits-ui';
-  import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, FolderSync, GitFork, LoaderCircle, MessageSquarePlus, PlugZap, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, Trash2 } from '@lucide/svelte';
+  import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, FolderSync, GitFork, LoaderCircle, MessageSquarePlus, Network, PlugZap, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, Trash2 } from '@lucide/svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
-  import { compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
+  import { compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import { createRoundIdenticon } from '$lib/vendor/round-identicon';
   import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
 
@@ -17,6 +17,7 @@
     emptyMessage = 'No sessions returned yet.',
     disconnected = false,
     showAgentNames = true,
+    showRemoteSessions = false,
     showToolbarRefresh = true,
     onRefresh = null,
     onCreateSession = null,
@@ -35,22 +36,23 @@
     emptyMessage?: string;
     disconnected?: boolean;
     showAgentNames?: boolean;
+    showRemoteSessions?: boolean;
     showToolbarRefresh?: boolean;
     onRefresh?: (() => void | Promise<void>) | null;
     onCreateSession?: (() => void | Promise<void>) | null;
     onOpenAgents?: (() => void | Promise<void>) | null;
     onOpenWorkspace?: ((cwd: string) => void | Promise<void>) | null;
-    onCreateWorkspaceSession?: ((cwd: string) => void | Promise<void>) | null;
+    onCreateWorkspaceSession?: ((group: WorkspaceSessionGroup, nodeId?: string) => void | Promise<void>) | null;
     onLoadMoreWorkspace?: ((cwd: string) => void | Promise<void>) | null;
     onOpenSession?: ((session: DesktopSessionSummary) => void) | null;
     canDeleteSession?: ((session: DesktopSessionSummary) => boolean) | null;
     onDeleteSession?: ((session: DesktopSessionSummary) => Promise<void>) | null;
   } = $props();
 
-  type SessionFilter = 'all' | 'active' | 'needs-input' | 'completed';
+  type SessionFilter = 'all' | 'active' | 'needs-input' | 'completed' | 'remote';
 
   let query = $state('');
-  let statusFilter = $state<SessionFilter>('all');
+  let sessionFilter = $state<SessionFilter>('all');
   let filtersExpanded = $state(false);
   let openGroups = $state<string[]>([]);
   let lastWorkspaceKeySignature = $state('');
@@ -72,9 +74,9 @@
   function workspaceMachineText(group: WorkspaceSessionGroup) {
     const machines = group.remoteMachines ?? [];
     if (machines.length === 0) return null;
-    if (machines.length > 1) return group.location === 'mixed' ? `local + ${machines.length} machines` : `on ${machines.length} machines`;
+    if (machines.length > 1) return group.location === 'mixed' ? `local + ${machines.length} machines` : `${machines.length} machines`;
     const name = machineName(machines[0]);
-    return group.location === 'mixed' ? `local + ${name}` : `on ${name}`;
+    return group.location === 'mixed' ? `local + ${name}` : name;
   }
 
   function workspaceMachineTitle(group: WorkspaceSessionGroup) {
@@ -84,7 +86,11 @@
   }
   const initialLoading = $derived(loading && sourceWorkspaceGroups.length === 0);
   const refreshing = $derived(loading && sourceWorkspaceGroups.length > 0);
-  const hasActiveFilters = $derived(query.trim().length > 0 || statusFilter !== 'all');
+  const hasActiveFilters = $derived(query.trim().length > 0 || sessionFilter !== 'all');
+
+  $effect(() => {
+    if (!showRemoteSessions && sessionFilter === 'remote') sessionFilter = 'all';
+  });
 
   function workspaceMatchesGroup(group: WorkspaceSessionGroup, normalizedQuery: string): boolean {
     return (
@@ -100,17 +106,22 @@
       .map((group) => {
         const workspaceMatches = workspaceMatchesGroup(group, normalizedQuery);
         const filteredSessions = group.sessions.filter((session) => {
-           const matchesStatus = sessionMatchesFilter(session.status, statusFilter);
+          const matchesFilter = sessionMatchesFilter(session, sessionFilter);
           const matchesQuery =
             workspaceMatches ||
             session.title.toLowerCase().includes(normalizedQuery) ||
             session.agentName.toLowerCase().includes(normalizedQuery) ||
             session.sessionId.toLowerCase().includes(normalizedQuery);
-          return matchesStatus && matchesQuery;
+          return matchesFilter && matchesQuery;
         });
-        return { ...group, sessions: filteredSessions };
+        return {
+          ...group,
+          sessions: filteredSessions,
+          location: filteredSessions.length ? getWorkspaceLocation(filteredSessions) : group.location,
+          remoteMachines: filteredSessions.length ? getWorkspaceRemoteMachines(filteredSessions) : group.remoteMachines
+        };
       })
-      .filter((group) => group.sessions.length > 0 || (statusFilter === 'all' && workspaceMatchesGroup(group, normalizedQuery)));
+      .filter((group) => group.sessions.length > 0 || (sessionFilter === 'all' && workspaceMatchesGroup(group, normalizedQuery)));
   });
 
   $effect(() => {
@@ -138,32 +149,34 @@
     }
   });
 
-  const statusFilters: Array<{ value: SessionFilter; label: string }> = [
+  const sessionFilters: Array<{ value: SessionFilter; label: string }> = [
     { value: 'all', label: 'All' },
     { value: 'active', label: 'Active' },
     { value: 'needs-input', label: 'Needs input' },
-    { value: 'completed', label: 'Completed' }
+    { value: 'completed', label: 'Completed' },
+    { value: 'remote', label: 'Remote' }
   ];
 
-  function sessionMatchesFilter(status: SessionStatus, filter: SessionFilter): boolean {
+  function sessionMatchesFilter(session: DesktopSessionSummary, filter: SessionFilter): boolean {
     if (filter === 'all') return true;
-    if (filter === 'active') return status === 'thinking' || status === 'cancelling';
-    if (filter === 'needs-input') return status === 'waiting';
-    return status === 'completed';
+    if (filter === 'remote') return session.location === 'remote';
+    if (filter === 'active') return session.status === 'thinking' || session.status === 'cancelling';
+    if (filter === 'needs-input') return session.status === 'waiting';
+    return session.status === 'completed';
   }
 
   function countWorkspaceSessions(group: WorkspaceSessionGroup, filter: SessionFilter): number {
-    return group.sessions.filter((session) => sessionMatchesFilter(session.status, filter)).length;
+    return group.sessions.filter((session) => sessionMatchesFilter(session, filter)).length;
   }
 
   function clearFilters() {
     query = '';
-    statusFilter = 'all';
+    sessionFilter = 'all';
     filtersExpanded = false;
   }
 
-  function setStatusFilter(filter: SessionFilter) {
-    statusFilter = filter;
+  function setSessionFilter(filter: SessionFilter) {
+    sessionFilter = filter;
     filtersExpanded = false;
   }
 
@@ -254,30 +267,35 @@
         class="session-browser-filter-toggle"
         type="button"
         aria-label={filtersExpanded ? 'Hide session filters' : 'Show session filters'}
-        aria-controls="session-status-filters"
+        aria-controls="session-filters"
         aria-expanded={filtersExpanded}
         onclick={() => (filtersExpanded = !filtersExpanded)}
       >
         <SlidersHorizontal size={15} />
         <span>Filters</span>
-        {#if statusFilter !== 'all'}<span class="session-browser-filter-indicator" aria-hidden="true"></span>{/if}
+        {#if sessionFilter !== 'all'}<span class="session-browser-filter-indicator" aria-hidden="true"></span>{/if}
         <ChevronDown size={14} class={filtersExpanded ? 'rotate-180' : ''} />
       </button>
       <div
-        id="session-status-filters"
-        class={`session-browser-filters ${filtersExpanded ? 'session-browser-filters-expanded' : ''}`}
-        aria-label="Session status filter"
+        id="session-filters"
+        class={`session-browser-filter-scroll ${filtersExpanded ? 'session-browser-filter-scroll-expanded' : ''}`}
+        role="group"
+        aria-label="Filter sessions"
       >
-        {#each statusFilters as filter}
-          <button
-            class={`session-browser-filter ${statusFilter === filter.value ? 'session-browser-filter-active' : ''}`}
-            type="button"
-            aria-pressed={statusFilter === filter.value}
-            onclick={() => setStatusFilter(filter.value)}
-          >
-            {filter.label}
-          </button>
-        {/each}
+        <div class="session-browser-filters">
+          {#each sessionFilters as filter}
+            {#if filter.value !== 'remote' || showRemoteSessions}
+              <button
+                class={`session-browser-filter ${sessionFilter === filter.value ? 'session-browser-filter-active' : ''}`}
+                type="button"
+                aria-pressed={sessionFilter === filter.value}
+                onclick={() => setSessionFilter(filter.value)}
+              >
+                {filter.label}
+              </button>
+            {/if}
+          {/each}
+        </div>
       </div>
       {#if showToolbarRefresh && onRefresh}
         <button class="icon-btn" type="button" aria-label={refreshing ? 'Refreshing sessions' : 'Refresh sessions'} disabled={loading} onclick={onRefresh}>
@@ -319,7 +337,7 @@
     {:else if filteredWorkspaceGroups.length === 0}
       <div class="state-panel">
         <span class="state-panel-icon"><SearchX size={17} /></span>
-        <div class="state-panel-copy"><strong>No matching sessions</strong><p>Try another search or clear the current status filter.</p></div>
+        <div class="state-panel-copy"><strong>No matching sessions</strong><p>Try another search or choose a different filter.</p></div>
         {#if hasActiveFilters}<button class="action-btn" type="button" onclick={clearFilters}>Clear filters</button>{/if}
       </div>
     {:else}
@@ -349,7 +367,7 @@
                          <span class="session-workspace-path">
                            <CopyTextChip value={group.path} title="Copy project path" />
                            {#if workspaceMachineText(group)}
-                             <span class="session-workspace-machine" title={workspaceMachineTitle(group)}>· {workspaceMachineText(group)}</span>
+                             <span class="session-workspace-machine" title={workspaceMachineTitle(group)}><Network size={12} aria-hidden="true" />{workspaceMachineText(group)}</span>
                            {/if}
                          </span>
                       </span>
@@ -371,9 +389,23 @@
                    </span>
                  </Accordion.Trigger>
                </Accordion.Header>
-               {#if onCreateWorkspaceSession}
-                 <button class="session-workspace-new" type="button" aria-label={`New session in ${group.name}`} title={`New session in ${group.name}`} onclick={() => onCreateWorkspaceSession?.(group.cwd)}><Plus size={15} /></button>
-               {/if}
+                {#if onCreateWorkspaceSession}
+                  {#if group.location === 'mixed' || (group.remoteMachines?.length ?? 0) > 1}
+                    <details class="session-workspace-target-picker">
+                      <summary class="session-workspace-new" aria-label={`New session in ${group.name}`} title={`Choose target for ${group.name}`}><Plus size={15} /></summary>
+                      <div class="session-workspace-target-options">
+                        {#if group.location === 'mixed'}
+                          <button type="button" onclick={() => onCreateWorkspaceSession?.(group, 'local')}>Local</button>
+                        {/if}
+                        {#each group.remoteMachines ?? [] as machine (machine.id)}
+                          <button type="button" title={machine.id} onclick={() => onCreateWorkspaceSession?.(group, machine.id)}>{machine.label || compactRemoteNodeId(machine.id)}</button>
+                        {/each}
+                      </div>
+                    </details>
+                  {:else}
+                    <button class="session-workspace-new" type="button" aria-label={`New session in ${group.name}`} title={`New session in ${group.name}`} onclick={() => onCreateWorkspaceSession?.(group)}><Plus size={15} /></button>
+                  {/if}
+                {/if}
              </div>
             <Accordion.Content class="session-workspace-content">
               {#if group.loading && group.sessions.length === 0}
@@ -411,10 +443,12 @@
                     <span class="session-row-main">
                        <span class="session-row-title-line">
                           <span class="session-row-title">{session.title}</span>
-                          {#if group.location === 'mixed' && session.location === 'remote'}
-                            <span class="session-relationship-badge session-relationship-badge-remote">Remote</span>
-                          {/if}
-                         {#if session.parentSessionId}
+                           {#if session.location === 'remote' && session.remoteConnectionState === 'disconnected'}
+                             <span class="session-relationship-badge session-relationship-badge-remote">Remote · disconnected</span>
+                           {:else if group.location === 'mixed' && session.location === 'remote'}
+                             <span class="session-relationship-badge session-relationship-badge-remote">Remote</span>
+                           {/if}
+                          {#if session.parentSessionId}
                           {#if session.forkOrigin === 'user'}
                             <span class="session-relationship-badge session-relationship-badge-fork"><GitFork size={11} />Fork</span>
                           {:else if session.forkOrigin === 'delegation'}

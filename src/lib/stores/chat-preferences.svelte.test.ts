@@ -1,5 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { ChatPreferencesStore } from './chat-preferences.svelte';
+import '@testing-library/jest-dom/vitest';
+import { cleanup, render, screen, waitFor } from '@testing-library/svelte';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import MeshNodeList from '$lib/components/mesh/MeshNodeList.svelte';
+import { ChatPreferencesStore, chatPreferencesStore } from './chat-preferences.svelte';
 
 const storageKey = 'querymt.sendShortcut';
 const imageModeStorageKey = 'querymt.imageAttachmentMode';
@@ -93,6 +96,48 @@ describe('ChatPreferencesStore', () => {
     store.setInputDelivery('steer');
     expect(store.inputDelivery).toBe('steer');
     expect(window.localStorage.getItem(inputDeliveryStorageKey)).toBe('steer');
+  });
+
+  it('keeps remote listings disabled until both preferences opt in', () => {
+    const store = new ChatPreferencesStore();
+    store.initialize();
+    expect(store.showRemoteSessions).toBe(false);
+    expect(store.remoteSessionPeers).toEqual([]);
+
+    store.setRemoteSessionPeer('node-1', true);
+    store.setRemoteSessionPeer('node-1', true);
+    store.setShowRemoteSessions(true);
+    const restored = new ChatPreferencesStore();
+    restored.initialize();
+    expect(restored.showRemoteSessions).toBe(true);
+    expect(restored.remoteSessionPeers).toEqual(['node-1']);
+    restored.setRemoteSessionPeer('node-1', false);
+    expect(restored.remoteSessionPeers).toEqual([]);
+  });
+
+  it('only shows the Mesh inclusion switch while remote sessions are enabled', async () => {
+    chatPreferencesStore.setShowRemoteSessions(false);
+    chatPreferencesStore.setRemoteSessionPeer('peer-1', true);
+    const onIncludeSessions = vi.fn();
+    try {
+      render(MeshNodeList, {
+        nodes: [{ id: 'peer-1', label: 'Laptop', capabilities: [], active_sessions: 0, transport: 'lan' }],
+        onIncludeSessions
+      });
+      expect(screen.queryByRole('switch', { name: 'Include Laptop in Sessions' })).toBeNull();
+
+      chatPreferencesStore.setShowRemoteSessions(true);
+      await waitFor(() => expect(screen.getByRole('switch', { name: 'Include Laptop in Sessions' })).toHaveAttribute('aria-checked', 'true'));
+
+      chatPreferencesStore.setShowRemoteSessions(false);
+      await waitFor(() => expect(screen.queryByRole('switch', { name: 'Include Laptop in Sessions' })).toBeNull());
+      expect(onIncludeSessions).not.toHaveBeenCalled();
+      expect(chatPreferencesStore.remoteSessionPeers).toContain('peer-1');
+    } finally {
+      cleanup();
+      chatPreferencesStore.setShowRemoteSessions(false);
+      chatPreferencesStore.setRemoteSessionPeer('peer-1', false);
+    }
   });
 
   it('ignores invalid saved input delivery values', () => {

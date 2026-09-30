@@ -51,6 +51,10 @@
     return getConfigOptionChoices(option).find((choice) => choice.value === option.currentValue)?.name ?? option.currentValue;
   });
   const sessionProfileLabel = $derived.by(() => {
+    if (selectedSession?.location === 'remote') {
+      return selectedSession.remoteProfileId
+        ? selectedSession.remoteProfileLabel?.trim() || selectedSession.remoteProfileId : null;
+    }
     if (!sessionProfileId) return null;
     const option = agentsStore.getProfileOptions().find((candidate) => candidate.id === sessionProfileId);
     return option?.label ?? (sessionProfileId === 'default' ? 'Default' : sessionProfileId);
@@ -521,6 +525,7 @@
     title={selectedSession?.title ?? 'Session'}
     workspace={selectedSession ? getSessionWorkspaceName(selectedSession.cwd) : 'Unknown workspace'}
     workspacePath={selectedSession?.cwd ?? null}
+    remoteHost={selectedSession?.location === 'remote' ? (selectedSession.remoteNodeLabel?.trim() || selectedSession.remoteNodeId || 'remote host') : null}
     agentName={activeAgentCount > 1 ? (selectedSession?.agentName ?? 'Unknown agent') : undefined}
     profileLabel={sessionProfileLabel}
     updatedAt={selectedSession ? formatSessionTimestamp(selectedSession.updatedAt, relativeTimeNow) : 'Not loaded'}

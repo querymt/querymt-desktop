@@ -1158,6 +1158,8 @@ export interface RemoteSessionAttachInfo {
 	node_id: string;
 	attached: boolean;
 	config_options: Array<any>;
+	profile_id?: string | null;
+	profile_label?: string | null;
 	snapshot: any;
 }
 
@@ -1173,7 +1175,8 @@ export interface RemoteSessionInfo {
 	title?: string;
 	cwd?: string;
 	updated_at?: string;
-	profile_id?: string;
+	profile_id?: string | null;
+	profile_label?: string | null;
 	model_id?: string;
 }
 

@@ -157,12 +157,14 @@ describe('DesktopSessionList', () => {
       ]
     });
 
-    expect(screen.getByText('· on sapr')).toHaveAttribute('title', 'Remote workspace on sapr');
-    expect(screen.getByText('· local + 12D3KooWPtRj...unWZUT62')).toHaveAttribute(
+    expect(screen.getByText('sapr')).toHaveAttribute('title', 'Remote workspace on sapr');
+    expect(screen.getByText('sapr').querySelector('.lucide-network')).not.toBeNull();
+    expect(screen.getByText('local + 12D3KooWPtRj...unWZUT62')).toHaveAttribute(
       'title',
       'Local workspace and remote workspace on 12D3KooWPtRj...unWZUT62'
     );
-    expect(screen.getByText('· on 2 machines')).toHaveAttribute('title', 'Remote workspace on alpha, beta');
+    expect(screen.getByText('2 machines')).toHaveAttribute('title', 'Remote workspace on alpha, beta');
+    expect(screen.getAllByText(/^(sapr|local \+ 12D3KooWPtRj\.\.\.unWZUT62|2 machines)$/).every((item) => item.querySelector('.lucide-network'))).toBe(true);
   });
 
   it('shows a copyable session id chip after the row status dot', async () => {
@@ -267,15 +269,81 @@ describe('DesktopSessionList', () => {
     expect(screen.getByRole('button', { name: 'Needs input' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Thinking' })).not.toBeInTheDocument();
 
-    const filterToggle = screen.getByRole('button', { name: 'Show session filters' });
-    expect(filterToggle).toHaveAttribute('aria-expanded', 'false');
-    await fireEvent.click(filterToggle);
+    const toggle = screen.getByRole('button', { name: 'Show session filters' });
+    const group = screen.getByRole('group', { name: 'Filter sessions' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('aria-controls', group.id);
+    expect(group).not.toHaveClass('session-browser-filter-scroll-expanded');
+    await fireEvent.click(toggle);
     expect(screen.getByRole('button', { name: 'Hide session filters' })).toHaveAttribute('aria-expanded', 'true');
-
+    expect(group).toHaveClass('session-browser-filter-scroll-expanded');
     await fireEvent.click(screen.getByRole('button', { name: 'Needs input' }));
     expect(screen.getByRole('button', { name: 'Show session filters' })).toHaveAttribute('aria-expanded', 'false');
+    expect(group).not.toHaveClass('session-browser-filter-scroll-expanded');
+    expect(screen.getByRole('button', { name: 'Needs input' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByText('Needs approval')).toBeInTheDocument();
     expect(screen.queryByText('Active work')).not.toBeInTheDocument();
+  });
+
+  it('switches between status and remote in one exclusive segmented filter', async () => {
+    const mixedSessions: DesktopSessionSummary[] = [
+      { ...sessions[0], sessionId: 'local-active', title: 'Local active', status: 'thinking', location: 'local' },
+      { ...sessions[0], sessionId: 'remote-waiting', title: 'Remote waiting', status: 'waiting', location: 'remote', remoteNodeId: 'node-1', remoteNodeLabel: 'Laptop' },
+      { ...sessions[0], sessionId: 'remote-completed', title: 'Remote completed', status: 'completed', location: 'remote', remoteNodeId: 'node-1', remoteNodeLabel: 'Laptop' }
+    ];
+    const { container } = render(DesktopSessionList, { sessions: mixedSessions, showRemoteSessions: true });
+    const remote = screen.getByRole('button', { name: 'Remote' });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Active' }));
+    expect(screen.getByText('Local active')).toBeInTheDocument();
+    expect(screen.queryByText('Remote waiting')).not.toBeInTheDocument();
+
+    await fireEvent.click(remote);
+    expect(remote).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Show session filters' })).toHaveAttribute('aria-expanded', 'false');
+    expect(container.querySelector('.session-browser-filter-indicator')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Active' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByText('Local active')).not.toBeInTheDocument();
+    expect(screen.getByText('Remote waiting')).toBeInTheDocument();
+    expect(screen.getByText('Remote completed')).toBeInTheDocument();
+    expect(container.querySelector('.session-workspace-icon-remote')).not.toBeNull();
+    expect(screen.getByText('Laptop').querySelector('.lucide-network')).not.toBeNull();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(screen.getByText('Local active')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('clears search and remote selection when no sessions match', async () => {
+    render(DesktopSessionList, { sessions, showRemoteSessions: true });
+    await fireEvent.click(screen.getByRole('button', { name: 'Remote' }));
+    expect(screen.getByText('No matching sessions')).toBeInTheDocument();
+    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), {
+      target: { value: 'missing' }
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByPlaceholderText('Search sessions, workspaces, agents…')).toHaveValue('');
+    expect(screen.getByText('Inspect workspace')).toBeInTheDocument();
+  });
+
+  it('hides Remote when disabled and resets an active Remote filter when disabled', async () => {
+    const { rerender } = render(DesktopSessionList, { sessions, showRemoteSessions: false });
+    expect(screen.queryByRole('button', { name: 'Remote' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+
+    await rerender({ sessions, showRemoteSessions: true });
+    await fireEvent.click(screen.getByRole('button', { name: 'Remote' }));
+    expect(screen.getByText('No matching sessions')).toBeInTheDocument();
+
+    await rerender({ sessions, showRemoteSessions: false });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true'));
+    expect(screen.queryByRole('button', { name: 'Remote' })).not.toBeInTheDocument();
+    expect(screen.getByText('Inspect workspace')).toBeInTheDocument();
+
+    await rerender({ sessions, showRemoteSessions: true });
+    expect(screen.getByRole('button', { name: 'Remote' })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('hides agent names for a single-agent session list while preserving agent search', async () => {
@@ -404,7 +472,24 @@ describe('DesktopSessionList', () => {
     await waitFor(() => expect(onOpenWorkspace).toHaveBeenCalledTimes(1));
     expect(onOpenWorkspace).toHaveBeenCalledWith('/recent');
     await fireEvent.click(screen.getByRole('button', { name: 'New session in recent' }));
-    expect(onCreateWorkspaceSession).toHaveBeenCalledWith('/recent');
+    expect(onCreateWorkspaceSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/recent' }));
+  });
+
+  it('passes the workspace host along when creating a remote session', async () => {
+    const onCreateWorkspaceSession = vi.fn();
+    const remoteGroup = createWorkspaceGroup({
+      key: '/remote', cwd: '/remote', name: 'remote',
+      sessions: [{ ...sessions[0], cwd: '/remote', location: 'remote', remoteNodeId: 'peer-1', remoteNodeLabel: 'Laptop' }]
+    });
+    render(DesktopSessionList, {
+      workspaceGroups: [{ ...remoteGroup, location: 'remote', remoteMachines: [{ id: 'peer-1', label: 'Laptop' }] }],
+      onCreateWorkspaceSession
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'New session in remote' }));
+    expect(onCreateWorkspaceSession).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/remote', location: 'remote', remoteMachines: [{ id: 'peer-1', label: 'Laptop' }]
+    }));
   });
 
   it('retries an uninitialized workspace after the catalog generation changes', async () => {
