@@ -34,7 +34,29 @@ describe('SessionHeader', () => {
     expect(within(mobileContext).getByText('querymt-desktop')).toBeInTheDocument();
     expect(within(mobileContext).getByText('session-1')).toBeInTheDocument();
     expect(screen.getByLabelText('Status: Ready')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Remote session on/ })).not.toBeInTheDocument();
     expect(document.querySelector('.session-header-context')).toBeNull();
+  });
+
+  it('shows an icon-only remote host tooltip before the workspace on desktop and mobile', async () => {
+    const props = {
+      session: session(), title: 'Remote task', workspace: 'querymt-desktop',
+      updatedAt: 'Just now', remoteHost: 'flkr'
+    };
+    const { rerender } = render(SessionHeader, props);
+    const desktopMeta = document.querySelector<HTMLElement>('.session-header-meta');
+    const mobileMeta = screen.getByLabelText('Session context');
+    const desktopIcon = within(desktopMeta!).getByRole('button', { name: 'Remote session on flkr' });
+    const mobileIcon = within(mobileMeta).getByRole('button', { name: 'Remote session on flkr' });
+    expect(desktopIcon.querySelector('.lucide-network')).not.toBeNull();
+    expect(mobileIcon.querySelector('.lucide-network')).not.toBeNull();
+    expect(desktopIcon.nextElementSibling).toHaveClass('session-header-workspace');
+    expect(mobileIcon.nextElementSibling).toHaveClass('session-header-mobile-workspace');
+    await fireEvent.pointerEnter(desktopIcon);
+    expect(await screen.findByText('Remote session on flkr', { selector: '.app-tooltip-content' })).toBeInTheDocument();
+
+    await rerender({ ...props, remoteHost: null });
+    expect(screen.queryByRole('button', { name: 'Remote session on flkr' })).not.toBeInTheDocument();
   });
 
   it('packs header widgets left in status, path, id, profile, context, time order', () => {

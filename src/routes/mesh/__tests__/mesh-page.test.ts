@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MeshPage from '../+page.svelte';
+import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 
 function capabilities() {
   return {
@@ -48,28 +49,26 @@ function createAgentsStore() {
     },
     remoteSessionsByAgent: {} as Record<string, Record<string, unknown>>,
     refreshMeshForAgent: vi.fn(async () => undefined),
-    refreshRemoteSessionsForAgent: vi.fn(async () => undefined),
-    attachRemoteSession: vi.fn(async () => 'remote-session-1'),
+    refreshAllSessions: vi.fn(async () => undefined),
     createMeshInvite: vi.fn(async () => ({ invite_id: 'invite-new', url: 'https://mesh.invalid/invite-new', expires_at: 0, max_uses: 1 })),
-    revokeMeshInvite: vi.fn(async () => undefined),
-    dismissRemoteSession: vi.fn(async () => undefined)
+    revokeMeshInvite: vi.fn(async () => undefined)
   };
 }
 
-const goto = vi.hoisted(() => vi.fn(async () => undefined));
 const agentsStore = vi.hoisted(() => createAgentsStore());
-const commandPaletteStore = vi.hoisted(() => ({
-  openRemoteCreate: vi.fn(),
-  openRemoteAttach: vi.fn()
-}));
 
-vi.mock('$app/navigation', () => ({ goto }));
 vi.mock('$lib/stores/agents.svelte', () => ({ agentsStore }));
-vi.mock('$lib/stores/command-palette.svelte', () => ({ commandPaletteStore }));
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  chatPreferencesStore.setShowRemoteSessions(false);
+  chatPreferencesStore.setRemoteSessionPeer('node-1', false);
+});
 
 beforeEach(() => {
+  chatPreferencesStore.initialize();
+  chatPreferencesStore.setShowRemoteSessions(false);
+  chatPreferencesStore.setRemoteSessionPeer('node-1', false);
   Object.assign(agentsStore, createAgentsStore());
   vi.clearAllMocks();
   vi.stubGlobal('confirm', vi.fn(() => true));
@@ -138,99 +137,88 @@ describe('Mesh page', () => {
     expect(screen.getByRole('button', { name: 'Remote peer ID copied' })).toBeInTheDocument();
   });
 
-  it('opens node actions with selected agent and node context', async () => {
-    render(MeshPage);
-
-    await fireEvent.click(screen.getByRole('button', { name: 'Create session on Build server' }));
-    expect(commandPaletteStore.openRemoteCreate).toHaveBeenCalledWith({ agentId: 'agent-1', nodeId: 'node-1' });
-
-    await fireEvent.click(screen.getByRole('button', { name: 'Attach session from Build server' }));
-    expect(commandPaletteStore.openRemoteAttach).toHaveBeenCalledWith({ agentId: 'agent-1', nodeId: 'node-1', sessionId: null });
-  });
-
-  it('loads sessions for only the selected node', async () => {
-    render(MeshPage);
-
-    await fireEvent.click(screen.getByRole('button', { name: 'Load sessions from Build server' }));
-    expect(agentsStore.refreshRemoteSessionsForAgent).toHaveBeenCalledWith('agent-1', 'node-1');
-  });
-
-  it('renders loaded remote sessions like session-list rows with attach and menu actions', async () => {
-    agentsStore.remoteSessionsByAgent = {
-      'agent-1': {
-        'node-1': {
-          node_id: 'node-1',
-          total_count: 1,
-          sessions: [{ id: 'remote-session-1', node_id: 'node-1', title: 'Review the deployment', cwd: '/srv/app', updated_at: '2026-07-29T22:30:00Z' }]
-        }
-      }
+  it('orders nodes by peer ID rather than label or discovery order', () => {
+    const original = agentsStore.meshNodesByAgent['agent-1'].nodes[0];
+    agentsStore.meshNodesByAgent['agent-1'] = {
+      nodes: [
+        { ...original, id: 'peer-z', label: 'Alpha' },
+        { ...original, id: 'peer-a', label: 'Zulu' },
+        { ...original, id: 'peer-m', label: 'Beta' }
+      ]
     };
 
     render(MeshPage);
 
-    expect(screen.getByText('Review the deployment')).toBeInTheDocument();
-    expect(screen.queryByText('Remote')).not.toBeInTheDocument();
-    expect(screen.getByText('/srv/app')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Attach Review the deployment' })).not.toBeInTheDocument();
-
-    await fireEvent.click(screen.getByRole('button', { name: 'Attach remote session Review the deployment' }));
-    await waitFor(() => expect(agentsStore.attachRemoteSession).toHaveBeenCalledWith('agent-1', 'node-1', 'remote-session-1'));
-    expect(commandPaletteStore.openRemoteAttach).not.toHaveBeenCalled();
-    expect(goto).toHaveBeenCalledWith('/sessions/agent-1/remote-session-1');
-
-    await fireEvent.click(screen.getByText('Review the deployment').closest('.session-row')!.querySelector('summary')!);
-    await fireEvent.click(screen.getByRole('button', { name: 'Copy remote session ID for Review the deployment' }));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('remote-session-1');
+    expect(screen.getAllByRole('button', { name: /^Copy remote peer ID/ }).map((button) => button.getAttribute('title')))
+      .toEqual(['peer-a', 'peer-m', 'peer-z']);
+    expect(agentsStore.meshNodesByAgent['agent-1'].nodes.map((node) => node.id))
+      .toEqual(['peer-z', 'peer-a', 'peer-m']);
   });
 
-  it('shows row-level pending feedback while a remote session attaches', async () => {
-    let resolveAttach: (() => void) | undefined;
-    agentsStore.attachRemoteSession.mockImplementationOnce(() => new Promise<string>((resolve) => (resolveAttach = () => resolve('remote-session-1'))));
+  it('shows a per-node switch only while remote sessions are enabled and preserves peer choice', async () => {
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    render(MeshPage);
+    expect(screen.queryByRole('switch', { name: 'Include Build server in Sessions' })).not.toBeInTheDocument();
+
+    chatPreferencesStore.setShowRemoteSessions(true);
+    const inclusion = await screen.findByRole('switch', { name: 'Include Build server in Sessions' });
+    expect(inclusion).toHaveAttribute('aria-checked', 'true');
+    await fireEvent.click(inclusion);
+    expect(chatPreferencesStore.remoteSessionPeers).not.toContain('node-1');
+    expect(agentsStore.refreshAllSessions).toHaveBeenCalledOnce();
+
+    chatPreferencesStore.setShowRemoteSessions(false);
+    await waitFor(() => expect(screen.queryByRole('switch', { name: 'Include Build server in Sessions' })).not.toBeInTheDocument());
+    chatPreferencesStore.setShowRemoteSessions(true);
+    expect(await screen.findByRole('switch', { name: 'Include Build server in Sessions' })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('explains how to enable remote session inclusion when it is disabled', async () => {
+    render(MeshPage);
+
+    const info = screen.getByRole('button', { name: 'About enabling remote sessions' });
+    expect(screen.queryByRole('switch', { name: 'Include Build server in Sessions' })).not.toBeInTheDocument();
+    await fireEvent.pointerEnter(info);
+    expect(await screen.findByText('To include sessions from remote hosts in the Sessions list, enable Show remote sessions in Settings.')).toBeInTheDocument();
+
+    chatPreferencesStore.setShowRemoteSessions(true);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'About enabling remote sessions' })).not.toBeInTheDocument());
+    expect(screen.getByRole('switch', { name: 'Include Build server in Sessions' })).toBeInTheDocument();
+  });
+
+  it('explains the per-host inclusion switch on info icon hover', async () => {
+    chatPreferencesStore.setShowRemoteSessions(true);
+    render(MeshPage);
+
+    expect(screen.getByText('Include', { selector: '.mesh-node-inclusion span' })).toBeInTheDocument();
+    const info = screen.getByRole('button', { name: 'About including sessions from Build server' });
+    await fireEvent.pointerEnter(info);
+    expect(await screen.findByText('Include sessions from remote host Build server in the Sessions list.')).toBeInTheDocument();
+  });
+
+  it('does not expose or fetch remote sessions within Mesh', () => {
     agentsStore.remoteSessionsByAgent = {
       'agent-1': {
         'node-1': {
-          node_id: 'node-1',
-          total_count: 1,
+          node_id: 'node-1', total_count: 1,
           sessions: [{ id: 'remote-session-1', node_id: 'node-1', title: 'Review the deployment' }]
         }
       }
     };
-
+    chatPreferencesStore.setShowRemoteSessions(true);
     render(MeshPage);
-    await fireEvent.click(screen.getByRole('button', { name: 'Attach remote session Review the deployment' }));
 
-    expect(screen.getByRole('status', { name: 'Attaching Review the deployment' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Attach remote session Review the deployment' })).toBeDisabled();
-
-    expect(goto).not.toHaveBeenCalled();
-    resolveAttach?.();
-    await waitFor(() => expect(goto).toHaveBeenCalledWith('/sessions/agent-1/remote-session-1'));
-    expect(screen.queryByRole('status', { name: 'Attaching Review the deployment' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Review the deployment')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create session on Build server' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Attach session from Build server' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load sessions from Build server' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create remote session' })).not.toBeInTheDocument();
   });
 
-  it('stays on Mesh and shows the node error when remote attach fails', async () => {
-    agentsStore.attachRemoteSession.mockRejectedValueOnce(new Error('Remote session unavailable'));
-    agentsStore.remoteSessionsByAgent = {
-      'agent-1': {
-        'node-1': {
-          node_id: 'node-1',
-          total_count: 1,
-          sessions: [{ id: 'remote-session-1', node_id: 'node-1', title: 'Review the deployment' }]
-        }
-      }
-    };
-
-    render(MeshPage);
-    await fireEvent.click(screen.getByRole('button', { name: 'Attach remote session Review the deployment' }));
-
-    expect(await screen.findByText('Remote session unavailable')).toBeInTheDocument();
-    expect(goto).not.toHaveBeenCalled();
-  });
-
-  it('keeps management creates neutral and invite revoke visible', () => {
+  it('keeps invite management available without remote session controls', () => {
     render(MeshPage);
 
-    expect(screen.getByRole('button', { name: 'Create remote session' })).not.toHaveClass('icon-btn-primary');
+    expect(screen.queryByRole('button', { name: 'Create remote session' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create mesh invite' })).not.toHaveClass('icon-btn-primary');
     expect(screen.getByRole('button', { name: 'Revoke invite-1' })).toHaveClass('icon-btn-danger');
     expect(screen.queryByLabelText('More actions for invite invite-1')).not.toBeInTheDocument();

@@ -4,6 +4,7 @@
   import AppSwitch from '$lib/components/primitives/AppSwitch.svelte';
   import type { ImageSendMode } from '$lib/domain/types';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
+  import { agentsStore } from '$lib/stores/agents.svelte';
   import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
 
   let advancedOpen = $state(false);
@@ -27,6 +28,21 @@
   <div class="settings-panel-header">
     <h2 id="general-settings-title">General</h2>
     <p>Everyday preferences for how QueryMT looks and behaves.</p>
+  </div>
+
+  <div class="settings-simple-row">
+    <div class="settings-simple-main">
+      <h3>Show remote sessions</h3>
+      <p>Include sessions from peers selected in Mesh.</p>
+    </div>
+    <AppSwitch
+      checked={chatPreferencesStore.showRemoteSessions}
+      ariaLabel="Show remote sessions"
+      onCheckedChange={(checked) => {
+        chatPreferencesStore.setShowRemoteSessions(checked);
+        void agentsStore.refreshAllSessions();
+      }}
+    />
   </div>
 
   <div class="settings-advanced">

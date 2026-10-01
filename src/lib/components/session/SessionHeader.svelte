@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ArrowLeft, Bug, FileCog, Info, RefreshCw } from '@lucide/svelte';
+  import { ArrowLeft, Bug, FileCog, Info, Network, RefreshCw } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import SessionContextDial from '$lib/components/session/SessionContextDial.svelte';
@@ -12,6 +13,7 @@
     title,
     workspace,
     workspacePath = null,
+    remoteHost = null,
     agentName,
     profileLabel = null,
     updatedAt,
@@ -28,6 +30,7 @@
     workspace: string;
     /** Full project path; when present the workspace name becomes click-to-copy. */
     workspacePath?: string | null;
+    remoteHost?: string | null;
     agentName?: string;
     /** Display label of the profile this session was started with; null hides the chip. */
     profileLabel?: string | null;
@@ -62,6 +65,21 @@
   });
 </script>
 
+{#snippet remoteHostIcon()}
+  {#if remoteHost}
+    <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+      <Tooltip.Root disableHoverableContent>
+        <Tooltip.Trigger class="session-header-remote-indicator" type="button" aria-label={`Remote session on ${remoteHost}`}>
+          <Network size={12} aria-hidden="true" />
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content class="app-tooltip-content" sideOffset={6}>Remote session on {remoteHost}</Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </Tooltip.Provider>
+  {/if}
+{/snippet}
+
 <header class="session-header">
   <button class="icon-btn session-header-back" type="button" aria-label="Back to sessions" title="Back to sessions" onclick={onBack}>
     <ArrowLeft size={17} />
@@ -70,6 +88,7 @@
   <div class="session-header-identity">
     <h1>{title}</h1>
     <div class="session-header-mobile-meta" aria-label="Session context">
+      {@render remoteHostIcon()}
       <span class="session-header-mobile-workspace" title={workspace}>{workspace}</span>
       {#if session.sessionId}
         <span aria-hidden="true">·</span>
@@ -85,6 +104,7 @@
         ></span>
         <span class="session-row-status-tooltip" role="tooltip">{status.label}</span>
       </span>
+      {@render remoteHostIcon()}
       <CopyTextChip class="session-header-workspace" value={workspacePath ?? workspace} display={workspace} title="Copy project path" />
       {#if session.sessionId}
         <span class="session-header-session-id"><span aria-hidden="true">·</span><SessionIdChip sessionId={session.sessionId} /></span>

@@ -4,15 +4,25 @@
   import DesktopSessionList from '$lib/components/primitives/DesktopSessionList.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
+  import type { WorkspaceSessionGroup } from '$lib/domain/sessions';
   import type { DesktopSessionSummary } from '$lib/domain/types';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 
   const connectedAgentCount = $derived(agentsStore.connectedAgents.length);
   const disconnected = $derived(connectedAgentCount === 0);
   const refreshing = $derived(agentsStore.loading && agentsStore.workspaceSessionGroups.length > 0);
 
-  async function createWorkspaceSession(cwd: string) {
-    agentsStore.setComposerCwd(cwd);
+  async function createWorkspaceSession(group: WorkspaceSessionGroup, targetNodeId?: string) {
+    const remoteNodeId = targetNodeId && targetNodeId !== 'local' ? targetNodeId
+      : !targetNodeId && group.location === 'remote' && group.remoteMachines?.length === 1
+        ? group.remoteMachines[0].id : null;
+    const owner = group.sessions.find((session) => remoteNodeId
+      ? session.location === 'remote' && session.remoteNodeId === remoteNodeId
+      : session.location !== 'remote');
+    agentsStore.setComposerCwd(group.cwd);
+    agentsStore.setComposerAgent(owner?.agentId ?? null);
+    agentsStore.setComposerTarget(remoteNodeId ?? 'local');
     await goto('/');
     agentsStore.requestPromptFocus();
   }
@@ -49,15 +59,16 @@
       emptyMessage="Start a task and its conversation will appear here."
       {disconnected}
       showAgentNames={connectedAgentCount > 1}
+      showRemoteSessions={chatPreferencesStore.showRemoteSessions}
       showToolbarRefresh={false}
       onRefresh={() => agentsStore.refreshAllSessions()}
       onCreateSession={() => goto('/')}
       onOpenAgents={() => goto('/agents')}
       onOpenWorkspace={(cwd: string) => agentsStore.loadWorkspaceSessions(cwd)}
-      onCreateWorkspaceSession={(cwd: string) => createWorkspaceSession(cwd)}
+      onCreateWorkspaceSession={createWorkspaceSession}
       onLoadMoreWorkspace={(cwd: string) => agentsStore.loadMoreWorkspaceSessions(cwd)}
       onOpenSession={(session: DesktopSessionSummary) => openSession(session)}
-      canDeleteSession={(session: DesktopSessionSummary) => agentsStore.canDeleteSession(session.agentId)}
+      canDeleteSession={(session: DesktopSessionSummary) => session.location !== 'remote' && agentsStore.canDeleteSession(session.agentId)}
       onDeleteSession={(session: DesktopSessionSummary) => agentsStore.deleteSession(session.agentId, session.sessionId)}
     />
   </div>

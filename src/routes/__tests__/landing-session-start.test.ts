@@ -3,6 +3,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/sv
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PromptAttachment } from '$lib/domain/types';
 import LandingPage from '../+page.svelte';
+import SessionsPage from '../sessions/+page.svelte';
+import { groupSessionsByWorkspace } from '$lib/domain/sessions';
+import type { DesktopSessionSummary } from '$lib/domain/types';
 
 function createAgentsStore() {
   return {
@@ -35,7 +38,7 @@ function createAgentsStore() {
         autoStart: true
       }
     ],
-    meshNodesByAgent: {},
+    meshNodesByAgent: {} as Record<string, { nodes: Array<{ id: string; label: string; active_sessions: number }> }>,
     activeSessionId: null as string | null,
     activeAgentId: null as string | null,
     activeSession: { runState: 'idle' },
@@ -46,6 +49,8 @@ function createAgentsStore() {
     composerModeId: 'build',
     composerReasoningId: 'auto',
     composerTargetId: 'local',
+    composerAgentId: null as string | null,
+    workspaceSessionGroups: [] as ReturnType<typeof groupSessionsByWorkspace>,
     promptAttachments: [] as PromptAttachment[],
     promptFocusToken: 0,
     loading: false,
@@ -83,13 +88,23 @@ function createAgentsStore() {
     setComposerReasoning: vi.fn((value: string) => {
       agentsStore.composerReasoningId = value;
     }),
-    setComposerTarget: vi.fn(),
+    setComposerTarget: vi.fn((value: string) => { agentsStore.composerTargetId = value; }),
+    setComposerAgent: vi.fn((value: string | null) => { agentsStore.composerAgentId = value; }),
+    requestPromptFocus: vi.fn(),
+    refreshAllSessions: vi.fn(),
+    loadWorkspaceSessions: vi.fn(),
+    loadMoreWorkspaceSessions: vi.fn(),
+    canDeleteSession: vi.fn(() => true),
+    deleteSession: vi.fn(),
     createSession: vi.fn(async () => 'session-1'),
     startSessionWithPrompt: vi.fn(async () => 'session-1'),
     getRecentModels: vi.fn(() => []),
     getRecentWorkspaces: vi.fn(() => []),
     getProfileOptions: vi.fn(() => []),
-    getTargetOptions: vi.fn(() => [{ id: 'local', label: 'Local' }])
+    getTargetOptions: vi.fn((agentId: string | null) => [
+      { id: 'local', label: 'Local' },
+      ...(agentsStore.meshNodesByAgent[agentId ?? '']?.nodes ?? []).map((node: { id: string; label: string }) => ({ id: node.id, label: node.label }))
+    ])
   };
 }
 
@@ -178,6 +193,79 @@ describe('Landing page session start', () => {
     expect(agentsStore.startSessionWithPrompt).toHaveBeenCalledWith('agent-1');
     expect(agentsStore.promptAttachments).toHaveLength(1);
     await waitFor(() => expect(goto).toHaveBeenCalledWith('/sessions/agent-1/session-1'));
+  });
+
+  it('preselects the owning remote host and agent when creating from a remote workspace', async () => {
+    agentsStore.connectedAgents.push({ ...agentsStore.connectedAgents[0], id: 'agent-2', name: 'Second agent' });
+    agentsStore.configs.push({ ...agentsStore.configs[0], id: 'agent-2', name: 'Second agent' });
+    agentsStore.meshNodesByAgent['agent-2'] = { nodes: [{ id: 'peer-2', label: 'Laptop', active_sessions: 1 }] };
+    const remoteSession: DesktopSessionSummary = {
+      agentId: 'agent-2', agentName: 'Second agent', sessionId: 'remote-1', title: 'Remote task',
+      cwd: '/remote/work', updatedAt: '2026-07-18T01:23:00Z', runtimeId: 'agent-2',
+      runtimeName: 'Second agent', source: 'acp', location: 'remote', remoteNodeId: 'peer-2',
+      remoteNodeLabel: 'Laptop', status: 'idle'
+    };
+    agentsStore.workspaceSessionGroups = groupSessionsByWorkspace([remoteSession]);
+
+    render(SessionsPage);
+    await fireEvent.click(screen.getByRole('button', { name: 'New session in work' }));
+    expect(agentsStore.setComposerCwd).toHaveBeenCalledWith('/remote/work');
+    expect(agentsStore.setComposerAgent).toHaveBeenCalledWith('agent-2');
+    expect(agentsStore.setComposerTarget).toHaveBeenCalledWith('peer-2');
+    expect(goto).toHaveBeenCalledWith('/');
+
+    cleanup();
+    render(LandingPage);
+    await fireEvent.click(screen.getByLabelText('Session options'));
+    expect(screen.getByRole('button', { name: 'Session target' })).toHaveTextContent('Laptop');
+    await fireEvent.click(screen.getByRole('button', { name: 'Start blank session' }));
+    expect(agentsStore.startSessionWithPrompt).toHaveBeenCalledWith('agent-2');
+  });
+
+  it('resets the target to local for a mixed workspace after selecting a remote host', async () => {
+    const localSession: DesktopSessionSummary = {
+      agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'local-1', title: 'Local task',
+      cwd: '/shared', updatedAt: '2026-07-18T01:23:00Z', runtimeId: 'agent-1',
+      runtimeName: 'QMTCODE', source: 'acp', location: 'local', status: 'idle'
+    };
+    agentsStore.workspaceSessionGroups = groupSessionsByWorkspace([
+      localSession,
+      { ...localSession, sessionId: 'remote-1', location: 'remote', remoteNodeId: 'peer-1', remoteNodeLabel: 'Laptop' }
+    ]);
+    agentsStore.composerTargetId = 'peer-1';
+    agentsStore.composerAgentId = 'agent-2';
+
+    render(SessionsPage);
+    await fireEvent.click(screen.getByLabelText('New session in shared'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Local' }));
+    expect(agentsStore.setComposerCwd).toHaveBeenCalledWith('/shared');
+    expect(agentsStore.setComposerTarget).toHaveBeenCalledWith('local');
+    expect(agentsStore.setComposerAgent).toHaveBeenCalledWith('agent-1');
+
+    await fireEvent.click(screen.getByLabelText('New session in shared'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Laptop' }));
+    expect(agentsStore.setComposerTarget).toHaveBeenLastCalledWith('peer-1');
+    expect(agentsStore.setComposerAgent).toHaveBeenLastCalledWith('agent-1');
+  });
+
+  it('asks for the host when a remote workspace spans multiple peers', async () => {
+    const remoteSession: DesktopSessionSummary = {
+      agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'remote-1', title: 'Remote task',
+      cwd: '/shared', updatedAt: '2026-07-18T01:23:00Z', runtimeId: 'agent-1',
+      runtimeName: 'QMTCODE', source: 'acp', location: 'remote', remoteNodeId: 'peer-1',
+      remoteNodeLabel: 'Laptop', status: 'idle'
+    };
+    agentsStore.workspaceSessionGroups = groupSessionsByWorkspace([
+      remoteSession,
+      { ...remoteSession, sessionId: 'remote-2', agentId: 'agent-2', remoteNodeId: 'peer-2', remoteNodeLabel: 'Server' }
+    ]);
+
+    render(SessionsPage);
+    await fireEvent.click(screen.getByLabelText('New session in shared'));
+    expect(agentsStore.setComposerTarget).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button', { name: 'Server' }));
+    expect(agentsStore.setComposerTarget).toHaveBeenCalledWith('peer-2');
+    expect(agentsStore.setComposerAgent).toHaveBeenCalledWith('agent-2');
   });
 
   it('hides the agent suffix when stopped or disabled agents are also configured', () => {

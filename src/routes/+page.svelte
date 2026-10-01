@@ -9,6 +9,7 @@
   const onlineAgents = $derived(agentsStore.connectedAgents);
 
   const primaryAgentId = $derived(
+    agentsStore.configs.find((config) => config.enabled && config.id === agentsStore.composerAgentId)?.id ??
     onlineAgents[0]?.id ?? agentsStore.configs.find((config) => config.enabled)?.id ?? null
   );
   const showAgentBadges = $derived(onlineAgents.length > 1);

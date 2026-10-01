@@ -87,6 +87,9 @@ export interface DesktopSessionSummary {
   location?: 'local' | 'remote';
   remoteNodeId?: string;
   remoteNodeLabel?: string;
+  remoteProfileId?: string;
+  remoteProfileLabel?: string;
+  remoteConnectionState?: 'available' | 'disconnected';
   status: SessionStatus;
   parentSessionId?: string | null;
   forkOrigin?: string | null;

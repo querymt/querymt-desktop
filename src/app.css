@@ -2736,6 +2736,13 @@ summary:focus-visible {
   gap: 0.55rem;
 }
 
+.mesh-node-list .mesh-item-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mesh-node-session-count {
   flex: 0 0 auto;
   border-radius: 999px;
@@ -2818,72 +2825,43 @@ summary:focus-visible {
   gap: 0.35rem;
 }
 
-.mesh-node-feedback,
-.mesh-remote-session-list {
-  grid-column: 1 / -1;
-}
-
-.mesh-node-feedback {
+.mesh-node-inclusion {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  margin-top: 0.15rem;
-  color: var(--muted);
-  font-size: 0.76rem;
-}
-
-.mesh-node-feedback-error {
-  color: var(--danger);
-}
-
-.mesh-node-feedback button {
-  color: currentColor;
-  font-weight: 650;
-  text-decoration: underline;
-  text-underline-offset: 0.15rem;
-}
-
-.mesh-remote-session-list {
-  display: grid;
-  margin-top: 0.35rem;
-  border-top: 1px solid var(--subtle-border);
-  padding-top: 0.25rem;
-}
-
-.mesh-remote-session-empty {
-  padding: 0.7rem 0.55rem 0.45rem;
-  color: var(--muted);
-  font-size: 0.76rem;
-}
-
-.mesh-remote-session-row {
-  display: flex;
-  margin: 0.12rem 0;
-}
-
-.mesh-remote-session-row + .mesh-remote-session-row::before {
-  position: absolute;
-  top: -0.12rem;
-  right: 0.55rem;
-  left: 0.55rem;
-  height: 1px;
-  background: var(--subtle-border);
-  content: '';
-  pointer-events: none;
-}
-
-.mesh-remote-session-side {
+  justify-content: flex-end;
   gap: 0.35rem;
-  pointer-events: auto;
+  color: var(--muted);
+  font-size: 0.76rem;
+  white-space: nowrap;
 }
 
-.mesh-remote-session-pending {
+.mesh-node-inclusion-info {
   display: inline-flex;
-  width: 1.8rem;
-  height: 1.8rem;
+  width: 1.5rem;
+  height: 1.5rem;
   align-items: center;
   justify-content: center;
-  color: var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+
+.mesh-node-inclusion-info:hover,
+.mesh-node-inclusion-info:focus-visible {
+  color: var(--text);
+  background: var(--subtle-surface-hover);
+}
+
+.mesh-node-inclusion-info:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.mesh-node-inclusion .app-switch-control {
+  margin-left: 0.3rem;
+}
+
+.mesh-node-inclusion-tooltip {
+  max-width: min(18rem, calc(100vw - 2rem));
+  line-height: 1.35;
 }
 
 @media (max-width: 800px) {
@@ -2939,12 +2917,6 @@ summary:focus-visible {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.6rem;
     padding: 0.75rem;
-  }
-
-  .mesh-node-list .mesh-item-row-stacked > .mesh-item-actions {
-    justify-content: flex-end;
-    flex-wrap: nowrap;
-    gap: 0.3rem;
   }
 }
 
@@ -5540,6 +5512,37 @@ summary:focus-visible {
 
 .session-header-mobile-meta {
   display: none;
+}
+
+.session-header-remote-indicator {
+  display: inline-flex;
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: inherit;
+}
+
+.session-header-remote-indicator:hover,
+.session-header-remote-indicator:focus-visible {
+  background: var(--subtle-surface-hover);
+  color: var(--text);
+}
+
+.session-header-remote-indicator:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.session-header-meta > .session-header-remote-indicator + .session-header-workspace {
+  margin-left: -0.2rem;
+  padding-left: 0.12rem;
+}
+
+.session-header-mobile-meta > .session-header-remote-indicator {
+  margin-right: -0.15rem;
 }
 
 .session-header-meta span:not([aria-hidden]):not(.session-context-dial):not(.session-context-dial-figure) {
@@ -8620,6 +8623,14 @@ summary:focus-visible {
   display: none;
 }
 
+.session-browser-filter-scroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
 .session-browser-search {
   display: flex;
   align-items: center;
@@ -8643,7 +8654,8 @@ summary:focus-visible {
 }
 
 .session-browser-filters {
-  display: inline-flex;
+  display: flex;
+  width: max-content;
   overflow: hidden;
   border: 1px solid var(--subtle-border);
   border-radius: var(--radius-control);
@@ -8651,6 +8663,8 @@ summary:focus-visible {
 }
 
 .session-browser-filter {
+  flex: 0 0 auto;
+  white-space: nowrap;
   border: 0;
   border-left: 1px solid transparent;
   background: transparent;
@@ -8668,6 +8682,13 @@ summary:focus-visible {
 .session-browser-filter-active {
   background: var(--selected-surface);
   color: var(--text);
+}
+
+.session-browser-filter:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .session-browser-body {
@@ -8737,6 +8758,45 @@ summary:focus-visible {
   outline: none;
 }
 
+.session-workspace-target-picker > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.session-workspace-target-picker > summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-workspace-target-options {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% - 0.2rem);
+  right: 0.65rem;
+  display: grid;
+  min-width: 9rem;
+  max-width: min(16rem, calc(100vw - 2rem));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-panel-strong);
+  padding: 0.3rem;
+  box-shadow: var(--shadow-lg);
+}
+
+.session-workspace-target-options button {
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-workspace-target-options button:hover,
+.session-workspace-target-options button:focus-visible {
+  background: var(--subtle-surface-hover);
+  outline: none;
+}
+
 .session-workspace-trigger-main,
 .session-workspace-meta,
 .session-workspace-updated {
@@ -8759,12 +8819,6 @@ summary:focus-visible {
   color: var(--text-muted);
 }
 
-.session-workspace-icon-remote {
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--subtle-border));
-  background: color-mix(in srgb, var(--accent-dim), var(--icon-surface) 76%);
-  color: var(--accent);
-}
-
 .session-workspace-copy {
   display: grid;
   min-width: 0;
@@ -8779,6 +8833,7 @@ summary:focus-visible {
 
 .session-workspace-path {
   display: flex;
+  gap: 0.5rem;
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
@@ -8792,8 +8847,10 @@ summary:focus-visible {
 }
 
 .session-workspace-machine {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   flex: 0 0 auto;
-  margin-left: 0.35rem;
   color: var(--text-dim);
   font-weight: 550;
 }
@@ -10557,7 +10614,7 @@ summary:focus-visible {
     background: var(--accent);
   }
 
-  .session-browser-filters {
+  .session-browser-filter-scroll {
     position: absolute;
     top: calc(100% + 0.4rem);
     right: 0;
@@ -10566,11 +10623,12 @@ summary:focus-visible {
     width: max-content;
     max-width: calc(100vw - 1rem);
     background: var(--bg-panel-strong);
+    border-radius: var(--radius-control);
     box-shadow: var(--shadow-lg);
   }
 
-  .session-browser-filters-expanded {
-    display: inline-flex;
+  .session-browser-filter-scroll-expanded {
+    display: block;
   }
 
   .agent-list-row-inner {
