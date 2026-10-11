@@ -5,6 +5,7 @@
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
   import { buildTurnPresentation, formatTurnDuration, type SessionConversationTurn } from '$lib/domain/session-conversation';
+  import { sessionTurnNavItemId } from '$lib/domain/session-turn-navigation';
   import { normalizeMarkdownCodeFences, renderMarkdownToHtml, splitStreamingMarkdown } from '$lib/domain/markdown';
   import type { SessionContentBlock, SessionImageGalleryItem } from '$lib/domain/types';
   import type { PromptFailure } from '$lib/domain/prompt-errors';
@@ -128,7 +129,7 @@
 
 <article class:session-turn-reverted={reverted} class="session-turn" data-turn-id={turn.id}>
   {#if turn.user}
-    <section class="session-user-message-shell">
+    <section class="session-user-message-shell" data-turn-part-id={sessionTurnNavItemId(turn.id, 'request')}>
       <div class="session-message session-message-user">
         {#each contentSegments(turn.user.blocks, turn.user.text) as segment}
           {#if segment.type === 'text'}
@@ -161,7 +162,10 @@
     </section>
   {/if}
 
-  <div class="session-turn-content">
+  <div
+    class="session-turn-content"
+    data-turn-part-id={turn.content.length > 0 ? sessionTurnNavItemId(turn.id, 'response') : undefined}
+  >
     {#if promptFailure && onDismissPromptFailure}
       <SessionPromptError
         failure={promptFailure}

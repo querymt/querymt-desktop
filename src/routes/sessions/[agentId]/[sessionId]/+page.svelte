@@ -19,6 +19,7 @@
     nextSessionChatPresentationState,
     nextSessionScrollMode,
     sessionFollowPinClass,
+    shouldKeepProgrammaticScroll,
     type SessionChatPresentationState,
     type SessionScrollMode
   } from '$lib/domain/session-scroll';
@@ -379,7 +380,7 @@
     const distanceFromBottom = getDistanceFromBottom(scrollViewport);
     if (programmaticScroll) {
       lastViewportScrollTop = scrollTop;
-      if (distanceFromBottom <= 16) {
+      if (!shouldKeepProgrammaticScroll(scrollMode, distanceFromBottom)) {
         programmaticScroll = false;
       }
       return;
@@ -554,6 +555,13 @@
       onRedo={() => void agentsStore.redoActiveSession()}
       onFork={openForkDialog}
       onDisclosureChange={preserveDisclosureAnchor}
+      onManualNavigate={() => {
+        programmaticScroll = true;
+        setScrollMode('free', scrollViewport ? getDistanceFromBottom(scrollViewport) : 0);
+      }}
+      onManualNavigateComplete={() => {
+        programmaticScroll = false;
+      }}
     />
 
     {#if pendingElicitations.length > 0}

@@ -6,7 +6,9 @@ import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActiveSessionViewModel } from '$lib/domain/types';
 import { calculateImageFit } from '$lib/components/session/SessionAttachmentPreview.svelte';
+import { SESSION_TURN_NAV_VISIBLE_GAP } from '$lib/domain/session-turn-navigation';
 import { createEmptyActiveSession } from '$lib/domain/session-updates';
+import { SESSION_TURN_DEFAULT_HEIGHT, SESSION_TURN_GAP } from '$lib/domain/session-turn-window';
 import ActiveSessionView from './ActiveSessionView.svelte';
 
 vi.mock('$app/state', () => ({
@@ -106,7 +108,9 @@ function sessionWithImages(): ActiveSessionViewModel {
 afterEach(() => {
   cleanup();
   resizeCallback = null;
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  document.querySelectorAll('.session-header, .app-shell-custom-titlebar').forEach((node) => node.remove());
 });
 
 describe('calculateImageFit', () => {
@@ -345,6 +349,441 @@ describe('ActiveSessionView turn window', () => {
     expect(screen.queryByText('No conversation yet')).not.toBeInTheDocument();
     expect(screen.getByText('Live answer 2')).toBeInTheDocument();
     expect(screen.getByText('Prompt 0')).toBeInTheDocument();
+  });
+});
+
+function makeRect(partial: {
+  top?: number;
+  bottom?: number;
+  height?: number;
+  left?: number;
+  width?: number;
+}): DOMRect {
+  const top = partial.top ?? 0;
+  const height = partial.height ?? Math.max(0, (partial.bottom ?? 0) - top);
+  const bottom = partial.bottom ?? top + height;
+  const left = partial.left ?? 0;
+  const width = partial.width ?? 0;
+  return {
+    x: left,
+    y: top,
+    top,
+    bottom,
+    left,
+    right: left + width,
+    width,
+    height,
+    toJSON() {
+      return this;
+    }
+  } as DOMRect;
+}
+
+function stubScroller(element: HTMLElement, initialTop = 0) {
+  let scrollTop = 0;
+  const scrollTo = vi.fn((options: ScrollToOptions) => {
+    scrollTop = options.top ?? 0;
+  });
+  Object.defineProperty(element, 'clientHeight', { configurable: true, value: 200 });
+  Object.defineProperty(element, 'scrollTop', {
+    configurable: true,
+    get: () => scrollTop,
+    set: (value: number) => {
+      scrollTop = value;
+    }
+  });
+  Object.defineProperty(element, 'scrollTo', { configurable: true, value: scrollTo });
+  return {
+    scrollTo,
+    setScrollTop(value: number) {
+      scrollTop = value;
+    },
+    initialTop
+  };
+}
+
+function scrollTopOf(call: ScrollToOptions): number {
+  return call.top ?? 0;
+}
+
+async function flushNavFrames() {
+  await tick();
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+  await tick();
+}
+
+async function flushIdleSettle() {
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+  });
+  await tick();
+}
+
+describe('ActiveSessionView turn navigation', () => {
+  it('hides the rail when the conversation is empty', () => {
+    const empty = createEmptyActiveSession();
+    empty.sessionId = 'session-empty';
+    render(ActiveSessionView, { session: empty });
+
+    expect(screen.queryByRole('navigation', { name: 'Turn navigation' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Previous response' })).not.toBeInTheDocument();
+  });
+
+  it('renders ordinal ticks and keeps boundary chevrons non-native-disabled', async () => {
+    const onManualNavigate = vi.fn();
+    stubScroller(document.documentElement);
+    render(ActiveSessionView, { session: longStreamingSession(2), onManualNavigate });
+    await tick();
+
+    const rail = screen.getByRole('navigation', { name: 'Turn navigation' });
+    expect(rail).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'User request 1 of 2' })).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByRole('button', { name: 'User request 2 of 2' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Agent response 1 of 2' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Agent response 2 of 2' })).toBeInTheDocument();
+
+    const previous = screen.getByRole('button', { name: 'Previous response' });
+    const next = screen.getByRole('button', { name: 'Next response' });
+    expect(previous).toHaveAttribute('aria-disabled', 'true');
+    expect(previous).not.toBeDisabled();
+    expect(next).not.toHaveAttribute('aria-disabled');
+    expect(next).toBeEnabled();
+  });
+
+  it('jumps a virtualized response in two phases: rough mount then exact header-cleared scroll', async () => {
+    const onManualNavigate = vi.fn();
+    const scroller = stubScroller(document.documentElement);
+    const header = document.createElement('header');
+    header.className = 'session-header';
+    document.body.append(header);
+
+    const turnIndex = 5;
+    const turnStart = turnIndex * (SESSION_TURN_DEFAULT_HEIGHT + SESSION_TURN_GAP);
+    const requestHeight = 400;
+    const responseLayoutTop = turnStart + requestHeight;
+    const headerBottom = 72;
+    const inset = headerBottom + SESSION_TURN_NAV_VISIBLE_GAP;
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const scrollTop = document.documentElement.scrollTop;
+      if (this === document.documentElement) return makeRect({ top: 0, height: 200 });
+      if (this === header) return makeRect({ top: 0, bottom: headerBottom, height: headerBottom });
+      if (this.classList.contains('session-conversation-window')) {
+        return makeRect({ top: -scrollTop, height: 4000 });
+      }
+      const partId = this.dataset.turnPartId;
+      if (partId === `turn-user-${turnIndex}:response`) {
+        return makeRect({ top: responseLayoutTop - scrollTop, height: 80 });
+      }
+      if (partId === `turn-user-${turnIndex}:request`) {
+        return makeRect({ top: turnStart - scrollTop, height: requestHeight });
+      }
+      const turnId = this.dataset.turnId;
+      if (turnId === `turn-user-${turnIndex}`) {
+        return makeRect({ top: turnStart - scrollTop, height: requestHeight + 80 });
+      }
+      return originalRect.call(this);
+    });
+
+    render(ActiveSessionView, { session: longStreamingSession(12), onManualNavigate });
+    await tick();
+
+    expect(document.querySelector(`[data-turn-id="turn-user-${turnIndex}"]`)).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 6 of 12' }));
+
+    expect(onManualNavigate).toHaveBeenCalledOnce();
+    expect(scroller.scrollTo).toHaveBeenNthCalledWith(1, { top: turnStart - inset, behavior: 'auto' });
+    expect(scrollTopOf(scroller.scrollTo.mock.calls[0][0])).toBe(turnStart - inset);
+
+    await flushNavFrames();
+    await vi.waitFor(() => expect(scroller.scrollTo).toHaveBeenCalledTimes(2));
+
+    expect(scroller.scrollTo).toHaveBeenNthCalledWith(2, {
+      top: responseLayoutTop - inset,
+      behavior: 'smooth'
+    });
+    expect(scrollTopOf(scroller.scrollTo.mock.calls[0][0])).not.toBe(scrollTopOf(scroller.scrollTo.mock.calls[1][0]));
+    expect(document.querySelector(`[data-turn-part-id="turn-user-${turnIndex}:response"]`)).toBeInTheDocument();
+    header.remove();
+  });
+
+  it('aligns a mounted target below the sticky header using the custom scroller origin', async () => {
+    const onManualNavigate = vi.fn();
+    const shell = document.createElement('div');
+    shell.className = 'app-shell-custom-titlebar';
+    const header = document.createElement('header');
+    header.className = 'session-header';
+    document.body.append(shell, header);
+    const scroller = stubScroller(shell);
+    scroller.setScrollTop(50);
+
+    const scrollerTop = 40;
+    const headerBottom = 112;
+    const nodeTop = 200;
+    const inset = headerBottom - scrollerTop + SESSION_TURN_NAV_VISIBLE_GAP;
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === shell) return makeRect({ top: scrollerTop, height: 200 });
+      if (this === header) return makeRect({ top: 16, bottom: headerBottom, height: headerBottom - 16 });
+      if (this.classList.contains('session-conversation-window')) {
+        return makeRect({ top: scrollerTop, height: 800 });
+      }
+      const partId = this.dataset.turnPartId;
+      if (partId === 'turn-user-0:response') {
+        return makeRect({ top: nodeTop, height: 80 });
+      }
+      return originalRect.call(this);
+    });
+
+    render(ActiveSessionView, {
+      target: shell,
+      props: { session: longStreamingSession(2), onManualNavigate }
+    });
+    await tick();
+
+    const rail = screen.getByRole('navigation', { name: 'Turn navigation' });
+    expect(rail.getAttribute('style')).toContain(`--session-turn-nav-inset: ${inset}px`);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 1 of 2' }));
+    expect(onManualNavigate).toHaveBeenCalledOnce();
+    expect(scroller.scrollTo).toHaveBeenCalledWith({
+      top: 50 + nodeTop - scrollerTop - inset,
+      behavior: 'smooth'
+    });
+    expect(scrollTopOf(scroller.scrollTo.mock.calls[0][0])).toBe(122);
+    shell.remove();
+    header.remove();
+  });
+
+  it('keeps programmatic navigation open until the mounted jump settles', async () => {
+    const onManualNavigate = vi.fn();
+    const onManualNavigateComplete = vi.fn();
+    stubScroller(document.documentElement);
+    render(ActiveSessionView, {
+      session: longStreamingSession(2),
+      onManualNavigate,
+      onManualNavigateComplete
+    });
+    await tick();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 1 of 2' }));
+    expect(onManualNavigate).toHaveBeenCalledOnce();
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new Event('scrollend'));
+    await tick();
+    expect(onManualNavigateComplete).toHaveBeenCalledOnce();
+  });
+
+  it('does not complete a two-phase jump until the exact phase settles', async () => {
+    const onManualNavigate = vi.fn();
+    const onManualNavigateComplete = vi.fn();
+    const scroller = stubScroller(document.documentElement);
+    const header = document.createElement('header');
+    header.className = 'session-header';
+    document.body.append(header);
+
+    const turnIndex = 5;
+    const turnStart = turnIndex * (SESSION_TURN_DEFAULT_HEIGHT + SESSION_TURN_GAP);
+    const requestHeight = 400;
+    const responseLayoutTop = turnStart + requestHeight;
+    const headerBottom = 72;
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const scrollTop = document.documentElement.scrollTop;
+      if (this === document.documentElement) return makeRect({ top: 0, height: 200 });
+      if (this === header) return makeRect({ top: 0, bottom: headerBottom, height: headerBottom });
+      if (this.classList.contains('session-conversation-window')) {
+        return makeRect({ top: -scrollTop, height: 4000 });
+      }
+      const partId = this.dataset.turnPartId;
+      if (partId === `turn-user-${turnIndex}:response`) {
+        return makeRect({ top: responseLayoutTop - scrollTop, height: 80 });
+      }
+      if (partId === `turn-user-${turnIndex}:request`) {
+        return makeRect({ top: turnStart - scrollTop, height: requestHeight });
+      }
+      const turnId = this.dataset.turnId;
+      if (turnId === `turn-user-${turnIndex}`) {
+        return makeRect({ top: turnStart - scrollTop, height: requestHeight + 80 });
+      }
+      return originalRect.call(this);
+    });
+
+    render(ActiveSessionView, {
+      session: longStreamingSession(12),
+      onManualNavigate,
+      onManualNavigateComplete
+    });
+    await tick();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 6 of 12' }));
+    expect(onManualNavigate).toHaveBeenCalledOnce();
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+    expect(scroller.scrollTo).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new Event('scrollend'));
+    await tick();
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+
+    await flushNavFrames();
+    await vi.waitFor(() => expect(scroller.scrollTo).toHaveBeenCalledTimes(2));
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new Event('scrollend'));
+    await tick();
+    expect(onManualNavigateComplete).toHaveBeenCalledOnce();
+    header.remove();
+  });
+
+  it('completes the previous jump when a replacement navigation starts', async () => {
+    const onManualNavigate = vi.fn();
+    const onManualNavigateComplete = vi.fn();
+    stubScroller(document.documentElement);
+    render(ActiveSessionView, {
+      session: longStreamingSession(2),
+      onManualNavigate,
+      onManualNavigateComplete
+    });
+    await tick();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 1 of 2' }));
+    expect(onManualNavigate).toHaveBeenCalledOnce();
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 2 of 2' }));
+    expect(onManualNavigate).toHaveBeenCalledTimes(2);
+    expect(onManualNavigateComplete).toHaveBeenCalledOnce();
+
+    window.dispatchEvent(new Event('scrollend'));
+    await tick();
+    expect(onManualNavigateComplete).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels an in-flight jump on session change without completing it', async () => {
+    const onManualNavigate = vi.fn();
+    const onManualNavigateComplete = vi.fn();
+    stubScroller(document.documentElement);
+    const { rerender } = render(ActiveSessionView, {
+      session: longStreamingSession(2),
+      onManualNavigate,
+      onManualNavigateComplete
+    });
+    await tick();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 1 of 2' }));
+    expect(onManualNavigate).toHaveBeenCalledOnce();
+
+    const nextSession = longStreamingSession(2);
+    nextSession.sessionId = 'session-other';
+    await rerender({ session: nextSession, onManualNavigate, onManualNavigateComplete });
+    await tick();
+
+    window.dispatchEvent(new Event('scrollend'));
+    await tick();
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+  });
+
+  it('clears programmatic navigation after idle frames when scrollend never fires', async () => {
+    const onManualNavigateComplete = vi.fn();
+    stubScroller(document.documentElement);
+    render(ActiveSessionView, {
+      session: longStreamingSession(2),
+      onManualNavigateComplete
+    });
+    await tick();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent response 1 of 2' }));
+    expect(onManualNavigateComplete).not.toHaveBeenCalled();
+
+    await flushIdleSettle();
+    expect(onManualNavigateComplete).toHaveBeenCalledOnce();
+  });
+
+  it('keeps previous and next non-operational when no agent responses exist', async () => {
+    const session = createEmptyActiveSession();
+    session.sessionId = 'session-requests';
+    session.runState = 'completed';
+    session.transcript = [
+      {
+        id: 'user-1',
+        kind: 'user_message_chunk',
+        text: 'Only a prompt',
+        messageId: 'user-message-1',
+        eventIndex: 0
+      }
+    ];
+    render(ActiveSessionView, { session });
+    await tick();
+
+    expect(screen.getByRole('button', { name: 'User request 1 of 1' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Agent response/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous response' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('button', { name: 'Next response' })).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('keeps the request active when the conversation root starts below the viewport origin', async () => {
+    const scroller = stubScroller(document.documentElement);
+    const header = document.createElement('header');
+    header.className = 'session-header';
+    document.body.append(header);
+
+    const rootTop = 84;
+    const headerBottom = 72;
+    const inset = headerBottom + SESSION_TURN_NAV_VISIBLE_GAP;
+    const requestHeight = 70;
+    const responseHeight = 80;
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const scrollTop = document.documentElement.scrollTop;
+      if (this === document.documentElement) return makeRect({ top: 0, height: 200 });
+      if (this === header) return makeRect({ top: 0, bottom: headerBottom, height: headerBottom });
+      if (this.classList.contains('session-conversation-window')) {
+        return makeRect({ top: rootTop - scrollTop, height: 400 });
+      }
+      const partId = this.dataset.turnPartId;
+      if (partId === 'turn-user-0:request') {
+        return makeRect({ top: rootTop - scrollTop, height: requestHeight });
+      }
+      if (partId === 'turn-user-0:response') {
+        return makeRect({ top: rootTop + requestHeight - scrollTop, height: responseHeight });
+      }
+      if (this.dataset.turnId === 'turn-user-0') {
+        return makeRect({ top: rootTop - scrollTop, height: requestHeight + responseHeight });
+      }
+      return originalRect.call(this);
+    });
+
+    render(ActiveSessionView, { session: longStreamingSession(1) });
+    await flushNavFrames();
+
+    // Clamped viewport.top + inset would be 88 and skip the 70px request.
+    // True conversation readY is scrollTop + 88 - 84 = scrollTop + 4.
+    expect(inset).toBe(88);
+    expect(screen.getByRole('button', { name: 'User request 1 of 1' })).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByRole('button', { name: 'Agent response 1 of 1' })).not.toHaveAttribute('aria-current');
+
+    scroller.setScrollTop(65);
+    await fireEvent.scroll(window);
+    await tick();
+    expect(screen.getByRole('button', { name: 'User request 1 of 1' })).toHaveAttribute('aria-current', 'true');
+
+    scroller.setScrollTop(66);
+    await fireEvent.scroll(window);
+    await tick();
+    expect(screen.getByRole('button', { name: 'Agent response 1 of 1' })).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByRole('button', { name: 'User request 1 of 1' })).not.toHaveAttribute('aria-current');
+    header.remove();
   });
 });
 
