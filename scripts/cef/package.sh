@@ -130,7 +130,7 @@ exec /opt/querymt-desktop/querymt-desktop "$@"
 LAUNCHER
 chmod 755 "$PKGROOT/usr/bin/querymt-desktop" "$PKGROOT/opt/querymt-desktop/querymt-desktop"
 cp packaging/querymt-desktop.desktop "$PKGROOT/usr/share/applications/"
-cp src-tauri/icons/icon.png "$PKGROOT/usr/share/icons/hicolor/256x256/apps/querymt-desktop.png"
+cp src-tauri/icons/128x128@2x.png "$PKGROOT/usr/share/icons/hicolor/256x256/apps/querymt-desktop.png"
 PKGROOT="$PKGROOT" PKG_ARCH="$PKG_ARCH" PKG_VERSION="$VERSION" "$NFPM" pkg \
   -f nfpm.yaml -p deb -t "$OUT/deb/QueryMT-Desktop-$VERSION-linux-$ARCH.deb"
 

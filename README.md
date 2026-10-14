@@ -46,6 +46,9 @@ npm run tauri:cef -- build
 
 CEF is experimental; Wry remains the stable fallback.
 
+Desktop icons are generated from `static/favicon.svg` with `npm run tauri -- icon static/favicon.svg`.
+Keep the desktop PNG, ICO, and ICNS outputs in `src-tauri/icons`; mobile and Appx icons are not used.
+
 ## Embedded artifact
 
 Build the standalone UI without Tauri or Rust:
