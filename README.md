@@ -8,6 +8,16 @@ The default target is QueryMT Desktop. It can manage local ACP subprocesses and 
 
 The embedded target is a static SPA for `qmtcode`. It registers one host-managed agent, connects to the serving origin at `/acp/ws`, uses `ws:` or `wss:` to match the page, and communicates through ACP plus capability-advertised QueryMT extensions. Workspace paths entered in this target refer to the `qmtcode` server filesystem.
 
+## Linux downloads
+
+Linux release filenames identify the runtime:
+
+- `QueryMT-Desktop-wry-<version>-linux-<arch>.*`: stable default, using the system WebKitGTK webview.
+- `QueryMT-Desktop-cef-<version>-linux-<arch>.*`: experimental CEF runtime, bundling Chromium instead of using WebKitGTK.
+
+Choose `x86_64` for Intel/AMD Linux or `aarch64` for ARM64 Linux. Both runtimes provide
+AppImage and Debian (`.deb`) packages; CEF also provides a portable `.tar.gz`.
+
 ## Development
 
 Development needs a Rust toolchain, Node.js, and the WebKit/CEF system

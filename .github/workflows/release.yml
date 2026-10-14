@@ -92,12 +92,14 @@ jobs:
             target: x86_64-unknown-linux-gnu
             qmtcode_asset_glob: qmtcode-*-x86_64-unknown-linux-musl.tar.gz
             tauri_args: --target x86_64-unknown-linux-gnu --bundles appimage,deb
+            release_asset_name_pattern: QueryMT-Desktop-wry-[version]-linux-x86_64[ext]
           - name: Linux arm64 (Wry)
             runtime: wry
             platform: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             qmtcode_asset_glob: qmtcode-*-aarch64-unknown-linux-musl.tar.gz
             tauri_args: --target aarch64-unknown-linux-gnu --bundles appimage,deb
+            release_asset_name_pattern: QueryMT-Desktop-wry-[version]-linux-aarch64[ext]
           - name: Linux x64 (CEF)
             runtime: cef
             arch: x86_64
@@ -244,6 +246,7 @@ jobs:
             Bundled qmtcode: ${{ env.QMTCODE_VERSION }} (${{ env.QMTCODE_ASSET }})
           releaseDraft: true
           prerelease: false
+          releaseAssetNamePattern: ${{ matrix.release_asset_name_pattern }}
           args: ${{ matrix.tauri_args }}
 
       - name: Build Linux CEF binary
@@ -256,7 +259,7 @@ jobs:
           APPIMAGE_RUNTIME_FILE="$HOME/.local/bin/appimage-runtime" \
             npm run package:cef -- "${GITHUB_REF_NAME#v}" ${{ matrix.target }}
 
-      - name: Upload CEF bundles to draft release
+      - name: Upload CEF bundles to GitHub Release
         if: matrix.runtime == 'cef'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -275,3 +278,18 @@ jobs:
             src-tauri/target/release/bundle/deb/* \
             src-tauri/target/release/bundle/tar/* \
             --clobber
+
+  publish-release:
+    name: Publish Release
+    needs: [release, publish-embedded-ui]
+    if: success() && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish completed release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --verify-tag

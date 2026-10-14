@@ -115,7 +115,7 @@ if [ -n "${APPIMAGE_RUNTIME_FILE:-}" ]; then
   APPIMAGE_ARGS+=(--runtime-file "$APPIMAGE_RUNTIME_FILE")
 fi
 ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" "${APPIMAGE_ARGS[@]}" "$APPDIR" \
-  "$OUT/appimage/QueryMT-Desktop-$VERSION-linux-$ARCH.AppImage"
+  "$OUT/appimage/QueryMT-Desktop-cef-$VERSION-linux-$ARCH.AppImage"
 
 NFPM="${NFPM:-$(command -v nfpm || true)}"
 [ -n "$NFPM" ] || { echo "nfpm not found" >&2; exit 1; }
@@ -132,13 +132,13 @@ chmod 755 "$PKGROOT/usr/bin/querymt-desktop" "$PKGROOT/opt/querymt-desktop/query
 cp packaging/querymt-desktop.desktop "$PKGROOT/usr/share/applications/"
 cp src-tauri/icons/128x128@2x.png "$PKGROOT/usr/share/icons/hicolor/256x256/apps/querymt-desktop.png"
 PKGROOT="$PKGROOT" PKG_ARCH="$PKG_ARCH" PKG_VERSION="$VERSION" "$NFPM" pkg \
-  -f nfpm.yaml -p deb -t "$OUT/deb/QueryMT-Desktop-$VERSION-linux-$ARCH.deb"
+  -f nfpm.yaml -p deb -t "$OUT/deb/QueryMT-Desktop-cef-$VERSION-linux-$ARCH.deb"
 
-PORTABLE="$WORK/QueryMT-Desktop-$VERSION-linux-$ARCH"
+PORTABLE="$WORK/QueryMT-Desktop-cef-$VERSION-linux-$ARCH"
 mkdir -p "$PORTABLE"
 cp -a "$RUNTIME/." "$PORTABLE/"
 cp "$BINARY" "$PORTABLE/querymt-desktop"
-tar -C "$WORK" -czf "$OUT/tar/QueryMT-Desktop-$VERSION-linux-$ARCH.tar.gz" \
+tar -C "$WORK" -czf "$OUT/tar/QueryMT-Desktop-cef-$VERSION-linux-$ARCH.tar.gz" \
   "$(basename "$PORTABLE")"
 
 echo "CEF packages written to $OUT"
