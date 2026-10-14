@@ -51,6 +51,7 @@ jobs:
         run: |
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
+              --draft \
               --title "QueryMT Desktop ${RELEASE_TAG}" \
               --notes "Desktop release for QueryMT Desktop." \
               || gh release view "$RELEASE_TAG" >/dev/null
@@ -243,7 +244,7 @@ jobs:
             Desktop release for QueryMT Desktop.
 
             Bundled qmtcode: ${{ env.QMTCODE_VERSION }} (${{ env.QMTCODE_ASSET }})
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           releaseAssetNamePattern: ${{ matrix.release_asset_name_pattern }}
           args: ${{ matrix.tauri_args }}
@@ -267,6 +268,7 @@ jobs:
         run: |
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
+              --draft \
               --title "QueryMT Desktop ${RELEASE_TAG}" \
               --notes "Desktop release for QueryMT Desktop." \
               || gh release view "$RELEASE_TAG" >/dev/null
@@ -276,3 +278,18 @@ jobs:
             src-tauri/target/release/bundle/deb/* \
             src-tauri/target/release/bundle/tar/* \
             --clobber
+
+  publish-release:
+    name: Publish Release
+    needs: [release, publish-embedded-ui]
+    if: success() && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish completed release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --verify-tag
