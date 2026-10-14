@@ -105,6 +105,9 @@ jobs:
             target: x86_64-unknown-linux-gnu
             qmtcode_asset_glob: qmtcode-*-x86_64-unknown-linux-musl.tar.gz
             nfpm_arch: x86_64
+            nfpm_sha256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
+            appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+            appimage_runtime_sha256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
           - name: Linux arm64 (CEF)
             runtime: cef
             arch: aarch64
@@ -112,6 +115,9 @@ jobs:
             target: aarch64-unknown-linux-gnu
             qmtcode_asset_glob: qmtcode-*-aarch64-unknown-linux-musl.tar.gz
             nfpm_arch: arm64
+            nfpm_sha256: a9a75213763783b7669719e505474c748c5ad7dc66591a195619deb50f85c2f4
+            appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+            appimage_runtime_sha256: 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
 
     steps:
       - name: Checkout
@@ -147,17 +153,24 @@ jobs:
         if: matrix.runtime == 'cef'
         env:
           NFPM_ARCH: ${{ matrix.nfpm_arch }}
+          NFPM_VERSION: '2.48.0'
+          NFPM_SHA256: ${{ matrix.nfpm_sha256 }}
           APPIMAGE_ARCH: ${{ matrix.arch }}
+          APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
           APPIMAGE_RUNTIME_VERSION: '20251108'
+          APPIMAGE_RUNTIME_SHA256: ${{ matrix.appimage_runtime_sha256 }}
         run: |
           mkdir -p "$HOME/.local/bin"
           curl -fsSL -o /tmp/nfpm.tar.gz \
-            "https://github.com/goreleaser/nfpm/releases/download/v2.47.0/nfpm_2.47.0_Linux_${NFPM_ARCH}.tar.gz"
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_${NFPM_ARCH}.tar.gz"
+          echo "${NFPM_SHA256}  /tmp/nfpm.tar.gz" | sha256sum --check --strict
           tar -xzf /tmp/nfpm.tar.gz -C "$HOME/.local/bin" nfpm
           curl -fsSL -o "$HOME/.local/bin/appimagetool" \
             "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${APPIMAGE_ARCH}.AppImage"
+          echo "${APPIMAGETOOL_SHA256}  $HOME/.local/bin/appimagetool" | sha256sum --check --strict
           curl -fsSL -o "$HOME/.local/bin/appimage-runtime" \
             "https://github.com/AppImage/type2-runtime/releases/download/${APPIMAGE_RUNTIME_VERSION}/runtime-${APPIMAGE_ARCH}"
+          echo "${APPIMAGE_RUNTIME_SHA256}  $HOME/.local/bin/appimage-runtime" | sha256sum --check --strict
           chmod +x "$HOME/.local/bin/nfpm" "$HOME/.local/bin/appimagetool" \
             "$HOME/.local/bin/appimage-runtime"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
