@@ -160,6 +160,7 @@ import { normalizeAcpWebSocketEndpoint, usesSecureWebSocket } from '$lib/querymt
 
 const AGENTS_STORAGE_KEY = 'querymt-desktop.agents';
 const RECENT_MODELS_STORAGE_KEY = 'querymt-desktop.recent-models';
+const RECENT_DELEGATE_MODELS_STORAGE_KEY = 'querymt-desktop.recent-delegate-models';
 const RECENT_WORKSPACES_STORAGE_KEY = 'querymt-desktop.recent-workspaces';
 const RECENT_MODELS_LIMIT = 5;
 const RECENT_WORKSPACES_LIMIT = 8;
@@ -365,6 +366,7 @@ export class AgentsStore {
   delegateAssignmentConflictBySession = $state<Record<string, boolean>>({});
   lastSessionLoadMetrics = $state<SessionLoadMetrics | null>(null);
   recentModelsByAgent = $state<Record<string, string[]>>(loadRecentModels());
+  private recentModelsByDelegate = $state<Record<string, string[]>>(loadRecentModels(RECENT_DELEGATE_MODELS_STORAGE_KEY));
   recentWorkspaces = $state<string[]>(loadRecentWorkspaces());
   private sessionModePreferences: SessionModePreferenceDocument = loadSessionModePreferences();
 
@@ -419,6 +421,16 @@ export class AgentsStore {
       ? buildSessionKey(this.activeAgentId, this.activeSessionId)
       : '';
     return this.delegateAssignmentsBySession[key] ?? null;
+  }
+
+  get activeRecentDelegateModels(): Record<string, ModelEntry[]> {
+    const ownerAgentId = this.activeAgentId;
+    const assignments = this.activeDelegateAssignments;
+    if (!ownerAgentId || !assignments) return {};
+    return Object.fromEntries(assignments.assignments.map(({ agent_id }) => [
+      agent_id,
+      this.getRecentDelegateModels(ownerAgentId, assignments.profile_id, agent_id)
+    ]));
   }
 
   get activeDelegateAssignmentsLoading(): boolean {
@@ -3062,7 +3074,12 @@ export class AgentsStore {
       current.orphaned_overrides.find((assignment) => assignment.agent_id === agentId);
     const previous = currentAssignment?.model ?? null;
     const reasoningUnchanged = reasoningEffort === undefined || (currentAssignment?.reasoning_effort ?? null) === reasoningEffort;
-    if (sameDelegateModel(previous, model) && reasoningUnchanged) return true;
+    const isExplicitModelSelection = model !== null && reasoningEffort === undefined &&
+      current.assignments.some((assignment) => assignment.agent_id === agentId);
+    if (sameDelegateModel(previous, model) && reasoningUnchanged) {
+      if (isExplicitModelSelection) this.rememberRecentDelegateModel(ownerAgentId, current.profile_id, agentId, model);
+      return true;
+    }
 
     const pendingForSession = this.delegateAssignmentPendingBySession[key] ?? {};
     this.delegateAssignmentPendingBySession = {
@@ -3092,6 +3109,9 @@ export class AgentsStore {
         const confirmed = applyDelegateModelConfirmation(this.delegateAssignmentsBySession[key], response);
         if (confirmed) {
           this.delegateAssignmentsBySession = { ...this.delegateAssignmentsBySession, [key]: confirmed };
+        }
+        if (isExplicitModelSelection && sameDelegateModel(response.model, model)) {
+          this.rememberRecentDelegateModel(ownerAgentId, latest.profile_id, agentId, model);
         }
         await this.refreshDelegateAssignments(ownerAgentId, sessionId);
         return true;
@@ -3871,6 +3891,32 @@ export class AgentsStore {
         seen.add(selectionKey);
         return true;
       });
+  }
+
+  getRecentDelegateModels(ownerAgentId: string, profileId: string | null, delegateAgentId: string): ModelEntry[] {
+    const key = JSON.stringify([ownerAgentId, profileId, delegateAgentId]);
+    const available = new Map((this.modelsByAgent[ownerAgentId] ?? []).map((model) => [getModelSelectionKey(model), model]));
+    return (this.recentModelsByDelegate[key] ?? []).flatMap((selectionKey) => {
+      const model = available.get(selectionKey);
+      return model ? [model] : [];
+    });
+  }
+
+  private rememberRecentDelegateModel(
+    ownerAgentId: string,
+    profileId: string | null,
+    delegateAgentId: string,
+    model: DelegateModelOverride
+  ) {
+    // Delegate IDs such as "coder" can be reused by different agents/profiles.
+    const key = JSON.stringify([ownerAgentId, profileId, delegateAgentId]);
+    const selectionKey = getModelSelectionKey({ id: model.model_id, node_id: model.node_id });
+    const current = this.recentModelsByDelegate[key] ?? [];
+    this.recentModelsByDelegate = {
+      ...this.recentModelsByDelegate,
+      [key]: [selectionKey, ...current.filter((entry) => entry !== selectionKey)].slice(0, RECENT_MODELS_LIMIT)
+    };
+    persistRecentModels(this.recentModelsByDelegate, RECENT_DELEGATE_MODELS_STORAGE_KEY);
   }
 
   /**
@@ -4869,13 +4915,13 @@ function persistAgents(agents: AgentConfig[]) {
   localStorage.setItem(AGENTS_STORAGE_KEY, JSON.stringify(agents));
 }
 
-function loadRecentModels(): Record<string, string[]> {
+function loadRecentModels(storageKey = RECENT_MODELS_STORAGE_KEY): Record<string, string[]> {
   if (typeof localStorage === 'undefined') {
     return {};
   }
 
   try {
-    const raw = localStorage.getItem(RECENT_MODELS_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) {
       return {};
     }
@@ -4887,12 +4933,12 @@ function loadRecentModels(): Record<string, string[]> {
   }
 }
 
-function persistRecentModels(value: Record<string, string[]>) {
+function persistRecentModels(value: Record<string, string[]>, storageKey = RECENT_MODELS_STORAGE_KEY) {
   if (typeof localStorage === 'undefined') {
     return;
   }
 
-  localStorage.setItem(RECENT_MODELS_STORAGE_KEY, JSON.stringify(value));
+  localStorage.setItem(storageKey, JSON.stringify(value));
 }
 
 function loadRecentWorkspaces(): string[] {

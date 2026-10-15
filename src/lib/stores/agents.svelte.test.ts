@@ -2550,6 +2550,126 @@ describe('AgentsStore delegate model assignments', () => {
     store.activeSession.sessionId = 'session-1';
   }
 
+  beforeEach(() => localStorage.removeItem('querymt-desktop.recent-delegate-models'));
+  afterEach(() => localStorage.removeItem('querymt-desktop.recent-delegate-models'));
+
+  function setupRecentDelegateModels() {
+    const store = createStore();
+    selectSession(store);
+    store.delegateAssignmentsBySession = { 'agent-1:session-1': assignmentState };
+    const models: ModelEntry[] = Array.from({ length: 7 }, (_, index) => ({
+      id: `codex/model-${index}`, provider: 'codex', model: `model-${index}`
+    }));
+    store.modelsByAgent = { 'agent-1': models };
+    mockClient.getDelegateModels.mockImplementation(async ({ session_id }) =>
+      store.delegateAssignmentsBySession[`${store.activeAgentId}:${session_id}`] ?? assignmentState);
+    return { store, models };
+  }
+
+  it('persists five recent models per delegate, moves reused models first, and shares history across sessions', async () => {
+    const { store, models } = setupRecentDelegateModels();
+    for (const model of models) {
+      await expect(store.setActiveDelegateModel('coder', { model_id: model.id })).resolves.toBe(true);
+    }
+    expect(store.getRecentDelegateModels('agent-1', 'quorum', 'coder')).toEqual(models.slice(2).reverse());
+
+    await store.setActiveDelegateModel('coder', { model_id: models[4].id });
+    const expected = [models[4], models[6], models[5], models[3], models[2]];
+    expect(store.getRecentDelegateModels('agent-1', 'quorum', 'coder')).toEqual(expected);
+    expect(store.activeRecentDelegateModels).toEqual({ coder: expected });
+    expect(store.recentModelsByAgent['agent-1']).toBeUndefined();
+    expect(JSON.parse(localStorage.getItem('querymt-desktop.recent-delegate-models')!)).toEqual({
+      [JSON.stringify(['agent-1', 'quorum', 'coder'])]: expected.map(getModelSelectionKey)
+    });
+
+    const reloaded = createStore();
+    reloaded.modelsByAgent = { 'agent-1': models };
+    reloaded.activeAgentId = 'agent-1';
+    reloaded.activeSessionId = 'session-2';
+    reloaded.delegateAssignmentsBySession = {
+      'agent-1:session-2': { ...assignmentState, session_id: 'session-2' }
+    };
+    expect(reloaded.activeRecentDelegateModels.coder).toEqual(expected);
+  });
+
+  it('isolates histories by delegate, profile, and connected agent', async () => {
+    const { store, models } = setupRecentDelegateModels();
+    await store.setActiveDelegateModel('coder', { model_id: models[0].id });
+    store.delegateAssignmentsBySession['agent-1:session-1'] = {
+      ...assignmentState,
+      assignments: [...assignmentState.assignments, { ...assignmentState.assignments[0], agent_id: 'reviewer' }]
+    };
+    await store.setActiveDelegateModel('reviewer', { model_id: models[1].id });
+    store.delegateAssignmentsBySession['agent-1:session-1'] = { ...assignmentState, profile_id: 'other-profile' };
+    await store.setActiveDelegateModel('coder', { model_id: models[2].id });
+    store.configs = [...store.configs, { ...store.configs[0], id: 'agent-2' }];
+    store.activeAgentId = 'agent-2';
+    store.modelsByAgent['agent-2'] = models;
+    store.delegateAssignmentsBySession['agent-2:session-1'] = assignmentState;
+    await store.setActiveDelegateModel('coder', { model_id: models[3].id });
+
+    expect(store.getRecentDelegateModels('agent-1', 'quorum', 'coder')).toEqual([models[0]]);
+    expect(store.getRecentDelegateModels('agent-1', 'quorum', 'reviewer')).toEqual([models[1]]);
+    expect(store.getRecentDelegateModels('agent-1', 'other-profile', 'coder')).toEqual([models[2]]);
+    expect(store.getRecentDelegateModels('agent-2', 'quorum', 'coder')).toEqual([models[3]]);
+    expect(store.getRecentDelegateModels('agent-1', 'quorum', 'unused-role')).toEqual([]);
+  });
+
+  it('keeps local and mesh history distinct and hides unavailable models without deleting saved history', async () => {
+    const { store, models } = setupRecentDelegateModels();
+    const local = models[0];
+    const remote = { ...local, node_id: 'node-1', node_label: 'Build server' };
+    store.modelsByAgent['agent-1'] = [local, remote];
+    await store.setActiveDelegateModel('coder', { model_id: local.id });
+    await store.setActiveDelegateModel('coder', { model_id: remote.id, node_id: remote.node_id });
+    expect(store.activeRecentDelegateModels.coder).toEqual([remote, local]);
+
+    const saved = localStorage.getItem('querymt-desktop.recent-delegate-models');
+    store.modelsByAgent['agent-1'] = [local];
+    expect(store.activeRecentDelegateModels.coder).toEqual([local]);
+    expect(localStorage.getItem('querymt-desktop.recent-delegate-models')).toBe(saved);
+    store.modelsByAgent['agent-1'] = [local, remote];
+    expect(store.activeRecentDelegateModels.coder).toEqual([remote, local]);
+  });
+
+  it('does not change recent models for reasoning, default resets, refreshes, failures, or conflicts', async () => {
+    const { store, models } = setupRecentDelegateModels();
+    await store.setActiveDelegateModel('coder', { model_id: models[0].id });
+    await store.setActiveDelegateModel('coder', { model_id: models[1].id });
+    const saved = localStorage.getItem('querymt-desktop.recent-delegate-models');
+
+    await store.setActiveDelegateModel('coder', { model_id: models[0].id }, DelegateReasoningEffort.High);
+    await store.setActiveDelegateModel('coder', null);
+    await store.refreshDelegateAssignments('agent-1', 'session-1');
+    mockClient.setDelegateModel.mockRejectedValueOnce(new Error('Provider unavailable'));
+    await expect(store.setActiveDelegateModel('coder', { model_id: models[2].id })).resolves.toBe(false);
+    mockClient.setDelegateModel.mockRejectedValueOnce(new RequestError(-32602, 'Conflict', {
+      code: 'delegate_assignment_conflict', expected_revision: 2, actual_revision: 3
+    }));
+    await expect(store.setActiveDelegateModel('coder', { model_id: models[2].id })).resolves.toBe(false);
+
+    expect(store.activeRecentDelegateModels.coder).toEqual([models[1], models[0]]);
+    expect(localStorage.getItem('querymt-desktop.recent-delegate-models')).toBe(saved);
+  });
+
+  it('only remembers a server-confirmed matching model and treats reselecting the current override as explicit use', async () => {
+    const { store, models } = setupRecentDelegateModels();
+    store.delegateAssignmentsBySession['agent-1:session-1'] = {
+      ...assignmentState,
+      assignments: [{ ...assignmentState.assignments[0], model: { model_id: models[0].id } }]
+    };
+    await store.setActiveDelegateModel('coder', { model_id: models[0].id });
+    expect(mockClient.setDelegateModel).not.toHaveBeenCalled();
+    expect(store.activeRecentDelegateModels.coder).toEqual([models[0]]);
+
+    mockClient.setDelegateModel.mockResolvedValueOnce({
+      version: 1, reasoning_effort_supported: true, session_id: 'session-1', agent_id: 'coder',
+      model: { model_id: models[2].id }, reasoning_effort: null, revision: 3, durable: true
+    });
+    await store.setActiveDelegateModel('coder', { model_id: models[1].id });
+    expect(store.activeRecentDelegateModels.coder).toEqual([models[0]]);
+  });
+
   it('exposes routing only when the current session has delegate roles', async () => {
     const store = createStore();
     selectSession(store);

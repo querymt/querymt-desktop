@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { Brain, ChevronDown, FileCog, FilePlus2, Lock, Monitor, Navigation, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
+  import { ChevronDown, FileCog, FilePlus2, Lock, Monitor, Navigation, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
   import { tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import type { TransitionConfig } from 'svelte/transition';
   import ComposerSplitPillSelect from '$lib/components/primitives/ComposerSplitPillSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import ModelQuickPicker from '$lib/components/primitives/ModelQuickPicker.svelte';
+  import type { ModelPickerReasoningControl } from '$lib/components/primitives/ModelPickerPanel.svelte';
   import WorkspacePathInput from '$lib/components/primitives/WorkspacePathInput.svelte';
   import { autoCollapsePopover } from '$lib/design/details-popover';
   import SessionAttachmentPreview from '$lib/components/session/SessionAttachmentPreview.svelte';
@@ -247,9 +248,6 @@
 
   const modeOption = $derived(activeSessionId ? findModeConfigOption(sessionConfigOptions) : undefined);
   const reasoningOption = $derived(activeSessionId ? findReasoningConfigOption(sessionConfigOptions) : undefined);
-  const selectedLaunchReasoningLabel = $derived(
-    launchReasoningOptions.find((option) => option.id === selectedLaunchReasoningId)?.label ?? 'Auto'
-  );
   const selectedProfileLabel = $derived(
     profileOptions.find((option) => option.id === selectedProfileId)?.label ?? 'Default'
   );
@@ -258,7 +256,6 @@
   );
   const secondaryOptionCount = $derived(
     (deliveryControlAvailable ? 1 : 0) +
-    (!activeSessionId && launch && launchReasoningOptions.length > 0 ? 1 : reasoningOption ? 1 : 0) +
       (!sessionOnly && profileOptions.length > 0 ? 1 : 0) +
       (sessionOnly && sessionProfileLabel ? 1 : 0) +
       (!sessionOnly && targetOptions.length > 1 ? 1 : 0) +
@@ -266,13 +263,32 @@
   );
   const optionsSummary = $derived.by(() => {
     const labels: string[] = [];
-    if (!activeSessionId && launch && launchReasoningOptions.length > 0) labels.push(selectedLaunchReasoningLabel);
-    else if (reasoningOption) {
-      labels.push(getConfigOptionChoices(reasoningOption).find((choice) => choice.value === reasoningOption.currentValue)?.name ?? reasoningOption.name);
-    }
     if (!sessionOnly && profileOptions.length > 0 && selectedProfileId !== 'default') labels.push(selectedProfileLabel);
     if (!sessionOnly && targetOptions.length > 1 && selectedTargetId !== 'local') labels.push(selectedTargetLabel);
     return labels.join(' · ');
+  });
+  const reasoningControl = $derived.by((): ModelPickerReasoningControl | null => {
+    if (!activeSessionId && launch && launchReasoningOptions.length > 0) {
+      return {
+        title: 'Reasoning effort',
+        description: 'How deeply the agent should think',
+        value: selectedLaunchReasoningId,
+        options: launchReasoningOptions.map((option) => ({ value: option.id, label: option.label })),
+        ariaLabel: 'Reasoning effort',
+        onChange: (value) => onLaunchReasoningChange?.(value)
+      };
+    }
+    if (!reasoningOption) return null;
+    return {
+      title: reasoningOption.name,
+      description: 'Adjust reasoning for the next reply',
+      value: reasoningOption.currentValue,
+      options: getConfigOptionChoices(reasoningOption).map((choice) => ({ value: choice.value, label: choice.name })),
+      ariaLabel: reasoningOption.name,
+      disabled: !!sessionConfigPending[reasoningOption.id],
+      pending: !!sessionConfigPending[reasoningOption.id],
+      onChange: (value) => onSessionConfigChange?.(reasoningOption.id, value)
+    };
   });
 
   function getNextConfigValue(option: (SessionConfigOption & { type: 'select' }) | undefined): string | null {
@@ -339,7 +355,7 @@
     if (!allowsProgrammaticPromptFocus()) {
       return false;
     }
-    void focusPrompt();
+    void focusPrompt({ force: true });
     return true;
   }
 
@@ -520,8 +536,11 @@
     return !window.matchMedia('(max-width: 760px), (pointer: coarse)').matches;
   }
 
-  async function focusPrompt() {
+  async function focusPrompt(options: { force?: boolean } = {}) {
     await tick();
+    // A prompt focus scheduled before the picker opens must not steal the
+    // search field. Close-restore passes force so it still wins after dismiss.
+    if (!options.force && document.querySelector('[data-blocking-overlay="true"]')) return;
     promptElement?.focus();
   }
 </script>
@@ -623,6 +642,7 @@
         onSelect={(value) => onModelChange?.(value)}
         onRefresh={onRefreshModels}
         onRequestPromptFocus={requestPromptFocusFromPicker}
+        reasoning={reasoningControl}
       />
        {#if !activeSessionId && launch && launchModeOptions.length > 0}
         <ComposerSplitPillSelect
@@ -689,33 +709,6 @@
                     </div>
                   </div>
                 {/if}
-                {#if !activeSessionId && launch && launchReasoningOptions.length > 0}
-                 <div class="composer-option-row">
-                   <div class="composer-option-copy"><Brain size={15} /><span><strong>Reasoning</strong><small>How deeply the agent should think</small></span></div>
-                   <ComposerSplitPillSelect
-                     value={selectedLaunchReasoningId}
-                     options={launchReasoningOptions.map((option) => ({ value: option.id, label: option.label }))}
-                     icon={Brain}
-                     ariaLabel="Reasoning effort"
-                     class="composer-control-pill"
-                     onValueChange={(value) => onLaunchReasoningChange?.(value)}
-                   />
-                 </div>
-               {:else if reasoningOption}
-                 <div class="composer-option-row">
-                   <div class="composer-option-copy"><Brain size={15} /><span><strong>{reasoningOption.name}</strong><small>Adjust reasoning for the next reply</small></span></div>
-                   <ComposerSplitPillSelect
-                     value={reasoningOption.currentValue}
-                     options={getConfigOptionChoices(reasoningOption).map((choice) => ({ value: choice.value, label: choice.name }))}
-                     icon={Brain}
-                     pending={!!sessionConfigPending[reasoningOption.id]}
-                     disabled={!!sessionConfigPending[reasoningOption.id]}
-                     ariaLabel={reasoningOption.name}
-                     class="composer-control-pill"
-                     onValueChange={(value) => onSessionConfigChange?.(reasoningOption.id, value)}
-                   />
-                 </div>
-               {/if}
                 {#if !sessionOnly && profileOptions.length > 0}
                   <div class="composer-option-row">
                     <div class="composer-option-copy"><FileCog size={15} /><span><strong>Profile</strong><small>Agent instructions and defaults</small></span></div>

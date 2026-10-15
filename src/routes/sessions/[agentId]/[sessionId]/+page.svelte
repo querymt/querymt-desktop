@@ -659,6 +659,7 @@
   <DelegateModelDialog
     bind:open={delegateModelDialogOpen}
     assignments={agentsStore.activeDelegateAssignments}
+    recentModelsByDelegate={agentsStore.activeRecentDelegateModels}
     models={agentsStore.modelsByAgent[agentId] ?? []}
     modelInfo={agentsStore.modelInfoByAgent[agentId] ?? {}}
     {inheritedReasoningLabel}

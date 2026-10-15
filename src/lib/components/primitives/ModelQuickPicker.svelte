@@ -1,19 +1,12 @@
 <script lang="ts">
-  import { Bot, Gauge, Network, RefreshCw, Search, X } from '@lucide/svelte';
+  import { Bot, Network, RefreshCw, X } from '@lucide/svelte';
   import { getContext, tick } from 'svelte';
   import { Dialog, Tooltip } from 'bits-ui';
   import providerSprite from '$lib/assets/providers.svg?raw';
-  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
-  import { displayedInputModalities, formatContextSize, knownInputModalities, modalityIcon, modalityLabel, showFamily } from '$lib/domain/model-capabilities';
-  import { scoreModelSearch } from '$lib/domain/model-search';
+  import ModelPickerPanel, { type ModelPickerReasoningControl } from '$lib/components/primitives/ModelPickerPanel.svelte';
   import { ensureProviderSprite, modelSelectionTooltip, providerIconHref, providerIconId } from '$lib/domain/provider-icons';
   import type { ModelEntry, ModelInfo } from '$lib/domain/types';
   import { getModelSelectionKey } from '$lib/querymt/config-options';
-
-  type ModelGroup = {
-    label: string;
-    items: ModelEntry[];
-  };
 
   let {
     modelOptions = [],
@@ -25,6 +18,7 @@
     disabled = false,
     agentLabel = null,
     class: className = '',
+    reasoning = null,
     onSelect,
     onRefresh = null,
     /** Returns whether programmatic prompt focus was taken; falsy keeps dialog default focus. */
@@ -39,6 +33,7 @@
     disabled?: boolean;
     agentLabel?: string | null;
     class?: string;
+    reasoning?: ModelPickerReasoningControl | null;
     onSelect: (modelId: string) => void | Promise<void>;
     onRefresh?: (() => void | Promise<void>) | null;
     onRequestPromptFocus?: (() => boolean) | null;
@@ -46,9 +41,8 @@
 
   let open = $state(false);
   let query = $state('');
-  let highlightedIndex = $state(0);
-  let searchElement = $state<HTMLInputElement | null>(null);
   let triggerElement = $state<HTMLButtonElement | null>(null);
+  let pickerPanel = $state<{ focusSearch: () => Promise<void>; focusSearchNow: () => void } | null>(null);
   // Where the picker was opened from and whether a selection completed; both
   // decide where focus returns on close (prompt vs. the dialog's trigger).
   let openOrigin: 'prompt' | 'trigger' = 'trigger';
@@ -69,53 +63,14 @@
     return null;
   });
 
+  const showFallbackTooltip = $derived(!!selectionTooltip && !selectedIconId && !loading);
+
   $effect.pre(() => {
     if (selectedIconId) ensureProviderSprite(providerSprite);
   });
 
-  const recentIds = $derived(new Set(recentModels.map(getModelSelectionKey)));
-
-  const filteredGroups = $derived.by(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    const groups: ModelGroup[] = [];
-
-    const recentItems = recentModels
-      .map((model) => ({ model, score: scoreModelSearch(model, normalizedQuery, [model.family, ...knownInputModalities(model, modelInfo)]) }))
-      .filter(({ score }) => score > Number.NEGATIVE_INFINITY)
-      .sort((a, b) => b.score - a.score)
-      .map(({ model }) => model);
-
-    groups.push({ label: 'Recent', items: recentItems });
-
-    const providerMap = new Map<string, Array<{ model: ModelEntry; score: number }>>();
-    for (const model of modelOptions) {
-      if (recentIds.has(getModelSelectionKey(model))) continue;
-      const score = scoreModelSearch(model, normalizedQuery, [model.family, ...knownInputModalities(model, modelInfo)]);
-      if (score === Number.NEGATIVE_INFINITY) continue;
-      const key = model.provider;
-      providerMap.set(key, [...(providerMap.get(key) ?? []), { model, score }]);
-    }
-
-    const providerGroups = Array.from(providerMap.entries())
-      .map(([label, entries]) => ({
-        label,
-        items: entries.sort((a, b) => b.score - a.score).map(({ model }) => model)
-      }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-
-    return [...groups, ...providerGroups];
-  });
-
-  const flatResults = $derived(filteredGroups.flatMap((group) => group.items));
-
   $effect(() => {
-    if (!open) {
-      query = '';
-      highlightedIndex = 0;
-      return;
-    }
-
-    highlightedIndex = clamp(highlightedIndex, 0, Math.max(flatResults.length - 1, 0));
+    if (!open) query = '';
   });
 
   /** Opens the picker from the prompt keyboard shortcut (Cmd+M / Ctrl+M). */
@@ -140,15 +95,16 @@
 
   async function focusSearchInput() {
     await tick();
-    searchElement?.focus();
-    searchElement?.select();
+    await pickerPanel?.focusSearch();
   }
 
   export function closePicker() {
+    stopSearchReclaim();
     open = false;
   }
 
   function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) stopSearchReclaim();
     open = nextOpen;
   }
 
@@ -173,10 +129,49 @@
     triggerElement?.focus();
   }
 
+  let removeSearchReclaim: (() => void) | null = null;
+
+  function stopSearchReclaim() {
+    removeSearchReclaim?.();
+  }
+
+  /**
+   * bits-ui's focus trap can park focus on the dialog shell (tabindex=-1)
+   * when a pending prompt focus races the open. Pull that back to search in
+   * the same turn so the field is focused when the open call returns.
+   */
+  function ensureSearchReclaim() {
+    if (removeSearchReclaim) return;
+    const reclaim = (event: FocusEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || !target.classList.contains('app-picker-model')) return;
+      const input = target.querySelector('input.app-picker-search-input');
+      if (!(input instanceof HTMLInputElement) || document.activeElement === input) return;
+      input.focus();
+      input.select();
+    };
+    document.addEventListener('focusin', reclaim, true);
+    removeSearchReclaim = () => {
+      document.removeEventListener('focusin', reclaim, true);
+      removeSearchReclaim = null;
+    };
+  }
+
+  function focusOpenSearch() {
+    const input = document.querySelector('.app-picker.app-picker-model input.app-picker-search-input');
+    if (input instanceof HTMLInputElement) {
+      input.focus();
+      input.select();
+      return true;
+    }
+    pickerPanel?.focusSearchNow();
+    return false;
+  }
+
   function focusSearch(event: Event) {
     event.preventDefault();
-    searchElement?.focus();
-    searchElement?.select();
+    ensureSearchReclaim();
+    if (!focusOpenSearch()) void focusSearchInput();
   }
 
   async function handleSelect(modelId: string) {
@@ -185,42 +180,15 @@
     closePicker();
   }
 
-  async function handleSearchKeydown(event: KeyboardEvent) {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      highlightedIndex = clamp(highlightedIndex + 1, 0, Math.max(flatResults.length - 1, 0));
-      return;
-    }
-
-    if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      highlightedIndex = clamp(highlightedIndex - 1, 0, Math.max(flatResults.length - 1, 0));
-      return;
-    }
-
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      const target = flatResults[highlightedIndex];
-      if (target) {
-        await handleSelect(getModelSelectionKey(target));
-      }
-      return;
-    }
-
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      closePicker();
-    }
-  }
-
-  function clamp(value: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, value));
+  function handlePickerEscape(event: KeyboardEvent) {
+    event.preventDefault();
+    closePicker();
   }
 </script>
 
 <div class="inline-flex">
   <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
-    <Tooltip.Root disableHoverableContent disabled={!selectionTooltip}>
+    <Tooltip.Root disableHoverableContent disabled={!showFallbackTooltip}>
       <Tooltip.Trigger>
         {#snippet child({ props })}
           {@const { type: _type, class: triggerClass = '', onclick: onTooltipClick, disabled: _tooltipDisabled, ...triggerProps } = props}
@@ -232,8 +200,8 @@
             type="button"
             aria-label={selectionTooltip}
             onclick={(event) => {
-              onTooltipClick?.(event);
-              void openFromTrigger();
+              if (typeof onTooltipClick === 'function') onTooltipClick(event);
+              return openFromTrigger();
             }}
           >
             <span class="composer-split-pill-icon" aria-hidden="true">
@@ -268,7 +236,7 @@
           </button>
         {/snippet}
       </Tooltip.Trigger>
-      {#if selectionTooltip}
+      {#if showFallbackTooltip}
         <Tooltip.Portal>
           <Tooltip.Content class="app-tooltip-content" sideOffset={6}>
             {selectionTooltip}
@@ -292,116 +260,32 @@
             <Dialog.Title class="app-picker-title">Switch model</Dialog.Title>
             <Dialog.Description class="app-picker-description">Search by model, provider, or mesh node.</Dialog.Description>
           </div>
-          {#if onRefresh}
-            <IconTooltipButton label="Refresh models" icon={RefreshCw} controlSize="compact" iconClass={loading ? 'animate-spin' : ''} disabled={loading} onclick={onRefresh} />
-          {/if}
           <button class="app-picker-header-action" type="button" aria-label="Close model picker" onclick={closePicker}>
             <X size={16} />
           </button>
         </header>
 
         <div class="app-picker-body">
-        <div class="app-picker-search-shell">
-          <Search size={15} />
-          <input
-            bind:this={searchElement}
-            class="app-picker-search-input"
+          <ModelPickerPanel
+            bind:this={pickerPanel}
+            bind:query
+            models={modelOptions}
+            {recentModels}
+            {modelInfo}
+            {selectedModelId}
+            {loading}
+            {reasoning}
+            {onRefresh}
+            refreshDisabled={loading}
             placeholder="Search models, providers, nodes…"
-            value={query}
-            oninput={(event) => {
-              query = (event.currentTarget as HTMLInputElement).value;
-              highlightedIndex = 0;
-            }}
-            onkeydown={handleSearchKeydown}
+            onSelect={(model) => handleSelect(getModelSelectionKey(model))}
+            onEscape={handlePickerEscape}
           />
         </div>
-
-        <div class="app-picker-scroll-frame mt-3">
-          <div class="app-picker-scroll-area">
-            {#each filteredGroups as group}
-              <section class="app-picker-group">
-                <div class="app-picker-group-heading">{group.label}</div>
-                {#if group.items.length === 0 && group.label === 'Recent'}
-                  <div class="app-picker-empty">No recent models yet.</div>
-                {:else if group.items.length > 0}
-                  <div class="app-picker-list">
-                    {#each group.items as model}
-                      {@const selectionKey = getModelSelectionKey(model)}
-                      {@const index = flatResults.findIndex((entry) => getModelSelectionKey(entry) === selectionKey)}
-                      {@const info = modelInfo[selectionKey]}
-                      {@const knownModalities = knownInputModalities(model, modelInfo)}
-                      <button
-                        class="app-picker-row"
-                        class:app-picker-row-highlighted={highlightedIndex === index}
-                        type="button"
-                        aria-pressed={selectedModelId === selectionKey}
-                        onclick={() => handleSelect(selectionKey)}
-                        onmousemove={() => (highlightedIndex = index)}
-                      >
-                        <div class="min-w-0 flex-1">
-                          <div class="app-picker-row-title" class:app-picker-row-title-selected={selectedModelId === selectionKey}>
-                            {model.label ?? model.model}
-                          </div>
-                          <div class="app-picker-row-description">
-                            <span>{model.provider}</span>
-                            {#if agentLabel}<span>{agentLabel}</span>{/if}
-                            {#if model.node_label}
-                              <span class="app-picker-row-meta" aria-label={`Mesh node ${model.node_label}`} title={`Mesh node ${model.node_label}`}>
-                                <Network size={12} aria-hidden="true" />
-                                <span>{model.node_label}</span>
-                              </span>
-                            {/if}
-                            {#if showFamily(model)}<span>{model.family}</span>{/if}
-                          </div>
-                        </div>
-                        <div class="app-picker-row-detail">
-                          <span
-                            class="app-picker-row-context"
-                            aria-label={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
-                            title={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
-                          >
-                            <Gauge size={12} aria-hidden="true" />
-                            <span>{info?.limits?.context ? formatContextSize(info.limits.context) : 'UNK'}</span>
-                          </span>
-                          <span
-                            class="app-picker-model-modalities"
-                            aria-label={knownModalities.length > 0 ? `Input modalities: ${knownModalities.join(', ')}` : 'Input modalities unknown'}
-                          >
-                            {#each displayedInputModalities(model, modelInfo) as modality}
-                              {@const ModalityIcon = modalityIcon(modality)}
-                              <span
-                                class="app-picker-model-modality"
-                                aria-label={modalityLabel(modality, knownModalities.length > 0)}
-                                title={modalityLabel(modality, knownModalities.length > 0)}
-                              >
-                                <ModalityIcon size={13} strokeWidth={1.9} aria-hidden="true" />
-                              </span>
-                            {/each}
-                          </span>
-                        </div>
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </section>
-            {/each}
-
-            {#if flatResults.length === 0 && modelOptions.length > 0}
-              <div class="app-picker-empty">No models match "{query}".</div>
-            {/if}
-
-            {#if modelOptions.length === 0}
-              <div class="app-picker-empty">
-                {#if loading}
-                  Loading models...
-                {:else}
-                  No models available from this agent.
-                {/if}
-              </div>
-            {/if}
-          </div>
-        </div>
-        </div>
+        <footer class="app-picker-footer shrink-0 px-5 pb-5">
+          <!-- TODO: Add "Use profile default" for the root planner; needs backend default-model and reset support. -->
+          <button class="action-btn" type="button" onclick={closePicker}>Done</button>
+        </footer>
       </Dialog.Content>
     </Dialog.Portal>
   </Dialog.Root>

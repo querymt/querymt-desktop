@@ -4,28 +4,17 @@
     Brain,
     Check,
     CloudOff,
-    Gauge,
     HardDrive,
     LoaderCircle,
     Network,
     RefreshCw,
     RotateCcw,
-    Search,
     TriangleAlert,
     Waypoints
   } from '@lucide/svelte';
   import AppDialog from '$lib/components/primitives/AppDialog.svelte';
-  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
-  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
-  import {
-    displayedInputModalities,
-    formatContextSize,
-    knownInputModalities,
-    modalityIcon,
-    modalityLabel,
-    type ModelInfoMap
-  } from '$lib/domain/model-capabilities';
-  import { scoreModelSearch } from '$lib/domain/model-search';
+  import ModelPickerPanel from '$lib/components/primitives/ModelPickerPanel.svelte';
+  import { type ModelInfoMap } from '$lib/domain/model-capabilities';
   import type { ModelEntry } from '$lib/domain/types';
   import {
     DelegateReasoningEffort,
@@ -45,6 +34,7 @@
     open = $bindable(false),
     assignments = null,
     models = [],
+    recentModelsByDelegate = {},
     modelInfo = {},
     inheritedReasoningLabel = null,
     loading = false,
@@ -60,6 +50,7 @@
     open?: boolean;
     assignments?: DelegateAssignmentsInfo | null;
     models?: ModelEntry[];
+    recentModelsByDelegate?: Record<string, ModelEntry[]>;
     modelInfo?: ModelInfoMap;
     inheritedReasoningLabel?: string | null;
     loading?: boolean;
@@ -81,6 +72,8 @@
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
   let selectedTarget = $state<AssignmentTarget | null>(null);
   let query = $state('');
+  let pickerPanel = $state<{ focusSearch: () => Promise<void> } | null>(null);
+  let focusedPickerAgentId = $state<string | null>(null);
 
   const anyPending = $derived(Object.values(pending).some(Boolean));
   const editable = $derived(assignments?.editable !== false);
@@ -99,15 +92,6 @@
   const selectedOverride = $derived(activeAssignment?.model ?? activeOrphan?.model ?? null);
   const selectedSelectionKey = $derived(overrideSelectionKey(selectedOverride));
   const currentModel = $derived(findModel(selectedOverride));
-  const filteredModels = $derived.by(() => {
-    const needle = query.trim();
-    if (!needle) return models;
-    return models
-      .map((model) => ({ model, score: scoreModelSearch(model, needle) }))
-      .filter(({ score }) => score > Number.NEGATIVE_INFINITY)
-      .sort((a, b) => b.score - a.score)
-      .map(({ model }) => model);
-  });
   const reasoningOptions = [
     { value: 'inherit', label: 'Inherit' },
     { value: DelegateReasoningEffort.Auto, label: 'Auto' },
@@ -116,14 +100,6 @@
     { value: DelegateReasoningEffort.High, label: 'High' },
     { value: DelegateReasoningEffort.Max, label: 'Max' }
   ];
-  const modelGroups = $derived.by(() => {
-    const groups = new Map<string, ModelEntry[]>();
-    for (const model of filteredModels) {
-      const label = model.node_label ? `${model.provider} · ${model.node_label}` : model.provider;
-      groups.set(label, [...(groups.get(label) ?? []), model]);
-    }
-    return Array.from(groups, ([label, items]) => ({ label, items }));
-  });
   const description = $derived(
     assignments
       ? reasoningSupported
@@ -144,7 +120,19 @@
     if (!open) {
       selectedTarget = null;
       query = '';
+      focusedPickerAgentId = null;
     }
+  });
+
+  $effect(() => {
+    if (!open || !selectedTarget || activeOrphan || !pickerPanel) {
+      if (!open || !selectedTarget || activeOrphan) focusedPickerAgentId = null;
+      return;
+    }
+    const agentId = selectedAgentId;
+    if (!agentId || focusedPickerAgentId === agentId) return;
+    focusedPickerAgentId = agentId;
+    void pickerPanel.focusSearch();
   });
 
   $effect(() => {
@@ -263,103 +251,30 @@
     {/if}
 
     {#if !activeOrphan}
-      <div class="app-picker-search-shell delegate-model-search">
-        <Search size={15} />
-        <input
-          class="app-picker-search-input"
-          placeholder="Search models, providers, nodes…"
-          bind:value={query}
-          aria-label="Search delegate models"
-        />
-        {#if onRefreshModels}
-          <IconTooltipButton
-            label="Refresh models"
-            icon={RefreshCw}
-            controlSize="compact"
-            iconClass={modelLoading ? 'animate-spin' : ''}
-            disabled={!editable || modelLoading}
-            onclick={onRefreshModels}
-          />
-        {/if}
-      </div>
-
-      <div class="delegate-model-picker-list">
-        {#if modelGroups.length === 0}
-          <div class="delegate-model-empty delegate-model-empty-compact">
-            <strong>{modelLoading ? 'Loading models…' : 'No matching models'}</strong>
-            <span>{models.length === 0 ? 'Refresh after the agent finishes discovering providers.' : `Nothing matches “${query}”.`}</span>
-          </div>
-        {:else}
-          {#each modelGroups as group}
-            <section class="delegate-model-picker-group">
-              <div class="delegate-model-picker-group-title">{group.label}</div>
-              {#each group.items as model}
-                {@const selectionKey = getModelSelectionKey(model)}
-                {@const info = modelInfo[selectionKey]}
-                {@const knownModalities = knownInputModalities(model, modelInfo)}
-                <button
-                  class="delegate-model-choice"
-                  type="button"
-                  disabled={!editable || !!pending[selectedAgentId]}
-                  onclick={() => assignModel(model)}
-                >
-                  <span>
-                    <span class="delegate-model-choice-name">
-                      <strong class:delegate-model-choice-name-selected={selectedSelectionKey === selectionKey}>{model.label ?? model.model}</strong>
-                      {#if selectedSelectionKey === selectionKey}
-                        <Check class="delegate-model-choice-check" size={12} strokeWidth={2.4} aria-hidden="true" />
-                      {/if}
-                    </span>
-                    <small>{model.id}</small>
-                  </span>
-                  <span class="delegate-model-choice-meta">
-                    {#if model.node_label}<small><Network size={11} />{model.node_label}</small>{/if}
-                  </span>
-                  <span class="app-picker-row-detail delegate-model-choice-detail">
-                    <span
-                      class="app-picker-row-context"
-                      aria-label={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
-                      title={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
-                    >
-                      <Gauge size={12} aria-hidden="true" />
-                      <span>{info?.limits?.context ? formatContextSize(info.limits.context) : 'UNK'}</span>
-                    </span>
-                    <span
-                      class="app-picker-model-modalities"
-                      aria-label={knownModalities.length > 0 ? `Input modalities: ${knownModalities.join(', ')}` : 'Input modalities unknown'}
-                    >
-                      {#each displayedInputModalities(model, modelInfo) as modality}
-                        {@const ModalityIcon = modalityIcon(modality)}
-                        <span
-                          class="app-picker-model-modality"
-                          aria-label={modalityLabel(modality, knownModalities.length > 0)}
-                          title={modalityLabel(modality, knownModalities.length > 0)}
-                        >
-                          <ModalityIcon size={13} strokeWidth={1.9} aria-hidden="true" />
-                        </span>
-                      {/each}
-                    </span>
-                  </span>
-                </button>
-              {/each}
-            </section>
-          {/each}
-        {/if}
-      </div>
-    {/if}
-
-    {#if activeAssignment && reasoningSupported}
-      <div class="delegate-reasoning-control">
-        <span><Brain size={15} /><span><strong>Reasoning effort</strong><small>Inherit the parent session or override this delegate.</small></span></span>
-        <AppSelect
-          value={activeAssignment.reasoning_effort ?? 'inherit'}
-          options={reasoningOptions}
-          ariaLabel="Delegate reasoning effort"
-          disabled={!editable || !!pending[selectedAgentId]}
-          pill={true}
-          onValueChange={assignReasoning}
-        />
-      </div>
+      <ModelPickerPanel
+        bind:this={pickerPanel}
+        bind:query
+        {models}
+        recentModels={recentModelsByDelegate[selectedAgentId] ?? []}
+        {modelInfo}
+        selectedModelId={selectedSelectionKey}
+        searchLabel="Search delegate models"
+        loading={modelLoading}
+        disabled={!editable || !!pending[selectedAgentId]}
+        emptyVariant="delegate"
+        onSelect={assignModel}
+        onRefresh={onRefreshModels}
+        refreshDisabled={!editable || modelLoading}
+        reasoning={activeAssignment && reasoningSupported ? {
+          title: 'Reasoning effort',
+          description: 'Inherit the parent session or override this delegate.',
+          value: activeAssignment.reasoning_effort ?? 'inherit',
+          options: reasoningOptions,
+          ariaLabel: 'Delegate reasoning effort',
+          disabled: !editable || !!pending[selectedAgentId],
+          onChange: assignReasoning
+        } : null}
+      />
     {/if}
   {:else}
   {#if conflict}

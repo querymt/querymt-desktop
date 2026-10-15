@@ -1,7 +1,8 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import ModelQuickPicker from './ModelQuickPicker.svelte';
+import ModelPickerPanel from './ModelPickerPanel.svelte';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
 import type { ModelEntry } from '$lib/domain/types';
 
@@ -31,6 +32,7 @@ const remote: ModelEntry = {
 afterEach(() => {
   cleanup();
   document.getElementById('querymt-provider-sprite')?.remove();
+  vi.useRealTimers();
 });
 
 function renderPicker(props: Record<string, unknown> = {}) {
@@ -40,6 +42,167 @@ function renderPicker(props: Record<string, unknown> = {}) {
     ...props
   });
 }
+
+describe('ModelPickerPanel provider headings', () => {
+  it('shows provider marks before labels, including mesh groups, with a custom-provider fallback', () => {
+    const codex: ModelEntry = { id: 'codex/gpt-5.5', provider: 'codex', model: 'gpt-5.5' };
+    render(ModelPickerPanel, { models: [codex, anthropic, remote, custom], onSelect: () => {} });
+
+    for (const [label, iconId] of [['codex', 'codex'], ['anthropic', 'anthropic'], ['xai · Build server', 'xai']]) {
+      const heading = screen.getByText(label).closest('.delegate-model-picker-group-title');
+      const icon = heading?.firstElementChild;
+      expect(heading).toHaveStyle({ display: 'flex', alignItems: 'center', gap: '0.4rem' });
+      expect(icon?.tagName.toLowerCase()).toBe('svg');
+      expect(icon).toHaveAttribute('aria-hidden', 'true');
+      expect(icon).toHaveAttribute('width', '12');
+      expect(icon).toHaveAttribute('height', '12');
+      expect(icon?.querySelector('use')).toHaveAttribute('href', `#querymt-provider-${iconId}`);
+      expect(document.getElementById(`querymt-provider-${iconId}`)).not.toBeNull();
+    }
+
+    const customHeading = screen.getByText('my-gateway').closest('.delegate-model-picker-group-title');
+    expect(customHeading?.firstElementChild).toHaveClass('lucide-bot');
+    expect(customHeading?.querySelector('use')).toBeNull();
+  });
+});
+
+describe('ModelQuickPicker recent models', () => {
+  it('shows Recent first with a history icon, preserves recency, and avoids duplicate provider rows', async () => {
+    renderPicker({ recentModels: [remote, anthropic] });
+    await fireEvent.click(screen.getByRole('button', { name: 'Select model' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Switch model' });
+    const headings = dialog.querySelectorAll('.delegate-model-picker-group-title');
+    expect(headings[0]).toHaveTextContent('Recent');
+    expect(headings[0].firstElementChild).toHaveClass('lucide-history');
+    expect(headings[0].firstElementChild).toHaveAttribute('width', '12');
+    expect(headings[0]).toHaveStyle({ display: 'flex', alignItems: 'center' });
+    const recentSection = headings[0].closest('section')!;
+    expect(within(recentSection).getAllByRole('button').map((row) => row.textContent)).toEqual([
+      expect.stringContaining('grok-4.7'),
+      expect.stringContaining('Claude Sonnet 4')
+    ]);
+    expect(dialog.querySelectorAll('.delegate-model-choice')).toHaveLength(3);
+    expect(headings).toHaveLength(2);
+    expect(headings[1]).toHaveTextContent('my-gateway');
+  });
+
+  it('keeps local and mesh identities distinct and ignores unavailable or duplicate recent entries', async () => {
+    const local: ModelEntry = { ...remote, node_id: undefined, node_label: undefined };
+    const unavailable: ModelEntry = { ...remote, node_id: 'offline-node' };
+    const onSelect = vi.fn();
+    renderPicker({
+      modelOptions: [local, remote],
+      recentModels: [unavailable, remote, remote],
+      selectedModelId: getModelSelectionKey(remote),
+      onSelect
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'grok-4.7 from xai on Build server' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Switch model' });
+    const recentSection = within(dialog).getByText('Recent').closest('section')!;
+    const recentRow = within(recentSection).getByRole('button');
+    expect(recentRow).toHaveAttribute('aria-pressed', 'true');
+    expect(within(recentRow).getByLabelText('Mesh node Build server')).toBeInTheDocument();
+    const localSection = within(dialog).getByText('xai', { selector: '.delegate-model-picker-group-title > span' }).closest('section')!;
+    expect(within(localSection).getByRole('button')).toHaveAttribute('aria-pressed', 'false');
+    expect(dialog.querySelectorAll('.delegate-model-choice')).toHaveLength(2);
+
+    await fireEvent.click(recentRow);
+    expect(onSelect).toHaveBeenCalledWith(getModelSelectionKey(remote));
+  });
+
+  it('searches recent models by family and modality and hides Recent when nothing in it matches', async () => {
+    const familyModel: ModelEntry = { ...remote, family: 'nebula' };
+    renderPicker({
+      modelOptions: [anthropic, custom, familyModel],
+      recentModels: [familyModel],
+      modelInfo: {
+        [getModelSelectionKey(familyModel)]: { capabilities: { modalities: { input: ['text', 'image'], output: ['text'] } } }
+      }
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Select model' }));
+    const dialog = screen.getByRole('dialog', { name: 'Switch model' });
+    const search = within(dialog).getByPlaceholderText('Search models, providers, nodes…');
+
+    await fireEvent.input(search, { target: { value: 'nebula' } });
+    expect(within(dialog).getByText('Recent')).toBeInTheDocument();
+    expect(dialog.querySelectorAll('.delegate-model-choice')).toHaveLength(1);
+    await fireEvent.input(search, { target: { value: 'image' } });
+    expect(within(dialog).getByText('Recent')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /grok-4.7/ })).toBeInTheDocument();
+    expect(dialog.querySelectorAll('.delegate-model-choice')).toHaveLength(1);
+    await fireEvent.input(search, { target: { value: 'gateway' } });
+    expect(within(dialog).queryByText('Recent')).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /Gateway model/ })).toBeInTheDocument();
+    await fireEvent.input(search, { target: { value: 'no-such-model-xyz' } });
+    expect(dialog.querySelectorAll('.delegate-model-choice')).toHaveLength(0);
+    expect(within(dialog).getByText(/No models match/)).toBeInTheDocument();
+  });
+
+  it('uses visual row order for keyboard navigation across Recent and provider sections', async () => {
+    const onSelect = vi.fn();
+    renderPicker({ recentModels: [remote], onSelect });
+    await fireEvent.click(screen.getByRole('button', { name: 'Select model' }));
+    const dialog = screen.getByRole('dialog', { name: 'Switch model' });
+    const search = within(dialog).getByPlaceholderText('Search models, providers, nodes…');
+    const rows = dialog.querySelectorAll('.delegate-model-choice');
+    expect(rows[0]).toHaveTextContent('grok-4.7');
+    expect(rows[0]).toHaveClass('delegate-model-choice-highlighted');
+    expect(Array.from(rows, (row) => row.getAttribute('data-model-index'))).toEqual(['0', '1', '2']);
+
+    await fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(rows[1]).toHaveClass('delegate-model-choice-highlighted');
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(onSelect).toHaveBeenCalledWith(anthropic.id);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('does not show an empty Recent section when no history is available', async () => {
+    renderPicker({ recentModels: [] });
+    await fireEvent.click(screen.getByRole('button', { name: 'Select model' }));
+    const dialog = screen.getByRole('dialog', { name: 'Switch model' });
+    expect(within(dialog).queryByText('Recent')).not.toBeInTheDocument();
+    expect(dialog.querySelectorAll('.delegate-model-choice')).toHaveLength(3);
+  });
+});
+
+describe('ModelQuickPicker dialog', () => {
+  it('closes with Done without changing the selection and restores trigger focus', async () => {
+    const onSelect = vi.fn();
+    renderPicker({ selectedModelId: anthropic.id, onSelect });
+    const trigger = screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic' });
+
+    await fireEvent.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Switch model' });
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
+
+    expect(screen.queryByRole('dialog', { name: 'Switch model' })).not.toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('refreshes from the search bar and disables refresh while loading', async () => {
+    const onRefresh = vi.fn();
+    const { rerender } = renderPicker({ selectedModelId: anthropic.id, onRefresh });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic' }));
+    const dialog = screen.getByRole('dialog', { name: 'Switch model' });
+    const refresh = within(dialog).getByRole('button', { name: 'Refresh models' });
+    const search = within(dialog).getByPlaceholderText('Search models, providers, nodes…');
+    expect(refresh.closest('.app-picker-search-shell')).toBe(search.closest('.app-picker-search-shell'));
+    expect(refresh.closest('.app-picker-header')).toBeNull();
+    await fireEvent.click(refresh);
+    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(dialog).toBeInTheDocument();
+
+    await rerender({ loading: true });
+    expect(refresh).toBeDisabled();
+    expect(refresh.querySelector('.animate-spin')).not.toBeNull();
+    refresh.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+});
 
 describe('ModelQuickPicker trigger', () => {
   it('keeps the robot icon only while no model is selected', () => {
@@ -51,7 +214,8 @@ describe('ModelQuickPicker trigger', () => {
     expect(button).not.toHaveAttribute('aria-label');
   });
 
-  it('replaces the robot with the provider mark and hides the provider name', async () => {
+  it('replaces the robot with the provider mark without showing a tooltip', async () => {
+    vi.useFakeTimers();
     renderPicker({ selectedModelId: anthropic.id });
 
     const button = screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic' });
@@ -62,16 +226,52 @@ describe('ModelQuickPicker trigger', () => {
     expect(document.getElementById('querymt-provider-sprite')?.querySelector('#querymt-provider-anthropic')).not.toBeNull();
 
     await fireEvent.pointerEnter(button);
-    expect(await screen.findByText('Claude Sonnet 4 from anthropic', { selector: '.app-tooltip-content' })).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(document.querySelector('.app-tooltip-content')).toBeNull();
+    await fireEvent.focus(button);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(document.querySelector('.app-tooltip-content')).toBeNull();
   });
 
-  it('uses the robot for a custom provider and keeps the provider on the hover label', () => {
+  it('uses the robot for a custom provider and shows the provider on the hover label', async () => {
     renderPicker({ selectedModelId: custom.id });
 
     const button = screen.getByRole('button', { name: 'Gateway model from my-gateway' });
     expect(button.querySelector('.lucide-bot')).not.toBeNull();
     expect(button.querySelector('.composer-provider-icon')).toBeNull();
     expect(button).not.toHaveTextContent('my-gateway');
+    await fireEvent.pointerEnter(button);
+    expect(await screen.findByText('Gateway model from my-gateway', { selector: '.app-tooltip-content' })).toBeInTheDocument();
+  });
+
+  it('shows the unavailable-model tooltip when using the generic icon', async () => {
+    renderPicker({ selectedModelId: 'missing/model' });
+    const button = screen.getByRole('button', { name: 'missing/model (unavailable)' });
+    expect(button.querySelector('.lucide-bot')).not.toBeNull();
+    await fireEvent.pointerEnter(button);
+    expect(await screen.findByText('missing/model (unavailable)', { selector: '.app-tooltip-content' })).toBeInTheDocument();
+  });
+
+  it('hides an open fallback tooltip when switching to a matching provider icon', async () => {
+    const { rerender } = renderPicker({ selectedModelId: custom.id });
+    await fireEvent.pointerEnter(screen.getByRole('button', { name: 'Gateway model from my-gateway' }));
+    expect(await screen.findByText('Gateway model from my-gateway', { selector: '.app-tooltip-content' })).toBeInTheDocument();
+
+    await rerender({ selectedModelId: anthropic.id });
+    expect(document.querySelector('.app-tooltip-content')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic' })).toBeInTheDocument();
+  });
+
+  it.each([
+    { selectedModelId: custom.id, loading: true, name: 'Gateway model from my-gateway' },
+    { selectedModelId: undefined, loading: false, name: 'Select model' }
+  ])('does not show a tooltip without a selected generic icon: %j', async ({ name, ...props }) => {
+    vi.useFakeTimers();
+    renderPicker(props);
+    const button = screen.getByRole('button', { name });
+    await fireEvent.pointerEnter(button);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(document.querySelector('.app-tooltip-content')).toBeNull();
   });
 
   it('keeps the mesh glyph without putting the provider name back in the pill', () => {
