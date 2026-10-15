@@ -272,7 +272,22 @@ export interface SessionPlanEntry {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
+export interface SessionTokenUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+}
+
+export interface SessionUsageBreakdown {
+  latestRequest: SessionTokenUsage | null;
+  sessionTotals: SessionTokenUsage | null;
+  partial: boolean;
+}
+
 export interface SessionUsageStats {
+  breakdown?: SessionUsageBreakdown;
   contextUsed: number | null;
   contextLimit: number | null;
   cumulativeCostUsd: number | null;

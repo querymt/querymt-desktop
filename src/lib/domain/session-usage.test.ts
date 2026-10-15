@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionUsageStats } from '$lib/domain/types';
 import {
+  appendHistoricalUsage,
+  readTokenUsage,
+  readUsageBreakdown,
   formatCostUsd,
   formatDuration,
   formatTokenCount,
@@ -17,6 +20,29 @@ const usage: SessionUsageStats = {
   activeWorkMs: 30_000,
   activeWorkStartedAt: null
 };
+
+describe('session usage breakdown', () => {
+  it('distinguishes reported zero from missing and invalid token counts', () => {
+    expect(readTokenUsage({ inputTokens: 0, outputTokens: -1, reasoningTokens: Infinity, cacheReadTokens: 1.5 })).toEqual({
+      inputTokens: 0, outputTokens: null, reasoningTokens: null, cacheReadTokens: null, cacheWriteTokens: null
+    });
+    expect(readTokenUsage({ inputTokens: Number.MAX_SAFE_INTEGER + 1 })).toBeNull();
+    expect(readUsageBreakdown({ querymt: { usage: { version: 1, partial: false,
+      latestRequest: { inputTokens: 0 }, sessionTotals: null } } })?.partial).toBe(true);
+  });
+
+  it('aggregates exclusive categories and marks unreported requests as partial', () => {
+    const raw = { input_tokens: 75, output_tokens: 162, reasoning_tokens: 1024, cache_read: 0, cache_write: 0 };
+    const first = appendHistoricalUsage(undefined, raw);
+    const second = appendHistoricalUsage(first, raw);
+    expect(second.sessionTotals).toEqual({ inputTokens: 150, outputTokens: 324, reasoningTokens: 2048, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    expect(second.partial).toBe(false);
+    const missing = appendHistoricalUsage(second, undefined);
+    expect(missing.latestRequest).toBeNull();
+    expect(missing.sessionTotals).toEqual(second.sessionTotals);
+    expect(missing.partial).toBe(true);
+  });
+});
 
 describe('session usage formatting', () => {
   it('formats context, cost, and duration for compact status display', () => {

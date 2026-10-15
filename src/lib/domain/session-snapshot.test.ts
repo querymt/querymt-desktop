@@ -291,6 +291,23 @@ describe('activeSessionFromLoadResponse', () => {
     expect(session.transcript[0].blocks?.[0]).toMatchObject({ type: 'image', data: 'b2xk', mimeType: 'image/png' });
   });
 
+  it('restores latest-request and session token totals without treating them as current occupancy', () => {
+    const usage = { input_tokens: 75, output_tokens: 162, reasoning_tokens: 1024, cache_read: 0, cache_write: 0 };
+    const session = activeSessionFromLoadResponse('usage-details', { _meta: {
+      'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+        { seq: 1, kind: { type: 'llm_request_end', data: { context_tokens: 1 } } },
+        { seq: 2, kind: { type: 'llm_request_end', data: { usage, context_tokens: 1261 } } },
+        { seq: 3, kind: { type: 'llm_request_end', data: { usage, context_tokens: 1261 } } }
+      ] } }
+    } });
+    expect(session.usage.contextUsed).toBe(1261);
+    expect(session.usage.breakdown).toEqual({
+      latestRequest: { inputTokens: 75, outputTokens: 162, reasoningTokens: 1024, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      sessionTotals: { inputTokens: 150, outputTokens: 324, reasoningTokens: 2048, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      partial: true
+    });
+  });
+
   it('restores context, cumulative cost, and completed active work from QueryMT snapshots', () => {
     const session = activeSessionFromLoadResponse('session-usage', {
       _meta: {

@@ -5759,6 +5759,8 @@ summary:focus-visible {
   right: -4.6rem;
   z-index: 40;
   width: min(28rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 8rem);
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-panel-strong);
@@ -6082,11 +6084,269 @@ summary:focus-visible {
 
 .session-usage-bar {
   display: grid;
-  gap: 0.6rem;
+  gap: 0.4rem;
   margin-top: 0.7rem;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 0.7rem;
+}
+
+.session-usage-context-row,
+.session-usage-lens-heading,
+.session-usage-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.session-usage-context-row {
+  white-space: nowrap;
+}
+
+.session-usage-context-row strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.session-usage-context-track {
+  display: flex;
+  flex: 1;
+  min-width: 1rem;
+  height: 0.3rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--icon-surface);
+}
+
+.session-usage-context-track > span {
+  background: var(--accent);
+}
+
+.session-usage-breakdown {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.session-usage-lens-heading {
+  justify-content: space-between;
+}
+
+.session-usage-scope {
+  display: inline-flex;
+  border: 1px solid var(--subtle-border);
+  border-radius: var(--radius-control);
+  background: var(--recessed-surface);
+  padding: 0.15rem;
+}
+
+.session-usage-scope button,
+.session-usage-color-key button,
+.session-usage-help {
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.session-usage-scope button {
+  padding: 0.25rem 0.5rem;
+}
+
+.session-usage-scope button[aria-pressed='true'] {
+  background: var(--bg-panel-strong);
+  color: var(--text);
+  box-shadow: 0 1px 3px var(--subtle-border);
+}
+
+.session-usage-scope button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.session-usage-partial {
+  color: var(--status-warn);
+  font-family: var(--font-sans);
+}
+
+.session-usage-rings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.session-usage-ring-column {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.session-usage-ring-column + .session-usage-ring-column {
+  border-left: 1px solid var(--subtle-border);
+}
+
+.session-usage-donut {
+  position: relative;
+  width: 4.75rem;
+  height: 4.75rem;
+}
+
+.session-usage-donut svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.session-usage-ring-track,
+.session-usage-arc {
+  fill: none;
+  stroke-width: 9;
+}
+
+.session-usage-ring-track {
+  stroke: var(--icon-surface);
+}
+
+.session-usage-arc {
+  stroke: var(--token-color);
+}
+
+.session-usage-arc-dimmed {
+  opacity: 0.25;
+}
+
+.session-usage-donut-incomplete .session-usage-ring-track {
+  stroke-dasharray: 3 3;
+}
+
+.session-usage-ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  pointer-events: none;
+}
+
+.session-usage-ring-center strong {
+  max-width: 4rem;
+  overflow-wrap: anywhere;
+  text-align: center;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-usage-ring-center strong.session-usage-exact {
+  font-size: 0.65rem;
+}
+
+.session-usage-ring-center > span {
+  max-width: 3.75rem;
+  text-align: center;
+  line-height: 1.1;
+  font-family: var(--font-sans);
+  font-size: 0.65rem;
+}
+
+.session-usage-ring-caption {
+  height: 1rem;
+  margin: 0;
+  font-size: 0.65rem;
+  line-height: 1rem;
+  white-space: nowrap;
+}
+
+.session-usage-color-key {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 0.15rem;
+}
+
+.session-usage-color-key button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 1.5rem;
+  padding: 0.15rem 0.25rem;
+}
+
+.session-usage-color-key button:hover,
+.session-usage-color-key button[aria-pressed='true'] {
+  background: var(--icon-surface);
+  color: var(--text);
+}
+
+.session-usage-scope button:focus-visible,
+.session-usage-color-key button:focus-visible,
+.session-usage-help:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.session-usage-arc[data-token='inputTokens'],
+.session-usage-swatch[data-token='inputTokens'] {
+  --token-color: var(--mode-tone-1);
+}
+
+.session-usage-arc[data-token='cacheReadTokens'],
+.session-usage-swatch[data-token='cacheReadTokens'] {
+  --token-color: var(--mode-tone-2);
+}
+
+.session-usage-arc[data-token='cacheWriteTokens'],
+.session-usage-swatch[data-token='cacheWriteTokens'] {
+  --token-color: var(--mode-tone-4);
+}
+
+.session-usage-arc[data-token='outputTokens'],
+.session-usage-swatch[data-token='outputTokens'] {
+  --token-color: var(--mode-tone-0);
+}
+
+.session-usage-arc[data-token='reasoningTokens'],
+.session-usage-swatch[data-token='reasoningTokens'] {
+  --token-color: var(--mode-tone-3);
+}
+
+.session-usage-swatch {
+  width: 0.4rem;
+  height: 0.4rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--token-color);
+}
+
+.session-usage-footer {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  border-top: 1px solid var(--subtle-border);
+  padding-top: 0.4rem;
+}
+
+.session-usage-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.session-usage-help-content {
+  max-width: min(18rem, calc(100vw - 2rem));
+  white-space: normal;
+  line-height: 1.5;
 }
 
 /* Context is a closed window, not a task bar. The ring is fixed-size so a low

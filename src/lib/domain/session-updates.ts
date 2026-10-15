@@ -1,4 +1,5 @@
 import type { SessionNotification } from '@agentclientprotocol/sdk';
+import { readUsageBreakdown } from '$lib/domain/session-usage';
 import type {
   ActiveSessionViewModel,
   SessionEventItem,
@@ -269,6 +270,7 @@ function applySessionNotificationInPlace(
       session.usage.contextUsed = readFiniteNumber(update.used) ?? session.usage.contextUsed;
       session.usage.contextLimit = readPositiveNumber(update.size) ?? session.usage.contextLimit;
       session.usage.cumulativeCostUsd = readCostUsd(update.cost) ?? session.usage.cumulativeCostUsd;
+      session.usage.breakdown = readUsageBreakdown(update._meta) ?? session.usage.breakdown;
       break;
     case 'plan_update':
       if (update.plan.type === 'items') {
@@ -544,6 +546,7 @@ export function applySessionNotification(
       next.usage.contextUsed = readFiniteNumber(update.used) ?? next.usage.contextUsed;
       next.usage.contextLimit = readPositiveNumber(update.size) ?? next.usage.contextLimit;
       next.usage.cumulativeCostUsd = readCostUsd(update.cost) ?? next.usage.cumulativeCostUsd;
+      next.usage.breakdown = readUsageBreakdown(update._meta) ?? next.usage.breakdown;
       break;
     case 'plan_update':
       if (update.plan.type === 'items') {
@@ -850,6 +853,7 @@ export function endSessionWork(session: ActiveSessionViewModel, endedAt = Date.n
  * notifications keep overriding, and active-work timers are never merged.
  */
 export function mergeMissingSessionUsage(target: ActiveSessionViewModel, source: ActiveSessionViewModel): void {
+  target.usage.breakdown ??= source.usage.breakdown;
   if (target.usage.contextUsed === null && source.usage.contextUsed !== null) {
     target.usage.contextUsed = source.usage.contextUsed;
   }

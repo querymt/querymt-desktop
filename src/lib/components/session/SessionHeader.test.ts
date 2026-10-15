@@ -97,6 +97,20 @@ describe('SessionHeader', () => {
     expect(mobileId!.nextElementSibling).toBe(mobileDial);
   });
 
+  it('keeps cache and token details out of the compact header', async () => {
+    const counts = { inputTokens: 75, outputTokens: 162, reasoningTokens: 1024, cacheReadTokens: 500, cacheWriteTokens: 0 };
+    render(SessionHeader, {
+      session: session({ usage: { ...usageFixture, breakdown: { latestRequest: counts, sessionTotals: counts, partial: false } } }),
+      title: 'Detailed usage', workspace: 'querymt-desktop', updatedAt: 'Just now'
+    });
+    expect(document.querySelector('.session-header-meta')?.textContent).not.toContain('Cache');
+    expect(document.querySelector('.session-header-mobile-meta')?.textContent).not.toContain('Cache');
+    expect(document.querySelector<HTMLDetailsElement>('.session-header-details')?.open).toBe(false);
+    await fireEvent.click(screen.getByLabelText('Session details'));
+    expect(screen.getByRole('button', { name: 'Latest request' })).toHaveAttribute('aria-pressed', 'true');
+    expect(document.querySelector('.session-usage-breakdown')?.closest('details')).not.toBeNull();
+  });
+
   it('keeps cost and active time inside the details popover', async () => {
     render(SessionHeader, {
       session: session({ usage: usageFixture }),
@@ -110,7 +124,7 @@ describe('SessionHeader', () => {
     expect(panel).not.toBeNull();
     expect(within(panel!).getByText('$0.05')).toBeInTheDocument();
     expect(within(panel!).getByText('12s')).toBeInTheDocument();
-    expect(within(panel!).getByText('24k / 100k')).toBeInTheDocument();
+    expect(within(panel!).getByText('76k free')).toBeInTheDocument();
     const contextStat = within(panel!).getByText('Context').closest('.session-usage-stat');
     expect(contextStat?.querySelector('svg')).not.toBeNull();
     expect(panel!.querySelector('.session-usage-meter')).toBeNull();
