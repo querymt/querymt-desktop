@@ -140,7 +140,7 @@ beforeEach(() => {
 });
 
 describe('Landing page session start', () => {
-  it('shows task-oriented launch copy and session preferences', () => {
+  it('shows task-oriented launch copy and session preferences', async () => {
     render(LandingPage);
 
     expect(screen.getAllByText('New session')).not.toHaveLength(0);
@@ -148,7 +148,11 @@ describe('Landing page session start', () => {
     expect(screen.getByText('work')).toBeInTheDocument();
     expect(screen.queryByText('Desktop control center')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Mode' })).toHaveTextContent('Build');
-    expect(screen.getByLabelText('Session options')).toHaveTextContent('Auto');
+    expect(screen.queryByLabelText('Session options')).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: /Claude Sonnet 4/i }));
+    expect(screen.getByRole('button', { name: 'Reasoning effort' })).toHaveTextContent('Auto');
+    expect(screen.getByText('How deeply the agent should think')).toBeInTheDocument();
   });
 
   it('uses only launch preferences when an existing session is still active in the store', async () => {
@@ -159,7 +163,7 @@ describe('Landing page session start', () => {
     expect(screen.getByRole('button', { name: 'Mode' })).toHaveTextContent('Build');
     await fireEvent.click(screen.getByRole('button', { name: /Claude Sonnet 4/i }));
     const modelRow = screen.getAllByRole('button', { name: /Claude Sonnet 4/i })
-      .find((button) => button.classList.contains('app-picker-row'))!;
+      .find((button) => button.classList.contains('delegate-model-choice'))!;
     await fireEvent.click(modelRow);
 
     expect(agentsStore.setLaunchModel).toHaveBeenCalledWith('agent-1', 'anthropic/claude-sonnet-4');

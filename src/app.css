@@ -3888,7 +3888,9 @@ summary:focus-visible {
 }
 
 .app-picker-row-highlighted .app-picker-model-modality,
-.app-picker-row:hover .app-picker-model-modality {
+.app-picker-row:hover .app-picker-model-modality,
+.delegate-model-choice-highlighted .app-picker-model-modality,
+.delegate-model-choice:hover .app-picker-model-modality {
   color: var(--text);
 }
 
@@ -4272,7 +4274,8 @@ summary:focus-visible {
 .delegate-model-row:hover:enabled,
 .delegate-model-orphan:hover:enabled,
 .delegate-model-default-choice:hover:enabled,
-.delegate-model-choice:hover:enabled {
+.delegate-model-choice:hover:enabled,
+.delegate-model-choice-highlighted {
   background: var(--bg-card-hover);
 }
 
@@ -4493,6 +4496,29 @@ summary:focus-visible {
   overflow: hidden;
 }
 
+.model-picker-panel {
+  display: grid;
+  min-height: 0;
+  gap: 0.8rem;
+}
+
+.app-picker-body:has(.model-picker-panel) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-picker-body .model-picker-panel {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.app-picker-body .delegate-model-picker-list {
+  max-height: none;
+}
+
 .delegate-reasoning-control {
   display: flex;
   align-items: center;
@@ -4640,6 +4666,9 @@ summary:focus-visible {
   position: sticky;
   top: 0;
   z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   padding: 0.38rem 0.7rem;
   background: var(--bg-panel-strong);
   box-shadow: 0 -1px 0 var(--bg-panel-strong);
@@ -4648,6 +4677,12 @@ summary:focus-visible {
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.model-picker-provider-icon {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
 }
 
 .delegate-model-choice {

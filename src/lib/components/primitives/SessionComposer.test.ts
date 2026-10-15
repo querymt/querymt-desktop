@@ -134,7 +134,7 @@ describe('SessionComposer', () => {
     expect(screen.queryByText('Delegate routing')).toBeNull();
   });
 
-  it('keeps launch mode visible and moves reasoning into session options', async () => {
+  it('keeps launch mode visible and moves reasoning into the model picker', async () => {
     const onLaunchModeChange = vi.fn();
     const onLaunchReasoningChange = vi.fn();
     renderComposer({
@@ -156,22 +156,22 @@ describe('SessionComposer', () => {
     const modeSelect = screen.getByRole('button', { name: 'Mode' });
     expect(modeSelect).toHaveClass('composer-control-pill');
     expect(modeSelect).toHaveTextContent('Build');
-    const options = screen.getByLabelText('Session options').closest('details');
-    const optionsHost = options?.closest('.composer-options-host');
-    const reasoningSelect = screen.getByRole('button', { name: 'Reasoning effort' });
-    expect(options).not.toHaveAttribute('open');
-    expect(reasoningSelect.closest('.composer-options-host')).toBe(optionsHost);
+    expect(screen.queryByLabelText('Session options')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reasoning effort' })).not.toBeInTheDocument();
 
-    await fireEvent.click(screen.getByLabelText('Session options'));
-    expect(options).toHaveAttribute('open');
-    expect(reasoningSelect).toHaveClass('composer-control-pill');
+    await fireEvent.click(screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0]);
+    const picker = screen.getByRole('dialog', { name: 'Switch model' });
+    const reasoningSelect = within(picker).getByRole('button', { name: 'Reasoning effort' });
+    expect(reasoningSelect.closest('.delegate-reasoning-control')).not.toBeNull();
     expect(reasoningSelect).toHaveTextContent('Auto');
+    expect(within(picker).getByText('How deeply the agent should think')).toBeInTheDocument();
   });
 
   it('collapses session options on outside clicks but keeps the trigger toggle', async () => {
     renderComposer({
       launch: true,
       launchModeOptions: [{ id: 'build', label: 'Build' }],
+      profileOptions: [{ id: 'default', label: 'Default profile' }],
       launchReasoningOptions: [{ id: 'auto', label: 'Auto' }],
       selectedLaunchReasoningId: 'auto'
     });
@@ -184,7 +184,7 @@ describe('SessionComposer', () => {
     expect(details).toHaveAttribute('open');
 
     // Pointer downs inside the panel (including its selects) keep it open.
-    await fireEvent.mouseDown(screen.getByRole('button', { name: 'Reasoning effort' }));
+    await fireEvent.mouseDown(screen.getByRole('button', { name: 'Profile' }));
     expect(details).toHaveAttribute('open');
 
     // Select menus render through a portal outside the <details>; presses in
@@ -262,6 +262,56 @@ describe('SessionComposer', () => {
     expect(morph).toHaveClass('is-sending');
     expect(createState).toHaveAttribute('aria-hidden', 'true');
     expect(sendState).toHaveAttribute('aria-hidden', 'false');
+  });
+
+  it('selects the highlighted model with the arrow keys and Enter', async () => {
+    const onModelChange = vi.fn();
+    const other = { id: 'openai/gpt-5', provider: 'openai', model: 'gpt-5', label: 'GPT-5' };
+    renderComposer({
+      modelOptions: [modelOptions[0], other],
+      onModelChange
+    });
+
+    await fireEvent.click(screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0]);
+    const search = screen.getByPlaceholderText('Search models, providers, nodes…');
+    await fireEvent.keyDown(search, { key: 'ArrowDown' });
+    await fireEvent.keyDown(search, { key: 'Enter' });
+
+    expect(onModelChange).toHaveBeenCalledWith(other.id);
+  });
+
+  it('moves active session reasoning into the model picker and still cycles it from the prompt', async () => {
+    const onSessionConfigChange = vi.fn();
+    renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      sessionProfileLabel: 'Default',
+      sessionConfigOptions: [{
+        id: 'reasoning',
+        name: 'Reasoning effort',
+        type: 'select',
+        currentValue: 'low',
+        options: [
+          { value: 'low', name: 'Low' },
+          { value: 'high', name: 'High' }
+        ]
+      }],
+      onSessionConfigChange
+    });
+
+    await fireEvent.click(screen.getByLabelText('Session options'));
+    expect(screen.queryByRole('button', { name: 'Reasoning effort' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Adjust reasoning for the next reply')).not.toBeInTheDocument();
+
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+    await fireEvent.keyDown(prompt, { key: 't', ctrlKey: true });
+    expect(onSessionConfigChange).toHaveBeenCalledWith('reasoning', 'high');
+
+    await fireEvent.click(screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0]);
+    const reasoning = screen.getByRole('button', { name: 'Reasoning effort' });
+    expect(reasoning).toHaveTextContent('Low');
+    expect(reasoning.closest('.delegate-reasoning-control')).not.toBeNull();
+    expect(screen.getByText('Adjust reasoning for the next reply')).toBeInTheDocument();
   });
 
   it('opens the model picker when the model pill is clicked', async () => {
@@ -342,18 +392,21 @@ describe('SessionComposer', () => {
 
     await fireEvent.click(screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0]);
 
-    const rows = screen.getAllByRole('button', { name: /Claude Sonnet 4/i }).filter((button) => button.classList.contains('app-picker-row'));
+    const picker = screen.getByRole('dialog', { name: 'Switch model' });
+    const rows = within(picker).getAllByRole('button', { name: /Claude Sonnet 4/i }).filter((button) => button.classList.contains('delegate-model-choice'));
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toHaveTextContent('anthropic');
-    expect(rows[0].querySelector('.app-picker-row-description')).not.toHaveTextContent('claude-sonnet-4');
+    expect(within(picker).getByText('anthropic', { selector: '.delegate-model-picker-group-title > span' })).toBeInTheDocument();
+    expect(within(picker).getByText('anthropic · flkr', { selector: '.delegate-model-picker-group-title > span' })).toBeInTheDocument();
+    expect(rows[0]).toHaveTextContent('anthropic/claude-sonnet-4');
     expect(within(rows[0]).getByLabelText('1,050,000 token context window')).toHaveTextContent('1M');
     expect(rows[0].querySelector('.app-picker-row-detail')?.firstElementChild).toHaveClass('app-picker-row-context');
     expect(rows[0].querySelector('.app-picker-row-detail')?.lastElementChild).toHaveClass('app-picker-model-modalities');
     expect(within(rows[1]).getByLabelText('Mesh node flkr')).toBeInTheDocument();
     expect(within(rows[1]).getByLabelText('128,000 token context window')).toHaveTextContent('128K');
     expect(rows[1]).toHaveAttribute('aria-pressed', 'true');
-    expect(rows[1].querySelector('.app-picker-row-title-selected')).toHaveTextContent('Claude Sonnet 4');
-    expect(rows[1].querySelector('.lucide-check')).toBeNull();
+    expect(rows[1].querySelector('.delegate-model-choice-name-selected')).toHaveTextContent('Claude Sonnet 4');
+    expect(rows[1].querySelector('.lucide-check')).not.toBeNull();
+    expect(rows[0].querySelector('.lucide-check')).toBeNull();
     expect(rows[0].querySelectorAll('.app-picker-model-modality')).toHaveLength(2);
     expect(rows[1].querySelectorAll('.app-picker-model-modality')).toHaveLength(2);
 
@@ -857,7 +910,7 @@ describe('SessionComposer model picker focus and mode cycling', () => {
   function pickerRow() {
     return screen
       .getAllByRole('button', { name: /Claude Sonnet 4/i })
-      .find((button) => button.classList.contains('app-picker-row'))!;
+      .find((button) => button.classList.contains('delegate-model-choice'))!;
   }
 
   async function closeAndWait() {

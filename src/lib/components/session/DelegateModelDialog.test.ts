@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import '@testing-library/jest-dom/vitest';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DelegateAssignmentSource,
@@ -64,6 +65,59 @@ describe('DelegateModelDialog', () => {
     expect(screen.getByRole('dialog', { name: 'Route Coder' })).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(screen.getByRole('dialog', { name: 'Delegate routing' })).toBeTruthy();
+  });
+
+  it('shows the selected delegate history with a history icon and keeps other delegates separate', async () => {
+    const onAssign = vi.fn(async () => true);
+    render(DelegateModelDialog, {
+      props: {
+        open: true,
+        assignments: {
+          ...assignments,
+          assignments: [...assignments.assignments, { ...assignments.assignments[0], agent_id: 'reviewer', name: 'Reviewer' }]
+        },
+        models,
+        recentModelsByDelegate: { coder: [models[1]], reviewer: [models[0]] },
+        onAssign,
+        onRefresh: vi.fn()
+      }
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: /Coder coder/i }));
+    const coderRecent = screen.getByText('Recent').closest('section')!;
+    expect(coderRecent.querySelector('.lucide-history')).not.toBeNull();
+    expect(within(coderRecent).getByRole('button', { name: /Grok 4.6/ })).toBeInTheDocument();
+    expect(within(coderRecent).queryByRole('button', { name: /GPT-5.6 Sol/ })).toBeNull();
+    expect(document.querySelectorAll('.delegate-model-choice')).toHaveLength(2);
+    await fireEvent.click(within(coderRecent).getByRole('button', { name: /Grok 4.6/ }));
+    expect(onAssign).toHaveBeenCalledWith('coder', { model_id: models[1].id, node_id: 'node-1' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    await fireEvent.click(screen.getByRole('button', { name: /Reviewer reviewer/i }));
+    const reviewerRecent = screen.getByText('Recent').closest('section')!;
+    expect(within(reviewerRecent).getByRole('button', { name: /GPT-5.6 Sol/ })).toBeInTheDocument();
+    expect(within(reviewerRecent).queryByRole('button', { name: /Grok 4.6/ })).toBeNull();
+    const search = screen.getByLabelText('Search delegate models');
+    await fireEvent.input(search, { target: { value: 'Build server' } });
+    expect(screen.queryByText('Recent')).toBeNull();
+    expect(screen.getByRole('button', { name: /Grok 4.6/ })).toBeInTheDocument();
+    await fireEvent.keyDown(search, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Delegate routing' })).toBeInTheDocument();
+  });
+
+  it('updates delegate history while open and follows Recent order for keyboard selection', async () => {
+    const onAssign = vi.fn(async () => true);
+    const { rerender } = render(DelegateModelDialog, {
+      props: { open: true, assignments, models, onAssign, onRefresh: vi.fn() }
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /Coder coder/i }));
+    expect(screen.queryByText('Recent')).toBeNull();
+    await rerender({ recentModelsByDelegate: { coder: [models[1]] } });
+    const firstRow = document.querySelector('.delegate-model-choice');
+    expect(firstRow).toHaveTextContent('Grok 4.6');
+    await fireEvent.keyDown(screen.getByLabelText('Search delegate models'), { key: 'Enter' });
+    expect(onAssign).toHaveBeenCalledWith('coder', { model_id: models[1].id, node_id: 'node-1' });
+    expect(screen.getByRole('dialog', { name: 'Route Coder' })).toBeInTheDocument();
   });
 
   it('preserves unavailable overrides and offers an explicit reset', async () => {
@@ -186,6 +240,26 @@ describe('DelegateModelDialog', () => {
     await fireEvent.click(defaultButton);
     await fireEvent.click(modelButton);
     expect(onAssign).not.toHaveBeenCalled();
+  });
+
+  it('focuses model search when a delegate route is opened', async () => {
+    render(DelegateModelDialog, {
+      props: { open: true, assignments, models, onAssign: vi.fn(), onRefresh: vi.fn() }
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: /Coder coder/i }));
+    await waitFor(() => expect(screen.getByLabelText('Search delegate models')).toHaveFocus());
+  });
+
+  it('returns to the routing list when Escape is pressed in model search', async () => {
+    render(DelegateModelDialog, {
+      props: { open: true, assignments, models, onAssign: vi.fn(), onRefresh: vi.fn() }
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: /Coder coder/i }));
+    await fireEvent.keyDown(screen.getByLabelText('Search delegate models'), { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Delegate routing' })).toBeTruthy();
+    expect(screen.getByText('Saved with this session')).toBeTruthy();
   });
 
   it('returns to the routing list from picker Escape without closing the dialog', async () => {
