@@ -288,8 +288,10 @@ describe('Landing page session start', () => {
 
     render(LandingPage);
 
-    expect(screen.getByRole('button', { name: /Claude Sonnet 4/i })).toHaveTextContent('Claude Sonnet 4 · anthropic');
-    expect(screen.getByRole('button', { name: /Claude Sonnet 4/i })).not.toHaveTextContent('QMTCODE');
+    const modelButton = screen.getByRole('button', { name: /Claude Sonnet 4 from anthropic/i });
+    expect(modelButton).toHaveTextContent('Claude Sonnet 4');
+    expect(modelButton).not.toHaveTextContent('anthropic');
+    expect(modelButton).not.toHaveTextContent('QMTCODE');
   });
 
   it('shows the agent suffix when multiple agents are connected', () => {

@@ -3246,6 +3246,13 @@ summary:focus-visible {
   color: var(--accent);
 }
 
+.composer-provider-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  color: var(--text);
+}
+
 .composer-control-pill.composer-split-pill,
 .composer-control-pill.composer-model-pill {
   padding-block: 0.18rem;
@@ -3476,6 +3483,7 @@ summary:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
+  margin-left: 0.3rem;
 }
 
 .composer-model-pill-node svg {
