@@ -158,8 +158,10 @@ describe('SessionComposer', () => {
     expect(modeSelect).toHaveTextContent('Build');
     expect(screen.queryByLabelText('Session options')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Reasoning effort' })).not.toBeInTheDocument();
+    const modelButton = screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic; reasoning effort: Auto' });
+    expect(modelButton.querySelector('.composer-reasoning-badge')).toHaveTextContent('Auto');
 
-    await fireEvent.click(screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0]);
+    await fireEvent.click(modelButton);
     const picker = screen.getByRole('dialog', { name: 'Switch model' });
     const reasoningSelect = within(picker).getByRole('button', { name: 'Reasoning effort' });
     expect(reasoningSelect.closest('.delegate-reasoning-control')).not.toBeNull();
@@ -224,7 +226,7 @@ describe('SessionComposer', () => {
       .getAllByRole('button')
       .filter((button) => button.classList.contains('composer-control-pill') && !button.closest('.composer-options-host'));
     expect(controls.map((button) => button.getAttribute('aria-label') ?? button.textContent?.trim())).toEqual([
-      'Claude Sonnet 4 from anthropic',
+      'Claude Sonnet 4 from anthropic; reasoning effort: Auto',
       'Mode'
     ]);
     expect(screen.getByRole('button', { name: 'Attach files' })).toBeInTheDocument();
@@ -303,9 +305,12 @@ describe('SessionComposer', () => {
     expect(screen.queryByRole('button', { name: 'Reasoning effort' })).not.toBeInTheDocument();
     expect(screen.queryByText('Adjust reasoning for the next reply')).not.toBeInTheDocument();
 
+    const modelButton = screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic; reasoning effort: Low' });
+    expect(modelButton.querySelector('.composer-reasoning-badge')).toHaveTextContent('Low');
     const prompt = screen.getByPlaceholderText('Write a reply for this session...');
     await fireEvent.keyDown(prompt, { key: 't', ctrlKey: true });
     expect(onSessionConfigChange).toHaveBeenCalledWith('reasoning', 'high');
+    expect(modelButton.querySelector('.composer-reasoning-badge')).toHaveTextContent('Low');
 
     await fireEvent.click(screen.getAllByRole('button', { name: /Claude Sonnet 4/i })[0]);
     const reasoning = screen.getByRole('button', { name: 'Reasoning effort' });

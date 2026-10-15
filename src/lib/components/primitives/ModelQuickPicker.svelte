@@ -64,6 +64,12 @@
   });
 
   const showFallbackTooltip = $derived(!!selectionTooltip && !selectedIconId && !loading);
+  const reasoningBadge = $derived(
+    selectedModel ? reasoning?.options.find((option) => option.value === reasoning.value && option.label.trim()) ?? null : null
+  );
+  const triggerLabel = $derived(
+    reasoningBadge ? `${selectionTooltip}; reasoning effort: ${reasoningBadge.label}` : selectionTooltip
+  );
 
   $effect.pre(() => {
     if (selectedIconId) ensureProviderSprite(providerSprite);
@@ -196,9 +202,10 @@
             {...triggerProps}
             bind:this={triggerElement}
             class={`composer-model-pill ${className} ${triggerClass}`}
+            class:composer-model-pill-with-reasoning={!!reasoningBadge}
             disabled={disabled}
             type="button"
-            aria-label={selectionTooltip}
+            aria-label={triggerLabel}
             onclick={(event) => {
               if (typeof onTooltipClick === 'function') onTooltipClick(event);
               return openFromTrigger();
@@ -233,6 +240,11 @@
                 {loading ? 'Loading model...' : emptyLabel}
               {/if}
             </span>
+            {#if reasoningBadge}
+              <span class="composer-reasoning-badge" data-level={reasoning?.value.trim().toLowerCase()} aria-hidden="true">
+                {reasoningBadge.label}
+              </span>
+            {/if}
           </button>
         {/snippet}
       </Tooltip.Trigger>
@@ -290,3 +302,61 @@
     </Dialog.Portal>
   </Dialog.Root>
 </div>
+
+<style>
+  /* Keep the attached badge's layout and theme-aware palette together. */
+  .composer-model-pill-with-reasoning {
+    position: relative;
+    overflow: visible;
+  }
+
+  .composer-reasoning-badge {
+    --reasoning-light: #475569;
+    --reasoning-dark: #cbd5e1;
+    --reasoning-color: var(--reasoning-light);
+    position: absolute;
+    top: -7px;
+    right: 5px;
+    display: block;
+    text-align: center;
+    box-sizing: border-box;
+    height: 14px;
+    max-width: calc(100% - 10px);
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--reasoning-color) 45%, var(--bg-card));
+    border-radius: calc(var(--radius-control) / 2);
+    background: color-mix(in srgb, var(--reasoning-color) 14%, var(--bg-card));
+    padding: 0 4px;
+    color: var(--reasoning-color);
+    font-size: 8.25px;
+    font-weight: 600;
+    line-height: 12px;
+    text-transform: lowercase;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .composer-reasoning-badge[data-level='low'] {
+    --reasoning-light: #0f766e;
+    --reasoning-dark: #5eead4;
+  }
+
+  .composer-reasoning-badge[data-level='medium'] {
+    --reasoning-light: #1d4ed8;
+    --reasoning-dark: #93c5fd;
+  }
+
+  .composer-reasoning-badge[data-level='high'] {
+    --reasoning-light: #92400e;
+    --reasoning-dark: #fcd34d;
+  }
+
+  .composer-reasoning-badge[data-level='max'] {
+    --reasoning-light: #7e22ce;
+    --reasoning-dark: #d8b4fe;
+  }
+
+  :global(:root[data-theme='dark']) .composer-reasoning-badge {
+    --reasoning-color: var(--reasoning-dark);
+  }
+</style>

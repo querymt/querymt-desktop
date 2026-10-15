@@ -2,7 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ModelQuickPicker from './ModelQuickPicker.svelte';
-import ModelPickerPanel from './ModelPickerPanel.svelte';
+import ModelPickerPanel, { type ModelPickerReasoningControl } from './ModelPickerPanel.svelte';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
 import type { ModelEntry } from '$lib/domain/types';
 
@@ -201,6 +201,108 @@ describe('ModelQuickPicker dialog', () => {
     expect(refresh.querySelector('.animate-spin')).not.toBeNull();
     refresh.click();
     expect(onRefresh).toHaveBeenCalledOnce();
+  });
+});
+
+describe('ModelQuickPicker reasoning badge', () => {
+  function reasoningControl(value = 'high'): ModelPickerReasoningControl {
+    return {
+      title: 'Reasoning effort',
+      description: 'Adjust reasoning for the next reply',
+      value,
+      options: ['auto', 'low', 'medium', 'high', 'max'].map((level) => ({
+        value: level, label: level[0].toUpperCase() + level.slice(1)
+      })),
+      ariaLabel: 'Reasoning effort',
+      onChange: vi.fn()
+    };
+  }
+
+  it.each(['auto', 'low', 'medium', 'high', 'max'])('shows the supported %s label with its level-specific palette hook', (level) => {
+    renderPicker({ selectedModelId: anthropic.id, reasoning: reasoningControl(level) });
+    const label = level[0].toUpperCase() + level.slice(1);
+    const button = screen.getByRole('button', { name: `Claude Sonnet 4 from anthropic; reasoning effort: ${label}` });
+    const badge = button.querySelector('.composer-reasoning-badge');
+    expect(badge).toHaveTextContent(label);
+    expect(badge).toHaveAttribute('data-level', level);
+    expect(badge).toHaveAttribute('aria-hidden', 'true');
+    expect(button).toHaveClass('composer-model-pill-with-reasoning');
+    expect(button.querySelector('use')).toHaveAttribute('href', '#querymt-provider-anthropic');
+    expect(within(button).queryByRole('button')).toBeNull();
+  });
+
+  it('uses the actual option label, including unfamiliar reasoning levels', () => {
+    const reasoning = { ...reasoningControl('adaptive'), options: [{ value: 'adaptive', label: 'Adaptive' }] };
+    renderPicker({ selectedModelId: anthropic.id, reasoning });
+    const badge = screen.getByText('Adaptive', { selector: '.composer-reasoning-badge' });
+    expect(badge).toHaveAttribute('data-level', 'adaptive');
+  });
+
+  it('normalizes color hooks without changing backend values or the actual label', () => {
+    const reasoning = { ...reasoningControl(' HIGH '), options: [{ value: ' HIGH ', label: 'High' }] };
+    renderPicker({ selectedModelId: anthropic.id, reasoning });
+    expect(screen.getByText('High', { selector: '.composer-reasoning-badge' })).toHaveAttribute('data-level', 'high');
+    expect(reasoning.value).toBe(' HIGH ');
+  });
+
+  it('preserves long option labels in the accessible name', () => {
+    const label = 'Adaptive reasoning with extended deliberation';
+    const reasoning = { ...reasoningControl('adaptive'), options: [{ value: 'adaptive', label }] };
+    renderPicker({ selectedModelId: anthropic.id, reasoning });
+    const button = screen.getByRole('button', { name: `Claude Sonnet 4 from anthropic; reasoning effort: ${label}` });
+    expect(button.querySelector('.composer-reasoning-badge')).toHaveTextContent(label);
+  });
+
+  it('does not open a disabled model picker when the attached badge is clicked', async () => {
+    renderPicker({ selectedModelId: anthropic.id, reasoning: reasoningControl(), disabled: true });
+    const button = screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic; reasoning effort: High' });
+    expect(button).toBeDisabled();
+    button.click();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(button.querySelector('.composer-reasoning-badge')).toHaveTextContent('High');
+  });
+
+  it('removes the badge and its accessible suffix when reasoning is no longer supported', async () => {
+    const { rerender } = renderPicker({ selectedModelId: anthropic.id, reasoning: reasoningControl() });
+    expect(screen.getByRole('button', { name: /reasoning effort: High/ })).toBeInTheDocument();
+    await rerender({ reasoning: null });
+    const button = screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic' });
+    expect(button.querySelector('.composer-reasoning-badge')).toBeNull();
+    expect(button).not.toHaveClass('composer-model-pill-with-reasoning');
+  });
+
+  it.each([
+    { reasoning: null, selectedModelId: anthropic.id },
+    { reasoning: reasoningControl('unsupported'), selectedModelId: anthropic.id },
+    { reasoning: { ...reasoningControl(), options: [] }, selectedModelId: anthropic.id },
+    { reasoning: reasoningControl(), selectedModelId: '' },
+    { reasoning: reasoningControl(), selectedModelId: 'missing/model' }
+  ])('hides the badge when reasoning or the selected model cannot be resolved: %j', (props) => {
+    const { container } = renderPicker(props);
+    expect(container.querySelector('.composer-reasoning-badge')).toBeNull();
+    expect(container.querySelector('.composer-model-pill-with-reasoning')).toBeNull();
+  });
+
+  it('updates with confirmed reasoning and opens the existing picker when the badge is clicked', async () => {
+    const { rerender } = renderPicker({ selectedModelId: anthropic.id, reasoning: reasoningControl() });
+    await rerender({ reasoning: reasoningControl('max') });
+    const button = screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic; reasoning effort: Max' });
+    await fireEvent.click(within(button).getByText('Max'));
+    const dialog = screen.getByRole('dialog', { name: 'Switch model' });
+    expect(within(dialog).getByRole('button', { name: 'Reasoning effort' })).toHaveTextContent('Max');
+    await fireEvent.keyDown(within(dialog).getByPlaceholderText('Search models, providers, nodes…'), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(button).toHaveFocus();
+  });
+
+  it('retains the current badge during a pending write without enabling known-provider tooltips', async () => {
+    vi.useFakeTimers();
+    renderPicker({ selectedModelId: anthropic.id, reasoning: { ...reasoningControl(), pending: true }, loading: true });
+    const button = screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic; reasoning effort: High' });
+    expect(button.querySelector('.composer-reasoning-badge')).toHaveTextContent('High');
+    await fireEvent.pointerEnter(button);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(document.querySelector('.app-tooltip-content')).toBeNull();
   });
 });
 
