@@ -1,5 +1,6 @@
 import { createEmptyActiveSession, normalizeContentBlocks, stringifyOptional, summarizeContentBlocks } from '$lib/domain/session-updates';
 import type { ActiveSessionViewModel, PromptAttachment, SessionContentBlock, SessionToolCallItem } from '$lib/domain/types';
+import { appendHistoricalUsage } from '$lib/domain/session-usage';
 
 type SnapshotEvent = {
   seq?: number;
@@ -85,6 +86,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
   const restoredStructuredPrompts = new Set<string>();
   let lastAssistantMessageId: string | null = null;
   let activeWorkStartedAt: number | null = null;
+  let missingHistoricalUsage = false;
 
   for (const event of snapshot.audit?.events ?? []) {
     const kind = event.kind?.type;
@@ -102,6 +104,12 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
     }
 
     if (kind === 'llm_request_end') {
+      if (data.usage != null || session.usage.breakdown) {
+        session.usage.breakdown = appendHistoricalUsage(session.usage.breakdown, data.usage);
+        session.usage.breakdown.partial ||= missingHistoricalUsage;
+      } else {
+        missingHistoricalUsage = true;
+      }
       session.usage.contextUsed = readNonNegativeNumber(data.context_tokens) ?? session.usage.contextUsed;
       session.usage.cumulativeCostUsd = readNonNegativeNumber(data.cumulative_cost_usd) ?? session.usage.cumulativeCostUsd;
       session.usage.activeWorkMs += elapsedWorkMs(activeWorkStartedAt, readTimestampMs(event.timestamp));

@@ -3,6 +3,7 @@ import type { SessionNotification } from '@agentclientprotocol/sdk';
 import {
   applyDelegationChildSession,
   applySessionNotification,
+  appendSessionReplay,
   beginSessionWork,
   createEmptyActiveSession,
   endSessionWork,
@@ -124,6 +125,41 @@ describe('structured content updates', () => {
 });
 
 describe('session usage updates', () => {
+  const counts = { inputTokens: 75, outputTokens: 162, reasoningTokens: 1024, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  const breakdown = { latestRequest: counts, sessionTotals: counts, partial: false };
+  const update = notification({ sessionUpdate: 'usage_update', used: 1261, size: 100_000,
+    _meta: { querymt: { usage: { version: 1, ...breakdown } } } });
+
+  it('replaces normalized usage in live and replay reducers without double-counting reasoning or replay', () => {
+    const live = applySessionNotification(createEmptyActiveSession(), update);
+    const replay = appendSessionReplay(createEmptyActiveSession(), [update, update]);
+    expect(live.usage.breakdown).toEqual(breakdown);
+    expect(replay.usage.breakdown).toEqual(breakdown);
+    expect(live.usage.contextUsed).toBe(1261);
+    expect(live.usage.breakdown!.latestRequest!.outputTokens).toBe(162);
+    expect(live.usage.breakdown!.latestRequest!.reasoningTokens).toBe(1024);
+  });
+
+  it('preserves details when metadata is omitted or invalid, and ignores unsupported versions', () => {
+    let current = applySessionNotification(createEmptyActiveSession(), update);
+    for (const _meta of [undefined, { querymt: { usage: { version: 2, ...breakdown } } },
+      { querymt: { usage: { version: 1, partial: false, latestRequest: 'invalid', sessionTotals: counts } } }]) {
+      current = applySessionNotification(current, notification({ sessionUpdate: 'usage_update', used: 10, size: 100_000, _meta }));
+      expect(current.usage.breakdown).toEqual(breakdown);
+    }
+  });
+
+  it('fills missing breakdowns without replacing the authoritative target totals', () => {
+    const source = applySessionNotification(createEmptyActiveSession(), update);
+    const target = createEmptyActiveSession();
+    mergeMissingSessionUsage(target, source);
+    expect(target.usage.breakdown).toEqual(breakdown);
+    const authoritative = { ...breakdown, partial: true };
+    target.usage.breakdown = authoritative;
+    mergeMissingSessionUsage(target, source);
+    expect(target.usage.breakdown).toBe(authoritative);
+  });
+
   it('stores live context-window and USD cost updates', () => {
     const next = applySessionNotification(
       createEmptyActiveSession(),
