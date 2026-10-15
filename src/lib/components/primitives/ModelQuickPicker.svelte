@@ -2,9 +2,11 @@
   import { Bot, Gauge, Network, RefreshCw, Search, X } from '@lucide/svelte';
   import { getContext, tick } from 'svelte';
   import { Dialog, Tooltip } from 'bits-ui';
+  import providerSprite from '$lib/assets/providers.svg?raw';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import { displayedInputModalities, formatContextSize, knownInputModalities, modalityIcon, modalityLabel, showFamily } from '$lib/domain/model-capabilities';
   import { scoreModelSearch } from '$lib/domain/model-search';
+  import { ensureProviderSprite, modelSelectionTooltip, providerIconHref, providerIconId } from '$lib/domain/provider-icons';
   import type { ModelEntry, ModelInfo } from '$lib/domain/types';
   import { getModelSelectionKey } from '$lib/querymt/config-options';
 
@@ -60,6 +62,16 @@
       modelOptions.find((entry) => entry.id === selectedModelId && !entry.node_id) ??
       null
   );
+  const selectedIconId = $derived(selectedModel ? providerIconId(selectedModel.provider) : null);
+  const selectionTooltip = $derived.by(() => {
+    if (selectedModel) return modelSelectionTooltip(selectedModel, agentLabel);
+    if (selectedModelId) return `${selectedModelId}${loading ? '' : ' (unavailable)'}`;
+    return null;
+  });
+
+  $effect.pre(() => {
+    if (selectedIconId) ensureProviderSprite(providerSprite);
+  });
 
   const recentIds = $derived(new Set(recentModels.map(getModelSelectionKey)));
 
@@ -207,63 +219,64 @@
 </script>
 
 <div class="inline-flex">
-  <button
-    bind:this={triggerElement}
-    class={`composer-model-pill ${className}`}
-    disabled={disabled}
-    type="button"
-    onclick={openFromTrigger}
-  >
-    <span class="composer-split-pill-icon" aria-hidden="true">
-      {#if loading}
-        <RefreshCw size={14} strokeWidth={2} class="animate-spin" />
-      {:else}
-        <Bot size={14} strokeWidth={2} />
-      {/if}
-    </span>
-    <span class="composer-split-pill-divider" aria-hidden="true"></span>
-    <span class="composer-model-pill-label">
-      {#if selectedModel}
-        {selectedModel.label ?? selectedModel.model}
-        {#if selectedModel.node_label}
-          <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
-            <Tooltip.Root disableHoverableContent>
-              <Tooltip.Trigger>
-                {#snippet child({ props })}
-                  {@const { type: _type, tabindex: _tabindex, class: triggerClass = '', ...triggerProps } = props}
-                  <!-- tabindex from the spread is stripped and overridden to -1 below -->
-                  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-                  <span
-                    {...triggerProps}
-                    class={`${triggerClass} muted composer-model-pill-node`}
-                    tabindex={-1}
-                    aria-label={`Using ${selectedModel.provider} from ${selectedModel.node_label}`}
-                  >
-                    · {selectedModel.provider}
-                    <Network size={12} aria-hidden="true" />
+  <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+    <Tooltip.Root disableHoverableContent disabled={!selectionTooltip}>
+      <Tooltip.Trigger>
+        {#snippet child({ props })}
+          {@const { type: _type, class: triggerClass = '', onclick: onTooltipClick, disabled: _tooltipDisabled, ...triggerProps } = props}
+          <button
+            {...triggerProps}
+            bind:this={triggerElement}
+            class={`composer-model-pill ${className} ${triggerClass}`}
+            disabled={disabled}
+            type="button"
+            aria-label={selectionTooltip}
+            onclick={(event) => {
+              onTooltipClick?.(event);
+              void openFromTrigger();
+            }}
+          >
+            <span class="composer-split-pill-icon" aria-hidden="true">
+              {#if loading}
+                <RefreshCw size={14} strokeWidth={2} class="animate-spin" />
+              {:else if selectedIconId}
+                <svg class="composer-provider-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <use href={providerIconHref(selectedIconId)} width="24" height="24" />
+                </svg>
+              {:else}
+                <Bot size={14} strokeWidth={2} />
+              {/if}
+            </span>
+            <span class="composer-split-pill-divider" aria-hidden="true"></span>
+            <span class="composer-model-pill-label">
+              {#if selectedModel}
+                {selectedModel.label ?? selectedModel.model}
+                {#if selectedModel.node_label}
+                  <span class="muted composer-model-pill-node" aria-hidden="true">
+                    <Network size={12} />
                   </span>
-                {/snippet}
-              </Tooltip.Trigger>
-              <Tooltip.Portal>
-                <Tooltip.Content class="app-tooltip-content" sideOffset={6}>
-                  Using <b>{selectedModel.provider}</b> from <b>{selectedModel.node_label}</b>
-                </Tooltip.Content>
-              </Tooltip.Portal>
-            </Tooltip.Root>
-          </Tooltip.Provider>
-        {:else}
-          <span class="muted">· {selectedModel.provider}</span>
-        {/if}
-        {#if agentLabel}
-          <span class="muted">· {agentLabel}</span>
-        {/if}
-      {:else if selectedModelId}
-        {selectedModelId}{loading ? '' : ' (unavailable)'}
-      {:else}
-        {loading ? 'Loading model...' : emptyLabel}
+                {/if}
+                {#if agentLabel}
+                  <span class="muted">· {agentLabel}</span>
+                {/if}
+              {:else if selectedModelId}
+                {selectedModelId}{loading ? '' : ' (unavailable)'}
+              {:else}
+                {loading ? 'Loading model...' : emptyLabel}
+              {/if}
+            </span>
+          </button>
+        {/snippet}
+      </Tooltip.Trigger>
+      {#if selectionTooltip}
+        <Tooltip.Portal>
+          <Tooltip.Content class="app-tooltip-content" sideOffset={6}>
+            {selectionTooltip}
+          </Tooltip.Content>
+        </Tooltip.Portal>
       {/if}
-    </span>
-  </button>
+    </Tooltip.Root>
+  </Tooltip.Provider>
 
   <Dialog.Root {open} onOpenChange={handleOpenChange}>
     <Dialog.Portal to={overlayPortalTarget}>

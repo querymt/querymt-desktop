@@ -224,7 +224,7 @@ describe('SessionComposer', () => {
       .getAllByRole('button')
       .filter((button) => button.classList.contains('composer-control-pill') && !button.closest('.composer-options-host'));
     expect(controls.map((button) => button.getAttribute('aria-label') ?? button.textContent?.trim())).toEqual([
-      'Claude Sonnet 4 · anthropic',
+      'Claude Sonnet 4 from anthropic',
       'Mode'
     ]);
     expect(screen.getByRole('button', { name: 'Attach files' })).toBeInTheDocument();
