@@ -10,8 +10,15 @@ permissions:
   contents: write
 
 jobs:
+  versions:
+    name: Version consistency
+    uses: ./.github/workflows/versions.yml
+    permissions:
+      contents: read
+
   embedded-ui:
     name: Embedded UI
+    needs: versions
     uses: ./.github/workflows/embedded-ui.yml
     permissions:
       contents: read
@@ -63,6 +70,7 @@ jobs:
 
   release:
     name: ${{ matrix.name }}
+    needs: versions
     runs-on: ${{ matrix.platform }}
     strategy:
       fail-fast: false

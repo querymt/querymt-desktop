@@ -108,6 +108,7 @@ import { createTauriAcpStream, createWebSocketAcpStream } from '$lib/querymt/tra
 import type { Stream } from '@agentclientprotocol/sdk';
 import { isEmbedded } from '$lib/platform/runtime';
 import { acpWebSocketUrl } from '$lib/querymt/websocket-url';
+import { version } from '../../../package.json';
 
 const PROTOCOL_VERSION = 1;
 
@@ -372,7 +373,7 @@ export class DesktopAcpClient {
       protocolVersion: PROTOCOL_VERSION,
       clientInfo: {
         name: isEmbedded ? 'QueryMT Embedded' : 'QueryMT Desktop',
-        version: '0.1.0'
+        version
       },
       clientCapabilities: buildClientCapabilities()
     };
