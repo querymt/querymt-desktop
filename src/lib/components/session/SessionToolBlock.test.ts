@@ -262,6 +262,68 @@ describe('SessionToolBlock', () => {
     expect(screen.queryByTestId('session-tool-diff')).toBeNull();
   });
 
+  it('renders live ACP write_file content as a diff instead of raw source data', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'write-1',
+        title: 'Run write_file',
+        kind: 'edit',
+        status: 'completed',
+        arguments: '{"path":"src/new.ts","content":"export const value = 1;\\n"}',
+        result: '{"path":"src/new.ts","bytes":24}'
+      }
+    });
+
+    const toolGroup = screen.getByRole('group', { name: 'Write file - src/new.ts +1' });
+    expect(toolGroup).toHaveClass('session-tool-block-diff');
+    expect(screen.queryByRole('region', { name: 'File diff' })).toBeNull();
+    await fireEvent.click(toolGroup.querySelector('summary')!);
+
+    expect(await screen.findByTestId('session-tool-diff')).toHaveTextContent('+export const value = 1;');
+    expect(screen.queryByRole('region', { name: 'Tool parameters' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Tool result' })).toBeNull();
+  });
+
+  it('renders live ACP multiedit replacements as a diff', async () => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'multiedit-1',
+        title: 'Run multiedit',
+        kind: 'edit',
+        status: 'completed',
+        arguments: '{"filePath":"src/app.ts","edits":[{"oldString":"one","newString":"two"}]}',
+        result: 'OK paths=1 edits=1 added=1 deleted=1\nP src/app.ts\nH replace old=1,1 new=1,1 +1 -1'
+      }
+    });
+
+    const toolGroup = screen.getByRole('group', { name: 'Edit file - src/app.ts +1 -1' });
+    await fireEvent.click(toolGroup.querySelector('summary')!);
+    const diff = await screen.findByTestId('session-tool-diff');
+    expect(diff).toHaveTextContent('-one');
+    expect(diff).toHaveTextContent('+two');
+  });
+
+  it.each(['failed', 'in_progress'] as const)('does not render a diff for a %s live ACP write', async (status) => {
+    render(SessionToolBlock, {
+      tool: {
+        id: 'write-1',
+        title: 'Run write_file',
+        kind: 'edit',
+        status,
+        arguments: '{"path":"src/new.ts","content":"hello\\n"}',
+        result: status === 'failed' ? 'write failed' : undefined
+      }
+    });
+
+    const toolGroup = screen.getByText('Write file').closest('details')!;
+    expect(toolGroup).not.toHaveClass('session-tool-block-diff');
+    await fireEvent.click(toolGroup.querySelector('summary')!);
+    expect(screen.queryByRole('region', { name: 'File diff' })).toBeNull();
+    expect(await screen.findByRole('region', { name: 'Tool parameters' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'File diff' })).toBeNull();
+    if (status === 'failed') expect(screen.getByRole('region', { name: 'Tool result' })).toHaveTextContent('write failed');
+  });
+
   it('renders replace_symbol diffs only after expand', async () => {
     chatPreferencesStore.setDeveloperMode(true);
     render(SessionToolBlock, {

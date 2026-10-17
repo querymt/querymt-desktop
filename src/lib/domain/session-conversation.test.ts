@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildSessionConversation, formatTurnDuration, groupConsecutiveReasoning, isReasoningSummaryPart } from './session-conversation';
+import { buildSessionConversation, formatTurnDuration, getTurnChangedFileCount, getTurnChangeStats, groupConsecutiveReasoning, isReasoningSummaryPart, type SessionConversationTurn } from './session-conversation';
 import { createEmptyActiveSession } from './session-updates';
-import type { ActiveSessionViewModel } from '$lib/domain/types';
+import type { ActiveSessionViewModel, SessionToolCallItem } from '$lib/domain/types';
 import * as markdown from './markdown';
 
 function baseSession(): ActiveSessionViewModel {
@@ -15,6 +15,136 @@ describe('formatTurnDuration', () => {
     expect(formatTurnDuration(3723000)).toBe('1h 2m 3s');
     expect(formatTurnDuration(3600000)).toBe('1h');
     expect(formatTurnDuration(300)).toBe('0s');
+  });
+});
+
+describe('getTurnChangeStats', () => {
+  function toolTurn(tools: SessionToolCallItem[]): SessionConversationTurn {
+    return {
+      id: 'changes',
+      forkMessageId: null,
+      content: tools.map((tool) => ({ type: 'tool', id: tool.id, tool }))
+    };
+  }
+
+  it('counts distinct changed files across edits, writes, and multi-file replacements', () => {
+    expect(getTurnChangedFileCount(toolTurn([
+      {
+        id: 'edit', title: 'Run edit', kind: 'edit', status: 'completed',
+        arguments: '{"path":"a.ts","oldString":"a","newString":"b"}'
+      },
+      {
+        id: 'write', title: 'Run write_file', kind: 'edit', status: 'completed',
+        arguments: '{"path":"a.ts","content":"new content\\n"}'
+      },
+      {
+        id: 'symbols', title: 'Run replace_symbol', kind: 'edit', status: 'completed',
+        arguments: '{"replacements":[{"path":"b.ts","oldText":"one","newText":"two"},{"path":"c.ts","oldText":"three","newText":"four"},{"path":"unchanged.ts","oldText":"same","newText":"same"}]}'
+      },
+      {
+        id: 'multi', title: 'Run multiedit', kind: 'edit', status: 'completed',
+        arguments: '{"filePath":"b.ts","edits":[{"oldString":"two","newString":"five"}]}'
+      },
+      {
+        id: 'failed', title: 'Run write_file', kind: 'edit', status: 'failed',
+        arguments: '{"path":"failed.ts","content":"not written"}'
+      },
+      {
+        id: 'pending', title: 'Run write_file', kind: 'edit', status: 'in_progress',
+        arguments: '{"path":"pending.ts","content":"not written"}'
+      }
+    ]))).toBe(3);
+  });
+
+  it('counts saved receipt paths even when source arguments are unavailable', () => {
+    expect(getTurnChangedFileCount(toolTurn([
+      {
+        id: 'receipt', title: 'Run edit', kind: 'edit', status: 'completed',
+        result: 'OK paths=2 added=3 deleted=2\nP /project/a.ts\nH replace old=1,1 new=1,2 +2 -1\nP /project/file with spaces.ts\nH replace old=1,1 new=1,1 +1 -1'
+      },
+      {
+        id: 'repeat', title: 'Run edit', kind: 'edit', status: 'completed',
+        result: 'OK added=1 deleted=1\nP /project/a.ts'
+      }
+    ]))).toBe(2);
+  });
+
+  it('does not invent a file count for changes without known paths', () => {
+    expect(getTurnChangedFileCount(toolTurn([
+      { id: 'receipt', title: 'Run edit', kind: 'edit', status: 'completed', result: 'OK added=1 deleted=1' }
+    ]))).toBeNull();
+    expect(getTurnChangedFileCount(toolTurn([]))).toBe(0);
+  });
+
+  it('sums completed edits, writes, multiedits, and symbol replacements using receipts when available', () => {
+    const turn = toolTurn([
+      {
+        id: 'edit', title: 'Run edit', kind: 'edit', status: 'completed',
+        arguments: '{"path":"a.ts","oldString":"a","newString":"b"}',
+        result: 'OK paths=1 edits=5 added=5 deleted=3'
+      },
+      {
+        id: 'write', title: 'Run write_file', kind: 'edit', status: 'completed',
+        arguments: '{"path":"new.ts","content":"one\\n two\\n"}',
+        result: '{"path":"new.ts","bytes":9}'
+      },
+      {
+        id: 'multi', title: 'Run multiedit', kind: 'edit', status: 'completed',
+        arguments: '{"filePath":"b.ts","edits":[{"oldString":"old","newString":"new"}]}'
+      },
+      {
+        id: 'symbol', title: 'Run replace_symbol', kind: 'edit', status: 'completed',
+        arguments: '{"replacements":[{"path":"c.ts","oldText":"one\\ntwo","newText":"three"}]}'
+      }
+    ]);
+
+    expect(getTurnChangeStats(turn)).toEqual({ added: 9, removed: 6 });
+  });
+
+  it('ignores failed, pending, running, unchanged, and non-edit calls', () => {
+    const tools: SessionToolCallItem[] = (['failed', 'pending', 'in_progress'] as const).map((status) => ({
+      id: status, title: 'Run write_file', kind: 'edit', status,
+      arguments: '{"path":"new.ts","content":"not written\\n"}'
+    }));
+    tools.push(
+      {
+        id: 'read', title: 'Run read_tool', kind: 'read', status: 'completed',
+        arguments: '{"path":"a.ts","content":"not an edit"}'
+      },
+      {
+        id: 'noop', title: 'Run edit', kind: 'edit', status: 'completed',
+        arguments: '{"path":"a.ts","oldString":"one","newString":"one"}'
+      }
+    );
+
+    expect(getTurnChangeStats(toolTurn(tools))).toBeNull();
+    expect(getTurnChangeStats(toolTurn([]))).toBeNull();
+  });
+
+  it('counts repeated edits cumulatively, rather than cancelling them into a net diff', () => {
+    expect(getTurnChangeStats(toolTurn([
+      { id: 'first', title: 'edit', kind: 'edit', status: 'completed', result: 'OK added=2 deleted=1' },
+      { id: 'second', title: 'edit', kind: 'edit', status: 'completed', result: 'OK added=1 deleted=2' }
+    ]))).toEqual({ added: 3, removed: 3 });
+  });
+
+  it('keeps totals scoped to each conversation turn', () => {
+    const session = baseSession();
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'first', messageId: 'u1', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: 'done', messageId: 'a1', eventIndex: 2 },
+      { id: 'u2', kind: 'user_message_chunk', text: 'second', messageId: 'u2', eventIndex: 3 },
+      { id: 'a2', kind: 'agent_message_chunk', text: 'done', messageId: 'a2', eventIndex: 5 }
+    ];
+    session.toolCalls = [
+      { id: 't1', title: 'edit', kind: 'edit', status: 'completed', result: 'OK added=5 deleted=2', eventIndex: 1 },
+      { id: 't2', title: 'edit', kind: 'edit', status: 'completed', result: 'OK added=1 deleted=3', eventIndex: 4 }
+    ];
+
+    expect(buildSessionConversation(session).map(getTurnChangeStats)).toEqual([
+      { added: 5, removed: 2 },
+      { added: 1, removed: 3 }
+    ]);
   });
 });
 

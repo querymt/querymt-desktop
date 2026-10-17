@@ -1,6 +1,7 @@
 <script lang="ts">
   import Conversation from '$lib/components/ai-elements/conversation.svelte';
   import SessionTurn from '$lib/components/session/SessionTurn.svelte';
+  import SessionTurnDiffPanel from '$lib/components/session/SessionTurnDiffPanel.svelte';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { getForkTarget } from '$lib/domain/session-fork';
   import { canUndoToMessage, isTurnReverted } from '$lib/domain/session-undo';
@@ -57,6 +58,32 @@
   let turnHeights = $state<SessionTurnHeightMap>({});
   let viewport = $state<SessionTurnWindowViewport>({ top: 0, height: 0 });
   let heightSessionId: string | null = null;
+  const diffPanelId = $props.id();
+  let diffSelection = $state<{ sessionId: string | null; turnId: string } | null>(null);
+  let diffPreview = $state<{ sessionId: string | null; turnId: string } | null>(null);
+  let diffTrigger: HTMLButtonElement | null = null;
+
+  function closeTurnDiff() {
+    diffSelection = null;
+    if (diffTrigger?.isConnected) diffTrigger.focus({ preventScroll: true });
+    diffTrigger = null;
+  }
+
+  function preloadTurnDiff(turnId: string) {
+    // Keep at most one warm panel, and never replace a panel the user is reading.
+    if (diffSelection || (diffPreview?.sessionId === session.sessionId && diffPreview.turnId === turnId)) return;
+    diffPreview = { sessionId: session.sessionId, turnId };
+  }
+
+  function toggleTurnDiff(turnId: string, event: MouseEvent) {
+    if (diffSelection?.sessionId === session.sessionId && diffSelection.turnId === turnId) {
+      closeTurnDiff();
+      return;
+    }
+    diffTrigger = event.currentTarget as HTMLButtonElement;
+    diffSelection = { sessionId: session.sessionId, turnId };
+    diffPreview = diffSelection;
+  }
 
   function handleImageFailure(key: string) {
     if (failedImageKeys.has(key)) return;
@@ -64,6 +91,20 @@
   }
 
   const turns = $derived(buildSessionConversation(session));
+  const diffTurn = $derived(
+    diffSelection?.sessionId === session.sessionId ? turns.find((turn) => turn.id === diffSelection?.turnId) : undefined
+  );
+  const previewSelection = $derived(diffSelection ?? diffPreview);
+  const previewTurn = $derived(
+    previewSelection?.sessionId === session.sessionId ? turns.find((turn) => turn.id === previewSelection?.turnId) : undefined
+  );
+  $effect(() => {
+    if (diffPreview && !previewTurn) diffPreview = null;
+    if (diffSelection && !diffTurn) {
+      diffSelection = null;
+      diffTrigger = null;
+    }
+  });
   const windowedTurns = $derived(windowSessionTurns(turns, viewport, turnHeights, { gap: SESSION_TURN_GAP }));
   const imageGallery = $derived.by(() => {
     const items: SessionImageGalleryItem[] = [];
@@ -221,7 +262,7 @@
   });
 </script>
 
-<div class="session-detail-shell">
+<div class="session-detail-shell" class:session-detail-diff-open={Boolean(diffTurn)}>
   <section class="session-conversation-column">
     <Conversation
       class="session-conversation"
@@ -265,6 +306,10 @@
                   turn.user.messageId === session.undo.stack.at(-1)
               )}
               {onRedo}
+              diffOpen={diffTurn?.id === turn.id}
+              {diffPanelId}
+              onToggleDiff={(event) => toggleTurnDiff(turn.id, event)}
+              onPreloadDiff={() => preloadTurnDiff(turn.id)}
               {onDisclosureChange}
             />
           {/if}
@@ -272,4 +317,7 @@
       </div>
     </Conversation>
   </section>
+  {#if previewTurn}
+    <SessionTurnDiffPanel id={diffPanelId} turn={previewTurn} open={Boolean(diffTurn)} onClose={closeTurnDiff} />
+  {/if}
 </div>

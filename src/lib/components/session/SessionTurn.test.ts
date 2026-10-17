@@ -1,10 +1,15 @@
 import '@testing-library/jest-dom/vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { cleanup, fireEvent, render, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionConversationTurn } from '$lib/domain/session-conversation';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import SessionTurn from './SessionTurn.svelte';
+
+const preloadSessionToolPatchDiff = vi.hoisted(() => vi.fn());
+vi.mock('./session-tool-patch-diff', () => ({ preloadSessionToolPatchDiff }));
 
 const turn: SessionConversationTurn = {
   id: 'turn-1',
@@ -432,6 +437,189 @@ describe('SessionTurn', () => {
     expect(queryByRole('button', { name: 'Fork into new session' })).not.toBeInTheDocument();
     expect(queryByRole('button', { name: 'Undo to this prompt' })).not.toBeInTheDocument();
     expect(queryByRole('button', { name: 'Redo this turn' })).not.toBeInTheDocument();
+  });
+
+  it('summarizes changes from every work group in one diff pill after the duration', () => {
+    const changedTurn: SessionConversationTurn = {
+      ...turn,
+      durationMs: 42000,
+      settled: true,
+      content: [
+        {
+          type: 'tool', id: 'edit', tool: {
+            id: 'edit', title: 'Run edit', kind: 'edit', status: 'completed', result: 'OK added=3 deleted=2'
+          }
+        },
+        ...turn.content,
+        {
+          type: 'tool', id: 'write', tool: {
+            id: 'write', title: 'Run write_file', kind: 'edit', status: 'completed',
+            arguments: '{"path":"new.ts","content":"hello\\nworld\\n"}',
+            result: '{"path":"new.ts","bytes":12}'
+          }
+        }
+      ]
+    };
+    const { getByRole, getByText, getAllByRole } = render(SessionTurn, { turn: changedTurn });
+
+    const pill = getByRole('button', { name: 'Turn changes: 5 lines added, 2 lines deleted' });
+    expect(getAllByRole('button', { name: /Turn changes:/ })).toHaveLength(1);
+    expect(getByText('Worked for 42s').nextElementSibling).toBe(pill);
+    expect(pill).toHaveTextContent('+5');
+    expect(pill).toHaveTextContent('-2');
+    expect(pill.querySelector('.lucide-diff')).toHaveAttribute('aria-hidden', 'true');
+    expect(pill.lastElementChild).toHaveClass('lucide-arrow-up-right');
+    expect(pill.lastElementChild).toHaveAttribute('aria-hidden', 'true');
+    expect(pill.querySelector('.session-tool-change-added')).toHaveTextContent('+5');
+    expect(pill.querySelector('.session-tool-change-removed')).toHaveTextContent('-2');
+    expect(pill.closest('.session-assistant-message-actions')).toBeInTheDocument();
+  });
+
+  it('toggles turn diffs through a borderless button without a native tooltip', async () => {
+    const onToggleDiff = vi.fn();
+    const changedTurn: SessionConversationTurn = {
+      ...turn,
+      content: [...turn.content, {
+        type: 'tool', id: 'edit-completed', tool: {
+          id: 'edit-completed', title: 'edit', kind: 'edit', status: 'completed', result: 'OK added=1 deleted=2'
+        }
+      }]
+    };
+    const { getByRole, rerender } = render(SessionTurn, {
+      turn: changedTurn, diffOpen: false, diffPanelId: 'turn-panel', onToggleDiff
+    });
+    const button = getByRole('button', { name: 'Turn changes: 1 line added, 2 lines deleted' });
+    expect(button).not.toHaveAttribute('title');
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    const arrow = button.lastElementChild;
+    expect(arrow).toHaveClass('lucide-arrow-up-right', 'session-turn-diff-pill-arrow');
+    await fireEvent.click(button);
+    expect(onToggleDiff).toHaveBeenCalledTimes(1);
+
+    await rerender({ turn: changedTurn, diffOpen: true, diffPanelId: 'turn-panel', onToggleDiff });
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    expect(button).toHaveAttribute('aria-controls', 'turn-panel');
+    expect(button.lastElementChild).toBe(arrow);
+    expect(arrow).toHaveAttribute('aria-hidden', 'true');
+    const appCss = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
+    const activeArrowRule = appCss.match(/\.session-turn-diff-pill\[aria-expanded='true'\] \.session-turn-diff-pill-arrow\s*\{([^}]+)\}/)?.[1];
+    expect(activeArrowRule).toContain('color: var(--accent);');
+    expect(activeArrowRule).toContain('transform: rotate(180deg);');
+    const arrowRule = appCss.match(/\.session-turn-diff-pill-arrow\s*\{([^}]+)\}/)?.[1];
+    expect(arrowRule).toContain('transform: rotate(0deg);');
+    expect(arrowRule).toContain('transition: transform 0.16s ease, color 0.16s ease;');
+    expect(appCss).toMatch(/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.session-turn-diff-pill-arrow\s*\{\s*transition: none;/);
+    await fireEvent.click(button);
+    expect(onToggleDiff).toHaveBeenCalledTimes(2);
+
+    await rerender({ turn: changedTurn, diffOpen: false, diffPanelId: 'turn-panel', onToggleDiff });
+    expect(button.lastElementChild).toBe(arrow);
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('preloads the renderer on pointer intent and keyboard focus without opening the panel', async () => {
+    preloadSessionToolPatchDiff.mockClear();
+    const onToggleDiff = vi.fn();
+    const onPreloadDiff = vi.fn();
+    const changedTurn: SessionConversationTurn = {
+      ...turn,
+      content: [{ type: 'tool', id: 'edit', tool: {
+        id: 'edit', title: 'edit', kind: 'edit', status: 'completed', result: 'OK added=1 deleted=1'
+      } }]
+    };
+    const { getByRole } = render(SessionTurn, { turn: changedTurn, onToggleDiff, onPreloadDiff });
+    const pill = getByRole('button', { name: 'Turn changes: 1 line added, 1 line deleted' });
+    expect(preloadSessionToolPatchDiff).not.toHaveBeenCalled();
+    await fireEvent.pointerEnter(pill);
+    expect(preloadSessionToolPatchDiff).toHaveBeenCalledTimes(1);
+    await fireEvent.focus(pill);
+    expect(preloadSessionToolPatchDiff).toHaveBeenCalledTimes(2);
+    expect(onPreloadDiff).toHaveBeenCalledTimes(2);
+    expect(onToggleDiff).not.toHaveBeenCalled();
+    expect(pill).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it.each([1, 2])('shows only a bare count for %i distinct files inside the diff pill', async (fileCount) => {
+    const changedTurn: SessionConversationTurn = {
+      ...turn,
+      content: [
+        { type: 'tool', id: 'first', tool: {
+          id: 'first', title: 'Run edit', kind: 'edit', status: 'completed',
+          arguments: '{"path":"a.ts","oldString":"one","newString":"two"}',
+          result: 'OK added=1 deleted=1'
+        } },
+        { type: 'tool', id: 'second', tool: {
+          id: 'second', title: 'Run write_file', kind: 'edit', status: 'completed',
+          arguments: JSON.stringify({ path: fileCount === 1 ? 'a.ts' : 'b.ts', content: 'hello\nworld\n' })
+        } }
+      ]
+    };
+    const { getByRole, queryByRole } = render(SessionTurn, { turn: changedTurn });
+    const button = getByRole('button', {
+      name: `Turn changes: 3 lines added, 1 line deleted, ${fileCount} ${fileCount === 1 ? 'file' : 'files'} changed`
+    });
+    const count = button.querySelector('.session-turn-diff-pill-files')!;
+    expect(count.textContent).toBe(String(fileCount));
+    expect(count.previousElementSibling).toHaveClass('lucide-diff');
+    expect(button.textContent?.trim()).toBe(`${fileCount} +3 -1`);
+    expect(button.lastElementChild).toHaveClass('lucide-arrow-up-right');
+    button.focus();
+    await fireEvent.pointerEnter(button);
+    expect(queryByRole('tooltip')).toBeNull();
+    expect(button).not.toHaveAttribute('data-tooltip-trigger');
+    expect(button).not.toHaveAttribute('title');
+  });
+
+  it('shows only the line totals when the changed file paths are unavailable', async () => {
+    const changedTurn: SessionConversationTurn = {
+      ...turn,
+      content: [{ type: 'tool', id: 'receipt', tool: {
+        id: 'receipt', title: 'Run edit', kind: 'edit', status: 'completed', result: 'OK added=2 deleted=1'
+      } }]
+    };
+    const { getByRole, queryByRole } = render(SessionTurn, { turn: changedTurn });
+    const button = getByRole('button', { name: 'Turn changes: 2 lines added, 1 line deleted' });
+    expect(button.querySelector('.session-turn-diff-pill-files')).toBeNull();
+    expect(button.textContent?.trim()).toBe('+2 -1');
+    button.focus();
+    await fireEvent.pointerEnter(button);
+    expect(queryByRole('tooltip')).toBeNull();
+  });
+
+  it('hides the diff pill when the turn contains no completed changes', () => {
+    const { getByText, queryByRole } = render(SessionTurn, { turn: { ...turn, durationMs: 2000, settled: true } });
+
+    expect(getByText('Worked for 2s')).toBeInTheDocument();
+    expect(queryByRole('button', { name: /Turn changes:/ })).toBeNull();
+  });
+
+  it('updates the pill as tools complete even without a duration', async () => {
+    const pendingTool = {
+      id: 'write', title: 'Run write_file', kind: 'edit', status: 'in_progress' as const,
+      arguments: '{"path":"new.ts","content":"hello\\n"}'
+    };
+    const activeTurn: SessionConversationTurn = {
+      ...turn,
+      settled: false,
+      content: [{ type: 'tool', id: 'write', tool: pendingTool }]
+    };
+    const { queryByRole, getByRole, queryByText, rerender } = render(SessionTurn, { turn: activeTurn });
+    expect(queryByRole('button', { name: /Turn changes:/ })).toBeNull();
+
+    await rerender({ turn: {
+      ...activeTurn,
+      content: [{ type: 'tool', id: 'write', tool: { ...pendingTool, status: 'completed' } }]
+    } });
+    expect(getByRole('button', { name: 'Turn changes: 1 line added, 0 lines deleted, 1 file changed' })).toHaveTextContent('1 +1 -0');
+    expect(queryByText(/Worked for/)).toBeNull();
+  });
+
+  it('keeps the diff pill borderless and uses a subtle surface', () => {
+    const appCss = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
+    const pillRule = appCss.match(/\.session-turn-diff-pill\s*\{([^}]+)\}/)?.[1];
+    expect(pillRule).toMatch(/border:\s*0\s*;/);
+    expect(pillRule).toMatch(/border-radius:\s*999px\s*;/);
+    expect(pillRule).toMatch(/background:\s*var\(--icon-surface\)\s*;/);
   });
 
   it('shows only functional message actions', () => {

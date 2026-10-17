@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { Check, Copy, GitFork, LoaderCircle, Redo2, Undo2 } from '@lucide/svelte';
+  import { ArrowUpRight, Check, Copy, Diff, GitFork, LoaderCircle, Redo2, Undo2 } from '@lucide/svelte';
   import SessionPromptError from '$lib/components/session/SessionPromptError.svelte';
   import SessionAttachmentPreview from '$lib/components/session/SessionAttachmentPreview.svelte';
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
-  import { buildTurnPresentation, formatTurnDuration, type SessionConversationTurn } from '$lib/domain/session-conversation';
+  import { preloadSessionToolPatchDiff } from './session-tool-patch-diff';
+  import { buildTurnPresentation, formatTurnDuration, getTurnChangedFileCount, getTurnChangeStats, type SessionConversationTurn } from '$lib/domain/session-conversation';
   import { normalizeMarkdownCodeFences, renderMarkdownToHtml, splitStreamingMarkdown } from '$lib/domain/markdown';
   import type { SessionContentBlock, SessionImageGalleryItem } from '$lib/domain/types';
   import type { PromptFailure } from '$lib/domain/prompt-errors';
@@ -27,6 +28,10 @@
     onUndo,
     onRedo,
     onFork,
+    diffOpen = false,
+    diffPanelId,
+    onToggleDiff,
+    onPreloadDiff,
     onDisclosureChange
   }: {
     turn: SessionConversationTurn;
@@ -46,6 +51,10 @@
     onUndo?: (messageId: string) => void;
     onRedo?: () => void | Promise<void>;
     onFork?: () => void;
+    diffOpen?: boolean;
+    diffPanelId?: string;
+    onToggleDiff?: (event: MouseEvent) => void;
+    onPreloadDiff?: () => void;
     onDisclosureChange?: (anchor: HTMLElement, expanded: boolean) => void;
   } = $props();
 
@@ -53,6 +62,8 @@
   let copiedUserId = $state<string | null>(null);
   const presentation = $derived(turn.presentation ?? buildTurnPresentation(turn.content, turn.settled ?? true));
   const lastPresentationId = $derived(presentation.at(-1)?.id ?? null);
+  const changeStats = $derived(getTurnChangeStats(turn));
+  const changedFileCount = $derived(getTurnChangedFileCount(turn));
   // Everything the response copy button should capture: the turn's assistant
   // text as markdown, without reasoning traces or tool activity.
   const turnResponseMarkdown = $derived(
@@ -62,6 +73,11 @@
       .filter(Boolean)
       .join('\n\n')
   );
+
+  function preloadTurnDiff() {
+    preloadSessionToolPatchDiff();
+    onPreloadDiff?.();
+  }
 
   function markdownParts(html: string | undefined, text: string, live: boolean, fullText: string) {
     if (live) return splitStreamingMarkdown(text);
@@ -220,8 +236,32 @@
             <Redo2 size={15} />
           </button>
         {/if}
-        {#if turn.durationMs !== undefined}
-          <span class="session-turn-duration">Worked for {formatTurnDuration(turn.durationMs)}</span>
+        {#if turn.durationMs !== undefined || changeStats}
+          <div class="session-turn-meta">
+            {#if turn.durationMs !== undefined}
+              <span class="session-turn-duration">Worked for {formatTurnDuration(turn.durationMs)}</span>
+            {/if}
+            {#if changeStats}
+              <button
+                class="session-turn-diff-pill"
+                type="button"
+                aria-label={`Turn changes: ${changeStats.added} ${changeStats.added === 1 ? 'line' : 'lines'} added, ${changeStats.removed} ${changeStats.removed === 1 ? 'line' : 'lines'} deleted${changedFileCount ? `, ${changedFileCount} ${changedFileCount === 1 ? 'file' : 'files'} changed` : ''}`}
+                aria-expanded={diffOpen}
+                aria-controls={diffOpen ? diffPanelId : undefined}
+                onpointerenter={preloadTurnDiff}
+                onfocus={preloadTurnDiff}
+                onclick={onToggleDiff}
+              >
+                <Diff size={13} aria-hidden="true" />
+                {#if changedFileCount !== null && changedFileCount > 0}
+                  <span class="session-turn-diff-pill-files" aria-hidden="true">{changedFileCount}</span>
+                {/if}
+                <span class="session-tool-change-added" aria-hidden="true">+{changeStats.added}</span>
+                <span class="session-tool-change-removed" aria-hidden="true">-{changeStats.removed}</span>
+                <ArrowUpRight size={12} class="session-turn-diff-pill-arrow" aria-hidden="true" />
+              </button>
+            {/if}
+          </div>
         {/if}
       </div>
     {/snippet}

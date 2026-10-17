@@ -47,9 +47,9 @@
   let sourceOpenForId = $state<string | null>(null);
   let copiedPart = $state<'arguments' | 'result' | null>(null);
   const presentation = $derived(getSessionToolPresentation(tool));
-  const diffs = $derived(buildSessionToolDiffs(presentation.name, tool.status, tool.arguments, tool.result));
   const READ_FILE_TOOLS = new Set(['read_tool', 'get_function', 'get_symbol', 'read', 'read_shared']);
   const toolName = $derived(getSessionToolName(tool));
+  const diffs = $derived(buildSessionToolDiffs(toolName, tool.status, tool.arguments, tool.result));
   const isRead = $derived(READ_FILE_TOOLS.has(toolName));
   const isShell = $derived(toolName === 'shell' || toolName === 'execute');
   const readOutputView = $derived.by(() => {

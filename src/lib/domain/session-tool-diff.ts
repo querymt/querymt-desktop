@@ -8,11 +8,46 @@ import {
   toolFilePath
 } from '$lib/domain/session-tool-args';
 import type { SessionToolCallItem } from '$lib/domain/types';
+import type { SessionConversationTurn } from '$lib/domain/session-conversation';
+import { getSessionToolName } from '$lib/domain/session-tool-presentation';
 
 export type SessionToolDiffFile = {
   path: string;
   patch: string;
 };
+
+export type SessionTurnDiffFile = {
+  path: string;
+  added: number;
+  removed: number;
+  changes: Array<{ id: string; patch: string }>;
+};
+
+/** Keep each tool's patch separate: successive edits do not share a common file baseline. */
+export function buildSessionTurnDiffs(turn: SessionConversationTurn): SessionTurnDiffFile[] {
+  const files = new Map<string, SessionTurnDiffFile>();
+  for (const item of turn.content) {
+    if (item.type !== 'tool') continue;
+    const tool = item.tool;
+    for (const file of buildSessionToolDiffs(getSessionToolName(tool), tool.status, tool.arguments, tool.result)) {
+      const key = normalizePatchPath(file.path);
+      let group = files.get(key);
+      if (!group) {
+        group = { path: file.path, added: 0, removed: 0, changes: [] };
+        files.set(key, group);
+      }
+      let inHunk = false;
+      for (const line of file.patch.split('\n')) {
+        if (line.startsWith('@@ ')) inHunk = true;
+        if (!inHunk) continue;
+        if (line.startsWith('+')) group.added += 1;
+        if (line.startsWith('-')) group.removed += 1;
+      }
+      group.changes.push({ id: `${tool.id}:${key}`, patch: file.patch });
+    }
+  }
+  return [...files.values()];
+}
 
 type ReplacementEdit = { oldText: string; newText: string };
 
@@ -88,6 +123,8 @@ function isWriteFileJsonResult(args: Record<string, unknown>, result: string): b
 }
 
 function buildWriteFilePatch(args: Record<string, unknown>): SessionToolDiffFile | null {
+  // TODO(backend): capture and persist pre-write content or a patch, plus create/overwrite
+  // metadata, for live updates and session replay. Until then, preview all written content as additions.
   const content = typeof args.content === 'string' ? args.content : typeof args.contents === 'string' ? args.contents : '';
   if (!content) return null;
   const path = toolFilePath(args) || 'file';
