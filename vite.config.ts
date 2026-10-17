@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
+import packageJson from './package.json' with { type: 'json' };
 
 export default defineConfig(({ mode }) => {
   const embedded = mode === 'embedded';
@@ -8,7 +9,7 @@ export default defineConfig(({ mode }) => {
 
   const buildMetadata = {
     application: 'querymt-ui',
-    version: process.env.npm_package_version ?? '0.1.0',
+    version: packageJson.version,
     revision: process.env.QUERYMT_UI_REVISION ?? process.env.GITHUB_SHA ?? 'unknown',
     target: embedded ? 'embedded' : 'desktop',
     acpWebSocketPath: embedded ? '/acp/ws' : null

@@ -1,0 +1,44 @@
+name: version-consistency
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check desktop versions and release tag
+        run: |
+          python3 - <<'PY'
+          import json, os, tomllib
+          from pathlib import Path
+
+          def load(path):
+              text = Path(path).read_text()
+              return json.loads(text) if path.endswith('.json') else tomllib.loads(text)
+
+          versions = {
+              'package.json': load('package.json')['version'],
+              'package-lock.json': load('package-lock.json')['version'],
+              'npm root package': load('package-lock.json')['packages']['']['version'],
+              'tauri.conf.json': load('src-tauri/tauri.conf.json')['version'],
+              'Cargo.toml': load('src-tauri/Cargo.toml')['package']['version'],
+              'Cargo.lock': next(p['version'] for p in load('src-tauri/Cargo.lock')['package'] if p['name'] == 'querymt-desktop'),
+          }
+          expected = versions['package.json']
+          for source, version in versions.items():
+              assert version == expected, f'{source}: {version} != {expected}'
+          if os.environ.get('GITHUB_REF_TYPE') == 'tag':
+              assert os.environ['GITHUB_REF_NAME'] == f'v{expected}', f'Release tag must be v{expected}'
+          print(f'All desktop versions match: {expected}')
+          PY
