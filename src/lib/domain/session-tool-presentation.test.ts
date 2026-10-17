@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatChangeStats, formatTechnicalText, getDelegateTargetAgentId, getSessionToolPresentation, humanizeToolName } from './session-tool-presentation';
+import { formatChangeStats, formatTechnicalText, getDelegateTargetAgentId, getSessionToolName, getSessionToolPresentation, humanizeToolName } from './session-tool-presentation';
 import type { SessionToolCallItem } from './types';
 
 function tool(overrides: Partial<SessionToolCallItem> = {}): SessionToolCallItem {
@@ -60,6 +60,27 @@ describe('getSessionToolPresentation', () => {
         tool({ title: 'Read file', kind: 'read', arguments: '{"path":"src/app.ts","offset":140,"limit":75}' })
       )
     ).toMatchObject({ name: 'read', label: 'Read', preview: 'src/app.ts (lines 141-215)' });
+  });
+
+  it.each(['edit', 'multiedit', 'replace_symbol', 'write_file'])(
+    'preserves the concrete %s tool name under the ACP edit category',
+    (name) => {
+      expect(
+        getSessionToolPresentation(tool({ title: `Run ${name}`, kind: 'edit', arguments: '{"path":"src/app.ts"}' }))
+      ).toMatchObject({
+        name,
+        label: name === 'write_file' ? 'Write file' : name === 'replace_symbol' ? 'Replace symbol' : 'Edit file',
+        icon: 'edit'
+      });
+    }
+  );
+
+  it('keeps the edit category for descriptive ACP titles', () => {
+    const call = tool({ title: 'Updating configuration', kind: 'edit', arguments: '{"path":"src/app.ts"}' });
+    expect(getSessionToolName(call)).toBe('edit');
+    expect(getSessionToolPresentation(call)).toMatchObject({
+      name: 'edit', label: 'Edit file', preview: 'src/app.ts', icon: 'edit'
+    });
   });
 
   it('summarizes shell commands and search locations', () => {

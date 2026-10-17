@@ -1,4 +1,6 @@
 import { renderMarkdownToHtml } from '$lib/domain/markdown';
+import { asObjectArray, parseObject, replacementPair, toolFilePath } from '$lib/domain/session-tool-args';
+import { getSessionToolChangeStats, type SessionToolChangeStats } from '$lib/domain/session-tool-presentation';
 import { getTranscriptBlocks, mapTranscriptRole } from '$lib/domain/session-updates';
 import type {
   ActiveSessionViewModel,
@@ -359,6 +361,51 @@ function buildConversationDrafts(session: ActiveSessionViewModel): DraftTurn[] {
   });
 
   return turns.filter((turn) => turn.user || turn.content.length > 0);
+}
+
+/** Cumulative tool changes in this turn, not a net diff against the workspace. */
+export function getTurnChangeStats(turn: SessionConversationTurn): SessionToolChangeStats | null {
+  let added = 0;
+  let removed = 0;
+  for (const item of turn.content) {
+    if (item.type !== 'tool') continue;
+    const stats = getSessionToolChangeStats(item.tool);
+    if (!stats) continue;
+    added += stats.added;
+    removed += stats.removed;
+  }
+  return added > 0 || removed > 0 ? { added, removed } : null;
+}
+
+export function getTurnChangedFileCount(turn: SessionConversationTurn): number | null {
+  const paths = new Set<string>();
+  for (const item of turn.content) {
+    if (item.type !== 'tool') continue;
+    const stats = getSessionToolChangeStats(item.tool);
+    if (!stats || stats.added + stats.removed === 0) continue;
+    const receiptPaths = [...(item.tool.result ?? '').matchAll(/^P (.+)$/gm)].map((match) => match[1].trim());
+    if (receiptPaths.length > 0) {
+      for (const path of receiptPaths) paths.add(path);
+      continue;
+    }
+    const args = parseObject(item.tool.arguments);
+    if (!args) return null;
+    const parentPath = toolFilePath(args);
+    const edits = asObjectArray(args.edits) ?? asObjectArray(args.replacements);
+    if (edits) {
+      for (const edit of edits) {
+        const pair = replacementPair(edit);
+        if (!pair || pair.oldText === pair.newText) continue;
+        const path = toolFilePath(edit) || parentPath;
+        if (!path) return null;
+        paths.add(path);
+      }
+    } else {
+      if (!parentPath) return null;
+      paths.add(parentPath);
+    }
+  }
+  return paths.size;
 }
 
 export function formatTurnDuration(durationMs: number): string {

@@ -226,11 +226,13 @@
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     if (typeof ResizeObserver === 'function' && sessionPage) {
-      // The dock alignment is measured in pixels, so it must track shell layout
-      // changes that do not resize the window, like collapsing or expanding the
-      // sidebar panel.
+      // Observe the available shell column too: a panel can move the centered
+      // page without changing its max-width. ResizeObserver follows every frame
+      // of either sidebar's grid transition, keeping all fixed docks aligned.
       pageResizeObserver = new ResizeObserver(() => syncDockAlign());
       pageResizeObserver.observe(sessionPage);
+      const column = sessionPage.closest('.app-main-column');
+      if (column) pageResizeObserver.observe(column);
     }
 
     return () => {

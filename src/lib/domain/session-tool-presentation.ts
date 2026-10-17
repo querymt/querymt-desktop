@@ -61,22 +61,22 @@ export function getSessionToolPresentation(tool: SessionToolCallItem): SessionTo
     expandable: Boolean(argumentsText || resultText),
     argumentsText,
     resultText,
-    changeStats: toolChangeStats(name, tool.status, args, tool.result)
+    changeStats: getSessionToolChangeStats(tool)
   };
 }
 
 /**
  * Resolves the concrete tool name for a call. Live ACP updates carry the
- * semantic kind (`read`, `execute`) in `kind` and either the real tool name
- * or a human description in the title, so shell kinds win over descriptive
- * titles and read-kind calls keep the title-derived name only when it names
- * a concrete read tool, falling back to the semantic `read` kind otherwise.
+ * semantic category in `kind` and either the real tool name or a human
+ * description in the title. Shell kinds win over titles; read/edit kinds
+ * accept recognized concrete tool names and otherwise keep their category.
  */
 export function getSessionToolName(tool: SessionToolCallItem): string {
   const titleName = stripRunPrefix(tool.title).toLowerCase();
   const kindName = stripRunPrefix(tool.kind ?? '').toLowerCase();
   if (kindName === 'execute' || kindName === 'shell') return kindName;
   if (kindName === 'read' && !READ_TOOLS.has(titleName)) return kindName;
+  if (kindName === 'edit' && !EDIT_TOOLS.has(titleName)) return kindName;
   if (titleName) return titleName;
   return normalizeToolName(tool);
 }
@@ -111,9 +111,11 @@ export function formatTechnicalText(value: string | null | undefined): string | 
 }
 
 function normalizeToolName(tool: SessionToolCallItem): string {
-  const kind = tool.kind?.trim();
-  if (kind && kind !== 'other') return stripRunPrefix(kind).toLowerCase();
-  return stripRunPrefix(tool.title).toLowerCase();
+  const kind = stripRunPrefix(tool.kind ?? '').toLowerCase();
+  const title = stripRunPrefix(tool.title).toLowerCase();
+  if (kind === 'edit' && EDIT_TOOLS.has(title)) return title;
+  if (kind && kind !== 'other') return kind;
+  return title;
 }
 
 function stripRunPrefix(value: string): string {
@@ -194,14 +196,9 @@ function statusLabel(status: SessionToolCallItem['status']): string {
   return 'Pending';
 }
 
-function toolChangeStats(
-  name: string,
-  status: SessionToolCallItem['status'],
-  args: Record<string, unknown> | null,
-  rawResult: string | null | undefined
-): SessionToolChangeStats | null {
-  if (status !== 'completed' || !EDIT_TOOLS.has(name)) return null;
-  return statsFromEditReceipt(rawResult) ?? statsFromEditArgs(args);
+export function getSessionToolChangeStats(tool: SessionToolCallItem): SessionToolChangeStats | null {
+  if (tool.status !== 'completed' || !EDIT_TOOLS.has(getSessionToolName(tool))) return null;
+  return statsFromEditReceipt(tool.result) ?? statsFromEditArgs(parseObject(tool.arguments));
 }
 
 function statsFromEditReceipt(rawResult: string | null | undefined): SessionToolChangeStats | null {

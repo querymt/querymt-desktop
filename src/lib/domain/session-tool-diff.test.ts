@@ -1,6 +1,7 @@
 import { getSingularPatch } from '@pierre/diffs';
 import { describe, expect, it } from 'vitest';
-import { buildSessionToolDiffs } from './session-tool-diff';
+import { buildSessionToolDiffs, buildSessionTurnDiffs } from './session-tool-diff';
+import type { SessionConversationTurn } from './session-conversation';
 
 const MERMAID_OLD = [
   'let mermaidPromise: Promise<MermaidApi> | null = null;',
@@ -46,6 +47,58 @@ function hunkBodies(patch: string | undefined): string[][] {
   }
   return bodies;
 }
+
+describe('buildSessionTurnDiffs', () => {
+  it('groups repeated file changes without merging their independent patch baselines', () => {
+    const turn: SessionConversationTurn = {
+      id: 'turn', forkMessageId: null,
+      content: [
+        { type: 'tool', id: 'first', tool: {
+          id: 'first', title: 'Run edit', kind: 'edit', status: 'completed',
+          arguments: '{"path":"src/a.ts","oldString":"one","newString":"two"}'
+        } },
+        { type: 'tool', id: 'write', tool: {
+          id: 'write', title: 'Run write_file', kind: 'edit', status: 'completed',
+          arguments: '{"path":"src/b.ts","content":"+++literal\\n---literal\\n"}',
+          result: '{"path":"src/b.ts","bytes":22}'
+        } },
+        { type: 'tool', id: 'second', tool: {
+          id: 'second', title: 'Run edit', kind: 'edit', status: 'completed',
+          arguments: '{"path":"src/a.ts","oldString":"two","newString":"three\\nfour"}'
+        } },
+        { type: 'tool', id: 'failed', tool: {
+          id: 'failed', title: 'Run edit', kind: 'edit', status: 'failed',
+          arguments: '{"path":"src/failed.ts","oldString":"a","newString":"b"}'
+        } },
+        { type: 'tool', id: 'running', tool: {
+          id: 'running', title: 'Run write_file', kind: 'edit', status: 'in_progress',
+          arguments: '{"path":"src/pending.ts","content":"hello"}'
+        } }
+      ]
+    };
+    const files = buildSessionTurnDiffs(turn);
+    expect(files.map((file) => file.path)).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(files[0]).toMatchObject({ added: 3, removed: 2 });
+    expect(files[0].changes.map((change) => change.id)).toEqual(['first:src/a.ts', 'second:src/a.ts']);
+    expect(files[0].changes[0].patch).toContain('-one\n+two');
+    expect(files[0].changes[1].patch).toContain('-two\n+three\n+four');
+    expect(files[1]).toMatchObject({ added: 2, removed: 0 });
+    for (const file of files) {
+      for (const change of file.changes) expect(() => getSingularPatch(change.patch)).not.toThrow();
+    }
+  });
+
+  it('returns no previews when only receipts or unsupported calls are available', () => {
+    expect(buildSessionTurnDiffs({ id: 'turn', forkMessageId: null, content: [
+      { type: 'tool', id: 'receipt', tool: {
+        id: 'receipt', title: 'Run edit', kind: 'edit', status: 'completed', result: 'OK added=2 deleted=1'
+      } },
+      { type: 'tool', id: 'shell', tool: {
+        id: 'shell', title: 'Run shell', kind: 'execute', status: 'completed', arguments: '{"command":"git diff"}'
+      } }
+    ] })).toEqual([]);
+  });
+});
 
 describe('buildSessionToolDiffs', () => {
   it('builds a unified patch from edit input, including snake_case keys', () => {

@@ -3,18 +3,29 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActiveSessionViewModel } from '$lib/domain/types';
 import { calculateImageFit } from '$lib/components/session/SessionAttachmentPreview.svelte';
 import { createEmptyActiveSession } from '$lib/domain/session-updates';
 import ActiveSessionView from './ActiveSessionView.svelte';
+import * as turnDiffs from '$lib/domain/session-tool-diff';
 
 vi.mock('$app/state', () => ({
   page: { params: { agentId: 'agent-1' } }
 }));
 
+const loadSessionToolPatchDiff = vi.hoisted(() => vi.fn(async () => {
+  const { default: MockPatchDiff } = await import('../session/SessionToolPatchDiff.stub.svelte');
+  return { default: MockPatchDiff };
+}));
+vi.mock('../session/session-tool-patch-diff', () => ({
+  loadSessionToolPatchDiff,
+  preloadSessionToolPatchDiff: vi.fn()
+}));
+
 const appCss = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
 
+const animateDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'animate');
 let resizeCallback: ResizeObserverCallback | null = null;
 
 class ResizeObserverMock {
@@ -106,7 +117,454 @@ function sessionWithImages(): ActiveSessionViewModel {
 afterEach(() => {
   cleanup();
   resizeCallback = null;
+  loadSessionToolPatchDiff.mockClear();
   vi.unstubAllGlobals();
+  if (animateDescriptor) Object.defineProperty(Element.prototype, 'animate', animateDescriptor);
+  else Reflect.deleteProperty(Element.prototype, 'animate');
+});
+
+describe('ActiveSessionView turn diffs', () => {
+  beforeEach(() => {
+    Object.defineProperty(Element.prototype, 'animate', {
+      configurable: true,
+      value: vi.fn(() => {
+        const animation = {
+          cancel: vi.fn(),
+          currentTime: 0,
+          effect: null,
+          playState: 'finished',
+          set onfinish(callback: Animation['onfinish']) {
+            if (callback) queueMicrotask(() => callback.call(animation as unknown as Animation, new Event('finish') as AnimationPlaybackEvent));
+          }
+        };
+        return animation;
+      })
+    });
+  });
+
+  function diffSession(): ActiveSessionViewModel {
+    return {
+      ...createEmptyActiveSession(),
+      sessionId: 'diff-session',
+      runState: 'completed',
+      transcript: [
+        { id: 'u1', messageId: 'u1', kind: 'user_message_chunk', text: 'First changes', eventIndex: 0 },
+        { id: 'a1', messageId: 'a1', kind: 'agent_message_chunk', text: 'First done', eventIndex: 4 },
+        { id: 'u2', messageId: 'u2', kind: 'user_message_chunk', text: 'Second changes', eventIndex: 5 },
+        { id: 'a2', messageId: 'a2', kind: 'agent_message_chunk', text: 'Second done', eventIndex: 7 }
+      ],
+      toolCalls: [
+        {
+          id: 'edit-1', title: 'Run edit', kind: 'edit', status: 'completed', eventIndex: 1,
+          arguments: '{"path":"src/a.ts","oldString":"one","newString":"two"}',
+          result: 'OK added=1 deleted=1'
+        },
+        {
+          id: 'edit-2', title: 'Run edit', kind: 'edit', status: 'completed', eventIndex: 2,
+          arguments: '{"path":"src/a.ts","oldString":"two","newString":"three"}',
+          result: 'OK added=1 deleted=1'
+        },
+        {
+          id: 'write-1', title: 'Run write_file', kind: 'edit', status: 'completed', eventIndex: 3,
+          arguments: '{"path":"src/b.ts","content":"new file\\n"}',
+          result: '{"path":"src/b.ts","bytes":9}'
+        },
+        {
+          id: 'edit-3', title: 'Run edit', kind: 'edit', status: 'completed', eventIndex: 6,
+          arguments: '{"path":"src/c.ts","oldString":"before","newString":"after"}',
+          result: 'OK added=1 deleted=1'
+        }
+      ]
+    };
+  }
+
+  it('reserves diff space in the shell grid using the sidebar motion tokens, not local chat sizing', () => {
+    const grid = appCss.match(/\.app-grid \{([^}]+)\}/)?.[1] ?? '';
+    expect(grid).toContain('transition: grid-template-columns var(--app-panel-duration) var(--app-panel-easing)');
+    expect(appCss).toContain('grid-template-columns: var(--app-sidebar-expanded-width) minmax(0, 1fr) var(--app-diff-panel-space)');
+    expect(appCss).toContain('grid-template-columns: var(--app-sidebar-collapsed-width) minmax(0, 1fr) var(--app-diff-panel-space)');
+    expect(appCss).not.toContain('@property --app-diff-panel-space');
+    expect(appCss).not.toContain('@property --app-sidebar-space');
+    const panel = appCss.match(/\.session-turn-diff-panel \{([^}]+)\}/)?.[1] ?? '';
+    expect(panel).not.toContain('transform: translateX(calc(');
+    expect(appCss).toContain('.app-grid:has(.session-detail-diff-open)');
+    expect(appCss).toContain('width: var(--app-diff-panel-width)');
+    expect(appCss).not.toContain('.session-page-chat:has(.session-turn-diff-panel)');
+    const reduced = appCss.match(/@media \(prefers-reduced-motion: reduce\) \{\n  \.app-sidebar,([\s\S]*?)\n\}/)?.[1] ?? '';
+    expect(reduced).toContain('.app-grid');
+    expect(reduced).toContain('transition: none');
+  });
+
+  it('shares the chat maximum width and renders code edge-to-edge inside styled change sections', () => {
+    expect(appCss).toContain('--app-diff-panel-width: min(44vw, var(--session-chat-max))');
+    const panel = appCss.match(/\.session-turn-diff-panel \{([^}]+)\}/)?.[1] ?? '';
+    expect(panel).toContain('max-width: var(--session-chat-max)');
+    const body = appCss.match(/\.session-turn-diff-panel-body \{([^}]+)\}/)?.[1] ?? '';
+    expect(body).toContain('padding: 0;');
+    const file = appCss.match(/\.session-turn-diff-file \{([^}]+)\}/)?.[1] ?? '';
+    expect(file).toContain('margin: 0;');
+    expect(file).not.toContain('border-radius');
+    const diff = appCss.match(/\.session-turn-diff-panel \.session-tool-diff \{([^}]+)\}/)?.[1] ?? '';
+    expect(diff).toContain('--diffs-gap-block: 0px;');
+    expect(diff).toContain('--diffs-gap-inline: 0px;');
+    expect(diff).toContain('width: 100%;');
+    const changeHeader = appCss.match(/\.session-turn-diff-change-header \{([^}]+)\}/)?.[1] ?? '';
+    expect(changeHeader).toContain('background: var(--subtle-surface)');
+    expect(changeHeader).toContain('border-block: 1px solid var(--subtle-border)');
+  });
+
+  it('floats compact bottom controls outside the scroll area without a top header', async () => {
+    render(ActiveSessionView, { session: diffSession() });
+    await fireEvent.click(screen.getByRole('button', { name: 'Turn changes: 3 lines added, 2 lines deleted, 2 files changed' }));
+    const panel = screen.getByRole('complementary', { name: 'Turn diff' });
+    const close = within(panel).getByRole('button', { name: 'Close turn diff' });
+    const count = within(panel).getByText('2 files');
+    const controls = panel.querySelector('.session-turn-diff-panel-controls')!;
+    expect(panel.querySelector('header')).toBeNull();
+    expect(within(panel).queryByRole('heading', { name: 'Turn changes' })).toBeNull();
+    expect(panel.firstElementChild).toHaveClass('session-turn-diff-panel-body');
+    expect(panel.lastElementChild).toBe(controls);
+    expect(controls).toContainElement(close);
+    expect(controls).toContainElement(count);
+    expect(close).toHaveClass('session-turn-diff-close');
+    expect(count).toHaveClass('session-turn-diff-file-count');
+    expect(count.children).toHaveLength(0);
+    expect(count).not.toHaveAttribute('title');
+    expect(panel.querySelector('.session-turn-diff-panel-body')).not.toContainElement(close);
+
+    const controlsRule = appCss.match(/\.session-turn-diff-panel-controls \{([^}]+)\}/)?.[1] ?? '';
+    expect(controlsRule).toContain('position: absolute');
+    expect(controlsRule).toContain('bottom: max(0.75rem, env(safe-area-inset-bottom))');
+    expect(controlsRule).toContain('pointer-events: none');
+    expect(appCss).toMatch(/\.session-turn-diff-close,\s*\.session-turn-diff-file-count\s*\{[^}]*border-radius: 999px/);
+    expect(appCss).toMatch(/\.session-turn-diff-panel-body::after\s*\{[^}]*height:/);
+    expect(appCss).not.toContain('.session-turn-diff-panel-header');
+  });
+
+  it('sticks the full file header to the panel scrollport within each file', () => {
+    const header = appCss.match(/\.session-turn-diff-file-header \{([^}]+)\}/)?.[1] ?? '';
+    expect(header).toContain('position: sticky;');
+    expect(header).toContain('top: 0;');
+    expect(header).toContain('z-index: 1;');
+    expect(header).toContain('background: var(--bg-surface);');
+    const file = appCss.match(/\.session-turn-diff-file \{([^}]+)\}/)?.[1] ?? '';
+    // A nested overflow container would prevent the header from following the panel scrollport.
+    expect(file).not.toMatch(/overflow:\s*(hidden|auto|scroll)/);
+  });
+
+  it('keeps floating controls dark with bright labels and shadow-only separation', () => {
+    const controls = appCss.match(/\.session-turn-diff-close,\s*\.session-turn-diff-file-count\s*\{([^}]+)\}/)?.[1] ?? '';
+    expect(controls).toContain('background: #30343a;');
+    expect(controls).toContain('color: #f5f5f5;');
+    expect(controls).toContain('border: 0;');
+    expect(controls).toContain('box-shadow: 0 3px 8px rgb(0 0 0 / 55%), 0 8px 24px rgb(0 0 0 / 35%);');
+    expect(controls).not.toContain('outline:');
+    expect(controls).not.toContain('background: var(--text)');
+    const hover = appCss.match(/\.session-turn-diff-close:hover \{([^}]+)\}/)?.[1] ?? '';
+    expect(hover).toContain('background: #41464e;');
+    expect(hover).not.toContain('color:');
+  });
+
+  it('observes the shell column so fixed composer, activity, and scroll docks follow centered-page movement', () => {
+    const page = readFileSync(resolve(process.cwd(), 'src/routes/sessions/[agentId]/[sessionId]/+page.svelte'), 'utf8');
+    expect(page).toContain("const column = sessionPage.closest('.app-main-column')");
+    expect(page).toContain('pageResizeObserver.observe(column)');
+    expect(page).toContain('pageResizeObserver.observe(sessionPage)');
+    expect(page).toContain('dockAlignLeft={dockAlignLeft}');
+    expect(page).toContain('alignLeft={dockAlignLeft}');
+  });
+
+  it('opens from the pill without a native tooltip and closes from the same pill, close button, or Escape', async () => {
+    render(ActiveSessionView, { session: diffSession() });
+    const pill = screen.getByRole('button', { name: 'Turn changes: 3 lines added, 2 lines deleted, 2 files changed' });
+    expect(pill).not.toHaveAttribute('title');
+    expect(pill).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('complementary', { name: 'Turn diff' })).toBeNull();
+    expect(loadSessionToolPatchDiff).not.toHaveBeenCalled();
+
+    await fireEvent.click(pill);
+    const panel = screen.getByRole('complementary', { name: 'Turn diff' });
+    expect(pill).toHaveAttribute('aria-expanded', 'true');
+    expect(pill).toHaveAttribute('aria-controls', panel.id);
+    expect(screen.getByRole('button', { name: 'Close turn diff' })).toHaveFocus();
+    expect(await within(panel).findAllByTestId('session-tool-diff')).toHaveLength(3);
+
+    await fireEvent.click(pill);
+    expect(screen.queryByRole('complementary', { name: 'Turn diff' })).toBeNull();
+    expect(pill).toHaveAttribute('aria-expanded', 'false');
+    expect(pill).toHaveFocus();
+
+    await fireEvent.click(pill);
+    await fireEvent.click(screen.getByRole('button', { name: 'Close turn diff' }));
+    expect(screen.queryByRole('complementary', { name: 'Turn diff' })).toBeNull();
+    expect(pill).toHaveFocus();
+
+    await fireEvent.click(pill);
+    await fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('complementary', { name: 'Turn diff' })).toBeNull();
+    expect(pill).toHaveFocus();
+  });
+
+  it('groups repeated changes under custom collapsible headers and hides Pierre headers', async () => {
+    render(ActiveSessionView, { session: diffSession() });
+    await fireEvent.click(screen.getByRole('button', { name: 'Turn changes: 3 lines added, 2 lines deleted, 2 files changed' }));
+    const panel = screen.getByRole('complementary', { name: 'Turn diff' });
+    const fileHeader = await within(panel).findByRole('button', { name: 'Collapse src/a.ts' });
+    expect(within(panel).getByText('2 files')).toBeInTheDocument();
+    expect(fileHeader).toHaveAttribute('aria-expanded', 'true');
+    expect(await within(panel).findAllByTestId('session-tool-diff')).toHaveLength(3);
+    for (const diff of within(panel).getAllByTestId('session-tool-diff')) {
+      expect(diff).toHaveAttribute('data-hide-file-header', 'true');
+      expect(diff).toHaveAttribute('data-virtualized', 'true');
+    }
+    const firstChange = within(panel).getByRole('region', { name: 'Change 1 of 2 in src/a.ts' });
+    const secondChange = within(panel).getByRole('region', { name: 'Change 2 of 2 in src/a.ts' });
+    for (const [index, change] of [firstChange, secondChange].entries()) {
+      expect(change).toHaveClass('session-turn-diff-change');
+      expect(within(change).getByRole('heading', { name: `Change ${index + 1} of 2` })).toHaveClass('session-turn-diff-change-header');
+      expect(within(change).getByTestId('session-tool-diff')).toBeInTheDocument();
+    }
+    expect(within(panel).queryByRole('heading', { name: 'Change 1 of 1' })).toBeNull();
+
+    await fireEvent.click(fileHeader);
+    expect(fileHeader).toHaveAttribute('aria-expanded', 'false');
+    expect(within(panel).getByRole('button', { name: 'Expand src/a.ts' })).toBe(fileHeader);
+    expect(within(panel).getAllByTestId('session-tool-diff')).toHaveLength(1);
+    await fireEvent.click(fileHeader);
+    expect(within(panel).getAllByTestId('session-tool-diff')).toHaveLength(3);
+  });
+
+  it('switches the single panel between turns and clears it on a session change', async () => {
+    const { rerender } = render(ActiveSessionView, { session: diffSession() });
+    const first = screen.getByRole('button', { name: 'Turn changes: 3 lines added, 2 lines deleted, 2 files changed' });
+    const second = screen.getByRole('button', { name: 'Turn changes: 1 line added, 1 line deleted, 1 file changed' });
+    await fireEvent.click(first);
+    await screen.findByRole('button', { name: 'Collapse src/a.ts' });
+    const panel = screen.getByRole('complementary', { name: 'Turn diff' });
+    await fireEvent.click(second);
+    expect(screen.getAllByRole('complementary', { name: 'Turn diff' })).toHaveLength(1);
+    expect(screen.getByRole('complementary', { name: 'Turn diff' })).toBe(panel);
+    expect(first).toHaveAttribute('aria-expanded', 'false');
+    expect(second).toHaveAttribute('aria-expanded', 'true');
+    expect(await screen.findByRole('button', { name: 'Collapse src/c.ts' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Collapse src/a.ts' })).toBeNull();
+    expect(within(panel).getByText('1 file')).toHaveClass('session-turn-diff-file-count');
+
+    await rerender({ session: { ...diffSession(), sessionId: 'other-session' } });
+    expect(screen.queryByRole('complementary', { name: 'Turn diff' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Turn changes: 1 line added, 1 line deleted, 1 file changed' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('keeps an open panel updated as more changes arrive in its turn', async () => {
+    const session = diffSession();
+    const { rerender } = render(ActiveSessionView, { session });
+    await fireEvent.click(screen.getByRole('button', { name: 'Turn changes: 1 line added, 1 line deleted, 1 file changed' }));
+    await screen.findByRole('button', { name: 'Collapse src/c.ts' });
+    await rerender({ session: {
+      ...session,
+      toolCalls: [...session.toolCalls, {
+        id: 'new-edit', title: 'Run edit', kind: 'edit', status: 'completed', eventIndex: 8,
+        arguments: '{"path":"src/d.ts","oldString":"x","newString":"y"}',
+        result: 'OK added=1 deleted=1'
+      }]
+    } });
+    expect(await screen.findByRole('button', { name: 'Collapse src/d.ts' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Turn changes: 2 lines added, 2 lines deleted, 2 files changed' })).toHaveAttribute('aria-expanded', 'true');
+    expect(within(screen.getByRole('complementary', { name: 'Turn diff' })).getByText('2 files')).toHaveClass('session-turn-diff-file-count');
+  });
+
+  it('shows an explicit empty state when only change receipts are available', async () => {
+    const session = diffSession();
+    session.toolCalls = session.toolCalls.map((tool) => ({ ...tool, arguments: undefined }));
+    render(ActiveSessionView, { session });
+    await fireEvent.click(screen.getByRole('button', { name: 'Turn changes: 1 line added, 1 line deleted' }));
+    expect(await screen.findByText(/Diff preview unavailable\./)).toBeInTheDocument();
+  });
+
+  it.each(['pointer', 'keyboard'])('pre-renders the hovered turn on %s intent and reveals the same DOM without a preparing frame', async (intent) => {
+    const { container } = render(ActiveSessionView, { session: diffSession() });
+    const pill = screen.getByRole('button', { name: 'Turn changes: 3 lines added, 2 lines deleted, 2 files changed' });
+    if (intent === 'pointer') await fireEvent.pointerEnter(pill);
+    else pill.focus();
+    const diffs = await screen.findAllByTestId('session-tool-diff');
+    expect(diffs).toHaveLength(3);
+    const preparedPanel = container.querySelector('.session-turn-diff-panel')!;
+    expect(preparedPanel).toHaveClass('session-turn-diff-panel-preloading');
+    expect(preparedPanel).toHaveAttribute('aria-hidden', 'true');
+    expect(preparedPanel).toHaveProperty('inert', true);
+    expect(screen.queryByRole('complementary', { name: 'Turn diff' })).toBeNull();
+    expect(container.querySelector('.session-detail-shell')).not.toHaveClass('session-detail-diff-open');
+    expect(pill).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'Close turn diff' })).toBeNull();
+    if (intent === 'keyboard') expect(pill).toHaveFocus();
+    else expect(pill).not.toHaveFocus();
+
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+    await fireEvent(window, escape);
+    expect(escape.defaultPrevented).toBe(false);
+    await fireEvent.click(pill);
+    const panel = screen.getByRole('complementary', { name: 'Turn diff' });
+    expect(panel).toBe(preparedPanel);
+    expect(within(panel).getAllByTestId('session-tool-diff')).toEqual(diffs);
+    expect(panel).not.toHaveTextContent('Preparing diff preview...');
+    expect(within(panel).queryByRole('status')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Close turn diff' })).toHaveFocus();
+  });
+
+  it('keeps only the latest hovered turn warm and never replaces a panel that is open', async () => {
+    const { container } = render(ActiveSessionView, { session: diffSession() });
+    const first = screen.getByRole('button', { name: 'Turn changes: 3 lines added, 2 lines deleted, 2 files changed' });
+    const second = screen.getByRole('button', { name: 'Turn changes: 1 line added, 1 line deleted, 1 file changed' });
+    await fireEvent.pointerEnter(first);
+    await screen.findAllByTestId('session-tool-diff');
+    await fireEvent.pointerEnter(second);
+    await tick();
+    expect(container.querySelectorAll('.session-turn-diff-panel')).toHaveLength(1);
+    const prepared = container.querySelector('.session-turn-diff-panel')!;
+    expect(prepared).toHaveTextContent('src/c.ts');
+    expect(prepared).not.toHaveTextContent('src/a.ts');
+    await fireEvent.click(second);
+    await fireEvent.pointerEnter(first);
+    expect(screen.getByRole('complementary', { name: 'Turn diff' })).toHaveTextContent('src/c.ts');
+    expect(container.querySelectorAll('.session-turn-diff-panel')).toHaveLength(1);
+  });
+
+  it('invalidates warmed content when the session or tool arguments change', async () => {
+    const session = diffSession();
+    const { container, rerender } = render(ActiveSessionView, { session });
+    await fireEvent.pointerEnter(screen.getByRole('button', { name: 'Turn changes: 1 line added, 1 line deleted, 1 file changed' }));
+    await screen.findAllByTestId('session-tool-diff');
+    await rerender({ session: {
+      ...session,
+      toolCalls: session.toolCalls.map((tool) => tool.id === 'edit-3'
+        ? { ...tool, arguments: '{"path":"src/c.ts","oldString":"before","newString":"updated"}' } : tool)
+    } });
+    expect(screen.getByTestId('session-tool-diff')).toHaveTextContent('+updated');
+    expect(screen.queryByRole('complementary', { name: 'Turn diff' })).toBeNull();
+    await rerender({ session: { ...session, sessionId: 'other-session' } });
+    expect(container.querySelector('.session-turn-diff-panel')).toBeNull();
+  });
+
+  it('reuses the warm preview on reopening, including scroll and collapsed-file state', async () => {
+    const { container } = render(ActiveSessionView, { session: diffSession() });
+    const pill = screen.getByRole('button', { name: 'Turn changes: 3 lines added, 2 lines deleted, 2 files changed' });
+    await fireEvent.pointerEnter(pill);
+    await screen.findAllByTestId('session-tool-diff');
+    await fireEvent.click(pill);
+    const panel = screen.getByRole('complementary', { name: 'Turn diff' });
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Collapse src/a.ts' }));
+    const body = panel.querySelector('.session-turn-diff-panel-body')!;
+    body.scrollTop = 150;
+    await fireEvent.click(pill);
+    expect(screen.queryByRole('complementary', { name: 'Turn diff' })).toBeNull();
+    expect(container.querySelector('.session-turn-diff-panel')).toBe(panel);
+    await fireEvent.click(pill);
+    expect(screen.getByRole('complementary', { name: 'Turn diff' })).toBe(panel);
+    expect(within(panel).getByRole('button', { name: 'Expand src/a.ts' })).toHaveAttribute('aria-expanded', 'false');
+    expect(body.scrollTop).toBe(150);
+  });
+
+  it('keeps speculative failures hidden and retries when opening', async () => {
+    loadSessionToolPatchDiff.mockRejectedValueOnce(new Error('speculative failure'));
+    const { container } = render(ActiveSessionView, { session: diffSession() });
+    const pill = screen.getByRole('button', { name: 'Turn changes: 3 lines added, 2 lines deleted, 2 files changed' });
+    await fireEvent.pointerEnter(pill);
+    await tick();
+    expect(container.querySelector('.session-turn-diff-panel')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.queryByRole('alert')).toBeNull();
+    await fireEvent.click(pill);
+    expect(await screen.findAllByTestId('session-tool-diff')).toHaveLength(3);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('does not build patches or load the renderer on a cold click until the slide finishes and the layout can paint', async () => {
+    const buildDiffs = vi.spyOn(turnDiffs, 'buildSessionTurnDiffs');
+    let finishOpening!: () => void;
+    Object.defineProperty(Element.prototype, 'animate', {
+      configurable: true,
+      value: vi.fn(() => ({
+        cancel: vi.fn(), currentTime: 0, effect: null, playState: 'running',
+        set onfinish(callback: () => void) { finishOpening = callback; }
+      }))
+    });
+    try {
+      render(ActiveSessionView, { session: diffSession() });
+      await fireEvent.click(screen.getByRole('button', { name: 'Turn changes: 3 lines added, 2 lines deleted, 2 files changed' }));
+      const panel = screen.getByRole('complementary', { name: 'Turn diff' });
+      expect(panel).toHaveTextContent('Preparing diff preview...');
+      expect(buildDiffs).not.toHaveBeenCalled();
+      expect(loadSessionToolPatchDiff).not.toHaveBeenCalled();
+      finishOpening();
+      expect(buildDiffs).not.toHaveBeenCalled();
+      expect(await within(panel).findAllByTestId('session-tool-diff')).toHaveLength(3);
+      expect(buildDiffs).toHaveBeenCalledTimes(1);
+      expect(loadSessionToolPatchDiff).toHaveBeenCalledTimes(1);
+    } finally {
+      buildDiffs.mockRestore();
+    }
+  });
+
+  it('keeps an early-closed preview hidden while warming it for a later opening', async () => {
+    Object.defineProperty(Element.prototype, 'animate', {
+      configurable: true,
+      value: vi.fn(() => ({ cancel: vi.fn(), currentTime: 0, effect: null, playState: 'running' }))
+    });
+    render(ActiveSessionView, { session: diffSession() });
+    const pill = screen.getByRole('button', { name: 'Turn changes: 3 lines added, 2 lines deleted, 2 files changed' });
+    await fireEvent.click(pill);
+    await fireEvent.click(screen.getByRole('button', { name: 'Close turn diff' }));
+    expect(pill).toHaveFocus();
+    expect(pill).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('complementary', { name: 'Turn diff' })).toBeNull();
+    expect(await screen.findAllByTestId('session-tool-diff')).toHaveLength(3);
+  });
+
+  it('shows file headers and skeletons while the renderer loads, without hiding the close controls', async () => {
+    let finishLoad!: (module: Awaited<ReturnType<typeof loadSessionToolPatchDiff>>) => void;
+    loadSessionToolPatchDiff.mockReturnValueOnce(new Promise((resolve) => { finishLoad = resolve; }));
+    render(ActiveSessionView, { session: diffSession() });
+    await fireEvent.click(screen.getByRole('button', { name: 'Turn changes: 3 lines added, 2 lines deleted, 2 files changed' }));
+    const panel = screen.getByRole('complementary', { name: 'Turn diff' });
+    expect(await within(panel).findByRole('button', { name: 'Collapse src/a.ts' })).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Collapse src/b.ts' })).toBeInTheDocument();
+    expect(within(panel).getAllByRole('status', { name: /Loading diff for/ })).toHaveLength(2);
+    expect(panel.querySelectorAll('.session-turn-diff-loading-line')).toHaveLength(8);
+    expect(panel.querySelector('.session-turn-diff-panel-body')).toHaveAttribute('aria-busy', 'true');
+    expect(within(panel).getByRole('button', { name: 'Close turn diff' })).toBeEnabled();
+    expect(within(panel).queryByTestId('session-tool-diff')).toBeNull();
+
+    const { default: MockPatchDiff } = await import('../session/SessionToolPatchDiff.stub.svelte');
+    finishLoad({ default: MockPatchDiff });
+    expect(await within(panel).findAllByTestId('session-tool-diff')).toHaveLength(3);
+    expect(within(panel).queryByRole('status')).toBeNull();
+    expect(panel.querySelector('.session-turn-diff-panel-body')).toHaveAttribute('aria-busy', 'false');
+  });
+
+  it('can close while loading and ignores a late renderer failure', async () => {
+    let failLoad!: (error: Error) => void;
+    loadSessionToolPatchDiff.mockReturnValueOnce(new Promise((_resolve, reject) => { failLoad = reject; }));
+    render(ActiveSessionView, { session: diffSession() });
+    const pill = screen.getByRole('button', { name: 'Turn changes: 3 lines added, 2 lines deleted, 2 files changed' });
+    await fireEvent.click(pill);
+    await screen.findByRole('button', { name: 'Collapse src/a.ts' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Close turn diff' }));
+    failLoad(new Error('late failure'));
+    await tick();
+    expect(screen.queryByRole('complementary', { name: 'Turn diff' })).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(pill).toHaveFocus();
+  });
+
+  it('reports a failed lazy load and retries when the panel reopens', async () => {
+    loadSessionToolPatchDiff.mockRejectedValueOnce(new Error('module unavailable'));
+    render(ActiveSessionView, { session: diffSession() });
+    const pill = screen.getByRole('button', { name: 'Turn changes: 1 line added, 1 line deleted, 1 file changed' });
+    await fireEvent.click(pill);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load diff preview.');
+    await fireEvent.click(pill);
+    await fireEvent.click(pill);
+    expect(await screen.findByRole('button', { name: 'Collapse src/c.ts' })).toBeInTheDocument();
+  });
 });
 
 describe('calculateImageFit', () => {

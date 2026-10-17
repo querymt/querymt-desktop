@@ -93,6 +93,9 @@
   --app-shell-inset: 1rem;
   --app-sidebar-expanded-width: 252px;
   --app-sidebar-collapsed-width: 48px;
+  --app-panel-duration: 180ms;
+  --app-panel-easing: cubic-bezier(0.22, 1, 0.36, 1);
+  --app-diff-panel-width: min(44vw, var(--session-chat-max));
   --app-sticky-top: var(--app-shell-inset);
   --session-composer-bottom-offset: 0.75rem;
   --session-composer-expanded-clearance: 13rem;
@@ -215,16 +218,22 @@ select {
 }
 
 .app-grid {
+  --app-diff-panel-space: 0px;
   align-items: start;
   min-height: calc(100dvh - 2rem);
+  transition: grid-template-columns var(--app-panel-duration) var(--app-panel-easing);
+}
+
+.app-grid:has(.session-detail-diff-open) {
+  --app-diff-panel-space: var(--app-diff-panel-width);
 }
 
 .app-grid-sidebar-expanded {
-  grid-template-columns: var(--app-sidebar-expanded-width) minmax(0, 1fr);
+  grid-template-columns: var(--app-sidebar-expanded-width) minmax(0, 1fr) var(--app-diff-panel-space);
 }
 
 .app-grid-sidebar-collapsed {
-  grid-template-columns: var(--app-sidebar-collapsed-width) minmax(0, 1fr);
+  grid-template-columns: var(--app-sidebar-collapsed-width) minmax(0, 1fr) var(--app-diff-panel-space);
 }
 
 .app-sidebar-spacer {
@@ -7100,11 +7109,285 @@ summary:focus-visible {
   min-height: 1.9rem;
 }
 
-.session-turn-duration {
+.session-turn-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
   margin-inline-start: auto;
+}
+
+.session-turn-duration {
   font-size: 0.72rem;
   color: var(--muted);
   white-space: nowrap;
+}
+
+.session-turn-diff-pill {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.28rem 0.5rem;
+  background: var(--icon-surface);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.session-turn-diff-pill > svg {
+  flex-shrink: 0;
+}
+
+.session-turn-diff-pill-files {
+  margin-inline-end: 0.15rem;
+  color: var(--text-muted);
+}
+
+.session-turn-diff-pill:hover,
+.session-turn-diff-pill[aria-expanded='true'] {
+  background: var(--row-surface-hover);
+}
+
+.session-turn-diff-pill-arrow {
+  transform: rotate(0deg);
+  transition: transform 0.16s ease, color 0.16s ease;
+}
+
+.session-turn-diff-pill[aria-expanded='true'] .session-turn-diff-pill-arrow {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-turn-diff-pill-arrow {
+    transition: none;
+  }
+}
+
+.session-turn-diff-pill:focus-visible,
+.session-turn-diff-close:focus-visible,
+.session-turn-diff-file-header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.session-turn-diff-panel {
+  position: fixed;
+  inset: 0 0 0 auto;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: var(--app-diff-panel-width);
+  max-width: var(--session-chat-max);
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-panel-strong);
+  box-shadow: -12px 0 32px rgb(0 0 0 / 8%);
+}
+
+.session-turn-diff-panel-preloading {
+  /* Preserve the scrollport geometry so Pierre can render rows before opening. */
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.app-shell-custom-titlebar .session-turn-diff-panel {
+  inset: calc(12px + 2.5rem) 12px 12px auto;
+  border-bottom-right-radius: 20px;
+}
+
+.app-shell-custom-titlebar.app-shell-maximized .session-turn-diff-panel {
+  inset: 2.5rem 0 0 auto;
+  border-radius: 0;
+}
+
+.session-turn-diff-panel-controls {
+  position: absolute;
+  inset-inline: 0.75rem;
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  pointer-events: none;
+}
+
+.session-turn-diff-close,
+.session-turn-diff-file-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2rem;
+  border: 0;
+  border-radius: 999px;
+  background: #30343a;
+  color: #f5f5f5;
+  box-shadow: 0 3px 8px rgb(0 0 0 / 55%), 0 8px 24px rgb(0 0 0 / 35%);
+}
+
+.session-turn-diff-close {
+  width: 2rem;
+  flex: 0 0 auto;
+  padding: 0;
+  pointer-events: auto;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.session-turn-diff-close:hover {
+  background: #41464e;
+}
+
+.session-turn-diff-file-count {
+  min-width: 4.5rem;
+  padding-inline: 0.85rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.session-turn-diff-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0;
+}
+
+.session-turn-diff-panel-body::after {
+  content: '';
+  display: block;
+  height: calc(3.5rem + env(safe-area-inset-bottom));
+}
+
+.session-turn-diff-file {
+  margin: 0;
+  background: var(--bg-card);
+}
+
+.session-turn-diff-file + .session-turn-diff-file {
+  border-top: 1px solid var(--border);
+}
+
+.session-turn-diff-file-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.45rem;
+  border: 0;
+  padding: 0.7rem;
+  background: var(--bg-surface);
+  color: var(--text-dim);
+  box-shadow: 0 1px 0 var(--border);
+  text-align: start;
+  cursor: pointer;
+}
+
+.session-turn-diff-file-header > svg {
+  flex-shrink: 0;
+}
+
+.session-turn-diff-file-header[aria-expanded='true'] .session-turn-diff-file-chevron {
+  transform: rotate(90deg);
+}
+
+.session-turn-diff-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.session-turn-diff-panel .session-tool-diff {
+  --diffs-gap-block: 0px;
+  --diffs-gap-inline: 0px;
+  width: 100%;
+  max-height: none;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.session-turn-diff-change + .session-turn-diff-change {
+  border-top: 1px solid var(--border);
+}
+
+.session-turn-diff-change-header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  border-block: 1px solid var(--subtle-border);
+  padding: 0.5rem 0.75rem;
+  background: var(--subtle-surface);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 500;
+  letter-spacing: 0.015em;
+  line-height: 1.5;
+}
+
+.session-turn-diff-change-header > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.session-turn-diff-loading {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem;
+}
+
+.session-turn-diff-loading .session-turn-diff-empty {
+  padding: 0;
+}
+
+.session-turn-diff-loading-line {
+  height: 0.6rem;
+  width: 85%;
+  border-radius: 3px;
+  background: var(--icon-surface);
+}
+
+.session-turn-diff-loading-line:nth-child(odd) {
+  width: 60%;
+}
+
+.session-turn-diff-empty {
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.6;
+}
+
+.session-turn-diff-panel .session-tool-diff-error {
+  padding: 0.75rem;
+}
+
+@media (max-width: 760px) {
+  :root {
+    --app-diff-panel-width: calc(100vw - 2rem);
+  }
 }
 
 .session-assistant-message-shell .session-assistant-message-actions .session-message-action-btn {
@@ -8240,7 +8523,7 @@ summary:focus-visible {
   box-shadow: var(--shadow-sm);
   backdrop-filter: var(--surface-blur);
   -webkit-backdrop-filter: var(--surface-blur);
-  transition: width 180ms cubic-bezier(0.22, 1, 0.36, 1), transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: width var(--app-panel-duration) var(--app-panel-easing), transform var(--app-panel-duration) var(--app-panel-easing);
 }
 
 .app-sidebar-collapsed {
@@ -8886,6 +9169,7 @@ summary:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   .app-sidebar,
+  .app-grid,
   .app-icon-link,
   .session-icon-link,
   .app-nav-icon-surface,
