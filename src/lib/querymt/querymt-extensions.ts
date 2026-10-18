@@ -1,4 +1,4 @@
-import type { ModelEntry, ModelInfo } from '$lib/domain/types';
+import type { ModelEntry, ModelInfo, SessionLifecycle, SessionLifecyclePatch } from '$lib/domain/types';
 import type {
   AuthMethod,
   AuthProviderStatus,
@@ -126,6 +126,8 @@ export const QMT_METHOD_SESSION_STEER = 'querymt/session/steer';
 export const QMT_METHOD_SESSION_QUEUE = 'querymt/session/queue';
 export const QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT = 'querymt/session/discardQueuedInput';
 export const QMT_METHOD_SESSION_RUNTIME_STATE = 'querymt/session/runtimeState';
+export const QMT_METHOD_SESSION_GET_LIFECYCLE = 'querymt/session/getLifecycle';
+export const QMT_METHOD_SESSION_SET_LIFECYCLE = 'querymt/session/setLifecycle';
 export const QMT_NOTIFICATION_SESSION_INPUT_STATE = 'querymt/session/inputState';
 
 export interface QuerymtProfileInfo {
@@ -425,6 +427,14 @@ export class QuerymtExtensions {
       params as Record<string, unknown>
     );
     return response as T;
+  }
+
+  async getSessionLifecycle(session_id: string): Promise<SessionLifecycle> {
+    return this.call<SessionLifecycle>(QMT_METHOD_SESSION_GET_LIFECYCLE, { session_id });
+  }
+
+  async setSessionLifecycle(session_id: string, patch: SessionLifecyclePatch): Promise<SessionLifecycle> {
+    return this.call<SessionLifecycle>(QMT_METHOD_SESSION_SET_LIFECYCLE, { session_id, ...patch });
   }
 
   async capabilities(): Promise<CapabilitiesInfo> {

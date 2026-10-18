@@ -1,3 +1,4 @@
+// TODO: Remove the round identicon implementation only after explicit approval.
 export interface RoundIdenticonOptions {
   width?: number;
   size?: number;

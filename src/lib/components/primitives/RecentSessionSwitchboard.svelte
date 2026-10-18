@@ -1,7 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { Ellipsis, Search } from '@lucide/svelte';
-  import { createRoundIdenticon } from '$lib/vendor/round-identicon';
+  import Identicon from '$lib/components/primitives/Identicon.svelte';
   import { formatSessionTimestamp, getSessionWorkspaceName } from '$lib/domain/sessions';
   import type { DesktopSessionSummary } from '$lib/domain/types';
 
@@ -106,7 +106,7 @@
 
     <div class="recent-session-switcher-row">
       {#each visibleSessions as session, index}
-        {@const identicon = createRoundIdenticon(session.sessionId)}
+
         <button
           class={`recent-session-chip ${isActive(session) ? 'recent-session-chip-active' : ''}`}
           type="button"
@@ -114,14 +114,7 @@
           onclick={() => void openSession(session)}
         >
           <span class="recent-session-chip-identicon" aria-hidden="true">
-            <svg width={identicon.width} height={identicon.width} viewBox={`0 0 ${identicon.width} ${identicon.width}`} preserveAspectRatio="xMinYMin">
-              <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill={identicon.color} />
-              <g fill="none" stroke={identicon.color} stroke-linecap="round" stroke-linejoin="round">
-                {#each identicon.arcs as arc}
-                  <path d={arc.d} stroke-width={arc.strokeWidth} />
-                {/each}
-              </g>
-            </svg>
+            <Identicon seed={session.sessionId} />
           </span>
           <span class="recent-session-chip-main">
             <span class="recent-session-chip-title">{session.title}</span>
@@ -181,17 +174,10 @@
           {#if filteredHiddenSessions.length > 0}
             <div class="model-picker-list">
               {#each filteredHiddenSessions as session, index}
-                {@const identicon = createRoundIdenticon(session.sessionId)}
+
                 <button class="model-picker-row recent-session-modal-row" type="button" onclick={() => void openSession(session)}>
                   <span class="recent-session-chip-identicon" aria-hidden="true">
-                    <svg width={identicon.width} height={identicon.width} viewBox={`0 0 ${identicon.width} ${identicon.width}`} preserveAspectRatio="xMinYMin">
-                      <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill={identicon.color} />
-                      <g fill="none" stroke={identicon.color} stroke-linecap="round" stroke-linejoin="round">
-                        {#each identicon.arcs as arc}
-                          <path d={arc.d} stroke-width={arc.strokeWidth} />
-                        {/each}
-                      </g>
-                    </svg>
+                    <Identicon seed={session.sessionId} />
                   </span>
                   <div class="min-w-0 flex-1">
                     <div class="truncate text-sm font-medium">{session.title}</div>

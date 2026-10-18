@@ -39,6 +39,14 @@
   const agentId = $derived(decodeURIComponent(page.params.agentId ?? ''));
   const sessionId = $derived(decodeURIComponent(page.params.sessionId ?? ''));
   const selectedSession = $derived(getSessionById(agentsStore.sessionsByAgent[agentId] ?? [], sessionId, agentId));
+  const lifecycleReadSessionId = $derived(selectedSession?.sessionId);
+  $effect(() => {
+    const owner = agentId;
+    const id = lifecycleReadSessionId;
+    if (owner && id && agentsStore.canSetSessionLifecycle(owner)) {
+      untrack(() => { void agentsStore.refreshSessionLifecycle(owner, id); });
+    }
+  });
   const sessionProfileId = $derived(getCurrentProfileId(agentsStore.activeSession.configOptions) ?? null);
   const waitingInputs = $derived(
     agentsStore.activePendingInputs.filter(
@@ -476,7 +484,7 @@
   }
 
   async function refreshSession() {
-    await agentsStore.refreshSessionsForAgent(agentId);
+    await Promise.all([agentsStore.refreshSessionsForAgent(agentId), agentsStore.refreshSessionLifecycle(agentId, sessionId)]);
     lastRequestedSessionKey = null;
     await loadCurrentSession(agentId, sessionId);
   }
@@ -524,6 +532,11 @@
 >
   <SessionHeader
     session={agentsStore.activeSession}
+    summary={selectedSession ?? null}
+    canManageLifecycle={agentsStore.canSetSessionLifecycle(agentId) && selectedSession?.remoteConnectionState !== 'disconnected'}
+    lifecyclePending={agentsStore.sessionLifecyclePending[`${agentId}:${sessionId}`]}
+    lifecycleError={agentsStore.sessionLifecycleErrors[`${agentId}:${sessionId}`]}
+    onSetLifecycle={(patch) => agentsStore.setSessionLifecycle(agentId, sessionId, patch)}
     title={selectedSession?.title ?? 'Session'}
     workspace={selectedSession ? getSessionWorkspaceName(selectedSession.cwd) : 'Unknown workspace'}
     workspacePath={selectedSession?.cwd ?? null}

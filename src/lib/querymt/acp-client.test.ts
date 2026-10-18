@@ -97,6 +97,26 @@ const image = { id: 'img-1', name: 'screen shot.png', mimeType: 'image/png', siz
 const file = { id: 'file-1', name: 'notes.txt', mimeType: 'text/plain', size: 4, data: 'dGV4dA==' };
 const pdf = { id: 'pdf-1', name: 'report.pdf', mimeType: 'application/pdf', size: 3, data: 'cGRm' };
 
+describe('DesktopAcpClient session lifecycle', () => {
+  it('requires the lifecycle feature and both methods before allowing writes', async () => {
+    const { client } = promptClient({});
+    const getSessionLifecycle = vi.fn();
+    const setSessionLifecycle = vi.fn(async () => ({ session_id: 'session-1', resolved: false, archived: true, resolved_at: null, archived_at: '2026-10-18T00:00:00Z' }));
+    const internal = client as unknown as { controlCapabilities: unknown; querymtExtensions: unknown };
+    internal.querymtExtensions = { getSessionLifecycle, setSessionLifecycle };
+    internal.controlCapabilities = { features: { session_lifecycle: false }, methods: ['querymt/session/getLifecycle', 'querymt/session/setLifecycle'] };
+    expect(client.supportsSessionLifecycle()).toBe(false);
+    await expect(client.setSessionLifecycle('session-1', { archived: true })).rejects.toThrow('unsupported');
+    expect(setSessionLifecycle).not.toHaveBeenCalled();
+    internal.controlCapabilities = { features: { session_lifecycle: true }, methods: ['querymt/session/getLifecycle'] };
+    expect(client.supportsSessionLifecycle()).toBe(false);
+    internal.controlCapabilities = { features: { session_lifecycle: true }, methods: ['querymt/session/getLifecycle', 'querymt/session/setLifecycle'] };
+    expect(client.supportsSessionLifecycle()).toBe(true);
+    await client.setSessionLifecycle('session-1', { archived: true });
+    expect(setSessionLifecycle).toHaveBeenCalledWith('session-1', { archived: true });
+  });
+});
+
 describe('DesktopAcpClient sendPrompt', () => {
   it('serializes native images, resources, ordering, metadata, and correlation IDs', async () => {
     const { client, prompt } = promptClient({ image: true, embeddedContext: true });

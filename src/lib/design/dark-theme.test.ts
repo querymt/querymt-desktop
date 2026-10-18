@@ -32,11 +32,10 @@ describe('dark theme palette', () => {
     expect(composerHover).toContain('border-color: color-mix(in srgb, var(--border), var(--border-strong) 42%);');
   });
 
-  it('gives workspace affordances distinct but neutral contrast', () => {
+  it('keeps workspace folders unframed and loading controls neutral', () => {
     const workspaceIcon = appCss.match(/\.session-workspace-icon \{([\s\S]*?)\n\}/)?.[1] ?? '';
     const loadMore = appCss.match(/\.session-workspace-load-more \{([\s\S]*?)\n\}/)?.[1] ?? '';
-    expect(workspaceIcon).toContain('background: var(--icon-surface);');
-    expect(workspaceIcon).toContain('border: 1px solid var(--subtle-border);');
+    expect(workspaceIcon).not.toMatch(/background:|border:|box-shadow:/);
     expect(workspaceIcon).toContain('color: var(--text-muted);');
     expect(loadMore).toContain('width: 100%;');
     expect(loadMore).toContain('background: var(--subtle-surface);');

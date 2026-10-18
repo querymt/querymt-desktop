@@ -29,6 +29,8 @@ import {
 } from '$lib/domain/session-updates';
 import {
   buildListSessionsRequest,
+  createSessionBrowserState,
+  sessionMatchesLifecycle,
   buildSessionKey,
   getSessionById,
   getSessionKey,
@@ -50,6 +52,7 @@ import type {
   AgentRuntimeStatus,
   ComposerOption,
   DesktopSessionSummary,
+  ExcludedSessionAgent,
   ModelEntry,
   ModelInfo,
   PendingSessionInput,
@@ -57,7 +60,10 @@ import type {
   SessionContentBlock,
   SessionInputDeliveryMode,
   SessionRunState,
-  SessionStatus
+  SessionStatus,
+  SessionLifecycle,
+  SessionLifecyclePatch,
+  SessionLifecycleFilter
 } from '$lib/domain/types';
 import { DelegateAssignmentSource, SessionInputDelivery, SessionInputState } from '$lib/querymt/generated/types';
 import type {
@@ -144,6 +150,7 @@ import {
   type AgentLogEntry
 } from '$native';
 import { inboxStore } from '$lib/stores/inbox.svelte';
+import { SessionCatalogCache, isCatalogFresh, sessionCatalogKey } from '$lib/stores/session-catalog-cache';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import {
   loadSessionModePreferences,
@@ -316,6 +323,23 @@ export class AgentsStore {
   lastRemoteAttachByAgent = $state<Record<string, RemoteSessionAttachInfo | null>>({});
   lastRemoteDismissByAgent = $state<Record<string, RemoteSessionDismissInfo | null>>({});
   sessionsByAgent = $state<Record<string, DesktopSessionSummary[]>>({});
+  sessionBrowser = $state(createSessionBrowserState());
+  sessionCatalog = $state<DesktopSessionSummary[]>([]);
+  sessionCatalogLoading = $state(false);
+  sessionCatalogLoadedCount = $state(0);
+  sessionCatalogError = $state<string | null>(null);
+  sessionCatalogHasSessions = $state<boolean | null>(null);
+  sessionCatalogExcludedAgents = $state<ExcludedSessionAgent[]>([]);
+  sessionCatalogSupportedAgentCount = $state(0);
+  sessionLifecyclePending = $state<Record<string, boolean>>({});
+  sessionLifecycleErrors = $state<Record<string, string | null>>({});
+  sessionLifecycles = $state<Record<string, SessionLifecycle | null>>({});
+  sessionLifecycleRevision = $state(0);
+  private sessionCatalogGeneration = 0;
+  private sessionCatalogSignature = '';
+  private sessionCatalogCache = new SessionCatalogCache();
+  private sessionCatalogFlight: { key: string; promise: Promise<void> } | null = null;
+  private lifecycleWriteVersions = new Map<string, number>();
   workspaceSessionSources = $state<Record<string, Record<string, WorkspaceSessionSource>>>({});
   workspaceVisibleLimits = $state<Record<string, number>>({});
   attentionSessionKeys = $state<string[]>([]);
@@ -594,6 +618,9 @@ export class AgentsStore {
   }
 
   dispose() {
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogFlight = null;
+    this.sessionCatalogCache.flush();
     this.sessionSelectionGeneration += 1;
     this.cancelPendingSessionNotifications();
     for (const agentId of [...this.sessionRefreshTimers.keys()]) {
@@ -1007,6 +1034,7 @@ export class AgentsStore {
           normalizedUpdates.websocketUrl !== current.websocketUrl) ||
         (updates.commandLine !== undefined && updates.commandLine !== current.commandLine));
     if (endpointChanged) {
+      this.invalidateSessionCatalogCache();
       clearElicitationResumeAuthoritiesForAgent(agentId);
     }
     if (current?.transport === 'websocket' && (normalizedUpdates.transport || normalizedUpdates.websocketUrl !== undefined || normalizedUpdates.enabled === false)) {
@@ -1028,6 +1056,7 @@ export class AgentsStore {
 
   async deleteConfig(agentId: string) {
     if (isEmbedded && agentId === EMBEDDED_AGENT_ID) return;
+    this.invalidateSessionCatalogCache();
     this.invalidateConnectGeneration(agentId);
     await this.stopConfiguredAgent(agentId);
     this.configs = this.configs.filter((config) => config.id !== agentId);
@@ -1414,6 +1443,218 @@ export class AgentsStore {
     }
   }
 
+  canSetSessionLifecycle(agentId: string): boolean {
+    // Read reactive connection/capability state before consulting the client record.
+    const online = isOnlineConnectionState(this.connectionStates[agentId]);
+    void this.controlCapabilitiesByAgent[agentId];
+    return online && (this.clients.get(agentId)?.client.supportsSessionLifecycle() ?? false);
+  }
+
+  private applySessionLifecycle(agentId: string, lifecycle: SessionLifecycle | null, sessionId: string) {
+    const key = buildSessionKey(agentId, sessionId);
+    this.sessionLifecycles = { ...this.sessionLifecycles, [key]: lifecycle };
+    const update = (session: DesktopSessionSummary) => session.agentId === agentId && session.sessionId === sessionId
+      ? { ...session, lifecycle } : session;
+    this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: (this.sessionsByAgent[agentId] ?? []).map(update) };
+    this.sessionCatalog = this.sessionCatalog.map(update);
+    for (const source of Object.values(this.workspaceSessionSources[agentId] ?? {})) {
+      this.setWorkspaceSource({ ...source, sessions: source.sessions.map(update) });
+    }
+  }
+
+  async refreshSessionLifecycle(agentId: string, sessionId: string) {
+    if (!this.canSetSessionLifecycle(agentId)) return;
+    const revision = this.sessionLifecycleRevision;
+    try {
+      const lifecycle = await this.clients.get(agentId)!.client.getSessionLifecycle(sessionId);
+      if (revision === this.sessionLifecycleRevision) this.applySessionLifecycle(agentId, lifecycle, sessionId);
+    } catch {
+      if (revision === this.sessionLifecycleRevision) this.applySessionLifecycle(agentId, null, sessionId);
+    }
+  }
+
+  async setSessionLifecycle(agentId: string, sessionId: string, patch: SessionLifecyclePatch) {
+    const key = buildSessionKey(agentId, sessionId);
+    if (this.sessionLifecyclePending[key]) throw new Error('A lifecycle change is already in progress.');
+    if (!this.canSetSessionLifecycle(agentId)) throw new Error('Session lifecycle is unavailable for this agent.');
+    this.sessionLifecyclePending = { ...this.sessionLifecyclePending, [key]: true };
+    this.sessionLifecycleErrors = { ...this.sessionLifecycleErrors, [key]: null };
+    try {
+      const lifecycle = await this.clients.get(agentId)!.client.setSessionLifecycle(sessionId, patch);
+      this.sessionLifecycleRevision += 1;
+      this.lifecycleWriteVersions.set(key, this.sessionLifecycleRevision);
+      this.invalidateSessionCatalogCache();
+      this.applySessionLifecycle(agentId, lifecycle, sessionId);
+      this.sessionCatalog = this.sessionCatalog.filter((session) => sessionMatchesLifecycle(session.lifecycle, this.sessionBrowser));
+      return lifecycle;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not update session lifecycle.';
+      this.sessionLifecycleErrors = { ...this.sessionLifecycleErrors, [key]: message };
+      throw error;
+    } finally {
+      this.sessionLifecyclePending = { ...this.sessionLifecyclePending, [key]: false };
+    }
+  }
+
+  private preserveNewerLifecycleWrites(sessions: DesktopSessionSummary[], revision: number): DesktopSessionSummary[] {
+    return sessions.map((session) => {
+      const key = getSessionKey(session);
+      return (this.lifecycleWriteVersions.get(key) ?? 0) > revision
+        ? { ...session, lifecycle: this.sessionLifecycles[key] } : session;
+    });
+  }
+
+  private sessionCatalogContext(filter: SessionLifecycleFilter) {
+    const lifecycle = { resolution: filter.resolution, archive: filter.archive };
+    const configs = this.connectedAgents.slice();
+    chatPreferencesStore.initialize();
+    const remoteNodeIds = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers.slice() : [];
+    const signature = JSON.stringify([
+      sessionCatalogKey(configs, remoteNodeIds, lifecycle),
+      configs.map((config) => [config.id, this.clients.get(config.id)?.client.supportsSessionLifecycle() ?? false]).sort()
+    ]);
+    const filtered = lifecycle.resolution !== 'any' || lifecycle.archive !== 'any';
+    const excludedAgents = configs.filter((config) => filtered && !this.clients.get(config.id)?.client.supportsSessionLifecycle())
+      .map(({ id, name }) => ({ id, name }));
+    const excludedIds = new Set(excludedAgents.map((agent) => agent.id));
+    const supportedConfigs = configs.filter((config) => !excludedIds.has(config.id));
+    return { lifecycle, configs, supportedConfigs, excludedAgents, remoteNodeIds, signature };
+  }
+
+  private selectSessionCatalog({ signature, supportedConfigs, excludedAgents }: ReturnType<AgentsStore['sessionCatalogContext']>) {
+    this.sessionCatalogExcludedAgents = excludedAgents;
+    this.sessionCatalogSupportedAgentCount = supportedConfigs.length;
+    if (this.sessionCatalogSignature === signature) return;
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogFlight = null;
+    this.sessionCatalogSignature = signature;
+    const cached = this.sessionCatalogCache.get(signature);
+    this.sessionCatalog = cached?.sessions.slice() ?? [];
+    for (const agentId of new Set(this.sessionCatalog.map((session) => session.agentId))) {
+      const summaries = this.sessionCatalog.filter((session) => session.agentId === agentId);
+      this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: mergeSessions(summaries, this.sessionsByAgent[agentId] ?? []) };
+    }
+    this.sessionCatalogHasSessions = cached?.hasSessions ?? null;
+    this.sessionCatalogError = null;
+    this.sessionCatalogLoading = false;
+    this.sessionCatalogLoadedCount = 0;
+  }
+
+  private invalidateSessionCatalogCache() {
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogFlight = null;
+    this.sessionCatalogCache.clear();
+  }
+
+  async ensureSessionCatalog(filter: SessionLifecycleFilter = this.sessionBrowser) {
+    const context = this.sessionCatalogContext(filter);
+    const { signature } = context;
+    this.selectSessionCatalog(context);
+    if (this.sessionCatalogFlight?.key === signature) return this.sessionCatalogFlight.promise;
+    const cached = this.sessionCatalogCache.get(signature);
+    if (cached && isCatalogFresh(cached)) return;
+    return this.refreshSessionCatalog(filter);
+  }
+
+  /** Explicit refresh reconciles the selected scope; ordinary navigation reuses fresh snapshots. */
+  async refreshSessionCatalog(filter: SessionLifecycleFilter = this.sessionBrowser) {
+    const context = this.sessionCatalogContext(filter);
+    this.selectSessionCatalog(context);
+    if (this.sessionCatalogFlight?.key === context.signature) return this.sessionCatalogFlight.promise;
+    const promise = this.readSessionCatalog(context);
+    const flight = { key: context.signature, promise };
+    this.sessionCatalogFlight = flight;
+    try {
+      await promise;
+    } finally {
+      if (this.sessionCatalogFlight === flight) this.sessionCatalogFlight = null;
+    }
+  }
+
+  /** Keep catalog membership separate from runtime, Inbox and scheduling caches. */
+  private async readSessionCatalog({ lifecycle, configs: allConfigs, supportedConfigs: configs, remoteNodeIds, signature }: ReturnType<AgentsStore['sessionCatalogContext']>) {
+    const generation = ++this.sessionCatalogGeneration;
+    const remember = (complete: boolean) => {
+      if (generation !== this.sessionCatalogGeneration || !allConfigs.length) return;
+      this.sessionCatalogCache.set({
+        key: signature, sessions: this.sessionCatalog, complete,
+        checkedAt: complete ? Date.now() : 0, hasSessions: this.sessionCatalogHasSessions
+      });
+    };
+    this.sessionCatalogLoading = true;
+    this.sessionCatalogLoadedCount = 0;
+    this.sessionCatalogError = null;
+    this.sessionCatalogHasSessions = configs.some((config) => (this.sessionsByAgent[config.id] ?? [])
+      .some((session) => !session.parentSessionId && this.sessionVisibleInCatalog(session))) ? true : null;
+    const filtered = lifecycle.resolution !== 'any' || lifecycle.archive !== 'any';
+    const errors = new Map<string, string>();
+    await Promise.all(configs.map(async (config) => {
+      try {
+        const record = this.initializedClientRecord(config.id);
+        if (!record) throw new Error('Agent disconnected.');
+        let sessions: DesktopSessionSummary[] = [];
+        const seen = new Set<string>();
+        let cursor: string | undefined;
+        do {
+          const page = await record.client.listSessions(buildListSessionsRequest({
+            cursor, remoteNodeIds, lifecycle: filtered ? lifecycle : undefined
+          }));
+          if (generation !== this.sessionCatalogGeneration) return;
+          const incoming = mapAcpSessionsToDesktopSessions(page.sessions, { agentId: config.id, agentName: config.name });
+          const previousCount = sessions.length;
+          sessions = mergeSessions(sessions, incoming);
+          this.sessionCatalogLoadedCount += sessions.length - previousCount;
+          this.sessionCatalog = mergeSessions(this.sessionCatalog, incoming);
+          if (incoming.length) this.sessionCatalogHasSessions = true;
+          remember(false);
+          this.sessionsByAgent = { ...this.sessionsByAgent, [config.id]: mergeSessions(this.sessionsByAgent[config.id] ?? [], incoming) };
+          cursor = page.nextCursor ?? undefined;
+          if (cursor && seen.has(cursor)) throw new Error('Agent returned a repeated session cursor.');
+          if (cursor) seen.add(cursor);
+        } while (cursor);
+        // Remove stale cached rows only after this agent's entire refresh succeeds.
+        this.sessionCatalog = mergeSessions(this.sessionCatalog.filter((session) => session.agentId !== config.id), sessions);
+        remember(false);
+      } catch (error) {
+        if (generation !== this.sessionCatalogGeneration) return;
+        errors.set(config.id, `${config.name}: ${acpErrorMessage(error, 'Sessions could not be loaded.')}`);
+        this.sessionCatalogError = [...errors.values()].join(' ');
+      }
+    }));
+    if (generation !== this.sessionCatalogGeneration) return;
+    if (!errors.size && configs.length) {
+      if (!filtered) {
+        this.sessionCatalogHasSessions = this.sessionCatalog.length > 0;
+      } else if (this.sessionCatalogHasSessions === null) {
+        // An empty lifecycle category does not establish that the whole catalog is empty.
+        const existence = await Promise.all(configs.map(async (config): Promise<boolean | null> => {
+          try {
+            const record = this.initializedClientRecord(config.id);
+            if (!record) return null;
+            const seen = new Set<string>();
+            let cursor: string | undefined;
+            do {
+              const page = await record.client.listSessions(buildListSessionsRequest({ cursor, remoteNodeIds }));
+              if (generation !== this.sessionCatalogGeneration) return null;
+              if (page.sessions.length) return true;
+              cursor = page.nextCursor ?? undefined;
+              if (cursor && seen.has(cursor)) return null;
+              if (cursor) seen.add(cursor);
+            } while (cursor);
+            return false;
+          } catch {
+            return null;
+          }
+        }));
+        if (generation !== this.sessionCatalogGeneration) return;
+        this.sessionCatalogHasSessions = existence.includes(true) ? true : existence.every((value) => value === false) ? false : null;
+      }
+    }
+    this.sessionCatalogLoading = false;
+    remember(!errors.size);
+    this.sessionCatalogCache.flush();
+  }
+
   private enqueueSessionListRefresh(agentId: string, task: () => Promise<void>): Promise<void> {
     const previous = this.sessionListRefreshChain.get(agentId) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(task);
@@ -1471,14 +1712,15 @@ export class AgentsStore {
     record.error = null;
 
     try {
+      const lifecycleRevision = this.sessionLifecycleRevision;
       const firstPage = await record.client.listSessions(this.buildSessionListRequest());
       const pages = discoverAll ? await this.collectSessionPages(record.client, firstPage) : [firstPage];
       const listedSessions = pages.flatMap((page) => page.sessions);
       const previousSessions = this.sessionsByAgent[agentId] ?? [];
-      const nextSessions = mapAcpSessionsToDesktopSessions(listedSessions, {
+      const nextSessions = this.preserveNewerLifecycleWrites(mapAcpSessionsToDesktopSessions(listedSessions, {
         agentId: config.id,
         agentName: config.name
-      });
+      }), lifecycleRevision);
       const mergedSessions = discoverAll ? nextSessions : mergeSessions(previousSessions, nextSessions);
       this.updateSessionAttention(agentId, previousSessions, mergedSessions);
       this.sessionsByAgent = {
@@ -1819,6 +2061,7 @@ export class AgentsStore {
         throw new Error(`${source.agentName} returned a repeated session cursor.`);
       }
       if (requestCursor) seenCursors.add(requestCursor);
+      const lifecycleRevision = this.sessionLifecycleRevision;
       const response = await record.client.listSessions(
         this.buildSessionListRequest({
           cwd: source.cwd,
@@ -1826,10 +2069,10 @@ export class AgentsStore {
         })
       );
       if ((this.workspaceSourceVersions.get(source.agentId) ?? 0) !== sourceVersion || !current) return;
-      const pageSessions = mapAcpSessionsToDesktopSessions(response.sessions, {
+      const pageSessions = this.preserveNewerLifecycleWrites(mapAcpSessionsToDesktopSessions(response.sessions, {
         agentId: config.id,
         agentName: config.name
-      });
+      }), lifecycleRevision);
       current = {
         ...current,
         sessions: mergeSessions(current.sessions, pageSessions),
@@ -1899,6 +2142,7 @@ export class AgentsStore {
     }
 
     await record.client.deleteSession(sessionId);
+    this.invalidateSessionCatalogCache();
     this.sessionsByAgent = {
       ...this.sessionsByAgent,
       [agentId]: (this.sessionsByAgent[agentId] ?? []).filter((session) => session.sessionId !== sessionId)
@@ -1956,6 +2200,7 @@ export class AgentsStore {
       normalizedCwd,
       profileId === 'default' ? null : profileId
     );
+    this.invalidateSessionCatalogCache();
     this.lastCreatedSession = response;
     this.applySessionConfigOptionsSnapshot(agentId, response.sessionId, response.configOptions ?? []);
     this.restoreSessionModel(agentId, response.sessionId, response.configOptions ?? [], response);
@@ -2864,6 +3109,7 @@ export class AgentsStore {
     this.activeSession.activityLabel = 'Creating fork...';
     try {
       const response = await record.client.forkSession(sessionId, source.cwd, messageId);
+      this.invalidateSessionCatalogCache();
       if (!this.isSelectedSession(agentId, sessionId)) return null;
 
       await this.refreshSessionsForAgent(agentId);
@@ -3048,7 +3294,7 @@ export class AgentsStore {
       this.delegateAssignmentsErrorBySession = { ...this.delegateAssignmentsErrorBySession, [key]: null };
     } catch (error) {
       if (this.delegateAssignmentRefreshVersions.get(key) !== refreshVersion) return;
-      const message = delegateAssignmentErrorMessage(error, 'Failed to load delegate models.');
+      const message = acpErrorMessage(error, 'Failed to load delegate models.');
       this.delegateAssignmentsErrorBySession = { ...this.delegateAssignmentsErrorBySession, [key]: message };
     } finally {
       if (this.delegateAssignmentRefreshVersions.get(key) === refreshVersion) {
@@ -3122,7 +3368,7 @@ export class AgentsStore {
           await this.refreshDelegateAssignments(ownerAgentId, sessionId);
           return false;
         }
-        const message = delegateAssignmentErrorMessage(error, 'Failed to update delegate model.');
+        const message = acpErrorMessage(error, 'Failed to update delegate model.');
         this.delegateAssignmentsErrorBySession = { ...this.delegateAssignmentsErrorBySession, [key]: message };
         return false;
       }
@@ -3688,6 +3934,7 @@ export class AgentsStore {
       throw new Error('Failed to connect to the agent.');
     }
     const result = await record.client.createRemoteSession({ node_id, cwd, attach: true });
+    this.invalidateSessionCatalogCache();
     this.lastRemoteAttachByAgent = {
       ...this.lastRemoteAttachByAgent,
       [agentId]: result
@@ -5041,7 +5288,7 @@ function readDelegateAssignmentConflict(error: unknown): { expected_revision: nu
     : null;
 }
 
-function delegateAssignmentErrorMessage(error: unknown, fallback: string): string {
+function acpErrorMessage(error: unknown, fallback: string): string {
   const data = (error as { data?: unknown } | null)?.data;
   if (typeof data === 'string' && data.trim()) return data;
   if (data && typeof data === 'object') {

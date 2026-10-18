@@ -1,19 +1,31 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import { Accordion } from 'bits-ui';
-  import { AlertTriangle, Bot, Check, ChevronDown, Clock3, Copy, Ellipsis, FolderKanban, FolderSync, GitFork, LoaderCircle, MessageSquarePlus, Network, PlugZap, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, Trash2 } from '@lucide/svelte';
+  import { Accordion, Popover, RadioGroup } from 'bits-ui';
+  import { AlertTriangle, Archive, Bot, Check, ChevronDown, Clock3, Folder, FolderOpen, FolderSync, GitFork, Info, LoaderCircle, MessageSquarePlus, Network, PlugZap, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, X } from '@lucide/svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
-  import { compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
-  import { createRoundIdenticon } from '$lib/vendor/round-identicon';
-  import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
+  import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
+  import SessionLifecycleBadges from '$lib/components/primitives/SessionLifecycleBadges.svelte';
+  import { createSessionBrowserState, SESSION_LIFECYCLE_VIEWS, sessionMatchesLifecycle, compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
+  import Identicon from '$lib/components/primitives/Identicon.svelte';
+  import type { DesktopSessionSummary, ExcludedSessionAgent, SessionBrowserState, SessionLifecyclePatch, SessionLifecycleView, SessionStatus } from '$lib/domain/types';
 
   let {
     sessions = [],
+    browserState = $bindable(createSessionBrowserState()),
+    catalogComplete = false,
+    hasAnySessions = null,
+    canManageLifecycle = null,
+    lifecyclePending = {},
+    lifecycleErrors = {},
+    onSetLifecycle = null,
     workspaceGroups = null,
     loading = false,
+    loadedSessionCount = 0,
     error = null,
+    excludedAgents = [],
+    supportedAgentCount = null,
     emptyMessage = 'No sessions returned yet.',
     disconnected = false,
     showAgentNames = true,
@@ -30,9 +42,19 @@
     onDeleteSession = null
   }: {
     sessions?: DesktopSessionSummary[];
+    browserState?: SessionBrowserState;
+    catalogComplete?: boolean;
+    hasAnySessions?: boolean | null;
+    canManageLifecycle?: ((session: DesktopSessionSummary) => boolean) | null;
+    lifecyclePending?: Record<string, boolean>;
+    lifecycleErrors?: Record<string, string | null>;
+    onSetLifecycle?: ((session: DesktopSessionSummary, patch: SessionLifecyclePatch) => Promise<unknown>) | null;
     workspaceGroups?: WorkspaceSessionGroup[] | null;
     loading?: boolean;
+    loadedSessionCount?: number;
     error?: string | null;
+    excludedAgents?: ExcludedSessionAgent[];
+    supportedAgentCount?: number | null;
     emptyMessage?: string;
     disconnected?: boolean;
     showAgentNames?: boolean;
@@ -49,13 +71,12 @@
     onDeleteSession?: ((session: DesktopSessionSummary) => Promise<void>) | null;
   } = $props();
 
-  type SessionFilter = 'all' | 'active' | 'needs-input' | 'completed' | 'remote';
+  type RuntimeFilter = SessionBrowserState['runtime'];
 
-  let query = $state('');
-  let sessionFilter = $state<SessionFilter>('all');
-  let filtersExpanded = $state(false);
-  let openGroups = $state<string[]>([]);
-  let lastWorkspaceKeySignature = $state('');
+  let filtersOpen = $state(false);
+  let coverageOpen = $state(false);
+  let loadingVisible = $state(false);
+  let searchOpenGroups = $state<string[]>([]);
   let requestedWorkspaceLoads = $state<Record<string, number>>({});
   let copiedSessionId = $state<string | null>(null);
   let pendingDeleteSession = $state<DesktopSessionSummary | null>(null);
@@ -73,7 +94,7 @@
 
   function workspaceMachineText(group: WorkspaceSessionGroup) {
     const machines = group.remoteMachines ?? [];
-    if (machines.length === 0) return null;
+    if (machines.length === 0) return group.location === 'remote' ? 'Remote' : group.location === 'mixed' ? 'local + remote' : null;
     if (machines.length > 1) return group.location === 'mixed' ? `local + ${machines.length} machines` : `${machines.length} machines`;
     const name = machineName(machines[0]);
     return group.location === 'mixed' ? `local + ${name}` : name;
@@ -81,15 +102,42 @@
 
   function workspaceMachineTitle(group: WorkspaceSessionGroup) {
     const names = (group.remoteMachines ?? []).map(machineName).join(', ');
-    if (!names) return undefined;
+    if (!names) return group.location === 'remote' ? 'Remote workspace' : group.location === 'mixed' ? 'Local and remote workspace' : undefined;
     return group.location === 'mixed' ? `Local workspace and remote workspace on ${names}` : `Remote workspace on ${names}`;
   }
   const initialLoading = $derived(loading && sourceWorkspaceGroups.length === 0);
   const refreshing = $derived(loading && sourceWorkspaceGroups.length > 0);
-  const hasActiveFilters = $derived(query.trim().length > 0 || sessionFilter !== 'all');
+  const searching = $derived(browserState.query.trim().length > 0);
+  const loadingStatus = $derived(`${searching ? 'Searching remaining history…' : initialLoading ? 'Loading sessions…' : catalogComplete ? 'Loading remaining sessions…' : 'Refreshing sessions…'}${loadedSessionCount > 0 ? ` ${loadedSessionCount} loaded` : ''}`);
+  const searchPlaceholder = $derived(loading && loadingVisible && !error ? loadingStatus : 'Search sessions, workspaces, agents…');
+  const hasActiveFilters = $derived(searching || browserState.runtime !== 'all' || browserState.location !== 'all');
+  const selectedView = $derived(SESSION_LIFECYCLE_VIEWS.find((view) => view.filter.resolution === browserState.resolution && view.filter.archive === browserState.archive));
+  const coverageExclusions = $derived(browserState.resolution !== 'any' || browserState.archive !== 'any' ? excludedAgents : []);
+  const allAgentsExcluded = $derived(coverageExclusions.length > 0 && supportedAgentCount === 0);
+  const coverageLabel = $derived(`${coverageExclusions.length} ${coverageExclusions.length === 1 ? 'agent' : 'agents'} excluded`);
+  const emptyCatalog = $derived(!coverageExclusions.length && (hasAnySessions === false || (sourceWorkspaceGroups.length === 0 && (!catalogComplete || selectedView?.value === 'all'))));
+  const emptyCategoryTitle = $derived(`${selectedView ? `No ${selectedView.label.toLowerCase()} sessions` : 'No matching sessions'}${coverageExclusions.length ? ' from supported agents' : ''}`);
+  const emptyCategoryDescription = $derived(selectedView?.value === 'resolved' ? 'Sessions you mark as resolved appear here.'
+    : selectedView?.value === 'archived' ? 'Sessions you archive appear here.' : 'Browse All to find resolved and archived sessions.');
+  const refinementLabels = $derived([
+    ...(browserState.runtime === 'all' ? [] : [browserState.runtime === 'running' ? 'Running' : 'Needs input']),
+    ...(browserState.location === 'all' ? [] : [browserState.location === 'remote' ? 'Remote' : 'Local']),
+    ...(selectedView ? [] : [
+      browserState.resolution === 'any' ? 'Any resolution' : browserState.resolution === 'open' ? 'Open' : 'Resolved',
+      browserState.archive === 'only' ? 'Archived only' : browserState.archive === 'excluded' ? 'Not archived' : 'Including archived'
+    ])
+  ]);
 
   $effect(() => {
-    if (!showRemoteSessions && sessionFilter === 'remote') sessionFilter = 'all';
+    if (!showRemoteSessions && browserState.location === 'remote') browserState.location = 'all';
+  });
+
+  const loadingKey = $derived(loading ? `${browserState.resolution}:${browserState.archive}` : null);
+  $effect(() => {
+    loadingVisible = false;
+    if (!loadingKey) return;
+    const timer = setTimeout(() => { loadingVisible = true; }, 200);
+    return () => clearTimeout(timer);
   });
 
   function workspaceMatchesGroup(group: WorkspaceSessionGroup, normalizedQuery: string): boolean {
@@ -101,12 +149,14 @@
   }
 
   const filteredWorkspaceGroups = $derived.by(() => {
-    const normalizedQuery = query.trim().toLowerCase();
+    const normalizedQuery = browserState.query.trim().toLowerCase();
     return sourceWorkspaceGroups
       .map((group) => {
         const workspaceMatches = workspaceMatchesGroup(group, normalizedQuery);
         const filteredSessions = group.sessions.filter((session) => {
-          const matchesFilter = sessionMatchesFilter(session, sessionFilter);
+          const matchesFilter = sessionMatchesFilter(session, browserState.runtime) &&
+            sessionMatchesLifecycle(session.lifecycle, browserState) &&
+            (browserState.location === 'all' || (browserState.location === 'remote' ? session.location === 'remote' : session.location !== 'remote'));
           const matchesQuery =
             workspaceMatches ||
             session.title.toLowerCase().includes(normalizedQuery) ||
@@ -114,30 +164,41 @@
             session.sessionId.toLowerCase().includes(normalizedQuery);
           return matchesFilter && matchesQuery;
         });
+        const limit = browserState.visibleLimits[group.key] ?? 10;
         return {
           ...group,
-          sessions: filteredSessions,
+          sessions: catalogComplete ? filteredSessions.slice(0, limit) : filteredSessions,
+          totalMatching: filteredSessions.length,
+          hasMore: catalogComplete ? filteredSessions.length > limit : group.hasMore,
           location: filteredSessions.length ? getWorkspaceLocation(filteredSessions) : group.location,
           remoteMachines: filteredSessions.length ? getWorkspaceRemoteMachines(filteredSessions) : group.remoteMachines
         };
       })
-      .filter((group) => group.sessions.length > 0 || (sessionFilter === 'all' && workspaceMatchesGroup(group, normalizedQuery)));
+      .filter((group) => group.sessions.length > 0 || (!catalogComplete && !hasActiveFilters && workspaceMatchesGroup(group, normalizedQuery)));
   });
 
   $effect(() => {
-    const nextSignature = filteredWorkspaceGroups.map((group) => group.key).join('|');
-    if (nextSignature !== lastWorkspaceKeySignature) {
-      lastWorkspaceKeySignature = nextSignature;
-      const visibleKeys = new Set(filteredWorkspaceGroups.map((group) => group.key));
-      const preservedOpenGroups = openGroups.filter((key) => visibleKeys.has(key));
-      openGroups = preservedOpenGroups.length > 0 ? preservedOpenGroups : filteredWorkspaceGroups.slice(0, 1).map((group) => group.key);
+    if (searching) {
+      searchOpenGroups = filteredWorkspaceGroups.map((group) => group.key);
+    } else if (!browserState.groupsInitialized && filteredWorkspaceGroups.length) {
+      browserState.openGroups = filteredWorkspaceGroups.slice(0, 1).map((group) => group.key);
+      browserState.groupsInitialized = true;
     }
   });
+
+  function getOpenGroups(): string[] {
+    return searching ? searchOpenGroups : browserState.openGroups;
+  }
+
+  function setOpenGroups(groups: string[]) {
+    if (searching) searchOpenGroups = groups;
+    else browserState.openGroups = groups;
+  }
 
   $effect(() => {
     for (const group of sourceWorkspaceGroups) {
       if (
-        openGroups.includes(group.key) &&
+        getOpenGroups().includes(group.key) &&
         !group.initialized &&
         !group.loading &&
         !group.error &&
@@ -149,35 +210,48 @@
     }
   });
 
-  const sessionFilters: Array<{ value: SessionFilter; label: string }> = [
-    { value: 'all', label: 'All' },
-    { value: 'active', label: 'Active' },
-    { value: 'needs-input', label: 'Needs input' },
-    { value: 'completed', label: 'Completed' },
-    { value: 'remote', label: 'Remote' }
+  const runtimeFilters: Array<{ value: RuntimeFilter; label: string }> = [
+    { value: 'all', label: 'Any' },
+    { value: 'running', label: 'Running' },
+    { value: 'needs-input', label: 'Needs input' }
   ];
 
-  function sessionMatchesFilter(session: DesktopSessionSummary, filter: SessionFilter): boolean {
-    if (filter === 'all') return true;
-    if (filter === 'remote') return session.location === 'remote';
-    if (filter === 'active') return session.status === 'thinking' || session.status === 'cancelling';
-    if (filter === 'needs-input') return session.status === 'waiting';
-    return session.status === 'completed';
+  const locationFilters = [{ value: 'all', label: 'Any' }, { value: 'local', label: 'Local' }, { value: 'remote', label: 'Remote' }];
+  const resolutionFilters = [{ value: 'any', label: 'Any' }, { value: 'open', label: 'Open' }, { value: 'resolved', label: 'Resolved' }];
+  const archiveFilters = [{ value: 'excluded', label: 'Hide' }, { value: 'only', label: 'Only' }, { value: 'any', label: 'Include' }];
+
+  function resetRefinements() {
+    browserState.runtime = 'all';
+    browserState.location = 'all';
+    if (!selectedView) setView('open');
   }
 
-  function countWorkspaceSessions(group: WorkspaceSessionGroup, filter: SessionFilter): number {
+  function sessionMatchesFilter(session: DesktopSessionSummary, filter: RuntimeFilter): boolean {
+    if (filter === 'all') return true;
+    if (filter === 'running') return session.status === 'thinking' || session.status === 'cancelling';
+    return session.status === 'waiting';
+  }
+
+  function countWorkspaceSessions(group: WorkspaceSessionGroup, filter: RuntimeFilter): number {
     return group.sessions.filter((session) => sessionMatchesFilter(session, filter)).length;
   }
 
   function clearFilters() {
-    query = '';
-    sessionFilter = 'all';
-    filtersExpanded = false;
+    browserState.query = '';
+    browserState.runtime = 'all';
+    browserState.location = 'all';
   }
 
-  function setSessionFilter(filter: SessionFilter) {
-    sessionFilter = filter;
-    filtersExpanded = false;
+  function setView(value: SessionLifecycleView) {
+    coverageOpen = false;
+    const view = SESSION_LIFECYCLE_VIEWS.find((candidate) => candidate.value === value)!;
+    browserState.resolution = view.filter.resolution;
+    browserState.archive = view.filter.archive;
+  }
+
+  function loadMore(group: WorkspaceSessionGroup) {
+    if (catalogComplete) browserState.visibleLimits[group.key] = (browserState.visibleLimits[group.key] ?? 10) + 10;
+    else void onLoadMoreWorkspace?.(group.cwd);
   }
 
   function getStatusLabel(status: SessionStatus): string {
@@ -189,7 +263,7 @@
       case 'cancelling':
         return 'Cancelling';
       case 'completed':
-        return 'Completed';
+        return 'Turn complete';
       case 'idle':
       default:
         return 'Idle';
@@ -210,9 +284,7 @@
     }
   }
 
-  async function copySessionId(event: MouseEvent, sessionId: string) {
-    event.stopPropagation();
-    (event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open');
+  async function copySessionId(sessionId: string) {
 
     try {
       await navigator.clipboard.writeText(sessionId);
@@ -225,9 +297,7 @@
     }
   }
 
-  function requestDeleteSession(event: MouseEvent, session: DesktopSessionSummary) {
-    event.stopPropagation();
-    (event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open');
+  function requestDeleteSession(session: DesktopSessionSummary) {
     deleteError = null;
     pendingDeleteSession = session;
   }
@@ -256,47 +326,57 @@
   }
 </script>
 
+{#snippet filterRow(label: string, value: string, options: Array<{ value: string; label: string }>, onChange: (value: string) => void)}
+  <div class="session-filter-row">
+    <span class="session-filter-row-label">{label}</span>
+    <RadioGroup.Root class="session-filter-choices" aria-label={label} {value} onValueChange={onChange} orientation="horizontal">
+      {#each options as option}
+        <RadioGroup.Item class="session-filter-choice" value={option.value}>
+          {#snippet children({ checked })}
+            <Check size={11} class={checked ? 'session-filter-check' : 'session-filter-check session-filter-check-hidden'} aria-hidden="true" />
+            {option.label}
+          {/snippet}
+        </RadioGroup.Item>
+      {/each}
+    </RadioGroup.Root>
+  </div>
+{/snippet}
+
 <div class="session-browser">
   <div class="session-browser-toolbar">
     <label class="session-browser-search">
-      <Search size={15} />
-      <input bind:value={query} placeholder="Search sessions, workspaces, agents…" />
+      {#if loading && loadingVisible && !error}
+        <LoaderCircle size={15} class="animate-spin" />
+        <span class="sr-only" role="status">{loadingStatus}</span>
+      {:else}
+        <Search size={15} />
+      {/if}
+      <input bind:value={browserState.query} aria-label="Search sessions" placeholder={searchPlaceholder} />
     </label>
     <div class="session-browser-actions">
-      <button
-        class="session-browser-filter-toggle"
-        type="button"
-        aria-label={filtersExpanded ? 'Hide session filters' : 'Show session filters'}
-        aria-controls="session-filters"
-        aria-expanded={filtersExpanded}
-        onclick={() => (filtersExpanded = !filtersExpanded)}
-      >
-        <SlidersHorizontal size={15} />
-        <span>Filters</span>
-        {#if sessionFilter !== 'all'}<span class="session-browser-filter-indicator" aria-hidden="true"></span>{/if}
-        <ChevronDown size={14} class={filtersExpanded ? 'rotate-180' : ''} />
-      </button>
-      <div
-        id="session-filters"
-        class={`session-browser-filter-scroll ${filtersExpanded ? 'session-browser-filter-scroll-expanded' : ''}`}
-        role="group"
-        aria-label="Filter sessions"
-      >
-        <div class="session-browser-filters">
-          {#each sessionFilters as filter}
-            {#if filter.value !== 'remote' || showRemoteSessions}
-              <button
-                class={`session-browser-filter ${sessionFilter === filter.value ? 'session-browser-filter-active' : ''}`}
-                type="button"
-                aria-pressed={sessionFilter === filter.value}
-                onclick={() => setSessionFilter(filter.value)}
-              >
-                {filter.label}
-              </button>
-            {/if}
-          {/each}
-        </div>
-      </div>
+      <Popover.Root bind:open={filtersOpen}>
+        <Popover.Trigger class="session-filter-trigger" aria-label={refinementLabels.length ? `Filters, ${refinementLabels.length} active` : 'Filters'}>
+          <SlidersHorizontal size={15} />
+          <span>Filters</span>
+          {#if refinementLabels.length}<span class="session-filter-count">{refinementLabels.length}</span>{/if}
+        </Popover.Trigger>
+        <Popover.Portal to={overlayPortalTarget ?? undefined}>
+          <Popover.Content class="session-filter-popover" role="dialog" aria-label="Session filters" sideOffset={8} collisionPadding={12} align="end" trapFocus>
+            <div class="session-filter-popover-heading">
+              <strong>Filters</strong>
+              <Popover.Close class="session-filter-close" aria-label="Close filters"><X size={15} /></Popover.Close>
+            </div>
+            <div class="session-filter-section">
+              {@render filterRow('Runtime', browserState.runtime, runtimeFilters, (value) => browserState.runtime = value as RuntimeFilter)}
+              {#if showRemoteSessions}{@render filterRow('Location', browserState.location, locationFilters, (value) => browserState.location = value as SessionBrowserState['location'])}{/if}
+            </div>
+            <div class="session-filter-section">
+              {@render filterRow('Resolution', browserState.resolution, resolutionFilters, (value) => browserState.resolution = value as SessionBrowserState['resolution'])}
+              {@render filterRow('Archived', browserState.archive, archiveFilters, (value) => browserState.archive = value as SessionBrowserState['archive'])}
+            </div>
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
       {#if showToolbarRefresh && onRefresh}
         <button class="icon-btn" type="button" aria-label={refreshing ? 'Refreshing sessions' : 'Refresh sessions'} disabled={loading} onclick={onRefresh}>
           {#if refreshing}<LoaderCircle size={16} class="animate-spin" />{:else}<RefreshCw size={16} />{/if}
@@ -304,64 +384,122 @@
       {/if}
     </div>
   </div>
+  <div class="session-browser-viewbar">
+    <div class="session-browser-filters" role="group" aria-label="Session lifecycle views">
+      {#each SESSION_LIFECYCLE_VIEWS as view}
+        <button class={`session-browser-filter ${selectedView?.value === view.value ? 'session-browser-filter-active' : ''}`} type="button" aria-pressed={selectedView?.value === view.value} onclick={() => setView(view.value)}>{view.label}</button>
+      {/each}
+    </div>
+    <div class="session-browser-view-details">
+      {#if refinementLabels.length}
+        <div class="session-filter-summary">
+          <span>{refinementLabels.join(' · ')}</span>
+          <button type="button" aria-label="Clear additional filters" onclick={resetRefinements}>Clear</button>
+        </div>
+      {/if}
+      {#if coverageExclusions.length}
+        <Popover.Root bind:open={coverageOpen}>
+          <Popover.Trigger class="session-coverage-trigger" aria-label={`${coverageLabel} from this view. Show details`}>
+            <span>{coverageLabel}</span><Info size={13} aria-hidden="true" />
+          </Popover.Trigger>
+          <Popover.Portal to={overlayPortalTarget ?? undefined}>
+            <Popover.Content class="app-tooltip-content session-coverage-content" role="dialog" aria-label="Excluded agents" sideOffset={6} align="end" collisionPadding={12} trapFocus>
+              <p>
+                {#each coverageExclusions as agent, index}{#if index > 0}{', '}{/if}<a href="/agents" onclick={() => coverageOpen = false}>{agent.name}</a>{/each}
+                {coverageExclusions.length === 1 ? 'does' : 'do'} not support lifecycle filters. {coverageExclusions.length === 1 ? 'Its' : 'Their'} sessions are <button type="button" onclick={() => setView('all')}>available in All</button>.
+              </p>
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
+      {/if}
+    </div>
+  </div>
 
-  <div class="session-browser-body">
+  <div class="session-browser-body" aria-busy={loading}>
+    {#if error && (sourceWorkspaceGroups.length > 0 || loading)}
+      <div class="state-inline-error" role="alert">
+        <AlertTriangle size={15} />
+        <span class="min-w-0 flex-1"><strong>{catalogComplete ? 'Session results may be incomplete.' : 'Sessions could not be refreshed.'}</strong> {error}</span>
+        {#if onRefresh}<button class="action-btn action-btn-compact" type="button" onclick={onRefresh}>Retry</button>{/if}
+      </div>
+    {/if}
     {#if initialLoading}
-      <div class="state-skeleton-list" aria-label="Loading sessions" aria-busy="true">
-        {#each Array(4) as _}
-          <div class="state-skeleton-row">
-            <span class="state-skeleton-avatar"></span>
-            <span class="state-skeleton-copy"><i></i><i></i></span>
-            <span class="state-skeleton-actions"></span>
+      <div class="session-browser-pending">
+        {#if loadingVisible}
+          <div class="state-skeleton-list" aria-label="Loading sessions">
+            {#each Array(4) as _}
+              <div class="state-skeleton-row">
+                <span class="state-skeleton-avatar"></span>
+                <span class="state-skeleton-copy"><i></i><i></i></span>
+                <span class="state-skeleton-actions"></span>
+              </div>
+            {/each}
           </div>
-        {/each}
+        {/if}
       </div>
     {:else if error && sourceWorkspaceGroups.length === 0}
-      <div class="state-panel state-panel-error" role="alert">
+      <div class="state-panel state-panel-error session-empty-state" role="alert">
         <span class="state-panel-icon"><AlertTriangle size={17} /></span>
         <div class="state-panel-copy"><strong>Sessions could not be loaded</strong><p>{error}</p></div>
-        {#if onRefresh}<button class="action-btn" type="button" onclick={onRefresh}>Try again</button>{/if}
+        {#if onRefresh}<div class="session-empty-actions"><button class="action-btn" type="button" onclick={onRefresh}>Try again</button></div>{/if}
       </div>
     {:else if disconnected && sourceWorkspaceGroups.length === 0}
-      <div class="state-panel">
+      <div class="state-panel session-empty-state">
         <span class="state-panel-icon"><PlugZap size={17} /></span>
         <div class="state-panel-copy"><strong>No agents connected</strong><p>Connect an agent before browsing or creating sessions.</p></div>
-        {#if onOpenAgents}<button class="action-btn action-btn-primary" type="button" onclick={onOpenAgents}>Open agents</button>{/if}
+        {#if onOpenAgents}<div class="session-empty-actions"><button class="action-btn action-btn-primary" type="button" onclick={onOpenAgents}>Open agents</button></div>{/if}
       </div>
-    {:else if sourceWorkspaceGroups.length === 0}
-      <div class="state-panel">
-        <span class="state-panel-icon"><MessageSquarePlus size={17} /></span>
-        <div class="state-panel-copy"><strong>No sessions yet</strong><p>{emptyMessage}</p></div>
-        {#if onCreateSession}<button class="action-btn action-btn-primary" type="button" onclick={onCreateSession}>New session</button>{/if}
+    {:else if allAgentsExcluded}
+      <div class="state-panel session-empty-state">
+        <span class="state-panel-icon"><Info size={17} /></span>
+        <div class="state-panel-copy"><strong>{selectedView ? `${selectedView.label} view unavailable for connected agents` : 'Lifecycle filters unavailable for connected agents'}</strong><p>View all sessions to browse these agents.</p></div>
+        <div class="session-empty-actions"><button class="action-btn" type="button" onclick={() => setView('all')}>View all sessions</button></div>
       </div>
     {:else if filteredWorkspaceGroups.length === 0}
-      <div class="state-panel">
-        <span class="state-panel-icon"><SearchX size={17} /></span>
-        <div class="state-panel-copy"><strong>No matching sessions</strong><p>Try another search or choose a different filter.</p></div>
-        {#if hasActiveFilters}<button class="action-btn" type="button" onclick={clearFilters}>Clear filters</button>{/if}
-      </div>
-    {:else}
-      {#if error}
-        <div class="state-inline-error" role="alert">
-          <AlertTriangle size={15} />
-          <span class="min-w-0 flex-1"><strong>Sessions could not be refreshed.</strong> {error}</span>
-          {#if onRefresh}<button class="action-btn action-btn-compact" type="button" onclick={onRefresh}>Retry</button>{/if}
+      {#if catalogComplete && (loading || error)}
+        <div class="state-panel session-empty-state">
+          <span class="state-panel-icon"><SearchX size={17} /></span>
+          <div class="state-panel-copy"><strong>No matches in loaded sessions</strong><p>{loading ? 'More sessions are still loading.' : 'Retry to search the remaining history.'}</p></div>
+          {#if hasActiveFilters}<div class="session-empty-actions"><button class="action-btn" type="button" onclick={clearFilters}>Clear filters</button></div>{/if}
         </div>
-      {:else if refreshing}
-        <div class="state-inline-progress" role="status"><LoaderCircle size={14} class="animate-spin" /><span>Refreshing sessions…</span></div>
+      {:else if emptyCatalog}
+        <div class="state-panel session-empty-state">
+          <span class="state-panel-icon"><MessageSquarePlus size={17} /></span>
+          <div class="state-panel-copy"><strong>No sessions yet</strong><p>{emptyMessage}</p></div>
+          {#if onCreateSession}<div class="session-empty-actions"><button class="action-btn action-btn-primary" type="button" onclick={onCreateSession}>New session</button></div>{/if}
+        </div>
+      {:else if hasActiveFilters || !selectedView}
+        <div class="state-panel session-empty-state">
+          <span class="state-panel-icon"><SearchX size={17} /></span>
+          <div class="state-panel-copy"><strong>No matching sessions{coverageExclusions.length ? ' from supported agents' : ''}</strong><p>Try another search or clear your filters.</p></div>
+          <div class="session-empty-actions"><button class="action-btn" type="button" onclick={() => { clearFilters(); resetRefinements(); }}>Clear filters</button></div>
+        </div>
+      {:else}
+        <div class="state-panel session-empty-state">
+          <span class="state-panel-icon">{#if selectedView.value === 'archived'}<Archive size={17} />{:else if selectedView.value === 'resolved'}<Check size={17} />{:else}<MessageSquarePlus size={17} />{/if}</span>
+          <div class="state-panel-copy"><strong>{emptyCategoryTitle}</strong><p>{hasAnySessions === null && selectedView.value === 'open' ? 'No open sessions were returned.' : emptyCategoryDescription}</p></div>
+          <div class="session-empty-actions">
+            <button class="action-btn" type="button" onclick={() => setView(selectedView?.value === 'resolved' ? 'open' : 'all')}>{selectedView.value === 'resolved' ? 'View open sessions' : 'View all sessions'}</button>
+          </div>
+        </div>
       {/if}
-      <Accordion.Root type="multiple" bind:value={openGroups} class="session-workspace-accordion">
+    {:else}
+      <Accordion.Root type="multiple" bind:value={getOpenGroups, setOpenGroups} class="session-workspace-accordion">
         {#each filteredWorkspaceGroups as group}
           <Accordion.Item value={group.key} class="session-workspace-item">
              <div class="session-workspace-heading">
                <Accordion.Header level={3} class="session-workspace-header">
                  <Accordion.Trigger class="session-workspace-trigger">
                    <span class="session-workspace-trigger-main">
-                      {#if group.location === 'remote'}
-                        <span class="session-workspace-icon session-workspace-icon-remote" aria-label="Remote workspace" title="Remote workspace"><FolderSync size={16} /></span>
-                      {:else}
-                        <span class="session-workspace-icon"><FolderKanban size={16} /></span>
-                      {/if}
+                      <span class="session-workspace-icon" aria-hidden="true">
+                        {#if getOpenGroups().includes(group.key)}
+                          <FolderOpen size={22} strokeWidth={1.5} />
+                        {:else if group.location === 'remote' || group.location === 'mixed'}
+                          <FolderSync size={22} strokeWidth={1.5} />
+                        {:else}
+                          <Folder size={22} strokeWidth={1.5} />
+                        {/if}
+                      </span>
                       <span class="session-workspace-copy">
                         <span class="session-workspace-name">{group.name}</span>
                          <span class="session-workspace-path">
@@ -376,9 +514,9 @@
                      {#if group.loading && !group.initialized}
                        <span class="badge session-workspace-count-loading" aria-label="Loading sessions" title="Loading sessions"><LoaderCircle size={12} class="animate-spin" aria-hidden="true" /></span>
                      {:else if group.initialized}
-                       {@const activeCount = countWorkspaceSessions(group, 'active')}
+                       {@const activeCount = countWorkspaceSessions(group, 'running')}
                        {@const waitingCount = countWorkspaceSessions(group, 'needs-input')}
-                       {#if activeCount > 0}<span class="session-workspace-signal session-workspace-signal-active">{activeCount} active</span>{/if}
+                       {#if activeCount > 0}<span class="session-workspace-signal session-workspace-signal-active">{activeCount} running</span>{/if}
                        {#if waitingCount > 0}<span class="session-workspace-signal session-workspace-signal-waiting">{waitingCount} waiting</span>{/if}
                        <span class="session-workspace-count" aria-label={`${group.sessions.length} loaded session${group.sessions.length === 1 ? '' : 's'}${group.hasMore ? ', more available' : ''}`}>{group.sessions.length}{group.hasMore ? '+' : ''}</span>
                      {:else}
@@ -413,7 +551,6 @@
               {:else}
                 <div class="model-picker-list session-workspace-session-list">
                   {#each group.sessions as session}
-                   {@const identicon = createRoundIdenticon(session.sessionId)}
                    {@const sessionKey = `${session.agentId}:${session.sessionId}`}
                    {@const canDelete = canDeleteSession?.(session) ?? false}
                    <div class="model-picker-row session-row">
@@ -424,25 +561,12 @@
                       onclick={() => onOpenSession?.(session)}
                     ></button>
                     <span class="session-row-identicon" aria-hidden="true">
-                      <svg
-                        class="session-identicon-svg"
-                        style={`--identicon-color: ${identicon.color}`}
-                        width={identicon.width}
-                        height={identicon.width}
-                        viewBox={`0 0 ${identicon.width} ${identicon.width}`}
-                        preserveAspectRatio="xMinYMin"
-                      >
-                        <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill="currentColor" />
-                        <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                          {#each identicon.arcs as arc}
-                            <path d={arc.d} stroke-width={arc.strokeWidth} />
-                          {/each}
-                        </g>
-                      </svg>
+                      <Identicon seed={session.sessionId} />
                     </span>
                     <span class="session-row-main">
                        <span class="session-row-title-line">
-                          <span class="session-row-title">{session.title}</span>
+                           <span class="session-row-title">{session.title}</span>
+                           <SessionLifecycleBadges lifecycle={session.lifecycle} showUnavailable={browserState.resolution === 'any' && browserState.archive === 'any'} />
                            {#if session.location === 'remote' && session.remoteConnectionState === 'disconnected'}
                              <span class="session-relationship-badge session-relationship-badge-remote">Remote · disconnected</span>
                            {:else if group.location === 'mixed' && session.location === 'remote'}
@@ -483,19 +607,16 @@
                       </span>
                     </span>
                      <span class="session-row-side">
-                       <details class="session-row-menu">
-                         <summary class="session-row-menu-trigger" aria-label={`Session actions for ${session.title}`} title="Session actions"><Ellipsis size={16} /></summary>
-                         <div class="session-row-menu-content">
-                           <button type="button" aria-label={`Copy session ID for ${session.title}`} onclick={(event) => copySessionId(event, session.sessionId)}>
-                             {#if copiedSessionId === session.sessionId}<Check size={14} />Copied{:else}<Copy size={14} />Copy session ID{/if}
-                           </button>
-                           {#if onDeleteSession && canDelete}
-                             <button class="session-row-menu-danger" type="button" aria-label={`Delete session ${session.title}`} disabled={deletingSessionKey !== null} onclick={(event) => requestDeleteSession(event, session)}>
-                               {#if deletingSessionKey === sessionKey}<LoaderCircle size={14} class="animate-spin" />Deleting{:else}<Trash2 size={14} />Delete session{/if}
-                             </button>
-                           {/if}
-                         </div>
-                       </details>
+                       <SessionActionsMenu
+                         {session}
+                         canManage={canManageLifecycle?.(session) ?? false}
+                         pending={lifecyclePending[sessionKey] || deletingSessionKey === sessionKey}
+                         error={lifecycleErrors[sessionKey]}
+                         onSetLifecycle={onSetLifecycle ? (patch) => onSetLifecycle!(session, patch) : null}
+                         onCopy={() => copySessionId(session.sessionId)}
+                         copied={copiedSessionId === session.sessionId}
+                         onDelete={onDeleteSession && canDelete && !deletingSessionKey ? () => requestDeleteSession(session) : null}
+                       />
                      </span>
                   </div>
                   {/each}
@@ -505,13 +626,13 @@
                     <span class="alert-error" role="alert">{group.error}</span>
                     <button class="action-btn" type="button" onclick={() => onOpenWorkspace?.(group.cwd)}>Retry</button>
                   </div>
-                {:else if group.hasMore && onLoadMoreWorkspace}
+                {:else if group.hasMore && (catalogComplete || onLoadMoreWorkspace)}
                   <div class="session-workspace-pagination">
                     <button
                       class="session-workspace-load-more"
                       type="button"
                       disabled={group.loading}
-                      onclick={() => onLoadMoreWorkspace(group.cwd)}
+                      onclick={() => loadMore(group)}
                     >
                       {#if group.loading}
                         <LoaderCircle size={14} class="animate-spin" />

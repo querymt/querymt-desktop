@@ -31,6 +31,7 @@ const activeSession: DesktopSessionSummary = {
   runtimeId: 'agent-1',
   runtimeName: 'QMTCODE',
   source: 'acp',
+  lifecycle: { session_id: 'session-1', resolved: false, archived: false, resolved_at: null, archived_at: null },
   status: 'waiting'
 };
 
@@ -56,10 +57,39 @@ describe('RecentSessionRail navigation', () => {
 
     expect(screen.getByText('Work')).toBeInTheDocument();
     expect(screen.getByText('Manage')).toBeInTheDocument();
-    expect(screen.getByText('Recent sessions')).toBeInTheDocument();
+    expect(screen.getByText('Open sessions')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Browse sessions' })).toHaveAttribute('href', '/sessions');
+    expect(screen.queryByRole('link', { name: 'View all' })).not.toBeInTheDocument();
     expect(screen.getByText('Waiting session')).toBeInTheDocument();
     expect(screen.getByText('work · Waiting')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
+  });
+
+  it('includes only known open/unarchived roots without mutating attention requests', () => {
+    inboxStore.actionableItems = [{ id: 'permission', agentId: 'agent-1', sessionId: 'resolved' }];
+    render(RecentSessionRail, { current: 'Sessions', sessions: [
+      activeSession,
+      { ...activeSession, sessionId: 'resolved', title: 'Resolved work', lifecycle: { ...activeSession.lifecycle!, resolved: true } },
+      { ...activeSession, sessionId: 'archived', title: 'Archived work', lifecycle: { ...activeSession.lifecycle!, archived: true } },
+      { ...activeSession, sessionId: 'unknown', title: 'Unknown work', lifecycle: null }
+    ] });
+    expect(screen.getByText('Waiting session')).toBeInTheDocument();
+    expect(screen.queryByText('Resolved work')).not.toBeInTheDocument();
+    expect(screen.queryByText('Archived work')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unknown work')).not.toBeInTheDocument();
+    expect(inboxStore.actionableItems).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Inbox, 1 action required' })).toBeInTheDocument();
+  });
+
+  it.each([false, true])('exposes the same actions with a keyboard context menu (collapsed=%s)', async (collapsed) => {
+    const onSetLifecycle = vi.fn(async () => {});
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed, canManageLifecycle: () => true, onSetLifecycle });
+    const link = screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl+1' });
+    link.focus();
+    await fireEvent.keyDown(link, { key: 'F10', shiftKey: true });
+    await fireEvent.click(await screen.findByRole('menuitem', { name: 'Mark resolved' }));
+    expect(onSetLifecycle).toHaveBeenCalledWith(activeSession, { resolved: true });
+    expect(link).toHaveAttribute('href', '/sessions/agent-1/session-1');
   });
 
   it('replaces the desktop rail with app-style navigation on mobile', async () => {
@@ -100,7 +130,7 @@ describe('RecentSessionRail navigation', () => {
 
     expect(screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl+1' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Expand sidebar' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Recent sessions')).not.toBeInTheDocument();
+    expect(screen.queryByText('Open sessions')).not.toBeInTheDocument();
   });
 
   it('shows the compact brand subtitle only in the expanded sidebar', () => {
@@ -144,7 +174,7 @@ describe('RecentSessionRail navigation', () => {
     expect(sessionLink).toHaveClass('session-icon-link');
     expect(surface).not.toBeNull();
     expect(avatar).not.toBeNull();
-    expect(avatar?.querySelector('.session-identicon-svg')).not.toBeNull();
+    expect(avatar?.querySelector('.hex-identicon svg polygon')).not.toBeNull();
   });
 
   it('keeps only the activity spinner when no session action is required', () => {

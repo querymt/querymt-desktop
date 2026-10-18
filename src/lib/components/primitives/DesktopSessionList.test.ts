@@ -1,6 +1,8 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { tick } from 'svelte';
+import { createSessionBrowserState } from '$lib/domain/sessions';
 import type { DesktopSessionSummary } from '$lib/domain/types';
 import DesktopSessionList from './DesktopSessionList.svelte';
 
@@ -15,6 +17,7 @@ const sessions: DesktopSessionSummary[] = [
     runtimeId: 'agent-1',
     runtimeName: 'WS-QMT',
     source: 'acp',
+    lifecycle: { session_id: '8f2a91bc-1234-5678-9012-abcdefabcdef', resolved: false, archived: false, resolved_at: null, archived_at: null },
     status: 'completed'
   },
   {
@@ -27,21 +30,81 @@ const sessions: DesktopSessionSummary[] = [
     runtimeId: 'agent-2',
     runtimeName: 'QMTCODE',
     source: 'acp',
+    lifecycle: { session_id: 'session-2', resolved: false, archived: false, resolved_at: null, archived_at: null },
     status: 'idle'
   }
 ];
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe('DesktopSessionList', () => {
-  it('shows a stable skeleton while sessions load initially', () => {
-    render(DesktopSessionList, { loading: true });
-
-    expect(screen.getByLabelText('Loading sessions')).toHaveAttribute('aria-busy', 'true');
+  it('delays loading chrome while keeping the pending state distinct from an empty catalog', async () => {
+    vi.useFakeTimers();
+    const { container } = render(DesktopSessionList, { loading: true });
+    expect(container.querySelector('.session-browser-body')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByLabelText('Loading sessions')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(200);
+    await tick();
+    expect(screen.getByLabelText('Loading sessions')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveClass('sr-only');
+    expect(container.querySelector('.state-inline-progress')).toBeNull();
+  });
+
+  it('does not flash a skeleton or loading status on fast loads or a completed fast view switch', async () => {
+    vi.useFakeTimers();
+    const { rerender, container } = render(DesktopSessionList, { loading: true, catalogComplete: true });
+    await vi.advanceTimersByTimeAsync(80);
+    await rerender({ loading: false, catalogComplete: true, sessions });
+    await vi.advanceTimersByTimeAsync(200);
+    await tick();
+    expect(screen.getByText('Inspect workspace')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Loading sessions')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    await rerender({ loading: true, catalogComplete: true, sessions });
+    await vi.advanceTimersByTimeAsync(50);
+    await rerender({ loading: false, catalogComplete: true, sessions });
+    await vi.advanceTimersByTimeAsync(200);
+    await tick();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(container.querySelector('.state-inline-progress')).toBeNull();
+  });
+
+  it('shows current-load progress in the placeholder and restores the original when finished', async () => {
+    vi.useFakeTimers();
+    const { rerender } = render(DesktopSessionList, { sessions, loading: true, catalogComplete: true, loadedSessionCount: 12 });
+    const input = screen.getByRole('textbox', { name: 'Search sessions' });
+    expect(input).toHaveAttribute('placeholder', 'Search sessions, workspaces, agents…');
+    await vi.advanceTimersByTimeAsync(200);
+    await tick();
+    expect(input).toHaveAttribute('placeholder', 'Loading remaining sessions… 12 loaded');
+    expect(screen.getByRole('status')).toHaveTextContent('Loading remaining sessions… 12 loaded');
+    await rerender({ sessions, loading: true, catalogComplete: true, loadedSessionCount: 25 });
+    expect(input).toHaveAttribute('placeholder', 'Loading remaining sessions… 25 loaded');
+    await rerender({ sessions, loading: false, catalogComplete: true, loadedSessionCount: 25 });
+    expect(input).toHaveAttribute('placeholder', 'Search sessions, workspaces, agents…');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('does not invent a total or replace the query while loading, and restores the placeholder on failure', async () => {
+    vi.useFakeTimers();
+    const { rerender } = render(DesktopSessionList, { sessions, loading: true, catalogComplete: true, loadedSessionCount: 0 });
+    const input = screen.getByRole('textbox', { name: 'Search sessions' });
+    await vi.advanceTimersByTimeAsync(200);
+    await tick();
+    expect(input).toHaveAttribute('placeholder', 'Loading remaining sessions…');
+    await fireEvent.input(input, { target: { value: 'Inspect' } });
+    await rerender({ sessions, loading: true, catalogComplete: true, loadedSessionCount: 3 });
+    expect(input).toHaveValue('Inspect');
+    expect(input).toHaveAttribute('placeholder', 'Searching remaining history… 3 loaded');
+    await rerender({ sessions, loading: false, catalogComplete: true, loadedSessionCount: 3, error: 'Remote owner offline' });
+    expect(input).toHaveValue('Inspect');
+    expect(input).toHaveAttribute('placeholder', 'Search sessions, workspaces, agents…');
   });
 
   it('offers the right recovery for empty and disconnected states', async () => {
@@ -58,6 +121,130 @@ describe('DesktopSessionList', () => {
     expect(screen.getByText('No agents connected')).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Open agents' }));
     expect(onOpenAgents).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['resolved', 'No resolved sessions', 'Sessions you mark as resolved appear here.', 'View open sessions'],
+    ['archived', 'No archived sessions', 'Sessions you archive appear here.', 'View all sessions']
+  ] as const)('shows category-specific recovery for an empty %s view', async (view, title, description, action) => {
+    const onCreateSession = vi.fn();
+    const { container } = render(DesktopSessionList, { sessions, catalogComplete: true, hasAnySessions: true, onCreateSession });
+    await fireEvent.click(screen.getByRole('button', { name: view === 'resolved' ? 'Resolved' : 'Archived' }));
+    expect(screen.getByText(title)).toBeInTheDocument();
+    expect(screen.getByText(description)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New session' })).not.toBeInTheDocument();
+    const actions = container.querySelector('.session-empty-actions');
+    expect(actions).not.toBeNull();
+    expect(within(actions as HTMLElement).getAllByRole('button')).toHaveLength(1);
+    await fireEvent.click(screen.getByRole('button', { name: action }));
+    expect(screen.getByText('Inspect workspace')).toBeInTheDocument();
+  });
+
+  it('offers a new session only when the whole catalog is known to be empty', async () => {
+    const onCreateSession = vi.fn();
+    const { container } = render(DesktopSessionList, { sessions: [], hasAnySessions: false, onCreateSession, catalogComplete: true });
+    await fireEvent.click(screen.getByRole('button', { name: 'Archived' }));
+    expect(screen.getByText('No sessions yet')).toBeInTheDocument();
+    expect(screen.queryByText('No archived sessions')).not.toBeInTheDocument();
+    const actions = container.querySelector('.session-empty-actions')!;
+    expect(within(actions as HTMLElement).getAllByRole('button')).toHaveLength(1);
+    await fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    expect(onCreateSession).toHaveBeenCalledOnce();
+  });
+
+  it('does not treat a filtered empty response as proof that no sessions exist', async () => {
+    render(DesktopSessionList, { sessions: [], catalogComplete: true, hasAnySessions: null, onCreateSession: vi.fn() });
+    await fireEvent.click(screen.getByRole('button', { name: 'Resolved' }));
+    expect(screen.getByText('No resolved sessions')).toBeInTheDocument();
+    expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New session' })).not.toBeInTheDocument();
+  });
+
+  it('keeps search recovery separate from an empty lifecycle category', async () => {
+    render(DesktopSessionList, { sessions: [], catalogComplete: true, hasAnySessions: true });
+    await fireEvent.click(screen.getByRole('button', { name: 'Archived' }));
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Search sessions' }), { target: { value: 'missing' } });
+    expect(screen.getByText('No matching sessions')).toBeInTheDocument();
+    expect(screen.queryByText('No archived sessions')).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(screen.getByText('No archived sessions')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Archived' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('shows exclusions without an error banner and does not open details on hover or focus', async () => {
+    vi.useFakeTimers();
+    render(DesktopSessionList, { sessions, catalogComplete: true, excludedAgents: [{ id: 'old', name: 'flkr-ws' }], supportedAgentCount: 1 });
+    const trigger = screen.getByRole('button', { name: '1 agent excluded from this view. Show details' });
+    expect(trigger.querySelector('.lucide-info')).not.toBeNull();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(screen.getByText('Inspect workspace')).toBeInTheDocument();
+    await fireEvent.pointerEnter(trigger, { pointerType: 'mouse' });
+    trigger.focus();
+    await vi.advanceTimersByTimeAsync(1000);
+    await tick();
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Excluded agents' })).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('opens exclusions on click and offers All without inferring lifecycle for excluded agents', async () => {
+    const { container } = render(DesktopSessionList, { sessions, catalogComplete: true, excludedAgents: [{ id: 'old', name: 'flkr-ws' }], supportedAgentCount: 1 });
+    await fireEvent.click(screen.getByRole('button', { name: '1 agent excluded from this view. Show details' }));
+    const explanation = screen.getByRole('dialog', { name: 'Excluded agents' });
+    expect(explanation).toHaveTextContent('flkr-ws does not support lifecycle filters. Its sessions are available in All.');
+    expect(within(explanation).getByRole('link', { name: 'flkr-ws' })).toHaveAttribute('href', '/agents');
+    expect(within(explanation).queryByRole('button', { name: 'View all sessions' })).not.toBeInTheDocument();
+    expect(within(explanation).getAllByRole('button')).toHaveLength(1);
+    expect(container.querySelector('.state-inline-error')).toBeNull();
+    await fireEvent.click(within(explanation).getByRole('button', { name: 'available in All' }));
+    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByText('1 agent excluded')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Excluded agents' })).not.toBeInTheDocument();
+  });
+
+  it('supports keyboard activation, per-agent links, and Escape for excluded-agent details', async () => {
+    render(DesktopSessionList, { sessions, excludedAgents: [{ id: 'one', name: 'Old one' }, { id: 'two', name: 'Old two' }], supportedAgentCount: 1 });
+    const trigger = screen.getByRole('button', { name: '2 agents excluded from this view. Show details' });
+    trigger.focus();
+    expect(screen.queryByRole('dialog', { name: 'Excluded agents' })).not.toBeInTheDocument();
+    await fireEvent.keyDown(trigger, { key: 'Enter' });
+    const explanation = screen.getByRole('dialog', { name: 'Excluded agents' });
+    expect(explanation).toHaveTextContent('Old one, Old two do not support lifecycle filters. Their sessions are available in All.');
+    expect(within(explanation).getByRole('link', { name: 'Old one' })).toHaveAttribute('href', '/agents');
+    expect(within(explanation).getByRole('link', { name: 'Old two' })).toHaveAttribute('href', '/agents');
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    await fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Excluded agents' })).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
+
+  it.each(['Open', 'Resolved', 'Archived'])('uses a neutral unavailable state when no agent supports the %s view', async (view) => {
+    const onRefresh = vi.fn();
+    render(DesktopSessionList, { sessions: [], catalogComplete: true, hasAnySessions: null, excludedAgents: [{ id: 'old', name: 'Older agent' }], supportedAgentCount: 0, onRefresh });
+    await fireEvent.click(screen.getByRole('button', { name: view }));
+    expect(screen.getByText(`${view} view unavailable for connected agents`)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+    expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'View all sessions' }));
+    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('qualifies empty supported results without claiming excluded agents have no sessions', async () => {
+    render(DesktopSessionList, { sessions: [], catalogComplete: true, hasAnySessions: false, excludedAgents: [{ id: 'old', name: 'Older agent' }], supportedAgentCount: 1 });
+    await fireEvent.click(screen.getByRole('button', { name: 'Resolved' }));
+    expect(screen.getByText('No resolved sessions from supported agents')).toBeInTheDocument();
+    expect(screen.queryByText('No sessions yet')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps actual request failures visible alongside compatibility information', () => {
+    render(DesktopSessionList, { sessions, catalogComplete: true, error: 'New agent: request timed out', excludedAgents: [{ id: 'old', name: 'Older agent' }], supportedAgentCount: 1, onRefresh: vi.fn() });
+    expect(screen.getByRole('alert')).toHaveTextContent('New agent: request timed out');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByText('1 agent excluded')).toBeInTheDocument();
   });
 
   it('clears a search that has no matching sessions', async () => {
@@ -110,6 +297,37 @@ describe('DesktopSessionList', () => {
     expect(onRefresh).toHaveBeenCalledOnce();
   });
 
+  it('renders loaded rows while showing that remaining history is still loading', async () => {
+    render(DesktopSessionList, { sessions, loading: true, catalogComplete: true });
+    expect(await screen.findByText('Inspect workspace')).toBeInTheDocument();
+    expect(await screen.findByRole('status')).toHaveTextContent('Loading remaining sessions');
+    expect(screen.getByRole('status')).toHaveClass('sr-only');
+    expect(screen.queryByLabelText('Loading sessions')).not.toBeInTheDocument();
+  });
+
+  it('does not report a complete no-match result while remaining history is loading', async () => {
+    const { rerender } = render(DesktopSessionList, { sessions, loading: true, catalogComplete: true });
+    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), { target: { value: 'not loaded yet' } });
+    expect(await screen.findByRole('status')).toHaveTextContent('Searching remaining history');
+    expect(screen.queryByText('No matching sessions')).not.toBeInTheDocument();
+    expect(screen.getByText('No matches in loaded sessions')).toBeInTheDocument();
+    await rerender({ sessions, loading: false, catalogComplete: true });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByText('No matching sessions')).toBeInTheDocument();
+  });
+
+  it('keeps partial-load errors visible even when none of the loaded rows match', async () => {
+    const onRefresh = vi.fn();
+    render(DesktopSessionList, { sessions, catalogComplete: true, error: 'Later page timed out.', onRefresh });
+    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), { target: { value: 'not loaded yet' } });
+    expect(screen.getByRole('alert')).toHaveTextContent('Session results may be incomplete.');
+    expect(screen.getByRole('alert')).toHaveTextContent('Later page timed out.');
+    expect(screen.queryByText('No matching sessions')).not.toBeInTheDocument();
+    expect(screen.getByText('No matches in loaded sessions')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
   it('shows agent names on sessions without workspace-level agent pills', async () => {
     const { container } = render(DesktopSessionList, { sessions, onOpenSession: vi.fn() });
 
@@ -119,16 +337,16 @@ describe('DesktopSessionList', () => {
 
     expect(container.querySelector('.session-workspace-agents')).toBeNull();
     expect(container.querySelector('.session-agent-chip')).toBeNull();
-    const identicon = container.querySelector<SVGElement>('.session-identicon-svg');
+    const identicon = container.querySelector('.hex-identicon');
     expect(identicon).not.toBeNull();
-    expect(identicon?.style.getPropertyValue('--identicon-color').trim()).toMatch(/^#[0-9a-f]{6}$/i);
-    expect(identicon?.querySelector('circle')).toHaveAttribute('fill', 'currentColor');
-    expect(identicon?.querySelector('g')).toHaveAttribute('stroke', 'currentColor');
+    expect(identicon?.querySelector('svg')).toHaveAttribute('viewBox', '0 0 32 32');
+    expect(identicon?.querySelector('polygon')).toHaveAttribute('fill', expect.stringMatching(/^#[0-9a-f]{6}$/i));
+    expect(identicon?.querySelector('circle')).toBeNull();
     expect(screen.getAllByText('WS-QMT')).toHaveLength(1);
     expect(screen.getAllByText('QMTCODE')).toHaveLength(1);
   });
 
-  it('uses the remote workspace icon only for remote-only groups', () => {
+  it('uses sync folders only for collapsed remote and mixed groups and keeps location beside the path', async () => {
     const remote = { ...sessions[0], sessionId: 'remote', location: 'remote' as const };
     const local = { ...sessions[1], sessionId: 'local', location: 'local' as const };
     const { container } = render(DesktopSessionList, {
@@ -140,9 +358,49 @@ describe('DesktopSessionList', () => {
       ]
     });
 
-    expect(screen.getByLabelText('Remote workspace').querySelector('.lucide-folder-sync')).not.toBeNull();
-    expect(container.querySelectorAll('.session-workspace-icon-remote')).toHaveLength(1);
-    expect(container.querySelectorAll('.lucide-folder-kanban')).toHaveLength(2);
+    expect(container.querySelectorAll('.session-workspace-icon')).toHaveLength(3);
+    expect(container.querySelector('.lucide-folder-kanban')).toBeNull();
+    for (const trigger of container.querySelectorAll<HTMLElement>('.session-workspace-trigger')) {
+      if (trigger.getAttribute('aria-expanded') === 'true') await fireEvent.click(trigger);
+      expect(trigger).toHaveAttribute('aria-expanded', 'false');
+      if (trigger.querySelector('.session-workspace-machine')) {
+        expect(trigger.querySelector('.lucide-folder-sync')).not.toBeNull();
+        await fireEvent.click(trigger);
+        expect(trigger).toHaveAttribute('aria-expanded', 'true');
+        expect(trigger.querySelector('.lucide-folder-open')).not.toBeNull();
+        expect(trigger.querySelector('.lucide-folder-sync')).toBeNull();
+        await fireEvent.click(trigger);
+        expect(trigger.querySelector('.lucide-folder-sync')).not.toBeNull();
+      } else {
+        expect(trigger.querySelector('.lucide-folder')).not.toBeNull();
+        expect(trigger.querySelector('.lucide-folder-sync')).toBeNull();
+      }
+    }
+    expect(container.querySelectorAll('.lucide-folder-sync')).toHaveLength(2);
+    for (const icon of container.querySelectorAll('.session-workspace-icon')) {
+      expect(icon).toHaveAttribute('aria-hidden', 'true');
+      expect(icon.querySelector('svg')).toHaveAttribute('width', '22');
+      expect(icon.querySelector('svg')).toHaveAttribute('stroke-width', '1.5');
+    }
+    expect(screen.getByText('Remote', { selector: '.session-workspace-machine' })).toHaveAttribute('title', 'Remote workspace');
+    expect(screen.getByText('local + remote')).toHaveAttribute('title', 'Local and remote workspace');
+    expect(screen.getByText('Remote', { selector: '.session-workspace-machine' }).closest('.session-workspace-path')).not.toBeNull();
+  });
+
+  it('shows open and closed folder glyphs as each workspace is expanded or collapsed', async () => {
+    const { container } = render(DesktopSessionList, { sessions: [sessions[0], { ...sessions[1], cwd: '/projects/other' }] });
+    const triggers = [...container.querySelectorAll<HTMLElement>('.session-workspace-trigger')];
+    await waitFor(() => expect(triggers[0]).toHaveAttribute('aria-expanded', 'true'));
+    expect(triggers[0].querySelector('.lucide-folder-open')).not.toBeNull();
+    expect(triggers[1]).toHaveAttribute('aria-expanded', 'false');
+    expect(triggers[1].querySelector('.lucide-folder')).not.toBeNull();
+    await fireEvent.click(triggers[0]);
+    expect(triggers[0]).toHaveAttribute('aria-expanded', 'false');
+    expect(triggers[0].querySelector('.lucide-folder-open')).toBeNull();
+    expect(triggers[0].querySelector('.lucide-folder')).not.toBeNull();
+    await fireEvent.click(triggers[1]);
+    expect(triggers[1]).toHaveAttribute('aria-expanded', 'true');
+    expect(triggers[1].querySelector('.lucide-folder-open')).not.toBeNull();
   });
 
   it('shows the owning machine on remote and mixed workspace path lines', () => {
@@ -241,7 +499,7 @@ describe('DesktopSessionList', () => {
     expect(screen.queryByText('8f2a91bc-1234-5678-9012-abcdefabcdef')).not.toBeInTheDocument();
 
     await fireEvent.click(await screen.findByLabelText('Session actions for Inspect workspace'));
-    await fireEvent.click(screen.getByRole('button', { name: 'Copy session ID for Inspect workspace' }));
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Copy session ID for Inspect workspace' }));
 
     expect(writeText).toHaveBeenCalledWith('8f2a91bc-1234-5678-9012-abcdefabcdef');
     expect(onOpenSession).not.toHaveBeenCalled();
@@ -257,93 +515,161 @@ describe('DesktopSessionList', () => {
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
   });
 
-  it('maps internal lifecycle states into user-facing filters', async () => {
-    const filteredSessions: DesktopSessionSummary[] = [
-      { ...sessions[0], sessionId: 'thinking', title: 'Active work', status: 'thinking' },
-      { ...sessions[0], sessionId: 'waiting', title: 'Needs approval', status: 'waiting' },
-      { ...sessions[0], sessionId: 'completed', title: 'Finished work', status: 'completed' }
-    ];
-    render(DesktopSessionList, { sessions: filteredSessions });
-
-    expect(screen.getByRole('button', { name: 'Active' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Needs input' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Thinking' })).not.toBeInTheDocument();
-
-    const toggle = screen.getByRole('button', { name: 'Show session filters' });
-    const group = screen.getByRole('group', { name: 'Filter sessions' });
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(toggle).toHaveAttribute('aria-controls', group.id);
-    expect(group).not.toHaveClass('session-browser-filter-scroll-expanded');
-    await fireEvent.click(toggle);
-    expect(screen.getByRole('button', { name: 'Hide session filters' })).toHaveAttribute('aria-expanded', 'true');
-    expect(group).toHaveClass('session-browser-filter-scroll-expanded');
-    await fireEvent.click(screen.getByRole('button', { name: 'Needs input' }));
-    expect(screen.getByRole('button', { name: 'Show session filters' })).toHaveAttribute('aria-expanded', 'false');
-    expect(group).not.toHaveClass('session-browser-filter-scroll-expanded');
-    expect(screen.getByRole('button', { name: 'Needs input' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByText('Needs approval')).toBeInTheDocument();
-    expect(screen.queryByText('Active work')).not.toBeInTheDocument();
+  it('defaults to Open without confusing an idle completed turn with resolution', async () => {
+    const resolved = { ...sessions[0], sessionId: 'resolved', title: 'Resolved task', lifecycle: { ...sessions[0].lifecycle!, session_id: 'resolved', resolved: true } };
+    render(DesktopSessionList, { sessions: [...sessions, resolved], catalogComplete: true });
+    expect(screen.getByRole('button', { name: 'Open' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Inspect workspace')).toBeInTheDocument();
+    expect(screen.queryByText('Resolved task')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Completed' })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Resolved' }));
+    expect(screen.getByText('Resolved task')).toBeInTheDocument();
+    expect(screen.queryByText('Inspect workspace')).not.toBeInTheDocument();
   });
 
-  it('switches between status and remote in one exclusive segmented filter', async () => {
+  it('combines lifecycle, runtime and location instead of making them exclusive', async () => {
     const mixedSessions: DesktopSessionSummary[] = [
       { ...sessions[0], sessionId: 'local-active', title: 'Local active', status: 'thinking', location: 'local' },
-      { ...sessions[0], sessionId: 'remote-waiting', title: 'Remote waiting', status: 'waiting', location: 'remote', remoteNodeId: 'node-1', remoteNodeLabel: 'Laptop' },
-      { ...sessions[0], sessionId: 'remote-completed', title: 'Remote completed', status: 'completed', location: 'remote', remoteNodeId: 'node-1', remoteNodeLabel: 'Laptop' }
+      { ...sessions[0], sessionId: 'remote-active', title: 'Remote active', status: 'thinking', location: 'remote' },
+      { ...sessions[0], sessionId: 'remote-waiting', title: 'Remote waiting', status: 'waiting', location: 'remote' }
     ];
-    const { container } = render(DesktopSessionList, { sessions: mixedSessions, showRemoteSessions: true });
-    const remote = screen.getByRole('button', { name: 'Remote' });
-
-    await fireEvent.click(screen.getByRole('button', { name: 'Active' }));
-    expect(screen.getByText('Local active')).toBeInTheDocument();
-    expect(screen.queryByText('Remote waiting')).not.toBeInTheDocument();
-
-    await fireEvent.click(remote);
-    expect(remote).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Show session filters' })).toHaveAttribute('aria-expanded', 'false');
-    expect(container.querySelector('.session-browser-filter-indicator')).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'Active' })).toHaveAttribute('aria-pressed', 'false');
+    render(DesktopSessionList, { sessions: mixedSessions, showRemoteSessions: true, catalogComplete: true });
+    await fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Runtime' })).getByRole('radio', { name: 'Running' }));
+    await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Location' })).getByRole('radio', { name: 'Remote' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Close filters' }));
+    expect(screen.getByText('Remote active')).toBeInTheDocument();
     expect(screen.queryByText('Local active')).not.toBeInTheDocument();
-    expect(screen.getByText('Remote waiting')).toBeInTheDocument();
-    expect(screen.getByText('Remote completed')).toBeInTheDocument();
-    expect(container.querySelector('.session-workspace-icon-remote')).not.toBeNull();
-    expect(screen.getByText('Laptop').querySelector('.lucide-network')).not.toBeNull();
-
-    await fireEvent.click(screen.getByRole('button', { name: 'All' }));
-    expect(screen.getByText('Local active')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByText('Remote waiting')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open' })).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('clears search and remote selection when no sessions match', async () => {
-    render(DesktopSessionList, { sessions, showRemoteSessions: true });
-    await fireEvent.click(screen.getByRole('button', { name: 'Remote' }));
-    expect(screen.getByText('No matching sessions')).toBeInTheDocument();
-    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), {
-      target: { value: 'missing' }
-    });
+  it('clears search and secondary filters without losing the lifecycle view', async () => {
+    render(DesktopSessionList, { sessions, showRemoteSessions: true, catalogComplete: true });
+    await fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Location' })).getByRole('radio', { name: 'Remote' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Close filters' }));
+    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), { target: { value: 'missing' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
-    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Open' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByPlaceholderText('Search sessions, workspaces, agents…')).toHaveValue('');
     expect(screen.getByText('Inspect workspace')).toBeInTheDocument();
   });
 
-  it('hides Remote when disabled and resets an active Remote filter when disabled', async () => {
-    const { rerender } = render(DesktopSessionList, { sessions, showRemoteSessions: false });
-    expect(screen.queryByRole('button', { name: 'Remote' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
-
-    await rerender({ sessions, showRemoteSessions: true });
-    await fireEvent.click(screen.getByRole('button', { name: 'Remote' }));
+  it('hides the location refinement when remote browsing is disabled', async () => {
+    const { rerender } = render(DesktopSessionList, { sessions, showRemoteSessions: true, catalogComplete: true });
+    await fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Location' })).getByRole('radio', { name: 'Remote' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Close filters' }));
     expect(screen.getByText('No matching sessions')).toBeInTheDocument();
-
-    await rerender({ sessions, showRemoteSessions: false });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true'));
-    expect(screen.queryByRole('button', { name: 'Remote' })).not.toBeInTheDocument();
+    await rerender({ sessions, showRemoteSessions: false, catalogComplete: true });
+    await fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    expect(screen.queryByRole('radiogroup', { name: 'Location' })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Close filters' }));
     expect(screen.getByText('Inspect workspace')).toBeInTheDocument();
+  });
 
-    await rerender({ sessions, showRemoteSessions: true });
-    expect(screen.getByRole('button', { name: 'Remote' })).toHaveAttribute('aria-pressed', 'false');
+  it('supports archived + open without coupling archive and resolution', async () => {
+    const archived = { ...sessions[0], title: 'Archived open task', lifecycle: { ...sessions[0].lifecycle!, archived: true } };
+    render(DesktopSessionList, { sessions: [archived], catalogComplete: true });
+    await fireEvent.click(screen.getByRole('button', { name: 'Archived' }));
+    expect(screen.getByText('Archived open task')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Resolution' })).getByRole('radio', { name: 'Open' }));
+    expect(within(screen.getByRole('radiogroup', { name: 'Archived' })).getByRole('radio', { name: 'Only' })).toHaveAttribute('aria-checked', 'true');
+    await fireEvent.click(screen.getByRole('button', { name: 'Close filters' }));
+    expect(screen.getByText('Archived open task')).toBeInTheDocument();
+  });
+
+  it('keeps refinements in a popover with no disclosure row or default filter count', async () => {
+    render(DesktopSessionList, { sessions, catalogComplete: true });
+    expect(screen.queryByText('Refine filters')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Session filters' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filters' })).toHaveAttribute('aria-expanded', 'false');
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Search sessions' }), { target: { value: 'Inspect' } });
+    expect(screen.getByRole('button', { name: 'Filters' })).not.toHaveTextContent(/[0-9]/);
+    await fireEvent.click(screen.getByRole('button', { name: 'Resolved' }));
+    expect(screen.getByRole('button', { name: 'Filters' })).not.toHaveTextContent(/[0-9]/);
+    await fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    expect(screen.getByRole('dialog', { name: 'Session filters' })).toBeInTheDocument();
+    expect(screen.getAllByRole('radiogroup')).toHaveLength(3);
+  });
+
+  it('shows a compact applied-filter summary and clears refinements without clearing search or the view', async () => {
+    const resolved = { ...sessions[0], lifecycle: { ...sessions[0].lifecycle!, resolved: true }, status: 'thinking' as const, location: 'remote' as const };
+    render(DesktopSessionList, { sessions: [resolved], showRemoteSessions: true, catalogComplete: true });
+    await fireEvent.click(screen.getByRole('button', { name: 'Resolved' }));
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Search sessions' }), { target: { value: 'Inspect' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Runtime' })).getByRole('radio', { name: 'Running' }));
+    await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Location' })).getByRole('radio', { name: 'Remote' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Close filters' }));
+    expect(screen.getByRole('button', { name: 'Filters, 2 active' })).toHaveTextContent('2');
+    expect(screen.getByText('Running · Remote')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear additional filters' }));
+    expect(screen.getByRole('textbox', { name: 'Search sessions' })).toHaveValue('Inspect');
+    expect(screen.getByRole('button', { name: 'Resolved' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByText('Running · Remote')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeInTheDocument();
+  });
+
+  it('supports radio arrow keys and restores trigger focus when dismissed with Escape', async () => {
+    render(DesktopSessionList, { sessions, catalogComplete: true });
+    const trigger = screen.getByRole('button', { name: 'Filters' });
+    trigger.focus();
+    await fireEvent.keyDown(trigger, { key: 'Enter' });
+    const runtime = screen.getByRole('radiogroup', { name: 'Runtime' });
+    const any = within(runtime).getByRole('radio', { name: 'Any' });
+    any.focus();
+    await fireEvent.keyDown(any, { key: 'ArrowRight' });
+    expect(within(runtime).getByRole('radio', { name: 'Running' })).toHaveAttribute('aria-checked', 'true');
+    expect(within(runtime).getByRole('radio', { name: 'Running' })).toHaveFocus();
+    await fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Session filters' })).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
+
+  it('searches beyond the initial workspace display limit and honors restored navigation state', async () => {
+    const catalog = Array.from({ length: 25 }, (_, index) => ({ ...sessions[0], sessionId: `task-${index}`, title: `Task ${index}`, updatedAt: `2026-07-${String(25 - index).padStart(2, '0')}T01:00:00Z` }));
+    const first = render(DesktopSessionList, { sessions: catalog, catalogComplete: true });
+    expect(screen.queryByText('Task 24')).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), { target: { value: 'Task 24' } });
+    expect(screen.getByText('Task 24')).toBeInTheDocument();
+    first.unmount();
+    const browserState = { ...createSessionBrowserState(), query: 'Task 24', openGroups: ['/projects/querymt'], groupsInitialized: true, visibleLimits: { '/projects/querymt': 20 } };
+    render(DesktopSessionList, { sessions: catalog, catalogComplete: true, browserState });
+    expect(screen.getByPlaceholderText('Search sessions, workspaces, agents…')).toHaveValue('Task 24');
+    expect(screen.getByText('Task 24')).toBeInTheDocument();
+  });
+
+  it('temporarily expands matching workspaces and restores their saved expansion after search', async () => {
+    const other = { ...sessions[1], cwd: '/projects/other', title: 'Matching session in closed workspace' };
+    const { container } = render(DesktopSessionList, { sessions: [sessions[0], other], catalogComplete: true });
+    const triggers = () => [...container.querySelectorAll<HTMLElement>('.session-workspace-trigger')];
+    await waitFor(() => expect(triggers().map((trigger) => trigger.getAttribute('aria-expanded'))).toEqual(['true', 'false']));
+    const search = screen.getByPlaceholderText('Search sessions, workspaces, agents…');
+    await fireEvent.input(search, { target: { value: 'Matching session in closed workspace' } });
+    await waitFor(() => expect(triggers()).toHaveLength(1));
+    expect(triggers()[0]).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(other.title)).toBeVisible();
+    await fireEvent.click(triggers()[0]);
+    expect(triggers()[0]).toHaveAttribute('aria-expanded', 'false');
+    await fireEvent.input(search, { target: { value: 'Inspect workspace' } });
+    await waitFor(() => expect(triggers()[0]).toHaveAttribute('aria-expanded', 'true'));
+    await fireEvent.input(search, { target: { value: '' } });
+    await waitFor(() => expect(triggers().map((trigger) => trigger.getAttribute('aria-expanded'))).toEqual(['true', 'false']));
+  });
+
+  it('expands new matching workspaces as progressive pages arrive during a search', async () => {
+    const other = { ...sessions[1], cwd: '/projects/other', title: 'Later matching session' };
+    const browserState = { ...createSessionBrowserState(), query: 'session', openGroups: ['/projects/querymt'], groupsInitialized: true };
+    const { container, rerender } = render(DesktopSessionList, { sessions: [], loading: true, catalogComplete: true, browserState });
+    await rerender({ sessions: [other], loading: true, catalogComplete: true, browserState });
+    const trigger = container.querySelector('.session-workspace-trigger');
+    await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'true'));
+    expect(screen.getByText(other.title)).toBeVisible();
+    expect(browserState.openGroups).toEqual(['/projects/querymt']);
   });
 
   it('hides agent names for a single-agent session list while preserving agent search', async () => {
@@ -373,7 +699,7 @@ describe('DesktopSessionList', () => {
     });
 
     await fireEvent.click(await screen.findByLabelText('Session actions for Inspect workspace'));
-    const deleteButton = screen.getByRole('button', { name: 'Delete session Inspect workspace' });
+    const deleteButton = screen.getByRole('menuitem', { name: 'Delete session Inspect workspace' });
 
     await fireEvent.click(deleteButton);
 
@@ -398,7 +724,7 @@ describe('DesktopSessionList', () => {
     });
 
     await fireEvent.click(await screen.findByLabelText('Session actions for Inspect workspace'));
-    await fireEvent.click(screen.getByRole('button', { name: 'Delete session Inspect workspace' }));
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete session Inspect workspace' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(onDeleteSession).not.toHaveBeenCalled();
@@ -416,7 +742,7 @@ describe('DesktopSessionList', () => {
     });
 
     await fireEvent.click(await screen.findByLabelText('Session actions for Inspect workspace'));
-    await fireEvent.click(screen.getByRole('button', { name: 'Delete session Inspect workspace' }));
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete session Inspect workspace' }));
     await fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Agent refused to delete the session.');

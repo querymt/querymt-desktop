@@ -220,6 +220,24 @@ describe('SessionHeader', () => {
     expect(details).not.toHaveAttribute('open');
   });
 
+  it('keeps resolution, archive and execution failure independent and exposes restore in the header', async () => {
+    const onSetLifecycle = vi.fn(async () => {});
+    render(SessionHeader, {
+      session: session({ runState: 'failed', lastError: 'Provider failed' }),
+      summary: { agentId: 'agent-1', agentName: 'Agent', sessionId: 'session-1', title: 'Finished attempt', cwd: '/tmp/work', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'Agent', source: 'acp', status: 'completed', lifecycle: { session_id: 'session-1', resolved: true, archived: true, resolved_at: null, archived_at: null } },
+      title: 'Finished attempt', workspace: 'work', updatedAt: 'Just now', canManageLifecycle: true, onSetLifecycle
+    });
+    expect(screen.getByLabelText('Status: Failed')).toBeInTheDocument();
+    expect(screen.getByText('Resolved')).toBeInTheDocument();
+    expect(screen.getByText('Archived')).toBeInTheDocument();
+    await fireEvent.click(screen.getByLabelText('Session details'));
+    expect(screen.getByText('Provider failed')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Session actions for Finished attempt' }));
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Restore' }));
+    expect(onSetLifecycle).toHaveBeenCalledWith({ archived: false });
+    expect(screen.getByLabelText('Status: Failed')).toBeInTheDocument();
+  });
+
   it('keeps header actions available without a context banner', async () => {
     const onBack = vi.fn();
     const onRefresh = vi.fn();

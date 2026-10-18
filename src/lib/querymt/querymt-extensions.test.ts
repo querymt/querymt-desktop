@@ -208,6 +208,20 @@ describe('parseQuerymtElicitationRecoveryAuthority', () => {
   });
 });
 
+describe('QuerymtExtensions session lifecycle', () => {
+  it('uses the exact wire names and sends only the requested independent patch', async () => {
+    const { extensions, extMethod } = extensionClient();
+    const lifecycle = { session_id: 'session-a', resolved: true, archived: false, resolved_at: '2026-10-18T00:00:00Z', archived_at: null };
+    extMethod.mockResolvedValue(lifecycle);
+    expect(await extensions.getSessionLifecycle('session-a')).toEqual(lifecycle);
+    expect(extMethod).toHaveBeenLastCalledWith('_querymt/session/getLifecycle', { session_id: 'session-a' });
+    await extensions.setSessionLifecycle('session-a', { resolved: false });
+    expect(extMethod).toHaveBeenLastCalledWith('_querymt/session/setLifecycle', { session_id: 'session-a', resolved: false });
+    await extensions.setSessionLifecycle('session-a', { archived: true });
+    expect(extMethod).toHaveBeenLastCalledWith('_querymt/session/setLifecycle', { session_id: 'session-a', archived: true });
+  });
+});
+
 describe('QuerymtExtensions control methods', () => {
   it('fetches profiles through the profiles method', async () => {
     const { extensions, extMethod } = extensionClient();

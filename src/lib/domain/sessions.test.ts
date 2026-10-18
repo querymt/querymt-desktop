@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
-import { buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
+import { sessionMatchesLifecycle, buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 
 function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionId: string }): DesktopSessionSummary {
@@ -48,6 +48,25 @@ describe('session list request meta', () => {
     expect(buildListSessionsRequest({ remoteNodeIds: ['node-1'] })._meta).toEqual({
       session_scope: 'root', remoteNodeIds: ['node-1']
     });
+  });
+});
+
+describe('session lifecycle metadata', () => {
+  const lifecycle = { session_id: 'session-1', resolved: true, archived: true, resolved_at: '2026-10-18T00:00:00Z', archived_at: '2026-10-01T00:00:00Z' };
+  it('preserves independent owner-sourced lifecycle fields without changing runtime inference', () => {
+    const [summary] = mapAcpSessionsToDesktopSessions([createSession({ querymt: { lifecycle }, messageCount: 2, userMessageCount: 1, hasErrors: true, runtimeStatus: runtimeMeta('model') })], { agentId: 'agent-1', agentName: 'Agent' });
+    expect(summary.lifecycle).toEqual(lifecycle);
+    expect(summary.status).toBe('thinking');
+  });
+  it('does not invent lifecycle state when the metadata is missing or belongs to another session', () => {
+    for (const meta of [{}, { querymt: { lifecycle: { ...lifecycle, session_id: 'other' } } }, { querymt: { lifecycle: { resolved: false } } }]) {
+      expect(mapAcpSessionsToDesktopSessions([createSession(meta)], { agentId: 'a', agentName: 'A' })[0].lifecycle).toBeNull();
+    }
+    expect(sessionMatchesLifecycle(null, { resolution: 'open', archive: 'excluded' })).toBe(false);
+    expect(sessionMatchesLifecycle(null, { resolution: 'any', archive: 'any' })).toBe(true);
+  });
+  it('serializes archive + resolution predicates alongside root, workspace and remote scope', () => {
+    expect(buildListSessionsRequest({ cwd: '/tmp/work', cursor: '10', remoteNodeIds: ['owner'], lifecycle: { resolution: 'open', archive: 'only' } })).toEqual({ cwd: '/tmp/work', cursor: '10', _meta: { session_scope: 'root', remoteNodeIds: ['owner'], querymt: { sessionFilters: { resolution: 'open', archive: 'only' } } } });
   });
 });
 

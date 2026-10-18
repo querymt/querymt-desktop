@@ -4,6 +4,7 @@
   import { ChevronLeft, ChevronRight, LoaderCircle, Menu } from '@lucide/svelte';
   import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
+  import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
   import { autoCollapsePopover } from '$lib/design/details-popover';
   import { formatAriaShortcut, formatShortcut } from '$lib/design/platform';
   import { sectionIcons, type SectionName } from '$lib/design/tokens';
@@ -12,12 +13,13 @@
     getRecentSessionRailItems,
     getSessionWorkspaceName,
     isRootSession,
+    sessionMatchesLifecycle,
     type SessionRailItem
   } from '$lib/domain/sessions';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
-  import { createRoundIdenticon } from '$lib/vendor/round-identicon';
-  import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
+  import Identicon from '$lib/components/primitives/Identicon.svelte';
+  import type { DesktopSessionSummary, SessionLifecyclePatch, SessionStatus } from '$lib/domain/types';
 
   const MAX_SESSION_ICONS = 10;
   const SESSION_ICON_REM = 2.4;
@@ -35,7 +37,11 @@
     mobileHidden = false,
     onToggleCollapsed = null,
     onOpenSession = null,
-    onVisibleSessionItemsChange = null
+    onVisibleSessionItemsChange = null,
+    canManageLifecycle = null,
+    lifecyclePending = {},
+    lifecycleErrors = {},
+    onSetLifecycle = null
   }: {
     current: SectionName;
     sessions: DesktopSessionSummary[];
@@ -48,6 +54,10 @@
     onToggleCollapsed?: (() => void) | null;
     onOpenSession?: ((session: DesktopSessionSummary) => void) | null;
     onVisibleSessionItemsChange?: ((items: SessionRailItem[]) => void) | null;
+    canManageLifecycle?: ((session: DesktopSessionSummary) => boolean) | null;
+    lifecyclePending?: Record<string, boolean>;
+    lifecycleErrors?: Record<string, string | null>;
+    onSetLifecycle?: ((session: DesktopSessionSummary, patch: SessionLifecyclePatch) => Promise<unknown>) | null;
   } = $props();
 
   const routeMap: Record<SectionName, string> = {
@@ -73,6 +83,13 @@
 
   let sessionListElement = $state<HTMLElement | null>(null);
   let mobileNavigation = $state(false);
+  let menuSessionKey = $state<string | null>(null);
+
+  function openSessionMenu(event: MouseEvent | KeyboardEvent, key: string) {
+    if (event instanceof KeyboardEvent && event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+    event.preventDefault();
+    menuSessionKey = key;
+  }
   let sessionIconLimit = $state(MAX_SESSION_ICONS);
   const compact = $derived(collapsed);
   const onlineAgentCount = $derived(agentsStore.connectedAgents.length);
@@ -88,6 +105,7 @@
   const visibleSessions = $derived.by(() =>
     sessions
       .filter(isRootSession)
+      .filter((session) => sessionMatchesLifecycle(session.lifecycle, { resolution: 'open', archive: 'excluded' }))
       .filter((session) => !(session.agentId === currentAgentId && session.sessionId === currentSessionId))
   );
   const railItems = $derived(
@@ -180,6 +198,17 @@
     onOpenSession?.(session);
   }
 </script>
+
+{#snippet sessionMenu(session: DesktopSessionSummary, key: string)}
+  <SessionActionsMenu
+    {session}
+    bind:open={() => menuSessionKey === key, (value) => (menuSessionKey = value ? key : null)}
+    canManage={canManageLifecycle?.(session) ?? false}
+    pending={lifecyclePending[key]}
+    error={lifecycleErrors[key]}
+    onSetLifecycle={onSetLifecycle ? (patch) => onSetLifecycle!(session, patch) : null}
+  />
+{/snippet}
 
 {#snippet navIndicator(section: SectionName)}
   {#if section === 'Agents' && compact && onlineAgentCount > 0}
@@ -298,18 +327,16 @@
         <div class="session-icon-rail-list">
           {#each railItems as item, index (item.key)}
             {@const session = item.session}
-            {@const identicon = createRoundIdenticon(session.sessionId)}
+
+            <div class="session-rail-entry session-rail-entry-compact" role="group" aria-label={`Session ${session.title}`}>
             <Tooltip.Root>
               <Tooltip.Trigger>
                 {#snippet child({ props })}
-                  <a {...props} class={`session-icon-link ${item.isActive ? 'session-icon-link-active' : ''}`} href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}, ${getSessionShortcutLabel(index)}`} aria-keyshortcuts={getSessionAriaShortcut(index)} onclick={() => openSession(session)}>
+                  <a {...props} class={`session-icon-link ${item.isActive ? 'session-icon-link-active' : ''}`} href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}, ${getSessionShortcutLabel(index)}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
                     <span class="app-icon-activity-pill" aria-hidden="true"></span>
                     <span class="session-icon-surface" aria-hidden="true">
                       <span class="session-icon-avatar">
-                        <svg class="session-identicon-svg" style={`--identicon-color: ${identicon.color}`} width={identicon.width} height={identicon.width} viewBox={`0 0 ${identicon.width} ${identicon.width}`} preserveAspectRatio="xMinYMin">
-                          <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill="currentColor" />
-                          <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">{#each identicon.arcs as arc}<path d={arc.d} stroke-width={arc.strokeWidth} />{/each}</g>
-                        </svg>
+                        <Identicon seed={session.sessionId} />
                       </span>
                       {#if item.isActive}<span class="session-icon-status session-icon-status-active"><LoaderCircle size={10} class="animate-spin" /></span>{/if}
                       {#if item.requiresAttention}<SidebarAttentionDot />{/if}
@@ -320,12 +347,15 @@
               <Tooltip.Portal>
                 <Tooltip.Content class="session-icon-tooltip" side="right" sideOffset={10}>
                   <div class="session-icon-tooltip-title">{session.title}</div>
+                  {#if !session.lifecycle}<div class="session-icon-tooltip-meta">Lifecycle unavailable</div>{/if}
                   <div class="session-icon-tooltip-meta">{getStatusLabel(session.status, item)}{#if onlineAgentCount > 1} / {session.agentName}{/if} / {getSessionWorkspaceName(session.cwd)}</div>
                   <div class="session-icon-tooltip-meta">{formatSessionTimestamp(session.updatedAt)} / <SessionIdChip sessionId={session.sessionId} /> / {getSessionShortcutLabel(index)}</div>
                   <Tooltip.Arrow class="session-icon-tooltip-arrow" />
                 </Tooltip.Content>
               </Tooltip.Portal>
             </Tooltip.Root>
+            {@render sessionMenu(session, item.key)}
+            </div>
           {/each}
         </div>
       </div>
@@ -358,26 +388,26 @@
       </div>
 
       <div class="app-sidebar-recent" bind:this={sessionListElement}>
-        <div class="app-sidebar-section-heading"><span>Recent sessions</span><a href="/sessions">View all</a></div>
+        <div class="app-sidebar-section-heading"><span>Open sessions</span><a href="/sessions">Browse sessions</a></div>
         <div class="app-sidebar-session-list">
           {#if railItems.length === 0}
-            <div class="app-sidebar-empty">No recent sessions</div>
+            <div class="app-sidebar-empty">No open sessions</div>
           {:else}
             {#each railItems as item, index (item.key)}
               {@const session = item.session}
-              {@const identicon = createRoundIdenticon(session.sessionId)}
-              <a class={`app-sidebar-session ${item.isActive ? 'app-sidebar-session-active' : ''}`} href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}, ${getSessionShortcutLabel(index)}`} aria-keyshortcuts={getSessionAriaShortcut(index)} onclick={() => openSession(session)}>
+
+              <div class="session-rail-entry" role="group" aria-label={`Session ${session.title}`}>
+              <a class={`app-sidebar-session ${item.isActive ? 'app-sidebar-session-active' : ''}`} href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}, ${getSessionShortcutLabel(index)}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
                 <span class="app-sidebar-session-avatar" aria-hidden="true">
-                  <svg class="session-identicon-svg" style={`--identicon-color: ${identicon.color}`} width={identicon.width} height={identicon.width} viewBox={`0 0 ${identicon.width} ${identicon.width}`} preserveAspectRatio="xMinYMin">
-                    <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill="currentColor" />
-                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">{#each identicon.arcs as arc}<path d={arc.d} stroke-width={arc.strokeWidth} />{/each}</g>
-                  </svg>
+                  <Identicon seed={session.sessionId} />
                   {#if item.isActive}<span class="app-sidebar-session-spinner"><LoaderCircle size={9} class="animate-spin" /></span>{/if}
                   {#if item.requiresAttention}<SidebarAttentionDot />{/if}
                 </span>
-                <span class="app-sidebar-session-copy"><strong>{session.title}</strong><small>{getSessionWorkspaceName(session.cwd)} · {getStatusLabel(session.status, item)}</small></span>
+                <span class="app-sidebar-session-copy"><strong>{session.title}</strong><small>{getSessionWorkspaceName(session.cwd)} · {getStatusLabel(session.status, item)}{#if !session.lifecycle} · Lifecycle unavailable{/if}</small></span>
                 <kbd>{index === 9 ? '0' : index + 1}</kbd>
               </a>
+              {@render sessionMenu(session, item.key)}
+              </div>
             {/each}
           {/if}
         </div>

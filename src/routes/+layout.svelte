@@ -342,6 +342,10 @@
       onToggleCollapsed={() => sidebarStore.toggleCollapsed()}
       onOpenSession={(session) => agentsStore.acknowledgeSession(session.agentId, session.sessionId)}
       onVisibleSessionItemsChange={(items) => (visibleRailSessionItems = items)}
+      canManageLifecycle={(session) => agentsStore.canSetSessionLifecycle(session.agentId) && session.remoteConnectionState !== 'disconnected'}
+      lifecyclePending={agentsStore.sessionLifecyclePending}
+      lifecycleErrors={agentsStore.sessionLifecycleErrors}
+      onSetLifecycle={(session, patch) => agentsStore.setSessionLifecycle(session.agentId, session.sessionId, patch)}
     />
 
     <div class={`app-grid grid ${layoutClass}`}>
