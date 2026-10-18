@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { Tooltip } from 'bits-ui';
   import { ChevronLeft, ChevronRight, LoaderCircle, Menu } from '@lucide/svelte';
   import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
@@ -22,6 +22,7 @@
   import type { DesktopSessionSummary, SessionLifecyclePatch, SessionStatus } from '$lib/domain/types';
 
   const MAX_SESSION_ICONS = 10;
+  const SESSION_PAGE_SIZE = 20;
   const SESSION_ICON_REM = 2.4;
   const SESSION_ICON_GAP_REM = 0.52;
   const SESSION_LIST_OFFSET_REM = 0.6;
@@ -41,7 +42,11 @@
     canManageLifecycle = null,
     lifecyclePending = {},
     lifecycleErrors = {},
-    onSetLifecycle = null
+    onSetLifecycle = null,
+    hasMoreSessions = false,
+    loadingMoreSessions = false,
+    sessionsLoadError = null,
+    onLoadMoreSessions = null
   }: {
     current: SectionName;
     sessions: DesktopSessionSummary[];
@@ -58,6 +63,10 @@
     lifecyclePending?: Record<string, boolean>;
     lifecycleErrors?: Record<string, string | null>;
     onSetLifecycle?: ((session: DesktopSessionSummary, patch: SessionLifecyclePatch) => Promise<unknown>) | null;
+    hasMoreSessions?: boolean;
+    loadingMoreSessions?: boolean;
+    sessionsLoadError?: string | null;
+    onLoadMoreSessions?: (() => Promise<void>) | null;
   } = $props();
 
   const routeMap: Record<SectionName, string> = {
@@ -84,6 +93,9 @@
   let sessionListElement = $state<HTMLElement | null>(null);
   let mobileNavigation = $state(false);
   let menuSessionKey = $state<string | null>(null);
+  let expandedSessionLimit = $state(SESSION_PAGE_SIZE);
+  let requestingMore = $state(false);
+  let loadError = $state<string | null>(null);
 
   function openSessionMenu(event: MouseEvent | KeyboardEvent, key: string) {
     if (event instanceof KeyboardEvent && event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
@@ -112,12 +124,12 @@
     getRecentSessionRailItems(visibleSessions, {
       attentionSessionKeys,
       actionRequiredSessionKeys,
-      limit: compact ? sessionIconLimit : MAX_SESSION_ICONS
+      limit: compact ? sessionIconLimit : expandedSessionLimit
     })
   );
 
   $effect(() => {
-    onVisibleSessionItemsChange?.(railItems);
+    onVisibleSessionItemsChange?.(railItems.slice(0, MAX_SESSION_ICONS));
   });
 
   onMount(() => {
@@ -130,25 +142,63 @@
     return () => mediaQuery.removeEventListener('change', updateMobileNavigation);
   });
 
-  onMount(() => {
+  $effect(() => {
+    const element = sessionListElement;
+    const isCompact = compact;
+    if (!element) return;
     const updateSessionIconLimit = () => {
-      if (!sessionListElement || !compact) return;
+      if (!isCompact) {
+        void loadNearBottom();
+        return;
+      }
       const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
       const iconHeight = SESSION_ICON_REM * rootFontSize;
       const iconGap = SESSION_ICON_GAP_REM * rootFontSize;
-      const availableHeight = Math.max(0, sessionListElement.clientHeight - SESSION_LIST_OFFSET_REM * rootFontSize);
+      const availableHeight = Math.max(0, element.clientHeight - SESSION_LIST_OFFSET_REM * rootFontSize);
       sessionIconLimit = Math.max(0, Math.min(MAX_SESSION_ICONS, Math.floor((availableHeight + iconGap) / (iconHeight + iconGap))));
     };
 
-    updateSessionIconLimit();
+    untrack(updateSessionIconLimit);
     const resizeObserver = new ResizeObserver(updateSessionIconLimit);
-    if (sessionListElement) resizeObserver.observe(sessionListElement);
+    resizeObserver.observe(element);
     window.addEventListener('resize', updateSessionIconLimit);
     return () => {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateSessionIconLimit);
     };
   });
+
+  $effect(() => {
+    void railItems.length;
+    void hasMoreSessions;
+    void loadingMoreSessions;
+    void sessionsLoadError;
+    void compact;
+    void mobileNavigation;
+    const frame = requestAnimationFrame(() => { void loadNearBottom(); });
+    return () => cancelAnimationFrame(frame);
+  });
+
+  async function loadNearBottom(retry = false) {
+    const element = sessionListElement;
+    if (compact || mobileNavigation || !element || requestingMore || loadingMoreSessions) return;
+    if (!retry && (element.clientHeight <= 0 || element.scrollHeight <= 0 ||
+      element.scrollHeight - element.scrollTop - element.clientHeight > 120)) return;
+    if (railItems.length < visibleSessions.length) {
+      expandedSessionLimit += SESSION_PAGE_SIZE;
+      return;
+    }
+    if (!onLoadMoreSessions || !hasMoreSessions || (!retry && (sessionsLoadError || loadError))) return;
+    requestingMore = true;
+    loadError = null;
+    try {
+      await onLoadMoreSessions();
+    } catch (error) {
+      loadError = error instanceof Error ? error.message : 'Could not load more sessions.';
+    } finally {
+      requestingMore = false;
+    }
+  }
 
   function getSessionHref(session: DesktopSessionSummary): string {
     return `/sessions/${encodeURIComponent(session.agentId)}/${encodeURIComponent(session.sessionId)}`;
@@ -181,10 +231,12 @@
   }
 
   function getSessionShortcutLabel(index: number): string {
+    if (index >= MAX_SESSION_ICONS) return '';
     return formatShortcut(index === 9 ? '0' : String(index + 1));
   }
 
-  function getSessionAriaShortcut(index: number): string {
+  function getSessionAriaShortcut(index: number): string | undefined {
+    if (index >= MAX_SESSION_ICONS) return undefined;
     return formatAriaShortcut(index === 9 ? '0' : String(index + 1));
   }
 
@@ -328,12 +380,11 @@
           {#each railItems as item, index (item.key)}
             {@const session = item.session}
 
-            <div class="session-rail-entry session-rail-entry-compact" role="group" aria-label={`Session ${session.title}`}>
+            <div class="session-rail-entry session-rail-entry-compact" class:session-rail-entry-menu-open={menuSessionKey === item.key} role="group" aria-label={`Session ${session.title}`}>
             <Tooltip.Root>
               <Tooltip.Trigger>
                 {#snippet child({ props })}
-                  <a {...props} class={`session-icon-link ${item.isActive ? 'session-icon-link-active' : ''}`} href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}, ${getSessionShortcutLabel(index)}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
-                    <span class="app-icon-activity-pill" aria-hidden="true"></span>
+                  <a {...props} class="session-icon-link" href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
                     <span class="session-icon-surface" aria-hidden="true">
                       <span class="session-icon-avatar">
                         <Identicon seed={session.sessionId} />
@@ -387,28 +438,32 @@
         {@render expandedSection(manageSections, 'Manage')}
       </div>
 
-      <div class="app-sidebar-recent" bind:this={sessionListElement}>
-        <div class="app-sidebar-section-heading"><span>Open sessions</span><a href="/sessions">Browse sessions</a></div>
-        <div class="app-sidebar-session-list">
-          {#if railItems.length === 0}
+      <div class="app-sidebar-recent">
+        <div class="app-sidebar-section-heading"><span>Open sessions</span></div>
+        <div class="app-sidebar-session-list" bind:this={sessionListElement} onscroll={() => { void loadNearBottom(); }} aria-label="Open sessions" aria-busy={loadingMoreSessions || requestingMore}>
+          {#if railItems.length === 0 && !hasMoreSessions && !loadingMoreSessions}
             <div class="app-sidebar-empty">No open sessions</div>
           {:else}
             {#each railItems as item, index (item.key)}
               {@const session = item.session}
 
-              <div class="session-rail-entry" role="group" aria-label={`Session ${session.title}`}>
-              <a class={`app-sidebar-session ${item.isActive ? 'app-sidebar-session-active' : ''}`} href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}, ${getSessionShortcutLabel(index)}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
+              <div class="session-rail-entry" class:session-rail-entry-menu-open={menuSessionKey === item.key} role="group" aria-label={`Session ${session.title}`}>
+              <a class="app-sidebar-session" href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
                 <span class="app-sidebar-session-avatar" aria-hidden="true">
                   <Identicon seed={session.sessionId} />
                   {#if item.isActive}<span class="app-sidebar-session-spinner"><LoaderCircle size={9} class="animate-spin" /></span>{/if}
                   {#if item.requiresAttention}<SidebarAttentionDot />{/if}
                 </span>
                 <span class="app-sidebar-session-copy"><strong>{session.title}</strong><small>{getSessionWorkspaceName(session.cwd)} · {getStatusLabel(session.status, item)}{#if !session.lifecycle} · Lifecycle unavailable{/if}</small></span>
-                <kbd>{index === 9 ? '0' : index + 1}</kbd>
               </a>
               {@render sessionMenu(session, item.key)}
               </div>
             {/each}
+          {/if}
+          {#if sessionsLoadError || loadError}
+            <div class="app-sidebar-session-load-error"><span>{sessionsLoadError || loadError}</span><button type="button" onclick={() => { void loadNearBottom(true); }}>Retry</button></div>
+          {:else if loadingMoreSessions || requestingMore}
+            <div class="app-sidebar-session-loading" role="status"><LoaderCircle size={13} class="animate-spin" /><span class="sr-only">Loading more open sessions</span></div>
           {/if}
         </div>
       </div>

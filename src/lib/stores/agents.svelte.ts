@@ -209,6 +209,15 @@ interface AgentClientRecord {
   recentSessionUpdateKeys: string[];
 }
 
+interface OpenSessionPage {
+  scopeKey: string;
+  nextCursor: string | null;
+  initialized: boolean;
+  loading: boolean;
+  error: string | null;
+  seenCursors: string[];
+}
+
 interface ConnectFlight {
   owner: AgentClientRecord;
   promise: Promise<void>;
@@ -323,6 +332,7 @@ export class AgentsStore {
   lastRemoteAttachByAgent = $state<Record<string, RemoteSessionAttachInfo | null>>({});
   lastRemoteDismissByAgent = $state<Record<string, RemoteSessionDismissInfo | null>>({});
   sessionsByAgent = $state<Record<string, DesktopSessionSummary[]>>({});
+  private openSessionPages = $state<Record<string, OpenSessionPage>>({});
   sessionBrowser = $state(createSessionBrowserState());
   sessionCatalog = $state<DesktopSessionSummary[]>([]);
   sessionCatalogLoading = $state(false);
@@ -618,6 +628,7 @@ export class AgentsStore {
   }
 
   dispose() {
+    this.openSessionPages = {};
     this.sessionCatalogGeneration += 1;
     this.sessionCatalogFlight = null;
     this.sessionCatalogCache.flush();
@@ -1541,6 +1552,7 @@ export class AgentsStore {
   }
 
   private invalidateSessionCatalogCache() {
+    this.openSessionPages = {};
     this.sessionCatalogGeneration += 1;
     this.sessionCatalogFlight = null;
     this.sessionCatalogCache.clear();
@@ -1713,7 +1725,8 @@ export class AgentsStore {
 
     try {
       const lifecycleRevision = this.sessionLifecycleRevision;
-      const firstPage = await record.client.listSessions(this.buildSessionListRequest());
+      const scope = this.openSessionListScope(config);
+      const firstPage = await record.client.listSessions(buildListSessionsRequest({ remoteNodeIds: scope.remoteNodeIds }));
       const pages = discoverAll ? await this.collectSessionPages(record.client, firstPage) : [firstPage];
       const listedSessions = pages.flatMap((page) => page.sessions);
       const previousSessions = this.sessionsByAgent[agentId] ?? [];
@@ -1727,6 +1740,15 @@ export class AgentsStore {
         ...this.sessionsByAgent,
         [agentId]: mergedSessions
       };
+      const openPage = this.openSessionPages[agentId];
+      if (this.openSessionListScope(config).key === scope.key && this.clients.get(agentId) === record &&
+        (discoverAll || !openPage || openPage.scopeKey !== scope.key)) {
+        const nextCursor = discoverAll ? null : firstPage.nextCursor ?? null;
+        this.openSessionPages[agentId] = {
+          scopeKey: scope.key, nextCursor, initialized: true, loading: false, error: null,
+          seenCursors: nextCursor ? [nextCursor] : []
+        };
+      }
       this.updateWorkspaceDiscovery(config, nextSessions, discoverAll);
       if (discoverAll) this.completedWorkspaceDiscoveries.add(agentId);
       if (nextSessions.some((session) => isActiveSessionStatus(session.status))) {
@@ -1785,6 +1807,75 @@ export class AgentsStore {
   }
 
   /** Include remote peers only when the catalog preference explicitly enables them. */
+  private openSessionListScope(config: AgentConfig) {
+    chatPreferencesStore.initialize();
+    const remoteNodeIds = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers.slice() : [];
+    return { remoteNodeIds, key: sessionCatalogKey([config], remoteNodeIds, { resolution: 'any', archive: 'any' }) };
+  }
+
+  get hasMoreOpenSessions(): boolean {
+    return this.connectedAgents.some((config) => {
+      if (!this.canSetSessionLifecycle(config.id)) return false;
+      const page = this.openSessionPages[config.id];
+      return !page || page.scopeKey !== this.openSessionListScope(config).key || !page.initialized || page.nextCursor !== null;
+    });
+  }
+
+  get openSessionsLoading(): boolean {
+    return this.connectedAgents.some((config) => {
+      const page = this.openSessionPages[config.id];
+      return page?.scopeKey === this.openSessionListScope(config).key && page.loading;
+    });
+  }
+
+  get openSessionsLoadError(): string | null {
+    return this.connectedAgents.flatMap((config) => {
+      const page = this.openSessionPages[config.id];
+      return page?.scopeKey === this.openSessionListScope(config).key && page.error ? [`${config.name}: ${page.error}`] : [];
+    }).join(' ') || null;
+  }
+
+  /** Continue the existing root list only as the sidebar exhausts its loaded rows. */
+  async loadMoreOpenSessions() {
+    await Promise.all(this.connectedAgents.map(async (config) => {
+      if (!this.canSetSessionLifecycle(config.id)) return;
+      const record = this.initializedClientRecord(config.id);
+      if (!record) return;
+      const scope = this.openSessionListScope(config);
+      if (this.openSessionPages[config.id]?.scopeKey !== scope.key) {
+        this.openSessionPages[config.id] = {
+          scopeKey: scope.key, nextCursor: null, initialized: false, loading: false, error: null, seenCursors: []
+        };
+      }
+      const page = this.openSessionPages[config.id];
+      if (page.loading || (page.initialized && page.nextCursor === null)) return;
+      page.loading = true;
+      page.error = null;
+      const revision = this.sessionLifecycleRevision;
+      const cursor = page.nextCursor;
+      try {
+        const response = await record.client.listSessions(buildListSessionsRequest({ cursor, remoteNodeIds: scope.remoteNodeIds }));
+        if (this.openSessionPages[config.id] !== page || this.clients.get(config.id) !== record ||
+          this.openSessionListScope(config).key !== scope.key) return;
+        const nextCursor = response.nextCursor ?? null;
+        if (nextCursor && (nextCursor === cursor || page.seenCursors.includes(nextCursor))) {
+          throw new Error('Agent returned a repeated session cursor.');
+        }
+        const sessions = this.preserveNewerLifecycleWrites(mapAcpSessionsToDesktopSessions(response.sessions, {
+          agentId: config.id, agentName: config.name
+        }), revision);
+        this.sessionsByAgent = { ...this.sessionsByAgent, [config.id]: mergeSessions(this.sessionsByAgent[config.id] ?? [], sessions) };
+        page.initialized = true;
+        page.nextCursor = nextCursor;
+        if (nextCursor) page.seenCursors.push(nextCursor);
+      } catch (error) {
+        if (this.openSessionPages[config.id] === page) page.error = acpErrorMessage(error, 'Could not load more sessions.');
+      } finally {
+        page.loading = false;
+      }
+    }));
+  }
+
   private buildSessionListRequest(input: { cwd?: string | null; cursor?: string | null } = {}) {
     chatPreferencesStore.initialize();
     const remoteNodeIds = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers : [];
@@ -3498,6 +3589,7 @@ export class AgentsStore {
     record.unsubscribeInbox?.();
     inboxStore.disconnectAgent(agentId);
     void record.client.disconnect();
+    delete this.openSessionPages[agentId];
     this.clients.delete(agentId);
   }
 

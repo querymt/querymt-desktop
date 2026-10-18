@@ -1,10 +1,9 @@
 <script lang="ts">
-  import { ArrowLeft, Bug, FileCog, Info, Network, RefreshCw } from '@lucide/svelte';
+  import { Archive, ArrowLeft, Bug, CircleCheckBig, FileCog, Info, Network, RefreshCw } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
-  import SessionLifecycleBadges from '$lib/components/primitives/SessionLifecycleBadges.svelte';
   import SessionContextDial from '$lib/components/session/SessionContextDial.svelte';
   import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
   import { autoCollapsePopover } from '$lib/design/details-popover';
@@ -77,6 +76,19 @@
   });
 </script>
 
+{#snippet lifecycleIcons()}
+  {#if summary?.lifecycle?.resolved || summary?.lifecycle?.archived}
+    <span class="session-header-lifecycle">
+      {#if summary.lifecycle.resolved}
+        <span class="session-header-lifecycle-icon session-header-lifecycle-icon-resolved" role="img" aria-label="Resolved" title="Resolved"><CircleCheckBig size={13} aria-hidden="true" /></span>
+      {/if}
+      {#if summary.lifecycle.archived}
+        <span class="session-header-lifecycle-icon" role="img" aria-label="Archived" title="Archived"><Archive size={13} aria-hidden="true" /></span>
+      {/if}
+    </span>
+  {/if}
+{/snippet}
+
 {#snippet remoteHostIcon()}
   {#if remoteHost}
     <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
@@ -98,8 +110,18 @@
   </button>
 
   <div class="session-header-identity">
-    <div class="session-header-title-line"><h1>{title}</h1>{#if summary}<SessionLifecycleBadges lifecycle={summary.lifecycle} showUnavailable={true} />{/if}</div>
+    <div class="session-header-title-line">
+      <span class="session-header-status-wrap">
+        <span
+          class={`session-header-status-dot session-header-status-dot-${status.tone}`}
+          aria-label={`Status: ${status.label}`}
+        ></span>
+        <span class="session-row-status-tooltip" role="tooltip">{status.label}</span>
+      </span>
+      <h1>{title}</h1>
+    </div>
     <div class="session-header-mobile-meta" aria-label="Session context">
+      {@render lifecycleIcons()}
       {@render remoteHostIcon()}
       <span class="session-header-mobile-workspace" title={workspace}>{workspace}</span>
       {#if session.sessionId}
@@ -109,13 +131,7 @@
       <SessionContextDial usage={session.usage} />
     </div>
     <div class="session-header-meta">
-      <span class="session-header-status-wrap">
-        <span
-          class={`session-header-status-dot session-header-status-dot-${status.tone}`}
-          aria-label={`Status: ${status.label}`}
-        ></span>
-        <span class="session-row-status-tooltip" role="tooltip">{status.label}</span>
-      </span>
+      {@render lifecycleIcons()}
       {@render remoteHostIcon()}
       <CopyTextChip class="session-header-workspace" value={workspacePath ?? workspace} display={workspace} title="Copy project path" />
       {#if session.sessionId}

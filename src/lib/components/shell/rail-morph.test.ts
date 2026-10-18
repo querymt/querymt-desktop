@@ -31,6 +31,27 @@ describe('left rail shape morph', () => {
     expect(focusRule).toContain('outline: 2px solid var(--accent);');
   });
 
+  it('does not persistently highlight active session rows or add an activity pill', () => {
+    expect(appCss).not.toContain('.app-sidebar-session-active');
+    expect(appCss).not.toContain('.session-icon-link-active');
+    expect(appCss).not.toContain('.session-icon-link:hover .app-icon-activity-pill');
+    expect(appCss).toContain('.app-icon-link-current .app-icon-activity-pill');
+  });
+
+  it('does not reserve idle row space for session actions or number badges', () => {
+    const entry = appCss.match(/\n\.session-rail-entry \{([\s\S]*?)\}/)?.[1];
+    expect(entry).not.toContain('grid-template-columns');
+    const row = appCss.match(/\n\.app-sidebar-session \{([\s\S]*?)\}/)?.[1];
+    expect(row).toContain('grid-template-columns: 1.75rem minmax(0, 1fr);');
+    expect(row).toContain('padding: 0.38rem 0.45rem;');
+    const trigger = appCss.match(/\.session-rail-entry:not\(\.session-rail-entry-compact\) > \.session-row-menu-trigger \{([\s\S]*?)\}/)?.[1];
+    expect(trigger).toContain('position: absolute;');
+    const hidden = appCss.match(/\.session-rail-entry > \.session-row-menu-trigger \{([\s\S]*?)\}/)?.[1];
+    expect(hidden).toContain('opacity: 0;');
+    expect(hidden).toContain('pointer-events: none;');
+    expect(appCss).not.toContain('.app-sidebar-session kbd');
+  });
+
   it('disables every visible rail-layer transition for reduced motion', () => {
     const reducedMotionRule = appCss.match(/@media \(prefers-reduced-motion: reduce\) \{\n  \.app-sidebar,([\s\S]*?)\n\}/)?.[0] ?? '';
     expect(reducedMotionRule).toContain('.app-sidebar');

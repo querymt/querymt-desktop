@@ -460,6 +460,129 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('AgentsStore open-session sidebar pagination', () => {
+  function row(sessionId: string): SessionInfo {
+    return { sessionId, title: sessionId, cwd: '/tmp/work', _meta: { querymt: { lifecycle: { session_id: sessionId, resolved: false, archived: false, resolved_at: null, archived_at: null } } } } as SessionInfo;
+  }
+
+  async function pagingStore() {
+    const store = createStore();
+    mockClient.supportsSessionLifecycle.mockReturnValue(true);
+    await store.connectAgent('agent-1');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('first')], nextCursor: '100' });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.listSessions.mockClear();
+    return store;
+  }
+
+  it('continues the already loaded root page on demand instead of restarting a full catalog traversal', async () => {
+    const store = await pagingStore();
+    expect(store.hasMoreOpenSessions).toBe(true);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('older')], nextCursor: '200' });
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenCalledExactlyOnceWith(listSessionsRequest({ cursor: '100' }));
+    expect(store.sessionsByAgent['agent-1'].map((session) => session.sessionId)).toEqual(['first', 'older']);
+    expect(store.hasMoreOpenSessions).toBe(true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('last')] });
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest({ cursor: '200' }));
+    expect(store.hasMoreOpenSessions).toBe(false);
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces overlapping sidebar requests for the same agent and keeps existing rows while loading', async () => {
+    const store = await pagingStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = store.loadMoreOpenSessions();
+    const second = store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenCalledOnce();
+    expect(store.openSessionsLoading).toBe(true);
+    expect(store.sessionsByAgent['agent-1'][0].sessionId).toBe('first');
+    release({ sessions: [row('next')] });
+    await Promise.all([first, second]);
+    expect(store.openSessionsLoading).toBe(false);
+    expect(store.sessionsByAgent['agent-1']).toHaveLength(2);
+  });
+
+  it('does not reset the sidebar continuation when a recent-session head refresh runs', async () => {
+    const store = await pagingStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('older')], nextCursor: '200' });
+    await store.loadMoreOpenSessions();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('newer'), row('first')], nextCursor: '100' });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('last')] });
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest({ cursor: '200' }));
+    expect(store.sessionsByAgent['agent-1'].some((session) => session.sessionId === 'older')).toBe(true);
+  });
+
+  it('retains failed pages for retry without marking the agent or its catalog failed', async () => {
+    const store = await pagingStore();
+    mockClient.listSessions.mockRejectedValueOnce(new RequestError(-32603, 'Internal error', 'Remote owner is offline'));
+    await store.loadMoreOpenSessions();
+    expect(store.openSessionsLoadError).toBe('QMTCODE: Remote owner is offline');
+    expect(store.connectionStates['agent-1']).toBe('initialized');
+    expect(store.sessionCatalogError).toBeNull();
+    expect(store.sessionsByAgent['agent-1']).toHaveLength(1);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('retry')] });
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest({ cursor: '100' }));
+    expect(store.openSessionsLoadError).toBeNull();
+    expect(store.hasMoreOpenSessions).toBe(false);
+  });
+
+  it('rejects repeated cursors instead of automatically requesting the same page forever', async () => {
+    const store = await pagingStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('bad')], nextCursor: '100' });
+    await store.loadMoreOpenSessions();
+    expect(store.openSessionsLoadError).toContain('repeated session cursor');
+    expect(mockClient.listSessions).toHaveBeenCalledOnce();
+    expect(store.sessionsByAgent['agent-1'].some((session) => session.sessionId === 'bad')).toBe(false);
+  });
+
+  it('starts a new traversal when selected remote peers change and ignores the old in-flight response', async () => {
+    const store = await pagingStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const old = store.loadMoreOpenSessions();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('peer-owner', true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('new-scope')] });
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith({ _meta: { session_scope: 'root', remoteNodeIds: ['peer-owner'] } });
+    release({ sessions: [row('old-scope')] });
+    await old;
+    expect(store.sessionsByAgent['agent-1'].some((session) => session.sessionId === 'old-scope')).toBe(false);
+    expect(store.hasMoreOpenSessions).toBe(false);
+  });
+
+  it('invalidates stale offsets after a lifecycle write and does not resurrect an older response', async () => {
+    const store = await pagingStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const old = store.loadMoreOpenSessions();
+    await store.setSessionLifecycle('agent-1', 'first', { resolved: true });
+    release({ sessions: [row('first'), row('obsolete')] });
+    await old;
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'first')?.lifecycle?.resolved).toBe(true);
+    expect(store.sessionsByAgent['agent-1'].some((session) => session.sessionId === 'obsolete')).toBe(false);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('new-head')] });
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest());
+  });
+
+  it('does not issue lifecycle-dependent sidebar discovery for unsupported agents', async () => {
+    const store = await pagingStore();
+    mockClient.supportsSessionLifecycle.mockReturnValue(false);
+    expect(store.hasMoreOpenSessions).toBe(false);
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+  });
+});
+
 describe('AgentsStore session lifecycle', () => {
   async function lifecycleStore() {
     const store = createStore();
