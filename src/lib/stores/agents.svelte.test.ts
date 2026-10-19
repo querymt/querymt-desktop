@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionInfo, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
+import { RequestError, type InitializeResponse, type ListSessionsRequest, type PromptResponse, type SessionConfigOption, type SessionInfo, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
 import type { AgentConfig, DesktopSessionSummary, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { findModeConfigOption, findReasoningConfigOption, getModelSelectionKey } from '$lib/querymt/config-options';
 import { QMT_METHOD_MESH_NODES, QMT_METHOD_MESH_STATUS } from '$lib/querymt/querymt-extensions';
@@ -62,7 +62,7 @@ const mockClient = vi.hoisted(() => {
       sessionId: 'session-1',
       configOptions: []
     })),
-    listSessions: vi.fn(async (): Promise<{ sessions: SessionInfo[]; nextCursor?: string }> => ({ sessions: [] })),
+    listSessions: vi.fn(async (_request?: ListSessionsRequest): Promise<{ sessions: SessionInfo[]; nextCursor?: string }> => ({ sessions: [] })),
     deleteSession: vi.fn(async () => undefined),
     supportsSessionLifecycle: vi.fn(() => false),
     getSessionLifecycle: vi.fn(async (session_id: string) => ({ session_id, resolved: false, archived: false, resolved_at: null as string | null, archived_at: null as string | null })),
@@ -863,6 +863,143 @@ describe('AgentsStore session lifecycle', () => {
       chatPreferencesStore.setRemoteSessionPeer('new-peer', false);
       chatPreferencesStore.setShowRemoteSessions(false);
     }
+  });
+
+  it('does not query a discovered but excluded peer for lifecycle statuses', async () => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    store.meshNodesByAgent = { 'agent-1': meshNodes(['legacy-peer']) };
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', false);
+    mockClient.listSessions.mockImplementation(async (request) => {
+      if (request?._meta?.remoteNodeIds) throw new Error('Legacy peer has no lifecycle support');
+      return { sessions: [listed('local')] };
+    });
+    await store.refreshAllSessions();
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalogError).toBeNull();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['local']);
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith({
+      _meta: { session_scope: 'root', querymt: { sessionFilters: { resolution: 'open', archive: 'excluded' } } }
+    });
+    expect(mockClient.listSessions.mock.calls.every(([request]) => !request?._meta?.remoteNodeIds)).toBe(true);
+  });
+
+  it.each(['peer', 'all-remotes'])('clears an excluded peer error immediately when disabling %s, without mounting Sessions', async (setting) => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', true);
+    mockClient.listSessions.mockRejectedValueOnce(new RequestError(-32603, 'Internal error',
+      'Remote session owner cannot provide lifecycle-filtered results: unsupported'));
+    await store.refreshSessionCatalog();
+    expect(store.sessionCatalogError).toContain('unsupported');
+
+    if (setting === 'peer') chatPreferencesStore.setRemoteSessionPeer('legacy-peer', false);
+    else chatPreferencesStore.setShowRemoteSessions(false);
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('local')] });
+    const refresh = store.refreshAllSessions();
+    expect(store.sessionCatalogError).toBeNull();
+    await refresh;
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['local']);
+    expect(store.sessionCatalogError).toBeNull();
+  });
+
+  it.each(['reject', 'resolve'] as const)('ignores an excluded peer catalog response (%s) even while Sessions is unmounted', async (outcome) => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', true);
+    let release!: (page: { sessions: SessionInfo[]; nextCursor?: string }) => void;
+    let reject!: (error: Error) => void;
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('old-local')], nextCursor: 'remote:0:0:live' })
+      .mockImplementationOnce(() => new Promise((resolve, rejectPage) => { release = resolve; reject = rejectPage; }));
+    const old = store.refreshSessionCatalog();
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledTimes(2));
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', false);
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('new-local')] });
+    await store.refreshAllSessions();
+    if (outcome === 'reject') reject(new Error('Remote session owner is unavailable for lifecycle-filtered results: deadline has elapsed'));
+    else release({ sessions: [listed('obsolete')], nextCursor: 'remote:0:100:live' });
+    await old;
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(3);
+    expect(store.sessionCatalogError).toBeNull();
+    expect(store.sessionCatalogLoading).toBe(false);
+    expect(store.sessionCatalog.some((session) => session.sessionId === 'obsolete')).toBe(false);
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['new-local']);
+  });
+
+  it.each(['reject', 'resolve'] as const)('restarts discovery with no excluded peer instead of coalescing with an old scope (%s)', async (outcome) => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', true);
+    let release!: (page: { sessions: SessionInfo[]; nextCursor?: string }) => void;
+    let reject!: (error: Error) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve, rejectPage) => { release = resolve; reject = rejectPage; }));
+    const old = store.refreshSessionsForAgent('agent-1', true);
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledOnce());
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', false);
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('local')] });
+    const refresh = store.refreshAllSessions();
+    if (outcome === 'reject') reject(new Error('Obsolete remote request failed'));
+    else release({ sessions: [listed('obsolete')], nextCursor: 'remote:0:0:live' });
+    await Promise.all([old, refresh]);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest());
+    expect(store.sessionsByAgent['agent-1'].map((session) => session.sessionId)).toEqual(['local']);
+    expect(store.connectionStates['agent-1']).toBe('initialized');
+    expect(store.agentErrors['agent-1']).toBeNull();
+    expect(store.error).toBeNull();
+  });
+
+  it('keeps other included peers in lifecycle requests when an unsupported peer is excluded', async () => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', true);
+    chatPreferencesStore.setRemoteSessionPeer('updated-peer', true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', false);
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('local')] });
+    await store.refreshAllSessions();
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith({ _meta: {
+      session_scope: 'root', remoteNodeIds: ['updated-peer'],
+      querymt: { sessionFilters: { resolution: 'open', archive: 'excluded' } }
+    } });
+    expect(store.sessionCatalogError).toBeNull();
+    mockClient.listSessions.mockRejectedValueOnce(new Error('Included owner failed'));
+    await store.refreshSessionCatalog();
+    expect(store.sessionCatalogError).toContain('Included owner failed');
+  });
+
+  it('still coalesces full discoveries for the same peer scope', async () => {
+    const store = await lifecycleStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = store.refreshSessionsForAgent('agent-1', true);
+    const second = store.refreshSessionsForAgent('agent-1', true);
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledOnce());
+    release({ sessions: [listed('local')] });
+    await Promise.all([first, second]);
+    expect(mockClient.listSessions).toHaveBeenCalledOnce();
+  });
+
+  it('does not deadlock a queued activity refresh when exclusion queues a replacement discovery', async () => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', true);
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const old = store.refreshSessionsForAgent('agent-1', true);
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledOnce());
+    const activity = store.refreshSessionsForAgent('agent-1');
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', false);
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('local')] });
+    const refresh = store.refreshAllSessions();
+    release({ sessions: [listed('obsolete')] });
+    await Promise.all([old, activity, refresh]);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(3);
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest());
+    expect(store.sessionsByAgent['agent-1'].map((session) => session.sessionId)).toEqual(['local']);
   });
 
   it('applies lifecycle predicates on every server page without discarding the global cache', async () => {

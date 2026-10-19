@@ -266,7 +266,7 @@ export class AgentsStore {
   private workspaceSourceVersions = new Map<string, number>();
   private seenWorkspaceCursors = new Map<string, Set<string>>();
   private completedWorkspaceDiscoveries = new Set<string>();
-  private workspaceDiscoveryPromises = new Map<string, Promise<void>>();
+  private workspaceDiscoveryPromises = new Map<string, { scopeKey: string; promise: Promise<void> }>();
   private sessionListRefreshChain = new Map<string, Promise<void>>();
   private hydratedRemoteSessionKeys = new Set<string>();
   private sessionSelectionGeneration = 0;
@@ -1464,6 +1464,8 @@ export class AgentsStore {
 
   async refreshAllSessions() {
     this.workspaceVisibleLimits = {};
+    // Mesh/settings changes must retire the old catalog even when Sessions is unmounted.
+    this.selectSessionCatalog(this.sessionCatalogContext(this.sessionBrowser));
     await Promise.allSettled(
       this.configs
         .filter((config) => this.statuses[config.id]?.state === 'running')
@@ -1726,29 +1728,30 @@ export class AgentsStore {
 
   async refreshSessionsForAgent(agentId: string, discoverAll = false) {
     if (discoverAll) {
+      const config = this.configs.find((candidate) => candidate.id === agentId);
+      if (!config) return;
+      const scopeKey = this.openSessionListScope(config).key;
       const existingDiscovery = this.workspaceDiscoveryPromises.get(agentId);
-      if (existingDiscovery) {
-        await existingDiscovery;
+      if (existingDiscovery?.scopeKey === scopeKey) {
+        await existingDiscovery.promise;
         return;
       }
 
-      const discovery = this.enqueueSessionListRefresh(agentId, () =>
-        this.refreshSessionsForAgentRequest(agentId, true)
-      ).finally(() => {
-        if (this.workspaceDiscoveryPromises.get(agentId) === discovery) {
+      const discovery = this.enqueueSessionListRefresh(agentId, async () => {
+        if (this.openSessionListScope(config).key !== scopeKey) return;
+        await this.refreshSessionsForAgentRequest(agentId, true);
+      }).finally(() => {
+        if (this.workspaceDiscoveryPromises.get(agentId)?.promise === discovery) {
           this.workspaceDiscoveryPromises.delete(agentId);
         }
       });
-      this.workspaceDiscoveryPromises.set(agentId, discovery);
+      this.workspaceDiscoveryPromises.set(agentId, { scopeKey, promise: discovery });
       await discovery;
       return;
     }
 
-    return this.enqueueSessionListRefresh(agentId, async () => {
-      const existingDiscovery = this.workspaceDiscoveryPromises.get(agentId);
-      if (existingDiscovery) await existingDiscovery;
-      await this.refreshSessionsForAgentRequest(agentId, false);
-    });
+    // The queue already waits for prior discoveries; the map may point to one queued after us.
+    return this.enqueueSessionListRefresh(agentId, () => this.refreshSessionsForAgentRequest(agentId, false));
   }
 
   private async refreshSessionsForAgentRequest(agentId: string, discoverAll: boolean) {
@@ -1768,12 +1771,15 @@ export class AgentsStore {
 
     record.connectionState = 'loading-sessions';
     record.error = null;
+    const scope = this.openSessionListScope(config);
+    const isCurrent = () => this.clients.get(agentId) === record && this.openSessionListScope(config).key === scope.key;
 
     try {
       const lifecycleRevision = this.sessionLifecycleRevision;
-      const scope = this.openSessionListScope(config);
       const firstPage = await record.client.listSessions(buildListSessionsRequest({ remoteNodeIds: scope.remoteNodeIds }));
-      const pages = discoverAll ? await this.collectSessionPages(record.client, firstPage) : [firstPage];
+      if (!isCurrent()) return;
+      const pages = discoverAll ? await this.collectSessionPages(record.client, firstPage, scope.remoteNodeIds, isCurrent) : [firstPage];
+      if (!isCurrent()) return;
       const listedSessions = pages.flatMap((page) => page.sessions);
       const previousSessions = this.sessionsByAgent[agentId] ?? [];
       const nextSessions = this.preserveNewerLifecycleWrites(this.mapSessionSummaries(listedSessions, {
@@ -1803,6 +1809,7 @@ export class AgentsStore {
         this.clearScheduledSessionRefresh(agentId);
       }
       const models = await record.client.listModels().catch(() => this.modelsByAgent[agentId] ?? []);
+      if (!isCurrent()) return;
       if (models.length > 0) {
         this.modelsByAgent = {
           ...this.modelsByAgent,
@@ -1820,6 +1827,7 @@ export class AgentsStore {
         [config.id]: null
       };
     } catch (error) {
+      if (!isCurrent()) return;
       if (discoverAll) this.completedWorkspaceDiscoveries.delete(agentId);
       record.error = error instanceof Error ? error.message : `Failed to load sessions for ${config.name}.`;
       record.connectionState = 'failed';
@@ -1832,6 +1840,8 @@ export class AgentsStore {
         [config.id]: record.error
       };
       this.error = record.error;
+    } finally {
+      if (!isCurrent() && record.connectionState === 'loading-sessions') record.connectionState = 'initialized';
     }
   }
 
@@ -2073,7 +2083,9 @@ export class AgentsStore {
     }
   }
 
-  private async collectSessionPages(client: DesktopAcpClient, firstPage: ListSessionsResponse): Promise<ListSessionsResponse[]> {
+  private async collectSessionPages(
+    client: DesktopAcpClient, firstPage: ListSessionsResponse, remoteNodeIds: string[], isCurrent: () => boolean
+  ): Promise<ListSessionsResponse[]> {
     const pages = [firstPage];
     const seenCursors = new Set<string>();
     let nextCursor = firstPage.nextCursor ?? null;
@@ -2084,9 +2096,9 @@ export class AgentsStore {
     // skip/duplicate. Desktop currently only uses these cursors for discovery
     // and "load more"; replace with a stable keyset/id cursor in
     // crates/agent session list before relying on them across creates.
-    while (nextCursor && !seenCursors.has(nextCursor)) {
+    while (nextCursor && !seenCursors.has(nextCursor) && isCurrent()) {
       seenCursors.add(nextCursor);
-      const page = await client.listSessions(this.buildSessionListRequest({ cursor: nextCursor }));
+      const page = await client.listSessions(buildListSessionsRequest({ cursor: nextCursor, remoteNodeIds }));
       pages.push(page);
       nextCursor = page.nextCursor ?? null;
     }
