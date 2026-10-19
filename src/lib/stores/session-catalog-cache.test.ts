@@ -25,6 +25,21 @@ describe('SessionCatalogCache', () => {
     expect(restored?.sessions[0]).toMatchObject({ title: 'Task', status: 'idle', remoteNodeId: 'peer', remoteConnectionState: 'disconnected', lifecycle: session.lifecycle });
   });
 
+  it.each([false, true])('preserves relationship knowledge across persistence (known=%s)', (relationshipKnown) => {
+    const cache = new SessionCatalogCache();
+    cache.set(entry({ sessions: [{ ...session, relationshipKnown, parentSessionId: 'root', forkOrigin: 'delegation' }] }));
+    cache.flush();
+    expect(new SessionCatalogCache().get('scope')?.sessions[0])
+      .toMatchObject({ relationshipKnown, parentSessionId: 'root', forkOrigin: 'delegation' });
+  });
+
+  it('rejects invalid persisted relationship flags', () => {
+    localStorage.setItem(SESSION_CATALOG_STORAGE_KEY, JSON.stringify({ version: 1, entries: [entry({
+      sessions: [{ ...session, relationshipKnown: 'yes' } as unknown as DesktopSessionSummary]
+    })] }));
+    expect(new SessionCatalogCache().get('scope')).toBeUndefined();
+  });
+
   it('continues in memory if storage access throws or writes fail', () => {
     const unavailable = new SessionCatalogCache(() => { throw new DOMException('Denied', 'SecurityError'); });
     unavailable.set(entry());

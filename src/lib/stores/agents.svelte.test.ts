@@ -28,7 +28,7 @@ import { startAgent } from '$native';
 import { AgentsStore } from './agents.svelte';
 import { chatPreferencesStore } from './chat-preferences.svelte';
 import { inboxStore } from './inbox.svelte';
-import { DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
+import { DEFAULT_SESSION_LIST_SCOPE, isRootSession, sessionMatchesLifecycle } from '$lib/domain/sessions';
 import { SESSION_CATALOG_STORAGE_KEY, SESSION_CATALOG_FRESH_MS } from './session-catalog-cache';
 
 function listSessionsRequest(input: { cwd?: string; cursor?: string } = {}) {
@@ -580,6 +580,150 @@ describe('AgentsStore open-session sidebar pagination', () => {
     expect(store.hasMoreOpenSessions).toBe(false);
     await store.loadMoreOpenSessions();
     expect(mockClient.listSessions).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentsStore child-session sidebar isolation', () => {
+  function info(sessionId: string, meta: Record<string, unknown> = {}): SessionInfo {
+    return {
+      sessionId, title: `Task: ${sessionId}`, cwd: '/tmp/work',
+      _meta: { querymt: { lifecycle: { session_id: sessionId, resolved: false, archived: false, resolved_at: null, archived_at: null } }, ...meta }
+    } as SessionInfo;
+  }
+
+  function openRoots(store: AgentsStore) {
+    return store.sessions.filter(isRootSession)
+      .filter((session) => sessionMatchesLifecycle(session.lifecycle, { resolution: 'open', archive: 'excluded' }))
+      .map((session) => session.sessionId);
+  }
+
+  it('does not promote a child reviewed from a log when its lifecycle is refreshed', async () => {
+    const store = createStore();
+    mockClient.supportsSessionLifecycle.mockReturnValue(true);
+    await store.loadSession('agent-1', 'unlisted-child');
+    await store.refreshSessionLifecycle('agent-1', 'unlisted-child');
+    mockClient.emitSessionUpdate({ sessionId: 'unlisted-child', update: {
+      sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working' }
+    } });
+    await tick();
+
+    await vi.waitFor(() => expect(store.sessions.find((session) => session.sessionId === 'unlisted-child')?.status).toBe('thinking'));
+    expect(store.activeSessionId).toBe('unlisted-child');
+    expect(store.sessions.find((session) => session.sessionId === 'unlisted-child')?.lifecycle?.resolved).toBe(false);
+    expect(openRoots(store)).toEqual([]);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+
+    // Only a root-scoped listing can establish that an otherwise unknown load is a root.
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('unlisted-child')] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(openRoots(store)).toEqual(['unlisted-child']);
+  });
+
+  it.each(['load', 'attach'] as const)('preserves known parentage through remote %s and partial catalog refreshes', async (operation) => {
+    const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('remote-session-1', {
+      location: 'remote', nodeId: 'node-1', parentSessionId: 'root', forkOrigin: 'delegation'
+    })] });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: { location: 'remote', nodeId: 'node-1' } }, replay: [] });
+    if (operation === 'load') await store.loadSession('agent-1', 'remote-session-1');
+    else await store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+    expect(store.error).toBeNull();
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'remote-session-1'))
+      .toMatchObject({ parentSessionId: 'root', forkOrigin: 'delegation' });
+
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('remote-session-1', { location: 'remote', nodeId: 'node-1' })] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(openRoots(store)).toEqual([]);
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'remote-session-1'))
+      .toMatchObject({ parentSessionId: 'root', forkOrigin: 'delegation' });
+  });
+
+  it.each([false, true])('remembers live child links before discovery even with an unselected parent (snake case=%s)', async (snakeCase) => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'other-root';
+    mockClient.emitExtensionNotification({ method: 'querymt/session/delegationUpdate', params: snakeCase
+      ? { session_id: 'root', child_session_id: 'child', tool_call_id: 'delegate-1' }
+      : { sessionId: 'root', childSessionId: 'child', toolCallId: 'delegate-1' }
+    });
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('root'), info('child')] });
+    await store.refreshSessionsForAgent('agent-1');
+    store.attentionSessionKeys = ['agent-1:child'];
+    mockClient.emitSessionUpdate({ sessionId: 'child', update: {
+      sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working' }
+    } });
+    await tick();
+
+    await vi.waitFor(() => expect(store.sessions.find((session) => session.sessionId === 'child')?.status).toBe('thinking'));
+    expect(store.sessions.find((session) => session.sessionId === 'child')).toMatchObject({ parentSessionId: 'root' });
+    expect(openRoots(store)).toEqual(['root']);
+    expect(store.attentionSessionKeys).toContain('agent-1:child');
+    expect(mockClient.listSessions).toHaveBeenCalledWith(listSessionsRequest());
+  });
+
+  it('keeps a live child link across a delayed catalog response and persisted cache hydration', async () => {
+    const store = createStore();
+    mockClient.supportsSessionLifecycle.mockReturnValue(true);
+    await store.connectAgent('agent-1');
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const refresh = store.ensureSessionCatalog();
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledOnce());
+    mockClient.emitExtensionNotification({ method: 'querymt/session/delegationUpdate', params: {
+      sessionId: 'root', childSessionId: 'child', toolCallId: 'delegate-1'
+    } });
+    release({ sessions: [info('root'), info('child')] });
+    await refresh;
+    expect(store.sessionCatalog.find((session) => session.sessionId === 'child')?.parentSessionId).toBe('root');
+    store.dispose();
+
+    const restored = createStore();
+    await restored.connectAgent('agent-1');
+    mockClient.listSessions.mockClear();
+    await restored.ensureSessionCatalog();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(openRoots(restored)).toEqual(['root']);
+    expect(restored.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'child')?.parentSessionId).toBe('root');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('root'), info('child')] });
+    await restored.refreshSessionsForAgent('agent-1', true);
+    expect(openRoots(restored)).toEqual(['root']);
+  });
+
+  it.each(['local', 'remote'])('uses owner-supplied child parentage on a direct %s load', async (location) => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      location, nodeId: 'node-1', parentSessionId: 'root', forkOrigin: 'delegation'
+    } }, replay: [] });
+    await store.loadSession('agent-1', 'child');
+    expect(store.error).toBeNull();
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'child'))
+      .toMatchObject({ parentSessionId: 'root', forkOrigin: 'delegation' });
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('root'), info('child')] });
+    await store.refreshSessionsForAgent('agent-1', true);
+    expect(openRoots(store)).toEqual(['root']);
+  });
+
+  it('restores child classification from the parent log while leaving child review available', async () => {
+    const store = createStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('root'), info('child')] });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+        { seq: 1, kind: { type: 'tool_call_start', data: { tool_call_id: 'delegate-1', tool_name: 'delegate', arguments: '{}' } } },
+        { seq: 2, kind: { type: 'session_forked', data: { parent_session_id: 'root', child_session_id: 'child', tool_call_id: 'delegate-1', origin: 'delegation' } } }
+      ] } }
+    } }, replay: [] });
+    await store.loadSession('agent-1', 'root');
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child');
+    expect(openRoots(store)).toEqual(['root']);
+    await store.loadSession('agent-1', 'child');
+    expect(store.activeSessionId).toBe('child');
+    expect(mockClient.loadSession).toHaveBeenLastCalledWith('child', '/tmp/work');
+    expect(openRoots(store)).toEqual(['root']);
   });
 });
 

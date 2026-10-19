@@ -109,8 +109,8 @@ export function isActiveSessionStatus(status: SessionStatus): boolean {
   return ACTIVE_SESSION_STATUSES.has(status);
 }
 
-export function isRootSession(session: Pick<DesktopSessionSummary, 'parentSessionId'>): boolean {
-  return !session.parentSessionId?.trim();
+export function isRootSession(session: Pick<DesktopSessionSummary, 'parentSessionId' | 'forkOrigin' | 'relationshipKnown'>): boolean {
+  return session.relationshipKnown !== false && !session.parentSessionId?.trim() && !session.forkOrigin?.trim();
 }
 
 /** Preserve owner-sourced location, profile, and availability metadata in desktop summaries. */
@@ -137,6 +137,8 @@ export function mapAcpSessionsToDesktopSessions(
       session._meta?.connectionState === 'available' ? 'available' : undefined,
     status: inferSessionStatus(session),
     lifecycle: readSessionLifecycle(session._meta?.querymt, session.sessionId),
+    // Disconnected bookmark fallbacks do not carry owner-sourced parentage.
+    relationshipKnown: session._meta?.location !== 'remote' || session._meta?.connectionState !== 'disconnected',
     ...readSessionRelationshipMeta(session)
   }));
 }
@@ -212,7 +214,7 @@ function readOperationalSessionMeta(session: SessionInfo): QuerymtSessionMeta | 
   return candidate as QuerymtSessionMeta;
 }
 
-export function readSessionRelationshipMeta(session: SessionInfo): SessionRelationshipMeta {
+export function readSessionRelationshipMeta(session: Pick<SessionInfo, '_meta'>): SessionRelationshipMeta {
   const meta = session._meta;
   if (!meta || typeof meta !== 'object') {
     return emptySessionRelationshipMeta();

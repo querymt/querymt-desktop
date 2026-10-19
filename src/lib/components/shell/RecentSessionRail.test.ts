@@ -282,6 +282,30 @@ describe('RecentSessionRail navigation', () => {
     expect(screen.getAllByRole('link', { name: /Session \d, Waiting/ })).toHaveLength(1);
   });
 
+  it.each([false, true])('never promotes active or attention-requesting children into Open sessions (collapsed=%s)', async (collapsed) => {
+    const children: DesktopSessionSummary[] = [
+      { ...activeSession, sessionId: 'child-active', title: 'Active child', status: 'thinking', parentSessionId: 'root' },
+      { ...activeSession, sessionId: 'child-waiting', title: 'Waiting child', status: 'waiting', forkOrigin: 'delegation' },
+      { ...activeSession, sessionId: 'child-attention', title: 'Attention child', status: 'completed', parentSessionId: 'root' },
+      { ...activeSession, sessionId: 'fork', title: 'User fork', forkOrigin: 'user' },
+      { ...activeSession, sessionId: 'unlisted-child', title: 'Reviewed child', relationshipKnown: false }
+    ];
+    inboxStore.actionableItems = [{ id: 'child-permission', agentId: 'agent-1', sessionId: 'child-waiting' }];
+    const onVisibleSessionItemsChange = vi.fn();
+    const root = { ...activeSession, title: 'Task: real root work', sessionKind: 'recurring' };
+    const { container } = render(RecentSessionRail, {
+      current: 'Sessions', sessions: [...children, root], collapsed,
+      attentionSessionKeys: ['agent-1:child-attention'], onVisibleSessionItemsChange
+    });
+
+    expect(container.querySelectorAll('a[href^="/sessions/agent-1/"]')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Task: real root work, Waiting, Ctrl+1' })).toBeInTheDocument();
+    await waitFor(() => expect(onVisibleSessionItemsChange).toHaveBeenCalled());
+    expect(onVisibleSessionItemsChange.mock.lastCall?.[0].map((item: { session: DesktopSessionSummary }) => item.session.sessionId)).toEqual(['session-1']);
+    expect(inboxStore.actionableItems).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Inbox, 1 action required' })).toBeInTheDocument();
+  });
+
   it('lists only root sessions and hides delegate session summaries', () => {
     const delegateSession: DesktopSessionSummary = {
       ...activeSession,

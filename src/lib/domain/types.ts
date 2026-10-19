@@ -129,6 +129,8 @@ export interface DesktopSessionSummary {
   remoteConnectionState?: 'available' | 'disconnected';
   status: SessionStatus;
   lifecycle?: SessionLifecycle | null;
+  /** False when load/bookmark metadata does not establish parentage. */
+  relationshipKnown?: boolean;
   parentSessionId?: string | null;
   forkOrigin?: string | null;
   sessionKind?: string | null;

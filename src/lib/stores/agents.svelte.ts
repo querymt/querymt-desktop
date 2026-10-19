@@ -40,6 +40,7 @@ import {
   getWorkspaceRemoteMachines,
   isActiveSessionStatus,
   mapAcpSessionsToDesktopSessions,
+  readSessionRelationshipMeta,
   newestTimestamp,
   type WorkspaceSessionGroup,
   type WorkspaceSessionSource
@@ -332,6 +333,7 @@ export class AgentsStore {
   lastRemoteAttachByAgent = $state<Record<string, RemoteSessionAttachInfo | null>>({});
   lastRemoteDismissByAgent = $state<Record<string, RemoteSessionDismissInfo | null>>({});
   sessionsByAgent = $state<Record<string, DesktopSessionSummary[]>>({});
+  private knownSessionParents = $state<Record<string, string>>({});
   private openSessionPages = $state<Record<string, OpenSessionPage>>({});
   sessionBrowser = $state(createSessionBrowserState());
   sessionCatalog = $state<DesktopSessionSummary[]>([]);
@@ -500,12 +502,52 @@ export class AgentsStore {
       chatPreferencesStore.remoteSessionPeers.includes(session.remoteNodeId ?? ''));
   }
 
+  private mapSessionSummaries(sessions: SessionInfo[], agent: { agentId: string; agentName: string }): DesktopSessionSummary[] {
+    const incoming = mapAcpSessionsToDesktopSessions(sessions, agent);
+    const incomingKeys = new Set(incoming.map(getSessionKey));
+    const summaries = mergeSessions(this.sessionsByAgent[agent.agentId] ?? [], incoming)
+      .filter((session) => incomingKeys.has(getSessionKey(session)));
+    for (const session of summaries) {
+      if (session.parentSessionId) this.rememberSessionChildren(agent.agentId, session.parentSessionId, [session.sessionId]);
+    }
+    return summaries.map((session) => this.withKnownSessionParent(session));
+  }
+
+  private withKnownSessionParent(session: DesktopSessionSummary): DesktopSessionSummary {
+    const parentSessionId = this.knownSessionParents[getSessionKey(session)];
+    return parentSessionId ? { ...session, parentSessionId, relationshipKnown: true } : session;
+  }
+
+  private rememberSessionChildren(agentId: string, parentSessionId: string, childIds: Array<string | null | undefined>) {
+    if (typeof parentSessionId !== 'string' || !parentSessionId.trim()) return;
+    parentSessionId = parentSessionId.trim();
+    const parents = { ...this.knownSessionParents };
+    let changed = false;
+    for (const childId of childIds) {
+      const childSessionId = typeof childId === 'string' ? childId.trim() : null;
+      if (!childSessionId || childSessionId === parentSessionId) continue;
+      const key = buildSessionKey(agentId, childSessionId);
+      if (parents[key] === parentSessionId) continue;
+      parents[key] = parentSessionId;
+      changed = true;
+    }
+    // A child can be announced before its summary arrives, or while another root is selected.
+    if (!changed) return;
+    this.knownSessionParents = parents;
+    const update = (session: DesktopSessionSummary) => this.withKnownSessionParent(session);
+    this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: (this.sessionsByAgent[agentId] ?? []).map(update) };
+    this.sessionCatalog = this.sessionCatalog.map(update);
+    // Old scopes may have cached an incomplete child summary. Do not reset the live paging cursor.
+    this.sessionCatalogCache.clear();
+  }
+
   get sessions(): DesktopSessionSummary[] {
-    return Object.values(this.sessionsByAgent).flat().filter((session) => this.sessionVisibleInCatalog(session)).sort((a, b) => {
-      const aValue = a.updatedAt ?? '';
-      const bValue = b.updatedAt ?? '';
-      return bValue.localeCompare(aValue);
-    });
+    return Object.values(this.sessionsByAgent).flat().map((session) => this.withKnownSessionParent(session))
+      .filter((session) => this.sessionVisibleInCatalog(session)).sort((a, b) => {
+        const aValue = a.updatedAt ?? '';
+        const bValue = b.updatedAt ?? '';
+        return bValue.localeCompare(aValue);
+      });
   }
 
   get workspaceSessionGroups(): WorkspaceSessionGroup[] {
@@ -1045,6 +1087,8 @@ export class AgentsStore {
           normalizedUpdates.websocketUrl !== current.websocketUrl) ||
         (updates.commandLine !== undefined && updates.commandLine !== current.commandLine));
     if (endpointChanged) {
+      this.knownSessionParents = Object.fromEntries(Object.entries(this.knownSessionParents)
+        .filter(([key]) => !key.startsWith(`${agentId}:`)));
       this.invalidateSessionCatalogCache();
       clearElicitationResumeAuthoritiesForAgent(agentId);
     }
@@ -1094,6 +1138,8 @@ export class AgentsStore {
     delete this.lastRemoteAttachByAgent[agentId];
     delete this.lastRemoteDismissByAgent[agentId];
     delete this.sessionsByAgent[agentId];
+    this.knownSessionParents = Object.fromEntries(Object.entries(this.knownSessionParents)
+      .filter(([key]) => !key.startsWith(`${agentId}:`)));
     this.completedWorkspaceDiscoveries.delete(agentId);
     this.invalidateWorkspaceSources(agentId);
     delete this.workspaceSessionSources[agentId];
@@ -1612,7 +1658,7 @@ export class AgentsStore {
             cursor, remoteNodeIds, lifecycle: filtered ? lifecycle : undefined
           }));
           if (generation !== this.sessionCatalogGeneration) return;
-          const incoming = mapAcpSessionsToDesktopSessions(page.sessions, { agentId: config.id, agentName: config.name });
+          const incoming = this.mapSessionSummaries(page.sessions, { agentId: config.id, agentName: config.name });
           const previousCount = sessions.length;
           sessions = mergeSessions(sessions, incoming);
           this.sessionCatalogLoadedCount += sessions.length - previousCount;
@@ -1730,7 +1776,7 @@ export class AgentsStore {
       const pages = discoverAll ? await this.collectSessionPages(record.client, firstPage) : [firstPage];
       const listedSessions = pages.flatMap((page) => page.sessions);
       const previousSessions = this.sessionsByAgent[agentId] ?? [];
-      const nextSessions = this.preserveNewerLifecycleWrites(mapAcpSessionsToDesktopSessions(listedSessions, {
+      const nextSessions = this.preserveNewerLifecycleWrites(this.mapSessionSummaries(listedSessions, {
         agentId: config.id,
         agentName: config.name
       }), lifecycleRevision);
@@ -1861,7 +1907,7 @@ export class AgentsStore {
         if (nextCursor && (nextCursor === cursor || page.seenCursors.includes(nextCursor))) {
           throw new Error('Agent returned a repeated session cursor.');
         }
-        const sessions = this.preserveNewerLifecycleWrites(mapAcpSessionsToDesktopSessions(response.sessions, {
+        const sessions = this.preserveNewerLifecycleWrites(this.mapSessionSummaries(response.sessions, {
           agentId: config.id, agentName: config.name
         }), revision);
         this.sessionsByAgent = { ...this.sessionsByAgent, [config.id]: mergeSessions(this.sessionsByAgent[config.id] ?? [], sessions) };
@@ -1909,6 +1955,7 @@ export class AgentsStore {
       runtimeName: config.name,
       source: 'acp',
       location: 'local',
+      relationshipKnown: false,
       status: 'idle'
     };
     this.sessionsByAgent = {
@@ -1946,7 +1993,7 @@ export class AgentsStore {
         session._meta?.location === 'remote' && typeof session._meta.nodeId === 'string' &&
         selectedPeers.includes(session._meta.nodeId));
       if (match) {
-        const summary = mapAcpSessionsToDesktopSessions([match], { agentId, agentName: config.name })[0];
+        const summary = this.mapSessionSummaries([match], { agentId, agentName: config.name })[0];
         this.sessionsByAgent = {
           ...this.sessionsByAgent,
           [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [summary])
@@ -2160,7 +2207,7 @@ export class AgentsStore {
         })
       );
       if ((this.workspaceSourceVersions.get(source.agentId) ?? 0) !== sourceVersion || !current) return;
-      const pageSessions = this.preserveNewerLifecycleWrites(mapAcpSessionsToDesktopSessions(response.sessions, {
+      const pageSessions = this.preserveNewerLifecycleWrites(this.mapSessionSummaries(response.sessions, {
         agentId: config.id,
         agentName: config.name
       }), lifecycleRevision);
@@ -2973,7 +3020,9 @@ export class AgentsStore {
           // Discovery may have populated or refreshed the summary while session/load was in flight.
           const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId) ?? target;
           const summary: DesktopSessionSummary = {
+            ...current,
             agentId, agentName: config.name, sessionId,
+            relationshipKnown: current?.relationshipKnown ?? false,
             title: typeof loadMeta.title === 'string' ? loadMeta.title : current?.title ?? sessionId,
             cwd: typeof loadMeta.cwd === 'string' ? loadMeta.cwd : current?.cwd ?? '',
             updatedAt: current?.updatedAt ?? null, runtimeId: agentId,
@@ -2999,6 +3048,12 @@ export class AgentsStore {
         });
       } else if (!target) {
         this.ensureSessionLoadTarget(agentId, sessionId);
+      }
+      const relationship = readSessionRelationshipMeta(loadedSession);
+      if (relationship.parentSessionId || relationship.forkOrigin) {
+        const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+        if (current) this.syncLoadedSessionSummary(agentId, { ...current, ...relationship, relationshipKnown: true });
+        if (relationship.parentSessionId) this.rememberSessionChildren(agentId, relationship.parentSessionId, [sessionId]);
       }
       await Promise.resolve();
       await tick();
@@ -3104,6 +3159,7 @@ export class AgentsStore {
         this.activeSession.lastError = snapshotLifecycle.lastError;
       }
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });
+      this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
       checkpoint('frontend.normalize');
       this.activeSession.undo.pendingOperation = pendingOperation;
       this.reconcileInputStatesFromSnapshot(agentId, sessionId, loadedSession);
@@ -3634,8 +3690,11 @@ export class AgentsStore {
             child_session_id?: string;
           };
           const sessionId = params.sessionId ?? params.session_id;
-          if (sessionId && this.isSelectedSession(agentId, sessionId)) {
-            this.activeSession = applyDelegationChildSession(this.activeSession, params);
+          if (sessionId) {
+            this.rememberSessionChildren(agentId, sessionId, [params.childSessionId ?? params.child_session_id]);
+            if (this.isSelectedSession(agentId, sessionId)) {
+              this.activeSession = applyDelegationChildSession(this.activeSession, params);
+            }
           }
         }
         if (notification.method === 'querymt/schedules/changed') {
@@ -4089,6 +4148,7 @@ export class AgentsStore {
     });
     snapshot.configOptions = configOptions;
     this.activeSession = normalizeHistoricalSession(snapshot, { loadCompleted: true });
+    this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
     this.reconcileInputStatesFromSnapshot(agentId, sessionId, {
       _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
     });
@@ -4099,10 +4159,13 @@ export class AgentsStore {
     // Remote attach is a load: seed the active mode from agent-reported state.
     this.seedSessionModePreferenceFromLoad(agentId, sessionId);
 
+    const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
     const summary: DesktopSessionSummary = {
+      ...current,
       agentId,
       agentName: config.name,
       sessionId,
+      relationshipKnown: current?.relationshipKnown ?? false,
       title: remoteSession.title?.trim() || sessionId,
       cwd: remoteSession.cwd ?? '',
       updatedAt: remoteSession.updated_at ?? new Date().toISOString(),
@@ -5428,7 +5491,15 @@ function mergeSessions(current: DesktopSessionSummary[], incoming: DesktopSessio
     // timestamp backwards past what live notifications already recorded.
     const key = getSessionKey(session);
     const existing = sessions.get(key);
-    sessions.set(key, existing ? { ...session, updatedAt: newestTimestamp(existing.updatedAt, session.updatedAt) } : session);
+    sessions.set(key, existing ? {
+      ...existing,
+      ...session,
+      // Parentage is immutable; an incomplete list/load must not promote a known child.
+      parentSessionId: session.parentSessionId ?? existing.parentSessionId,
+      forkOrigin: session.forkOrigin ?? existing.forkOrigin,
+      relationshipKnown: existing.relationshipKnown === true ? true : session.relationshipKnown ?? existing.relationshipKnown,
+      updatedAt: newestTimestamp(existing.updatedAt, session.updatedAt)
+    } : session);
   }
   return [...sessions.values()].sort(compareSessionsByActivity);
 }

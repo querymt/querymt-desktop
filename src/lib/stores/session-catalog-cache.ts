@@ -127,7 +127,8 @@ function persistedSummary(session: DesktopSessionSummary): DesktopSessionSummary
     location: session.location, remoteNodeId: session.remoteNodeId, remoteNodeLabel: session.remoteNodeLabel,
     remoteProfileId: session.remoteProfileId, remoteProfileLabel: session.remoteProfileLabel,
     remoteConnectionState: session.location === 'remote' ? 'disconnected' : undefined,
-    lifecycle: session.lifecycle, parentSessionId: session.parentSessionId, forkOrigin: session.forkOrigin,
+    lifecycle: session.lifecycle, relationshipKnown: session.relationshipKnown,
+    parentSessionId: session.parentSessionId, forkOrigin: session.forkOrigin,
     sessionKind: session.sessionKind, hasChildren: session.hasChildren, forkCount: session.forkCount
   };
 }
@@ -141,7 +142,8 @@ function readSummary(value: unknown): DesktopSessionSummary | null {
   for (const field of ['remoteNodeId', 'remoteNodeLabel', 'remoteProfileId', 'remoteProfileLabel', 'parentSessionId', 'forkOrigin', 'sessionKind'] as const) {
     if (row[field] !== undefined && row[field] !== null && typeof row[field] !== 'string') return null;
   }
-  if ((row.hasChildren !== undefined && typeof row.hasChildren !== 'boolean') ||
+  if ((row.relationshipKnown !== undefined && typeof row.relationshipKnown !== 'boolean') ||
+    (row.hasChildren !== undefined && typeof row.hasChildren !== 'boolean') ||
     (row.forkCount !== undefined && (!Number.isSafeInteger(row.forkCount) || row.forkCount < 0))) return null;
   const lifecycle = readSessionLifecycle({ lifecycle: row.lifecycle }, row.sessionId);
   if (row.lifecycle != null && lifecycle === null) return null;

@@ -79,6 +79,14 @@ describe('session relationship metadata', () => {
     expect(session).toMatchObject({ location: 'remote', remoteNodeId: 'peer-1', remoteNodeLabel: 'Laptop', remoteConnectionState: 'disconnected' });
   });
 
+  it('does not treat disconnected bookmarks without owner relationship metadata as roots', () => {
+    const [session] = mapAcpSessionsToDesktopSessions(
+      [createSession({ location: 'remote', nodeId: 'peer-1', connectionState: 'disconnected' })],
+      { agentId: 'agent-1', agentName: 'QueryMT' }
+    );
+    expect(isRootSession(session)).toBe(false);
+  });
+
   it('maps only owner-supplied remote profile metadata', () => {
     const [remote] = mapAcpSessionsToDesktopSessions(
       [createSession({ location: 'remote', nodeId: 'peer-1', profileId: 'owner-profile', profileLabel: 'Owner Profile' })],
@@ -158,6 +166,15 @@ describe('isRootSession', () => {
     expect(isRootSession(createDesktopSession({ sessionId: 'root-1' }))).toBe(true);
     expect(isRootSession({ ...createDesktopSession({ sessionId: 'root-2' }), parentSessionId: null })).toBe(true);
     expect(isRootSession({ ...createDesktopSession({ sessionId: 'root-3' }), parentSessionId: '   ' })).toBe(true);
+  });
+
+  it('rejects partial child metadata without guessing from titles or session kinds', () => {
+    const root = createDesktopSession({ sessionId: 'root', title: 'Task: ordinary root' });
+    expect(isRootSession({ ...root, forkOrigin: 'delegation' })).toBe(false);
+    expect(isRootSession({ ...root, forkOrigin: 'user' })).toBe(false);
+    const recurringRoot = { ...root, sessionKind: 'recurring' };
+    expect(isRootSession(recurringRoot)).toBe(true);
+    expect(isRootSession({ ...root, relationshipKnown: false })).toBe(false);
   });
 
   it('rejects delegate and forked sessions that reference a parent session', () => {
