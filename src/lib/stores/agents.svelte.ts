@@ -277,6 +277,7 @@ export class AgentsStore {
   private workspaceDiscoveryPromises = new Map<string, { scopeKey: string; promise: Promise<void> }>();
   private sessionListRefreshChain = new Map<string, Promise<void>>();
   private hydratedRemoteSessionKeys = new Set<string>();
+  private snapshotUserMessageIds = new Set<string>();
   private sessionSelectionGeneration = 0;
   private unlistenAgentLogs: UnlistenFn | null = null;
   private agentLogSubscriptionPending = false;
@@ -3123,12 +3124,16 @@ export class AgentsStore {
       // advertised that it hydrates history from the load-response snapshot.
       // Detect that case so we only transform the authoritative representation
       // instead of building both.
+      const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
+      this.rememberSnapshotUserMessages(snapshotSession);
+      this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
+      // Capture starts before the snapshot read. User messages in that snapshot
+      // are already complete, so their captured echoes must not create new turns.
+      replay = replay.filter((notification) => !this.isSnapshotUserEcho(notification));
       const replayIsEmpty = replay.length === 0;
       const replaySession = replayIsEmpty
         ? null
         : reduceSessionReplay(sessionId, replay);
-      this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
-      const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
       checkpoint('frontend.snapshot_transform');
       // The lifecycle override below must read the snapshot's pristine run
       // verdict; folding the captured updates into the baseline mutates it in
@@ -4201,6 +4206,7 @@ export class AgentsStore {
     });
     snapshot.configOptions = configOptions;
     this.activeSession = normalizeHistoricalSession(snapshot, { loadCompleted: true });
+    this.rememberSnapshotUserMessages(snapshot);
     this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
     this.reconcileInputStatesFromSnapshot(agentId, sessionId, {
       _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
@@ -4775,6 +4781,7 @@ export class AgentsStore {
     this.activeSessionId = sessionId;
     this.activeSession = createEmptyActiveSession();
     this.activeSession.sessionId = sessionId;
+    this.snapshotUserMessageIds.clear();
     this.sessionHistoryLoading = false;
     this.promptFailure = null;
 
@@ -4864,6 +4871,17 @@ export class AgentsStore {
       messageId: id
     });
     return eventIndex;
+  }
+
+  private rememberSnapshotUserMessages(snapshot: ActiveSessionViewModel) {
+    this.snapshotUserMessageIds = new Set(snapshot.transcript.flatMap((item) =>
+      item.kind === 'user_message_chunk' && item.messageId ? [item.messageId] : []));
+  }
+
+  private isSnapshotUserEcho(notification: SessionNotification): boolean {
+    const update = notification.update;
+    return update.sessionUpdate === 'user_message_chunk' && !!update.messageId &&
+      this.snapshotUserMessageIds.has(update.messageId);
   }
 
   private reconcileOptimisticUserPrompt(notification: SessionNotification): number | undefined {
@@ -5037,7 +5055,7 @@ export class AgentsStore {
 
     if (!this.applyingDrainedUpdates) this.activeLoadMeasurement?.increment('liveNotifications');
     const notificationKey = getSessionNotificationKey(notification);
-    if (record.recentSessionUpdateKeys.includes(notificationKey)) {
+    if (this.isSnapshotUserEcho(notification) || record.recentSessionUpdateKeys.includes(notificationKey)) {
       this.activeLoadMeasurement?.increment('duplicateNotifications');
       console.debug('querymt session/update duplicate', {
         agentId,

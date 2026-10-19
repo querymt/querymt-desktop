@@ -24,6 +24,8 @@ import {
 } from '$lib/querymt/generated/types';
 import { tick } from 'svelte';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
+import { BrowserClient } from '$lib/querymt/browser-client';
+import { buildSessionConversation } from '$lib/domain/session-conversation';
 import { startAgent } from '$native';
 import { AgentsStore } from './agents.svelte';
 import { chatPreferencesStore } from './chat-preferences.svelte';
@@ -4612,6 +4614,129 @@ describe('AgentsStore mesh node availability', () => {
 });
 
 describe('AgentsStore prompt session start', () => {
+  it.each(['capture', 'live', 'drain'] as const)('keeps one first prompt when navigation overlaps a snapshot with its %s echo', async (delivery) => {
+    const store = createStore();
+    let finishPrompt!: (response: PromptResponse) => void;
+    mockClient.sendPrompt.mockImplementationOnce(() => new Promise((resolve) => { finishPrompt = resolve; }));
+    const prompt = 'Check whether this project uses the requested shader';
+    store.composerPrompt = prompt;
+    const sessionId = await store.startSessionWithPrompt('agent-1');
+    expect(sessionId).toBe('session-1');
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    const clientPromptId = mockClient.sendPrompt.mock.calls[0][3]?.clientPromptId;
+    const response = { configOptions: [] as SessionConfigOption[], _meta: {
+      'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+        { seq: 1, kind: { type: 'prompt_received', data: { message_id: 'user-1', content: prompt } } },
+        { seq: 2, kind: { type: 'assistant_message_stored', data: { message_id: 'assistant-1', content: 'I will inspect the project.' } } },
+        { seq: 3, kind: { type: 'tool_call_start', data: { tool_call_id: 'inspect-1', tool_name: 'read_file', arguments: '{}' } } }
+      ] } }
+    } };
+    // The route loads history while the first prompt is running. Capture begins
+    // before the snapshot is read, so these are both live updates AND history.
+    const browser = new BrowserClient();
+    browser.onSessionUpdate((notification) => mockClient.emitSessionUpdate(notification));
+    const echo: SessionNotification = { sessionId: 'session-1', update: {
+      sessionUpdate: 'user_message_chunk', messageId: 'user-1', content: { type: 'text', text: prompt },
+      _meta: { querymt: { client_prompt_id: clientPromptId } }
+    } };
+    mockClient.loadSession.mockImplementationOnce(async () => {
+      const capture = browser.beginSessionReplay('session-1');
+      if (delivery === 'capture') await browser.sessionUpdate(echo);
+      if (delivery === 'drain') mockDrainAgentSessionUpdates.mockResolvedValueOnce([echo]);
+      return { response, replay: capture.notifications, finishReplay: () => browser.completeSessionReplay(capture) };
+    });
+    try {
+      await store.loadSession('agent-1', 'session-1');
+      if (delivery === 'live') await browser.sessionUpdate(echo);
+      expect(store.activeSession.toolCalls).toHaveLength(1);
+      expect(store.activeSession.transcript.filter((item) => item.kind === 'agent_message_chunk').map((item) => item.text))
+        .toEqual(['I will inspect the project.']);
+      const afterNavigation = buildSessionConversation(store.activeSession).map((turn) => turn.user?.text);
+      // A manual refresh has no overlapping echo, matching the issue's second image.
+      mockClient.loadSession.mockResolvedValueOnce({ response, replay: [] });
+      await store.loadSession('agent-1', 'session-1');
+      const afterRefresh = buildSessionConversation(store.activeSession).map((turn) => turn.user?.text);
+      expect(afterRefresh).toEqual([prompt]);
+      expect(afterNavigation).toEqual(afterRefresh);
+      expect(mockClient.sendPrompt).toHaveBeenCalledOnce();
+    } finally {
+      finishPrompt({ stopReason: 'end_turn' });
+    }
+  });
+
+  it('keeps complete snapshot attachments once while preserving new captured prompt blocks with identical text', async () => {
+    const store = createStore();
+    const blocks: SessionNotification['update'][] = [
+      { sessionUpdate: 'user_message_chunk', messageId: 'user-old', content: { type: 'text', text: 'Repeat this' } },
+      { sessionUpdate: 'user_message_chunk', messageId: 'user-old', content: { type: 'image', data: 'aW1n', mimeType: 'image/png' } },
+      { sessionUpdate: 'user_message_chunk', messageId: 'user-old', content: { type: 'resource', resource: { uri: 'file:///notes.txt', text: 'Notes', mimeType: 'text/plain' } } },
+      { sessionUpdate: 'user_message_chunk', messageId: 'user-new', content: { type: 'text', text: 'Repeat this' } },
+      { sessionUpdate: 'user_message_chunk', messageId: 'user-new', content: { type: 'image', data: 'bmV3', mimeType: 'image/png' } }
+    ];
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      'querymt/sessionLoadSnapshot.v1': {
+        user_prompts: [{ message_id: 'user-old', blocks: blocks.slice(0, 3).map((update) => 'content' in update ? update.content : null) }],
+        audit: { events: [
+          { seq: 1, kind: { type: 'prompt_received', data: { message_id: 'user-old', content: 'Repeat this' } } },
+          { seq: 2, kind: { type: 'assistant_message_stored', data: { message_id: 'answer', content: 'First reply' } } }
+        ] }
+      }
+    } }, replay: blocks.map((update) => ({ sessionId: 'session-1', update })) });
+    await store.loadSession('agent-1', 'session-1');
+    const turns = buildSessionConversation(store.activeSession);
+    expect(turns.map((turn) => turn.user?.text)).toEqual(['Repeat this', 'Repeat this']);
+    expect(turns[0].user?.blocks?.map((block) => block.type)).toEqual(['text', 'image', 'resource']);
+    expect(turns[1].user?.blocks?.map((block) => block.type)).toEqual(['text', 'image']);
+    expect(turns[0].content[0]).toMatchObject({ type: 'assistant', text: 'First reply' });
+  });
+
+  it('does not drop uncorrelated user chunks or a genuinely new live message after snapshot hydration', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+        { seq: 1, kind: { type: 'prompt_received', data: { message_id: 'old', content: 'Same text' } } }
+      ] } }
+    } }, replay: [{ sessionId: 'session-1', update: {
+      sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'No ID' }
+    } }] });
+    await store.loadSession('agent-1', 'session-1');
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'user_message_chunk', messageId: 'new', content: { type: 'text', text: 'Same text' }
+    } });
+    expect(buildSessionConversation(store.activeSession).map((turn) => turn.user?.text))
+      .toEqual(['Same text', 'No ID', 'Same text']);
+  });
+
+  it('does not carry snapshot message identities into a different session or an undo reload', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+        { seq: 1, kind: { type: 'prompt_received', data: { message_id: 'shared-id', content: 'First' } } }
+      ] } }
+    } }, replay: [] });
+    await store.loadSession('agent-1', 'session-1');
+    await store.loadSession('agent-1', 'session-2');
+    mockClient.emitSessionUpdate({ sessionId: 'session-2', update: {
+      sessionUpdate: 'user_message_chunk', messageId: 'shared-id', content: { type: 'text', text: 'Second' }
+    } });
+    expect(store.activeSession.transcript.map((item) => item.text)).toEqual(['Second']);
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [] }, replay: [{ sessionId: 'session-2', update: {
+      sessionUpdate: 'user_message_chunk', messageId: 'shared-id', content: { type: 'text', text: 'Second' }
+    } }] });
+    await store.loadSession('agent-1', 'session-2', 'undo');
+    expect(store.activeSession.transcript.map((item) => item.text)).toEqual(['Second']);
+  });
+
+  it('ignores late snapshot-covered user echoes after remote attach', async () => {
+    const store = createStore();
+    await store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+    const before = buildSessionConversation(store.activeSession).map((turn) => turn.user?.text);
+    mockClient.emitSessionUpdate({ sessionId: 'remote-session-1', update: {
+      sessionUpdate: 'user_message_chunk', messageId: 'm1', content: { type: 'text', text: 'Review deployment' }
+    } });
+    expect(buildSessionConversation(store.activeSession).map((turn) => turn.user?.text)).toEqual(before);
+  });
+
   it('does not redirect an input when the selected session changes during runtime refresh', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
     let resolveRuntime!: (runtime: SessionRuntimeStatus) => void;
