@@ -86,6 +86,7 @@
   <div class="sessions-unified-panel">
     <DesktopSessionList
       sessions={agentsStore.sessionCatalog}
+      recentSessionKeys={agentsStore.recentSessionKeys}
       bind:browserState={agentsStore.sessionBrowser}
       catalogComplete={true}
       hasAnySessions={agentsStore.sessionCatalogHasSessions}

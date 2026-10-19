@@ -2,7 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { tick } from 'svelte';
-import { createSessionBrowserState } from '$lib/domain/sessions';
+import { createSessionBrowserState, getSessionKey, RECENT_SESSION_GROUP_KEY } from '$lib/domain/sessions';
 import type { DesktopSessionSummary } from '$lib/domain/types';
 import DesktopSessionList from './DesktopSessionList.svelte';
 
@@ -39,6 +39,98 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe('DesktopSessionList recent sessions', () => {
+  it('shows recents as the first expanded workspace with ten rows and local load-more', async () => {
+    const catalog = Array.from({ length: 24 }, (_, index) => ({
+      ...sessions[0], sessionId: `recent-${index}`, title: `Recent task ${index}`, cwd: `/projects/project-${index % 2}`,
+      updatedAt: `2026-07-${String(index + 1).padStart(2, '0')}T01:00:00Z`
+    }));
+    const onLoadMoreWorkspace = vi.fn();
+    const onCreateWorkspaceSession = vi.fn();
+    const onOpenSession = vi.fn();
+    const { container } = render(DesktopSessionList, {
+      sessions: catalog, recentSessionKeys: catalog.map(getSessionKey), catalogComplete: true,
+      onLoadMoreWorkspace, onCreateWorkspaceSession, onOpenSession
+    });
+    const groups = container.querySelectorAll<HTMLElement>('.session-workspace-item');
+    const recent = within(groups[0]);
+    expect(recent.getByText('Recent sessions')).toBeInTheDocument();
+    expect(recent.getByRole('button', { name: /^Recent sessions/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(recent.getAllByRole('button', { name: /^Open session/ }).map((row) => row.getAttribute('aria-label')))
+      .toEqual(catalog.slice(0, 10).map((session) => `Open session ${session.title}`));
+    expect(recent.queryByRole('button', { name: /^New session/ })).not.toBeInTheDocument();
+    expect(recent.queryByTitle('Copy project path')).not.toBeInTheDocument();
+    expect(recent.getAllByText('project-0')).toHaveLength(5);
+    expect(groups).toHaveLength(3);
+    expect(groups[0].querySelector('.session-workspace-icon .lucide-clock-3')).not.toBeNull();
+    await fireEvent.click(recent.getByRole('button', { name: 'Open session Recent task 0' }));
+    expect(onOpenSession).toHaveBeenCalledWith(catalog[0]);
+    await fireEvent.click(recent.getByRole('button', { name: 'Load 10 more' }));
+    expect(recent.getAllByRole('button', { name: /^Open session/ })).toHaveLength(20);
+    expect(onLoadMoreWorkspace).not.toHaveBeenCalled();
+    await fireEvent.click(recent.getByRole('button', { name: 'Load 10 more' }));
+    expect(recent.getAllByRole('button', { name: /^Open session/ })).toHaveLength(24);
+    expect(recent.queryByRole('button', { name: 'Load 10 more' })).not.toBeInTheDocument();
+  });
+
+  it('filters recents by lifecycle, runtime, location, and workspace search before limiting', async () => {
+    const catalog = [
+      ...Array.from({ length: 12 }, (_, index) => ({ ...sessions[0], sessionId: `open-${index}`, title: `Open ${index}` })),
+      { ...sessions[1], title: 'Remote result', cwd: '/projects/remote-project', location: 'remote' as const, status: 'thinking' as const,
+        lifecycle: { ...sessions[1].lifecycle!, resolved: true } }
+    ];
+    const { container } = render(DesktopSessionList, { sessions: catalog, recentSessionKeys: catalog.map(getSessionKey), catalogComplete: true, showRemoteSessions: true });
+    await fireEvent.click(screen.getByRole('button', { name: 'Resolved' }));
+    const recent = () => within(container.querySelector<HTMLElement>('.session-workspace-item')!);
+    expect(recent().getByText('Remote result')).toBeInTheDocument();
+    expect(recent().queryByText('Open 0')).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Runtime' })).getByRole('radio', { name: 'Running' }));
+    await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Location' })).getByRole('radio', { name: 'Remote' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Close filters' }));
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Search sessions' }), { target: { value: 'remote-project' } });
+    expect(recent().getByText('Recent sessions')).toBeInTheDocument();
+    expect(recent().getByText('Remote result')).toBeInTheDocument();
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Search sessions' }), { target: { value: 'missing' } });
+    expect(screen.queryByText('Recent sessions')).not.toBeInTheDocument();
+  });
+
+  it('never invents missing rows or promotes child/unknown summaries and does not duplicate recents', () => {
+    const child = { ...sessions[0], sessionId: 'child', parentSessionId: 'root' };
+    const fork = { ...sessions[0], sessionId: 'fork', forkOrigin: 'delegation' };
+    const unknown = { ...sessions[0], sessionId: 'unknown', relationshipKnown: false };
+    const catalog = [sessions[0], child, fork, unknown];
+    const { container } = render(DesktopSessionList, {
+      sessions: catalog, catalogComplete: true,
+      recentSessionKeys: [...catalog.map(getSessionKey), getSessionKey(sessions[0]), 'agent-1:missing']
+    });
+    const recent = within(container.querySelector<HTMLElement>('.session-workspace-item')!);
+    expect(recent.getByText('Recent sessions')).toBeInTheDocument();
+    expect(recent.getAllByRole('button', { name: /^Open session/ })).toHaveLength(1);
+  });
+
+  it('restores the Recent group expansion and independent row limit', () => {
+    const catalog = Array.from({ length: 22 }, (_, index) => ({ ...sessions[0], sessionId: `recent-${index}`, title: `Recent ${index}` }));
+    const browserState = {
+      ...createSessionBrowserState(), groupsInitialized: true, recentGroupInitialized: true,
+      openGroups: ['/projects/querymt'], visibleLimits: { [RECENT_SESSION_GROUP_KEY]: 20 }
+    };
+    const first = render(DesktopSessionList, { sessions: catalog, browserState, catalogComplete: true, recentSessionKeys: catalog.map(getSessionKey) });
+    expect(screen.getByRole('button', { name: /^Recent sessions/ })).toHaveAttribute('aria-expanded', 'false');
+    first.unmount();
+    render(DesktopSessionList, { sessions: catalog, browserState: { ...browserState, openGroups: [RECENT_SESSION_GROUP_KEY] }, catalogComplete: true, recentSessionKeys: catalog.map(getSessionKey) });
+    expect(screen.getByRole('button', { name: /^Recent sessions/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getAllByRole('button', { name: /^Open session/ })).toHaveLength(20);
+  });
+
+  it('does not show an empty Recent group before the first visit or when its rows leave the catalog', async () => {
+    const { rerender } = render(DesktopSessionList, { sessions, catalogComplete: true });
+    expect(screen.queryByText('Recent sessions')).not.toBeInTheDocument();
+    await rerender({ sessions: [], catalogComplete: true, recentSessionKeys: sessions.map(getSessionKey) });
+    expect(screen.queryByText('Recent sessions')).not.toBeInTheDocument();
+  });
 });
 
 describe('DesktopSessionList', () => {

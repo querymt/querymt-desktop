@@ -29,7 +29,9 @@ import { AgentsStore } from './agents.svelte';
 import { chatPreferencesStore } from './chat-preferences.svelte';
 import { inboxStore } from './inbox.svelte';
 import { DEFAULT_SESSION_LIST_SCOPE, isRootSession, sessionMatchesLifecycle } from '$lib/domain/sessions';
-import { SESSION_CATALOG_STORAGE_KEY, SESSION_CATALOG_FRESH_MS } from './session-catalog-cache';
+import { SESSION_CATALOG_STORAGE_KEY, SESSION_CATALOG_FRESH_MS, sessionCatalogKey } from './session-catalog-cache';
+
+const RECENT_SESSIONS_STORAGE_KEY = 'querymt-desktop.recent-sessions';
 
 function listSessionsRequest(input: { cwd?: string; cursor?: string } = {}) {
   return {
@@ -355,6 +357,7 @@ function createStore() {
 }
 
 beforeEach(() => {
+  localStorage.removeItem(RECENT_SESSIONS_STORAGE_KEY);
   localStorage.removeItem(SESSION_CATALOG_STORAGE_KEY);
   vi.clearAllMocks();
   vi.mocked(DesktopAcpClient).mockImplementation(function () {
@@ -458,6 +461,144 @@ afterEach(() => {
   }
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe('AgentsStore recent sessions', () => {
+  it('remembers successful opens in MRU order and restores them without loading history', async () => {
+    const store = createStore();
+    await store.loadSession('agent-1', 'first');
+    await store.loadSession('agent-1', 'second');
+    await store.loadSession('agent-1', 'first');
+    expect(store.recentSessionKeys).toEqual(['agent-1:first', 'agent-1:second']);
+    const stored = JSON.parse(localStorage.getItem(RECENT_SESSIONS_STORAGE_KEY)!);
+    expect(stored).toHaveLength(2);
+    expect(Object.keys(stored[0]).sort()).toEqual(['agentId', 'sessionId', 'source']);
+    mockClient.loadSession.mockClear();
+    const restored = createStore();
+    expect(restored.recentSessionKeys).toEqual(store.recentSessionKeys);
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+  });
+
+  it('preloads recent identities from the existing catalog cache without a second history or catalog request', async () => {
+    const store = createStore();
+    mockClient.supportsSessionLifecycle.mockReturnValue(true);
+    await store.connectAgent('agent-1');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{ sessionId: 'recent', title: 'Cached recent', cwd: '/tmp/work', _meta: {
+      querymt: { lifecycle: { session_id: 'recent', resolved: false, archived: false, resolved_at: null, archived_at: null } }
+    } }] });
+    await store.ensureSessionCatalog();
+    await store.loadSession('agent-1', 'recent');
+    store.dispose();
+    const restored = createStore();
+    await restored.connectAgent('agent-1');
+    mockClient.listSessions.mockClear();
+    mockClient.loadSession.mockClear();
+    await restored.ensureSessionCatalog();
+    expect(restored.recentSessionKeys).toEqual(['agent-1:recent']);
+    expect(restored.sessionCatalog[0].title).toBe('Cached recent');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
+  });
+
+  it('does not remember failed loads, known children, or background activity', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockRejectedValueOnce(new Error('Missing session'));
+    await store.loadSession('agent-1', 'missing');
+    expect(store.recentSessionKeys).toEqual([]);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{
+      sessionId: 'child', title: 'Child', cwd: '/tmp/work', _meta: { parentSessionId: 'root', forkOrigin: 'delegation' }
+    }] });
+    await store.refreshSessionsForAgent('agent-1');
+    await store.loadSession('agent-1', 'child');
+    expect(store.recentSessionKeys).toEqual([]);
+    await store.loadSession('agent-1', 'root');
+    mockClient.emitSessionUpdate({ sessionId: 'child', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Background work' } } });
+    await tick();
+    expect(store.recentSessionKeys).toEqual(['agent-1:root']);
+  });
+
+  it('remembers foreground creation but not background session creation', async () => {
+    const store = createStore();
+    await store.createBackgroundSession('agent-1', '/tmp/work');
+    expect(store.recentSessionKeys).toEqual([]);
+    await store.createSession('agent-1');
+    expect(store.recentSessionKeys).toEqual(['agent-1:session-1']);
+  });
+
+  it('remembers successful remote attachments', async () => {
+    const store = createStore();
+    await store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+    expect(store.recentSessionKeys).toEqual(['agent-1:remote-session-1']);
+  });
+
+  it('does not let a superseded successful load reorder recent sessions', async () => {
+    const store = createStore();
+    let release!: (value: { response: { configOptions: SessionConfigOption[] }; replay: SessionNotification[] }) => void;
+    mockClient.loadSession.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const old = store.loadSession('agent-1', 'old');
+    await vi.waitFor(() => expect(mockClient.loadSession).toHaveBeenCalledOnce());
+    await store.loadSession('agent-1', 'new');
+    release({ response: { configOptions: [] }, replay: [] });
+    await old;
+    expect(store.recentSessionKeys).toEqual(['agent-1:new']);
+  });
+
+  it('scopes identities to endpoints and removes them when changing endpoints', async () => {
+    const store = createStore();
+    await store.loadSession('agent-1', 'session-1');
+    const restored = createStore();
+    restored.configs = [{ ...restored.configs[0], commandLine: 'different-agent' }];
+    expect(restored.recentSessionKeys).toEqual([]);
+    store.updateConfig('agent-1', { name: 'Renamed' });
+    expect(store.recentSessionKeys).toEqual(['agent-1:session-1']);
+    store.updateConfig('agent-1', { commandLine: 'different-agent' });
+    expect(store.recentSessionKeys).toEqual([]);
+    expect(JSON.parse(localStorage.getItem(RECENT_SESSIONS_STORAGE_KEY)!)).toEqual([]);
+  });
+
+  it('forgets a session only after successful deletion', async () => {
+    const store = createStore();
+    mockClient.connect.mockResolvedValueOnce({ protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { delete: {} } }, authMethods: [] });
+    await store.loadSession('agent-1', 'session-1');
+    mockClient.deleteSession.mockRejectedValueOnce(new Error('Denied'));
+    await expect(store.deleteSession('agent-1', 'session-1')).rejects.toThrow('Denied');
+    expect(store.recentSessionKeys).toEqual(['agent-1:session-1']);
+    await store.deleteSession('agent-1', 'session-1');
+    expect(store.recentSessionKeys).toEqual([]);
+    expect(createStore().recentSessionKeys).toEqual([]);
+  });
+
+  it.each(['null', '{}', '[null, {"agentId":3}]', 'invalid json'])('ignores invalid stored recents (%s)', (raw) => {
+    localStorage.setItem(RECENT_SESSIONS_STORAGE_KEY, raw);
+    expect(createStore().recentSessionKeys).toEqual([]);
+  });
+
+  it('bounds and deduplicates persisted identities', async () => {
+    const seed = createStore();
+    const source = sessionCatalogKey(seed.configs, [], { resolution: 'any', archive: 'any' });
+    const entries = Array.from({ length: 65 }, (_, index) => ({ agentId: 'agent-1', sessionId: `session-${index}`, source }));
+    localStorage.setItem(RECENT_SESSIONS_STORAGE_KEY, JSON.stringify([entries[0], ...entries]));
+    const store = createStore();
+    expect(store.recentSessionKeys).toHaveLength(50);
+    await store.loadSession('agent-1', 'newest');
+    expect(store.recentSessionKeys[0]).toBe('agent-1:newest');
+    expect(JSON.parse(localStorage.getItem(RECENT_SESSIONS_STORAGE_KEY)!)).toHaveLength(50);
+  });
+
+  it('keeps successful opens usable when recent-session storage writes fail', async () => {
+    const store = createStore();
+    const original = Storage.prototype.setItem;
+    const storage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === RECENT_SESSIONS_STORAGE_KEY) throw new Error('Storage full');
+      original.call(this, key, value);
+    });
+    try {
+      await store.loadSession('agent-1', 'session-1');
+      expect(store.recentSessionKeys).toEqual(['agent-1:session-1']);
+      expect(store.activeSession.lastError).toBeNull();
+    } finally { storage.mockRestore(); }
+  });
 });
 
 describe('AgentsStore open-session sidebar pagination', () => {

@@ -10368,6 +10368,12 @@ summary:focus-visible {
   line-height: 1.35;
 }
 
+.session-row-workspace {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-row-status-line {
   position: relative;
   z-index: 1;

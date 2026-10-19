@@ -107,6 +107,7 @@ export interface SessionBrowserState {
   location: 'all' | 'local' | 'remote';
   openGroups: string[];
   groupsInitialized: boolean;
+  recentGroupInitialized?: boolean;
   visibleLimits: Record<string, number>;
   scrollTop: number;
 }

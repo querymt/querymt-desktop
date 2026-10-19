@@ -7,12 +7,13 @@
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
   import SessionLifecycleBadges from '$lib/components/primitives/SessionLifecycleBadges.svelte';
-  import { createSessionBrowserState, SESSION_LIFECYCLE_VIEWS, sessionMatchesLifecycle, compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
+  import { createSessionBrowserState, SESSION_LIFECYCLE_VIEWS, RECENT_SESSION_GROUP_KEY, getSessionKey, getSessionWorkspaceName, isRootSession, sessionMatchesLifecycle, compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import Identicon from '$lib/components/primitives/Identicon.svelte';
   import type { DesktopSessionSummary, ExcludedSessionAgent, SessionBrowserState, SessionLifecyclePatch, SessionLifecycleView, SessionStatus } from '$lib/domain/types';
 
   let {
     sessions = [],
+    recentSessionKeys = [],
     browserState = $bindable(createSessionBrowserState()),
     catalogComplete = false,
     hasAnySessions = null,
@@ -42,6 +43,7 @@
     onDeleteSession = null
   }: {
     sessions?: DesktopSessionSummary[];
+    recentSessionKeys?: string[];
     browserState?: SessionBrowserState;
     catalogComplete?: boolean;
     hasAnySessions?: boolean | null;
@@ -86,7 +88,22 @@
   const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
 
-  const sourceWorkspaceGroups = $derived(workspaceGroups ?? groupSessionsByWorkspace(sessions));
+  const sourceWorkspaceGroups = $derived.by(() => {
+    const groups = workspaceGroups ?? groupSessionsByWorkspace(sessions);
+    if (!recentSessionKeys.length) return groups;
+    const byKey = new Map(groups.flatMap((group) => group.sessions).map((session) => [getSessionKey(session), session]));
+    const recent = [...new Set(recentSessionKeys)].flatMap((key) => {
+      const session = byKey.get(key);
+      return session && isRootSession(session) ? [session] : [];
+    });
+    if (!recent.length) return groups;
+    const recentGroup: WorkspaceSessionGroup = {
+      kind: 'recent', key: RECENT_SESSION_GROUP_KEY, cwd: '', name: 'Recent sessions', path: '',
+      sessions: recent, latestActivity: null, initialized: true, loading: false,
+      hasMore: false, error: null, catalogGeneration: 0
+    };
+    return [recentGroup, ...groups];
+  });
 
   function machineName(machine: { id: string; label: string | null }) {
     return machine.label ?? compactRemoteNodeId(machine.id);
@@ -143,8 +160,8 @@
   function workspaceMatchesGroup(group: WorkspaceSessionGroup, normalizedQuery: string): boolean {
     return (
       !normalizedQuery ||
-      group.name.toLowerCase().includes(normalizedQuery) ||
-      group.path.toLowerCase().includes(normalizedQuery)
+      (group.kind !== 'recent' && (group.name.toLowerCase().includes(normalizedQuery) ||
+        group.path.toLowerCase().includes(normalizedQuery)))
     );
   }
 
@@ -161,15 +178,17 @@
             workspaceMatches ||
             session.title.toLowerCase().includes(normalizedQuery) ||
             session.agentName.toLowerCase().includes(normalizedQuery) ||
-            session.sessionId.toLowerCase().includes(normalizedQuery);
+            session.sessionId.toLowerCase().includes(normalizedQuery) ||
+            (group.kind === 'recent' && (session.cwd.toLowerCase().includes(normalizedQuery) ||
+              getSessionWorkspaceName(session.cwd).toLowerCase().includes(normalizedQuery)));
           return matchesFilter && matchesQuery;
         });
         const limit = browserState.visibleLimits[group.key] ?? 10;
         return {
           ...group,
-          sessions: catalogComplete ? filteredSessions.slice(0, limit) : filteredSessions,
+          sessions: catalogComplete || group.kind === 'recent' ? filteredSessions.slice(0, limit) : filteredSessions,
           totalMatching: filteredSessions.length,
-          hasMore: catalogComplete ? filteredSessions.length > limit : group.hasMore,
+          hasMore: catalogComplete || group.kind === 'recent' ? filteredSessions.length > limit : group.hasMore,
           location: filteredSessions.length ? getWorkspaceLocation(filteredSessions) : group.location,
           remoteMachines: filteredSessions.length ? getWorkspaceRemoteMachines(filteredSessions) : group.remoteMachines
         };
@@ -180,9 +199,15 @@
   $effect(() => {
     if (searching) {
       searchOpenGroups = filteredWorkspaceGroups.map((group) => group.key);
-    } else if (!browserState.groupsInitialized && filteredWorkspaceGroups.length) {
-      browserState.openGroups = filteredWorkspaceGroups.slice(0, 1).map((group) => group.key);
-      browserState.groupsInitialized = true;
+    } else {
+      if (!browserState.groupsInitialized && filteredWorkspaceGroups.length) {
+        browserState.openGroups = filteredWorkspaceGroups.slice(0, 1).map((group) => group.key);
+        browserState.groupsInitialized = true;
+      }
+      if (!browserState.recentGroupInitialized && filteredWorkspaceGroups.some((group) => group.kind === 'recent')) {
+        browserState.openGroups = [...new Set([RECENT_SESSION_GROUP_KEY, ...browserState.openGroups])];
+        browserState.recentGroupInitialized = true;
+      }
     }
   });
 
@@ -250,7 +275,7 @@
   }
 
   function loadMore(group: WorkspaceSessionGroup) {
-    if (catalogComplete) browserState.visibleLimits[group.key] = (browserState.visibleLimits[group.key] ?? 10) + 10;
+    if (catalogComplete || group.kind === 'recent') browserState.visibleLimits[group.key] = (browserState.visibleLimits[group.key] ?? 10) + 10;
     else void onLoadMoreWorkspace?.(group.cwd);
   }
 
@@ -492,7 +517,9 @@
                  <Accordion.Trigger class="session-workspace-trigger">
                    <span class="session-workspace-trigger-main">
                       <span class="session-workspace-icon" aria-hidden="true">
-                        {#if getOpenGroups().includes(group.key)}
+                        {#if group.kind === 'recent'}
+                          <Clock3 size={22} strokeWidth={1.5} />
+                        {:else if getOpenGroups().includes(group.key)}
                           <FolderOpen size={22} strokeWidth={1.5} />
                         {:else if group.location === 'remote' || group.location === 'mixed'}
                           <FolderSync size={22} strokeWidth={1.5} />
@@ -503,8 +530,12 @@
                       <span class="session-workspace-copy">
                         <span class="session-workspace-name">{group.name}</span>
                          <span class="session-workspace-path">
-                           <CopyTextChip value={group.path} title="Copy project path" />
-                           {#if workspaceMachineText(group)}
+                           {#if group.kind === 'recent'}
+                             <span>Recently opened</span>
+                           {:else}
+                             <CopyTextChip value={group.path} title="Copy project path" />
+                           {/if}
+                           {#if group.kind !== 'recent' && workspaceMachineText(group)}
                              <span class="session-workspace-machine" title={workspaceMachineTitle(group)}><Network size={12} aria-hidden="true" />{workspaceMachineText(group)}</span>
                            {/if}
                          </span>
@@ -522,12 +553,12 @@
                      {:else}
                        <span class="session-workspace-count session-workspace-count-pending" aria-label="Sessions not loaded" title="Sessions load when opened">—</span>
                      {/if}
-                      <span class="session-workspace-updated" title={formatSessionTimestampAbsolute(group.latestActivity)}><Clock3 size={12} /> {formatSessionTimestamp(group.latestActivity)}</span>
+                      {#if group.kind !== 'recent'}<span class="session-workspace-updated" title={formatSessionTimestampAbsolute(group.latestActivity)}><Clock3 size={12} /> {formatSessionTimestamp(group.latestActivity)}</span>{/if}
                      <ChevronDown size={15} class="session-workspace-chevron" />
                    </span>
                  </Accordion.Trigger>
                </Accordion.Header>
-                {#if onCreateWorkspaceSession}
+                {#if onCreateWorkspaceSession && group.kind !== 'recent'}
                   {#if group.location === 'mixed' || (group.remoteMachines?.length ?? 0) > 1}
                     <details class="session-workspace-target-picker">
                       <summary class="session-workspace-new" aria-label={`New session in ${group.name}`} title={`Choose target for ${group.name}`}><Plus size={15} /></summary>
@@ -588,6 +619,11 @@
                         {/if}
                       </span>
                       <span class="session-row-meta">
+                        {#if group.kind === 'recent'}
+                          <span class="session-row-workspace" title={session.cwd}>
+                            {getSessionWorkspaceName(session.cwd)}{#if session.location === 'remote'} · {session.remoteNodeLabel || compactRemoteNodeId(session.remoteNodeId ?? '')}{/if}
+                          </span>
+                        {/if}
                         {#if showAgentNames}<span>{session.agentName}</span>{/if}
                         <span class="session-row-status-line">
                           <span
@@ -626,7 +662,7 @@
                     <span class="alert-error" role="alert">{group.error}</span>
                     <button class="action-btn" type="button" onclick={() => onOpenWorkspace?.(group.cwd)}>Retry</button>
                   </div>
-                {:else if group.hasMore && (catalogComplete || onLoadMoreWorkspace)}
+                {:else if group.hasMore && (catalogComplete || group.kind === 'recent' || onLoadMoreWorkspace)}
                   <div class="session-workspace-pagination">
                     <button
                       class="session-workspace-load-more"

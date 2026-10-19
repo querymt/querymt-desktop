@@ -168,6 +168,8 @@ import { normalizeAcpWebSocketEndpoint, usesSecureWebSocket } from '$lib/querymt
 
 const AGENTS_STORAGE_KEY = 'querymt-desktop.agents';
 const RECENT_MODELS_STORAGE_KEY = 'querymt-desktop.recent-models';
+const RECENT_SESSIONS_STORAGE_KEY = 'querymt-desktop.recent-sessions';
+const RECENT_SESSIONS_LIMIT = 50;
 const RECENT_DELEGATE_MODELS_STORAGE_KEY = 'querymt-desktop.recent-delegate-models';
 const RECENT_WORKSPACES_STORAGE_KEY = 'querymt-desktop.recent-workspaces';
 const RECENT_MODELS_LIMIT = 5;
@@ -208,6 +210,12 @@ interface AgentClientRecord {
   unsubscribeConnectionLoss: (() => void) | null;
   unsubscribeInbox: (() => void) | null;
   recentSessionUpdateKeys: string[];
+}
+
+interface RecentSessionEntry {
+  agentId: string;
+  sessionId: string;
+  source: string;
 }
 
 interface OpenSessionPage {
@@ -334,6 +342,7 @@ export class AgentsStore {
   lastRemoteDismissByAgent = $state<Record<string, RemoteSessionDismissInfo | null>>({});
   sessionsByAgent = $state<Record<string, DesktopSessionSummary[]>>({});
   private knownSessionParents = $state<Record<string, string>>({});
+  private recentSessionEntries = $state<RecentSessionEntry[]>(loadRecentSessions());
   private openSessionPages = $state<Record<string, OpenSessionPage>>({});
   sessionBrowser = $state(createSessionBrowserState());
   sessionCatalog = $state<DesktopSessionSummary[]>([]);
@@ -539,6 +548,31 @@ export class AgentsStore {
     this.sessionCatalog = this.sessionCatalog.map(update);
     // Old scopes may have cached an incomplete child summary. Do not reset the live paging cursor.
     this.sessionCatalogCache.clear();
+  }
+
+  get recentSessionKeys(): string[] {
+    const sources = new Map(this.configs.filter((config) => config.enabled)
+      .map((config) => [config.id, sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' })]));
+    return this.recentSessionEntries.filter((entry) => sources.get(entry.agentId) === entry.source)
+      .map((entry) => buildSessionKey(entry.agentId, entry.sessionId));
+  }
+
+  private rememberRecentSession(agentId: string, sessionId: string) {
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) return;
+    const summary = this.sessionsByAgent[agentId]?.find((session) => session.sessionId === sessionId);
+    // Unknown deep links may become roots after discovery; explicit children never do.
+    if (summary && (summary.parentSessionId || summary.forkOrigin || this.knownSessionParents[buildSessionKey(agentId, sessionId)])) return;
+    const entry = { agentId, sessionId, source: sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' }) };
+    this.recentSessionEntries = [entry, ...this.recentSessionEntries
+      .filter((current) => current.agentId !== agentId || current.sessionId !== sessionId)].slice(0, RECENT_SESSIONS_LIMIT);
+    persistRecentSessions(this.recentSessionEntries);
+  }
+
+  private forgetRecentSessions(agentId: string, sessionId?: string) {
+    this.recentSessionEntries = this.recentSessionEntries.filter((entry) => entry.agentId !== agentId ||
+      (sessionId !== undefined && entry.sessionId !== sessionId));
+    persistRecentSessions(this.recentSessionEntries);
   }
 
   get sessions(): DesktopSessionSummary[] {
@@ -1087,6 +1121,7 @@ export class AgentsStore {
           normalizedUpdates.websocketUrl !== current.websocketUrl) ||
         (updates.commandLine !== undefined && updates.commandLine !== current.commandLine));
     if (endpointChanged) {
+      this.forgetRecentSessions(agentId);
       this.knownSessionParents = Object.fromEntries(Object.entries(this.knownSessionParents)
         .filter(([key]) => !key.startsWith(`${agentId}:`)));
       this.invalidateSessionCatalogCache();
@@ -1115,6 +1150,7 @@ export class AgentsStore {
     this.invalidateConnectGeneration(agentId);
     await this.stopConfiguredAgent(agentId);
     this.configs = this.configs.filter((config) => config.id !== agentId);
+    this.forgetRecentSessions(agentId);
     delete this.statuses[agentId];
     delete this.connectionStates[agentId];
     delete this.agentErrors[agentId];
@@ -2292,6 +2328,7 @@ export class AgentsStore {
     }
 
     await record.client.deleteSession(sessionId);
+    this.forgetRecentSessions(agentId, sessionId);
     this.invalidateSessionCatalogCache();
     this.sessionsByAgent = {
       ...this.sessionsByAgent,
@@ -2399,6 +2436,7 @@ export class AgentsStore {
         await this.applyComposerLaunchConfig(agentId, sessionId, launch);
         await this.applySelectedModelToSession(agentId, sessionId, launch.modelId);
         this.captureLaunchSessionPreference(agentId, sessionId, launch);
+        this.rememberRecentSession(agentId, sessionId);
         return sessionId;
       }
 
@@ -2411,6 +2449,7 @@ export class AgentsStore {
       this.captureLaunchSessionPreference(agentId, sessionId, launch);
       await this.drainQueuedSessionUpdates(agentId, sessionId);
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
+      this.rememberRecentSession(agentId, sessionId);
       return sessionId;
     } catch (error) {
       this.error = error instanceof Error ? error.message : `Failed to create session for ${config.name}.`;
@@ -2909,6 +2948,7 @@ export class AgentsStore {
       this.isSelectedSession(agentId, sessionId)
     ) {
       this.acknowledgeSession(agentId, sessionId);
+      this.rememberRecentSession(agentId, sessionId);
       await this.refreshDelegateAssignments(agentId, sessionId);
       return;
     }
@@ -3194,6 +3234,7 @@ export class AgentsStore {
       this.hydrateLoadedSessionSummary(agentId, sessionId, replay);
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
       checkpoint('frontend.model_hydrate');
+      if (isCurrentLoad() && pendingOperation === null) this.rememberRecentSession(agentId, sessionId);
       void this.refreshDelegateAssignments(agentId, sessionId);
       await tick();
       await new Promise<void>((resolve) => {
@@ -4199,6 +4240,7 @@ export class AgentsStore {
     };
     this.updateWorkspaceDiscovery(config, [summary], false);
     this.hydratedRemoteSessionKeys.add(buildSessionKey(agentId, sessionId));
+    this.rememberRecentSession(agentId, sessionId);
     // Attachment is committed; a retryable catalog refresh must not fail its load.
     await this.refreshRemoteSessionsForAgent(agentId, nodeId).catch((error) => {
       console.warn('Remote session attached, but catalog refresh failed', error);
@@ -5353,6 +5395,35 @@ function persistRecentModels(value: Record<string, string[]>, storageKey = RECEN
   }
 
   localStorage.setItem(storageKey, JSON.stringify(value));
+}
+
+function loadRecentSessions(): RecentSessionEntry[] {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const parsed: unknown = JSON.parse(localStorage.getItem(RECENT_SESSIONS_STORAGE_KEY) ?? '[]');
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set<string>();
+    return parsed.filter((value): value is RecentSessionEntry => {
+      if (!value || typeof value !== 'object') return false;
+      const { agentId, sessionId, source } = value as Partial<RecentSessionEntry>;
+      if (typeof agentId !== 'string' || !agentId.trim() || typeof sessionId !== 'string' || !sessionId.trim() ||
+        typeof source !== 'string' || !source) return false;
+      const key = buildSessionKey(agentId, sessionId);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, RECENT_SESSIONS_LIMIT).map(({ agentId, sessionId, source }) => ({ agentId, sessionId, source }));
+  } catch {
+    return [];
+  }
+}
+
+function persistRecentSessions(entries: RecentSessionEntry[]) {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(RECENT_SESSIONS_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // Recent navigation remains usable in memory when browser storage is unavailable.
+  }
 }
 
 function loadRecentWorkspaces(): string[] {

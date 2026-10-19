@@ -40,7 +40,10 @@ export interface WorkspaceRemoteMachine {
   label: string | null;
 }
 
+export const RECENT_SESSION_GROUP_KEY = '__recent_sessions__';
+
 export interface WorkspaceSessionGroup {
+  kind?: 'recent';
   key: string;
   cwd: string;
   name: string;
