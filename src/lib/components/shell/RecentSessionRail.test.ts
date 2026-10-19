@@ -452,6 +452,62 @@ describe('RecentSessionRail agents count', () => {
 });
 
 describe('RecentSessionRail Mesh node count', () => {
+  const statusDescriptionId = 'app-sidebar-mesh-status-description';
+
+  it.each([1, 3])('explains %i available nodes in an expanded tooltip on hover', async (count) => {
+    agentsStore.meshNodeCount = count;
+    const status = `${count} ${count === 1 ? 'node' : 'nodes'} available`;
+    render(RecentSessionRail, { current: 'Mesh', sessions: [activeSession] });
+
+    const meshLink = screen.getByRole('link', { name: `Mesh, ${count} ${count === 1 ? 'node' : 'nodes'}` });
+    expect(meshLink).toHaveAttribute('href', '/mesh');
+    expect(meshLink).toHaveAttribute('aria-current', 'page');
+    expect(meshLink).toHaveAttribute('aria-describedby', statusDescriptionId);
+    expect(document.querySelectorAll(`[id="${statusDescriptionId}"]`)).toHaveLength(1);
+    expect(document.getElementById(statusDescriptionId)).toHaveClass('sr-only');
+    expect(document.getElementById(statusDescriptionId)).toHaveTextContent(status);
+    expect(document.querySelector('.app-icon-tooltip')).toBeNull();
+
+    await fireEvent.pointerEnter(meshLink);
+    await waitFor(() => expect(document.querySelector('.app-icon-tooltip')).toHaveTextContent(status));
+    expect(document.querySelector('.app-icon-tooltip')).toHaveAttribute('data-side', 'right');
+    expect(document.querySelector('.app-icon-tooltip-arrow')).not.toBeNull();
+    expect(meshLink).toHaveAttribute('aria-describedby', statusDescriptionId);
+  });
+
+  it.each([false, true])('exposes the Mesh count tooltip to keyboard focus (collapsed=%s)', async (collapsed) => {
+    agentsStore.meshNodeCount = 2;
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed });
+    const meshLink = screen.getByRole('link', { name: 'Mesh, 2 nodes' });
+    meshLink.focus();
+    await waitFor(() => expect(document.querySelector('.app-icon-tooltip'))
+      .toHaveTextContent(collapsed ? 'Mesh, 2 nodes available' : '2 nodes available'));
+    expect(meshLink).toHaveAttribute('aria-describedby', statusDescriptionId);
+    expect(document.querySelectorAll(`[id="${statusDescriptionId}"]`)).toHaveLength(1);
+  });
+
+  it('keeps a plain expanded Mesh link when there are no reported nodes', async () => {
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
+    const meshLink = screen.getByRole('link', { name: 'Mesh' });
+    expect(meshLink).not.toHaveAttribute('aria-describedby');
+    expect(document.getElementById(statusDescriptionId)).toBeNull();
+    await fireEvent.pointerEnter(meshLink);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(document.querySelector('.app-icon-tooltip')).toBeNull();
+  });
+
+  it('keeps Mesh and Agents status descriptions distinct', () => {
+    agentsStore.configs = [{ id: 'agent-1' }];
+    agentsStore.connectedAgents = [{ id: 'agent-1' }];
+    agentsStore.meshNodeCount = 2;
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
+    const meshLink = screen.getByRole('link', { name: 'Mesh, 2 nodes' });
+    const agentsLink = screen.getByRole('link', { name: 'Agents' });
+    expect(meshLink).toHaveAccessibleDescription('2 nodes available');
+    expect(agentsLink).toHaveAccessibleDescription('1 agent active, 1 agent available');
+    expect(meshLink.getAttribute('aria-describedby')).not.toBe(agentsLink.getAttribute('aria-describedby'));
+  });
+
   it('labels the expanded Mesh link with a trailing node count and no icon badge', () => {
     agentsStore.meshNodeCount = 3;
 

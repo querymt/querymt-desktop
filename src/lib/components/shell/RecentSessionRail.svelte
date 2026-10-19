@@ -84,6 +84,7 @@
   // Point at a persistent visually hidden description instead; it must not collide with the
   // expanded and collapsed rails because only one renders at a time.
   const AGENTS_STATUS_DESCRIPTION_ID = 'app-sidebar-agents-status-description';
+  const MESH_STATUS_DESCRIPTION_ID = 'app-sidebar-mesh-status-description';
   const workSections: SectionName[] = ['Inbox', 'Sessions', 'Workspaces'];
   const manageSections: SectionName[] = ['Agents', 'Automations', 'Mesh'];
   const mobilePrimarySections: SectionName[] = ['Start', 'Inbox', 'Sessions', 'Agents'];
@@ -214,6 +215,10 @@
     return `${active}, ${available}`;
   }
 
+  function getMeshStatus(): string {
+    return `${meshNodeCount} ${meshNodeCount === 1 ? 'node' : 'nodes'} available`;
+  }
+
   function getSectionLabel(section: SectionName): string {
     if (section === 'Inbox' && inboxActionCount > 0) {
       return `Inbox, ${inboxActionCount} ${inboxActionCount === 1 ? 'action' : 'actions'} required`;
@@ -227,6 +232,7 @@
 
   function getSectionTooltip(section: SectionName): string {
     if (section === 'Agents' && configuredAgentCount > 0) return `Agents, ${getAgentsStatus()}`;
+    if (section === 'Mesh' && meshNodeCount > 0) return `Mesh, ${getMeshStatus()}`;
     return getSectionLabel(section);
   }
 
@@ -278,37 +284,43 @@
     <div class="app-sidebar-group-label">{label}</div>
     {#each sections as section}
       {@const Icon = sectionIcons[section]}
-      {#if section === 'Agents' && configuredAgentCount > 0}
+      {#if (section === 'Agents' && configuredAgentCount > 0) || (section === 'Mesh' && meshNodeCount > 0)}
+        {@const status = section === 'Agents' ? getAgentsStatus() : getMeshStatus()}
+        {@const descriptionId = section === 'Agents' ? AGENTS_STATUS_DESCRIPTION_ID : MESH_STATUS_DESCRIPTION_ID}
         <Tooltip.Root>
           <Tooltip.Trigger>
             {#snippet child({ props })}
               <a
                 {...props}
-                class={`app-sidebar-link ${current === 'Agents' ? 'app-sidebar-link-current' : ''}`}
-                href={routeMap.Agents}
-                aria-current={current === 'Agents' ? 'page' : undefined}
-                aria-label={getSectionLabel('Agents')}
-                aria-describedby={AGENTS_STATUS_DESCRIPTION_ID}
+                class={`app-sidebar-link ${current === section ? 'app-sidebar-link-current' : ''}`}
+                href={routeMap[section]}
+                aria-current={current === section ? 'page' : undefined}
+                aria-label={getSectionLabel(section)}
+                aria-describedby={descriptionId}
               >
-                <span class="app-sidebar-link-icon"><Icon size={16} />{@render navIndicator('Agents')}</span>
-                <span>Agents</span>
-                <small
-                  class={`app-sidebar-agents-count ${onlineAgentCount > 0 ? 'app-sidebar-agents-count-active' : ''}`}
-                  aria-hidden="true"
-                >
-                  <span class="app-sidebar-agents-count-n">{onlineAgentCount}</span> / {configuredAgentCount}
-                </small>
+                <span class="app-sidebar-link-icon"><Icon size={16} />{@render navIndicator(section)}</span>
+                <span>{section}</span>
+                {#if section === 'Agents'}
+                  <small
+                    class={`app-sidebar-agents-count ${onlineAgentCount > 0 ? 'app-sidebar-agents-count-active' : ''}`}
+                    aria-hidden="true"
+                  >
+                    <span class="app-sidebar-agents-count-n">{onlineAgentCount}</span> / {configuredAgentCount}
+                  </small>
+                {:else}
+                  <small aria-hidden="true">{meshNodeCount}</small>
+                {/if}
               </a>
             {/snippet}
           </Tooltip.Trigger>
           <Tooltip.Portal>
             <Tooltip.Content class="app-icon-tooltip" side="right" sideOffset={10}>
-              {getAgentsStatus()}
+              {status}
               <Tooltip.Arrow class="app-icon-tooltip-arrow" />
             </Tooltip.Content>
           </Tooltip.Portal>
         </Tooltip.Root>
-        <span class="sr-only" id={AGENTS_STATUS_DESCRIPTION_ID}>{getAgentsStatus()}</span>
+        <span class="sr-only" id={descriptionId}>{status}</span>
       {:else}
         <a
           class={`app-sidebar-link ${current === section ? 'app-sidebar-link-current' : ''}`}
@@ -319,7 +331,6 @@
           <span class="app-sidebar-link-icon"><Icon size={16} />{@render navIndicator(section)}</span>
           <span>{section}</span>
           {#if section === 'Inbox' && inboxActionCount > 0}<small>{inboxActionCount}</small>{/if}
-          {#if section === 'Mesh' && meshNodeCount > 0}<small>{meshNodeCount}</small>{/if}
         </a>
       {/if}
     {/each}
@@ -358,7 +369,8 @@
                     href={routeMap[section]}
                     aria-current={current === section ? 'page' : undefined}
                     aria-label={getSectionLabel(section)}
-                    aria-describedby={section === 'Agents' && configuredAgentCount > 0 ? AGENTS_STATUS_DESCRIPTION_ID : undefined}
+                    aria-describedby={section === 'Agents' && configuredAgentCount > 0 ? AGENTS_STATUS_DESCRIPTION_ID :
+                      section === 'Mesh' && meshNodeCount > 0 ? MESH_STATUS_DESCRIPTION_ID : undefined}
                   >
                     <span class="app-icon-activity-pill" aria-hidden="true"></span>
                     <span class="app-nav-icon-surface" aria-hidden="true"><Icon size={16} />{@render navIndicator(section)}</span>
@@ -369,6 +381,8 @@
             </Tooltip.Root>
             {#if section === 'Agents' && configuredAgentCount > 0}
               <span class="sr-only" id={AGENTS_STATUS_DESCRIPTION_ID}>{getAgentsStatus()}</span>
+            {:else if section === 'Mesh' && meshNodeCount > 0}
+              <span class="sr-only" id={MESH_STATUS_DESCRIPTION_ID}>{getMeshStatus()}</span>
             {/if}
           {/each}
         </div>
