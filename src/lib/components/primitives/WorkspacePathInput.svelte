@@ -1,5 +1,6 @@
 <script lang="ts">
   import { FolderSearch } from '@lucide/svelte';
+  import { onDestroy } from 'svelte';
   import { suggestWorkspacePaths } from '$native';
   import type { WorkspaceSuggestion } from '$lib/domain/types';
   import { isEmbedded, platformCapabilities } from '$lib/platform/runtime';
@@ -23,6 +24,49 @@
   let highlightedIndex = $state(0);
   let loading = $state(false);
   let requestToken = 0;
+  let containerElement: HTMLDivElement | null = null;
+  let inputElement: HTMLInputElement | null = null;
+  let selectingSuggestion = false;
+  let restoringInputFocus = false;
+
+  onDestroy(() => { requestToken += 1; });
+
+  function closeSuggestions() {
+    selectingSuggestion = false;
+    requestToken += 1;
+    open = false;
+    suggestions = [];
+    highlightedIndex = 0;
+    loading = false;
+  }
+
+  function handleFocusOut(event: FocusEvent) {
+    if (selectingSuggestion || (event.relatedTarget instanceof Node && containerElement?.contains(event.relatedTarget))) return;
+    closeSuggestions();
+  }
+
+  function handleOutsidePointerDown(event: PointerEvent) {
+    if (!(event.target instanceof Node) || !containerElement?.contains(event.target)) closeSuggestions();
+  }
+
+  function beginSuggestionPointer(event: PointerEvent) {
+    if (event.button > 0) return;
+    // A webview may blur the input before click. Keep the pressed row mounted
+    // and stable until selection completes, without committing on pointerdown.
+    selectingSuggestion = true;
+    requestToken += 1;
+    loading = false;
+  }
+
+  function finishSuggestionPointer(event: PointerEvent) {
+    selectingSuggestion = false;
+    if (!(event.target instanceof Node) || !containerElement?.contains(event.target)) closeSuggestions();
+  }
+
+  function cancelSuggestionPointer() {
+    selectingSuggestion = false;
+    if (!containerElement?.contains(document.activeElement)) closeSuggestions();
+  }
 
   async function updateSuggestions(query: string) {
     const trimmed = query.trim();
@@ -68,10 +112,11 @@
   }
 
   function applySuggestion(path: string) {
+    closeSuggestions();
     onInput(path);
-    open = false;
-    suggestions = [];
-    highlightedIndex = 0;
+    restoringInputFocus = true;
+    inputElement?.focus({ preventScroll: true });
+    restoringInputFocus = false;
   }
 
   function formatSuggestionName(suggestion: WorkspaceSuggestion): string {
@@ -81,6 +126,11 @@
   }
 
   function handleKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      if (open || loading) event.preventDefault();
+      closeSuggestions();
+      return;
+    }
     if (!open || suggestions.length === 0) {
       return;
     }
@@ -105,25 +155,23 @@
       }
       return;
     }
-
-    if (event.key === 'Escape') {
-      open = false;
-    }
   }
 </script>
 
-<div class="relative">
+<svelte:window onpointerdown={handleOutsidePointerDown} onpointerup={finishSuggestionPointer} onpointercancel={cancelSuggestionPointer} />
+
+<div class="relative" bind:this={containerElement} onfocusout={handleFocusOut}>
   <div class="workspace-input-shell">
     <FolderSearch size={15} />
     <input
+      bind:this={inputElement}
       class="workspace-input"
       placeholder={isEmbedded ? '/path/on/qmtcode/server' : '/absolute/path/to/workspace'}
       value={value}
       disabled={disabled}
       oninput={handleInput}
       onkeydown={handleKeydown}
-      onblur={() => setTimeout(() => (open = false), 120)}
-      onfocus={() => void updateSuggestions(value)}
+      onfocus={() => { if (!restoringInputFocus) void updateSuggestions(value); }}
     />
     {#if loading}
       <span class="muted workspace-input-loading text-xs">...</span>
@@ -141,6 +189,7 @@
           class="workspace-suggestion-row"
           class:model-picker-row-selected={highlightedIndex === index}
           type="button"
+          onpointerdown={beginSuggestionPointer}
           onmousedown={(event) => event.preventDefault()}
           onclick={() => applySuggestion(suggestion.path)}
           onmousemove={() => (highlightedIndex = index)}
