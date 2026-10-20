@@ -161,7 +161,11 @@ export function readSessionPin(namespace: unknown, sessionId: string): SessionPi
 }
 
 export function compareSessionsByPin(a: DesktopSessionSummary, b: DesktopSessionSummary): number {
-  return (b.pin?.pinned_at ?? '').localeCompare(a.pin?.pinned_at ?? '') || getSessionKey(a).localeCompare(getSessionKey(b));
+  const aTime = Date.parse(a.pin?.pinned_at ?? '');
+  const bTime = Date.parse(b.pin?.pinned_at ?? '');
+  const aValue = Number.isFinite(aTime) ? aTime : Number.NEGATIVE_INFINITY;
+  const bValue = Number.isFinite(bTime) ? bTime : Number.NEGATIVE_INFINITY;
+  return aValue === bValue ? getSessionKey(a).localeCompare(getSessionKey(b)) : bValue - aValue;
 }
 
 export function createSessionBrowserState(): SessionBrowserState {

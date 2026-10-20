@@ -217,7 +217,7 @@
     if (compact || mobileNavigation || !element || requestingMore || loadingMoreSessions) return;
     if (!retry && (element.clientHeight <= 0 || element.scrollHeight <= 0 ||
       element.scrollHeight - element.scrollTop - element.clientHeight > 120)) return;
-    if (railItems.length < visibleSessions.length) {
+    if (openRailItems.length < visibleSessions.length) {
       expandedSessionLimit += SESSION_PAGE_SIZE;
       return;
     }

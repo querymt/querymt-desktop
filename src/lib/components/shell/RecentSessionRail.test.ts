@@ -93,6 +93,23 @@ describe('RecentSessionRail pinned sessions', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Show more pinned' }));
     expect(container.querySelectorAll('.app-sidebar-session')).toHaveLength(8);
   });
+  it.each([false, true])('reveals all 22 cached open sessions despite five pins before any server fetch (hasMore=%s)', async (hasMoreSessions) => {
+    const open = Array.from({ length: 22 }, (_, index) => ({ ...activeSession, sessionId: `open-${index}`, title: `Open ${String(index).padStart(2, '0')}` }));
+    const fivePins = pinned.slice(0, 5);
+    const onLoadMoreSessions = vi.fn(async () => {});
+    const { container } = render(RecentSessionRail, { current: 'Sessions', sessions: [...fivePins, ...open], pinnedSessions: fivePins,
+      showPinnedSessions: true, hasMoreSessions, onLoadMoreSessions });
+    const list = container.querySelector<HTMLElement>('.app-sidebar-session-list')!;
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, get: () => container.querySelectorAll('.app-sidebar-session').length * 80 });
+    expect(container.querySelectorAll('.app-sidebar-session')).toHaveLength(25);
+    expect(screen.queryByText('Open 20')).not.toBeInTheDocument();
+    list.scrollTop = list.scrollHeight - list.clientHeight;
+    await fireEvent.scroll(list);
+    expect(container.querySelectorAll('.app-sidebar-session')).toHaveLength(27);
+    expect(screen.getByText('Open 20')).toBeInTheDocument();
+    expect(screen.getByText('Open 21')).toBeInTheDocument();
+    expect(onLoadMoreSessions).not.toHaveBeenCalled();
+  });
   it.each([false, true])('keeps an older current pin inside the visible limit without reordering pins (compact=%s)', async (collapsed) => {
     const rows = Array.from({ length: 14 }, (_, index) => ({ ...pinned[0], sessionId: `old-pin-${index}`, title: `Pin ${index}`,
       pin: { session_id: `old-pin-${index}`, pinned: true, pinned_at: new Date(Date.UTC(2026, 9, 20, 10) - index * 60_000).toISOString() }
