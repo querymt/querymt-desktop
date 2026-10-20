@@ -1560,12 +1560,19 @@ export class AgentsStore {
 
   async refreshSessionLifecycle(agentId: string, sessionId: string) {
     if (!this.canSetSessionLifecycle(agentId)) return;
+    const key = buildSessionKey(agentId, sessionId);
     const revision = this.sessionLifecycleRevision;
     try {
       const lifecycle = await this.clients.get(agentId)!.client.getSessionLifecycle(sessionId);
-      if (revision === this.sessionLifecycleRevision) this.applySessionLifecycle(agentId, lifecycle, sessionId);
-    } catch {
-      if (revision === this.sessionLifecycleRevision) this.applySessionLifecycle(agentId, null, sessionId);
+      if (revision === this.sessionLifecycleRevision) {
+        this.applySessionLifecycle(agentId, lifecycle, sessionId);
+        this.sessionLifecycleErrors = { ...this.sessionLifecycleErrors, [key]: null };
+      }
+    } catch (error) {
+      // A failed read does not invalidate the last authoritative lifecycle.
+      if (revision === this.sessionLifecycleRevision) {
+        this.sessionLifecycleErrors = { ...this.sessionLifecycleErrors, [key]: acpErrorMessage(error, 'Could not refresh session lifecycle.') };
+      }
     }
   }
 

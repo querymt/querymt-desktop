@@ -1,4 +1,7 @@
+import '@testing-library/jest-dom/vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
 import { RequestError, type InitializeResponse, type ListSessionsRequest, type PromptResponse, type SessionConfigOption, type SessionInfo, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
 import type { AgentConfig, DesktopSessionSummary, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { findModeConfigOption, findReasoningConfigOption, getModelSelectionKey } from '$lib/querymt/config-options';
@@ -1410,6 +1413,64 @@ describe('AgentsStore session lifecycle', () => {
     expect(store.activeSession.runState).toBe('thinking');
     expect(mockClient.cancelSession).not.toHaveBeenCalled();
     expect(store.sessionLifecyclePending['agent-1:session-1']).toBe(false);
+  });
+
+  it('retains listed lifecycle, Open membership and menu controls on a failed read, then reconciles on retry', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('session-1')] });
+    await store.ensureSessionCatalog();
+    const known = store.sessions[0].lifecycle;
+    const key = 'agent-1:session-1';
+    mockClient.getSessionLifecycle.mockRejectedValueOnce(new RequestError(-32603, 'Internal error', 'Owner timed out'));
+    await store.refreshSessionLifecycle('agent-1', 'session-1');
+    expect(store.sessions[0].lifecycle).toEqual(known);
+    expect(store.sessionCatalog[0].lifecycle).toEqual(known);
+    expect(store.sessions.filter((session) => isRootSession(session) && sessionMatchesLifecycle(session.lifecycle,
+      { resolution: 'open', archive: 'excluded' })).map((session) => session.sessionId)).toEqual(['session-1']);
+    expect(store.sessionLifecycleErrors[key]).toBe('Owner timed out');
+
+    try {
+      const menu = render(SessionActionsMenu, { session: store.sessions[0], canManage: store.canSetSessionLifecycle('agent-1'),
+        error: store.sessionLifecycleErrors[key], onSetLifecycle: vi.fn(async () => {}) });
+      await fireEvent.click(screen.getByRole('button', { name: 'Session actions for session-1' }));
+      expect(screen.getByRole('menuitem', { name: 'Mark resolved' })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: 'Archive' })).toBeInTheDocument();
+      expect(screen.queryByText(/Lifecycle controls unavailable/)).not.toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('Owner timed out');
+
+      const saved = { ...known!, resolved: true, resolved_at: '2026-10-20T16:00:00Z' };
+      mockClient.getSessionLifecycle.mockResolvedValueOnce(saved);
+      await store.refreshSessionLifecycle('agent-1', 'session-1');
+      expect(store.sessions[0].lifecycle).toEqual(saved);
+      expect(store.sessionCatalog[0].lifecycle).toEqual(saved);
+      expect(store.sessionLifecycleErrors[key]).toBeNull();
+      await menu.rerender({ session: store.sessions[0], error: store.sessionLifecycleErrors[key] });
+      expect(screen.getByRole('menuitem', { name: 'Reopen' })).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    } finally { cleanup(); }
+  });
+
+  it('keeps unknown lifecycle out of Open on read failure without inventing state', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = { 'agent-1': [{ ...summary(), lifecycle: null }] };
+    mockClient.getSessionLifecycle.mockRejectedValueOnce(new Error('Owner offline'));
+    await store.refreshSessionLifecycle('agent-1', 'session-1');
+    expect(store.sessions[0].lifecycle).toBeNull();
+    expect(sessionMatchesLifecycle(store.sessions[0].lifecycle, { resolution: 'open', archive: 'excluded' })).toBe(false);
+    expect(store.sessionLifecycleErrors['agent-1:session-1']).toBe('Owner offline');
+  });
+
+  it('ignores a stale read failure after a newer successful lifecycle write', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = { 'agent-1': [summary()] };
+    let reject!: (error: Error) => void;
+    mockClient.getSessionLifecycle.mockImplementationOnce(() => new Promise((_resolve, rejectRead) => { reject = rejectRead; }));
+    const refresh = store.refreshSessionLifecycle('agent-1', 'session-1');
+    await store.setSessionLifecycle('agent-1', 'session-1', { resolved: true });
+    reject(new Error('Obsolete timeout'));
+    await refresh;
+    expect(store.sessions[0].lifecycle?.resolved).toBe(true);
+    expect(store.sessionLifecycleErrors['agent-1:session-1']).toBeNull();
   });
 
   it('keeps a failed mutation visible with an actionable error and allows retry', async () => {

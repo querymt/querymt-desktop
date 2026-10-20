@@ -51,7 +51,7 @@ function capabilitiesFixture(
 }
 
 function extensionClient() {
-  const extMethod = vi.fn(async () => ({}));
+  const extMethod = vi.fn(async (): Promise<unknown> => ({}));
   const extensions = new QuerymtExtensions({
     extMethod
   } as unknown as ClientSideConnection);
@@ -209,15 +209,39 @@ describe('parseQuerymtElicitationRecoveryAuthority', () => {
 });
 
 describe('QuerymtExtensions session lifecycle', () => {
+  describe.each(['getSessionLifecycle', 'setSessionLifecycle'] as const)('%s validation', (method) => {
+    const wireMethod = method === 'getSessionLifecycle' ? 'querymt/session/getLifecycle' : 'querymt/session/setLifecycle';
+    const lifecycle = { session_id: 'session-a', resolved: false, archived: false, resolved_at: null, archived_at: null };
+
+    it('accepts authoritative state with null timestamps', async () => {
+      const { extensions, extMethod } = extensionClient();
+      extMethod.mockResolvedValueOnce(lifecycle);
+      await expect(extensions[method]('session-a', { resolved: false })).resolves.toEqual(lifecycle);
+    });
+
+    it.each([
+      ['null', null],
+      ['missing flags', { session_id: 'session-a' }],
+      ['a different session', { ...lifecycle, session_id: 'other-session' }],
+      ['a non-boolean resolved flag', { ...lifecycle, resolved: 'false' }],
+      ['a non-boolean archived flag', { ...lifecycle, archived: 0 }]
+    ])('rejects %s with a method-specific response error', async (_label, payload) => {
+      const { extensions, extMethod } = extensionClient();
+      extMethod.mockResolvedValueOnce(payload);
+      await expect(extensions[method]('session-a', { resolved: true }))
+        .rejects.toEqual(new QuerymtExtensionResponseError(wireMethod));
+    });
+  });
+
   it('uses the exact wire names and sends only the requested independent patch', async () => {
     const { extensions, extMethod } = extensionClient();
     const lifecycle = { session_id: 'session-a', resolved: true, archived: false, resolved_at: '2026-10-18T00:00:00Z', archived_at: null };
     extMethod.mockResolvedValue(lifecycle);
     expect(await extensions.getSessionLifecycle('session-a')).toEqual(lifecycle);
     expect(extMethod).toHaveBeenLastCalledWith('_querymt/session/getLifecycle', { session_id: 'session-a' });
-    await extensions.setSessionLifecycle('session-a', { resolved: false });
+    expect(await extensions.setSessionLifecycle('session-a', { resolved: false })).toEqual(lifecycle);
     expect(extMethod).toHaveBeenLastCalledWith('_querymt/session/setLifecycle', { session_id: 'session-a', resolved: false });
-    await extensions.setSessionLifecycle('session-a', { archived: true });
+    expect(await extensions.setSessionLifecycle('session-a', { archived: true })).toEqual(lifecycle);
     expect(extMethod).toHaveBeenLastCalledWith('_querymt/session/setLifecycle', { session_id: 'session-a', archived: true });
   });
 });
