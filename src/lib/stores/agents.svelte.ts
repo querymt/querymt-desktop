@@ -2,6 +2,7 @@ import { RequestError } from '@agentclientprotocol/sdk';
 import type {
   InitializeResponse,
   ListSessionsResponse,
+  ListSessionsRequest,
   LoadSessionResponse,
   NewSessionResponse,
   PromptResponse,
@@ -157,6 +158,7 @@ import {
 } from '$native';
 import { inboxStore } from '$lib/stores/inbox.svelte';
 import { SessionCatalogCache, isCatalogFresh, sessionCatalogKey } from '$lib/stores/session-catalog-cache';
+import { SessionListCoordinator } from '$lib/stores/session-list-coordination';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import {
   loadSessionModePreferences,
@@ -381,6 +383,9 @@ export class AgentsStore {
   private pinFlights = new Map<string, { version: number; promise: Promise<void> }>();
   private sessionCatalogGeneration = 0;
   private sessionCatalogSignature = '';
+  private sessionListSharing: SessionListCoordinator | null = null;
+  private sharedListSources = new Map<string, string>();
+  private sharedListVersions = new Map<string, number>();
   private sessionCatalogCache = new SessionCatalogCache();
   private sessionCatalogFlight: { key: string; promise: Promise<void> } | null = null;
   private lifecycleWriteVersions = new Map<string, number>();
@@ -742,6 +747,53 @@ export class AgentsStore {
     this.attentionSessionKeys = this.attentionSessionKeys.filter((candidate) => candidate !== key);
   }
 
+  private sessionListCoordinator(): SessionListCoordinator | null {
+    if (!isEmbedded || this.pollingDisposed) return null;
+    return this.sessionListSharing ??= new SessionListCoordinator({ onInvalidate: (source) => {
+      for (const [agentId, current] of this.sharedListSources) if (current === source) {
+        this.sharedListVersions.set(agentId, (this.sharedListVersions.get(agentId) ?? 0) + 1);
+        this.pinVersions.set(agentId, (this.pinVersions.get(agentId) ?? 0) + 1);
+        this.pinFlights.delete(agentId);
+        delete this.pinnedSessionsLoading[agentId];
+        this.invalidateSessionCatalogCache(false);
+        this.sessionCatalogLoading = false;
+        this.scheduleSessionRefresh(agentId);
+      }
+    } });
+  }
+
+  private sessionListSource(config: AgentConfig, record: AgentClientRecord): string {
+    return JSON.stringify({ version: 1, origin: window.location.origin, agent: config.id,
+      transport: config.transport, endpoint: config.websocketUrl, secure: config.websocketSecure ?? false,
+      profile: this.composerProfileId, protocol: record.initializeResponse?.protocolVersion,
+      agentInfo: record.initializeResponse?.agentInfo, agentCapabilities: record.initializeResponse?.agentCapabilities,
+      capabilities: record.client.getControlCapabilities() });
+  }
+
+  private listSessionPage(config: AgentConfig, record: AgentClientRecord, request: ListSessionsRequest, fresh = false, maxAge = SESSION_SUMMARY_POLL_MS, onShared?: () => void): Promise<ListSessionsResponse> {
+    const sharing = this.sessionListCoordinator();
+    if (!sharing?.available) return record.client.listSessions(request);
+    const source = this.sessionListSource(config, record);
+    const previous = this.sharedListSources.get(config.id);
+    if (previous && previous !== source) sharing.drop(previous);
+    this.sharedListSources.set(config.id, source);
+    const version = this.sharedListVersions.get(config.id) ?? 0;
+    return sharing.read(source, JSON.stringify(request), () => record.client.listSessions(request), { fresh, maxAge, allowHidden: !this.pollingIsVisible() }).then((page) => {
+      if (sharing.isShared(page)) onShared?.();
+      if (this.pollingDisposed || this.clients.get(config.id) !== record || this.sharedListSources.get(config.id) !== source || this.sessionListSource(config, record) !== source ||
+        (this.sharedListVersions.get(config.id) ?? 0) !== version) throw new Error('Session list source changed during refresh.');
+      return page;
+    });
+  }
+
+  private invalidateSharedSessionLists(agentId?: string) {
+    if (!this.sessionListSharing) return;
+    for (const [id, source] of this.sharedListSources) if (!agentId || id === agentId) {
+      this.sharedListVersions.set(id, (this.sharedListVersions.get(id) ?? 0) + 1);
+      this.sessionListSharing.invalidate(source);
+    }
+  }
+
   private pollingIsVisible(): boolean {
     return !this.pollingDisposed && (typeof document === 'undefined' || !document.hidden);
   }
@@ -761,6 +813,7 @@ export class AgentsStore {
       const visible = this.pollingIsVisible();
       if (visible === this.pollingVisible) return;
       this.pollingVisible = visible;
+      this.sessionListSharing?.visibilityChanged();
       if (!visible) {
         for (const agentId of this.sessionRefreshTimers.keys()) this.clearScheduledSessionRefresh(agentId);
         for (const key of this.sessionRuntimeRefreshTimers.keys()) this.cancelSessionRuntimeRefresh(key);
@@ -805,7 +858,7 @@ export class AgentsStore {
     // Join explicit/discovery work rather than queueing another list behind it.
     const promise = this.sessionListRefreshChain.get(agentId) ?? this.enqueueSessionListRefresh(agentId, async () => {
       if (this.sessionPollingStarted && this.pollingIsVisible() && this.clients.get(agentId) === record) {
-        await this.refreshSessionsForAgentRequest(agentId, false);
+        await this.refreshSessionsForAgentRequest(agentId, false, true);
       }
     });
     this.routineSessionRefreshes.set(agentId, promise);
@@ -821,6 +874,10 @@ export class AgentsStore {
 
   dispose() {
     this.pollingDisposed = true;
+    this.sessionListSharing?.dispose();
+    this.sessionListSharing = null;
+    this.sharedListSources.clear();
+    this.sharedListVersions.clear();
     this.sessionPollingStarted = false;
     this.runtimePollingEnabled = false;
     this.unlistenPollingVisibility?.();
@@ -868,7 +925,7 @@ export class AgentsStore {
       );
       await Promise.allSettled([
         this.refreshManagedProfiles(),
-        ...undiscoveredAgents.filter(() => this.pollingIsVisible()).map((config) => this.refreshSessionsForAgent(config.id, true)),
+        ...undiscoveredAgents.filter(() => this.pollingIsVisible()).map((config) => this.refreshSessionsForAgent(config.id, true, false)),
         this.preloadModelsForRunningAgents()
       ]);
     } catch (error) {
@@ -1371,7 +1428,7 @@ export class AgentsStore {
       }
       if (this.connectGeneration(agentId) !== generation) return;
       await Promise.allSettled([
-        this.pollingIsVisible() || !this.loading ? this.refreshSessionsForAgent(config.id, true) : Promise.resolve(),
+        this.pollingIsVisible() || !this.loading ? this.refreshSessionsForAgent(config.id, true, !this.loading) : Promise.resolve(),
         this.refreshAuthProviders(config.id)
       ]);
       if (config.transport === 'stdio') {
@@ -1441,7 +1498,7 @@ export class AgentsStore {
       }
       if (this.connectGeneration(agentId) !== generation) return;
       await Promise.allSettled([
-        this.pollingIsVisible() || !this.loading ? this.refreshSessionsForAgent(config.id, true) : Promise.resolve(),
+        this.pollingIsVisible() || !this.loading ? this.refreshSessionsForAgent(config.id, true, !this.loading) : Promise.resolve(),
         this.refreshAuthProviders(config.id)
       ]);
       if (config.transport === 'stdio') {
@@ -1732,6 +1789,7 @@ export class AgentsStore {
     const isCurrent = () => this.clients.get(agentId) === record && this.pinWrites.get(key) === write;
     this.sessionPinPending = { ...this.sessionPinPending, [key]: true };
     this.sessionPinErrors = { ...this.sessionPinErrors, [key]: null };
+    this.invalidateSharedSessionLists(agentId);
     this.pinVersions.set(agentId, (this.pinVersions.get(agentId) ?? 0) + 1);
     try {
       const response = await record.client.setSessionPinned(sessionId, pinned);
@@ -1739,6 +1797,7 @@ export class AgentsStore {
       const pin = response?.session_id === sessionId ? readSessionPin({ pin: response }, sessionId) : null;
       if (!pin || pin.pinned !== pinned) throw new Error('Agent returned invalid session pin state.');
       this.sessionCatalogCache.clear();
+      this.invalidateSharedSessionLists(agentId);
       this.applySessionPin(agentId, pin);
       if (pinned) this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent,
         [agentId]: mergeSessions(this.pinnedSessionsByAgent[agentId] ?? [], [{ ...session, pin }]) };
@@ -1770,7 +1829,7 @@ export class AgentsStore {
     const existing = this.pinFlights.get(agentId);
     if (existing?.version === version) return existing.promise;
     const source = sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' });
-    const cacheKey = `pins:${source}`;
+    const cacheKey = `pins:${source}${isEmbedded ? this.sessionListSource(config, record) : ''}`;
     const cached = force ? undefined : this.sessionCatalogCache.get(cacheKey);
     if (cached) {
       this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: cached.sessions };
@@ -1788,11 +1847,12 @@ export class AgentsStore {
       this.pinnedSessionsErrors = { ...this.pinnedSessionsErrors, [agentId]: null };
       try {
         let sessions: DesktopSessionSummary[] = [];
+        let shared = false;
         let cursor: string | undefined;
         const seen = new Set<string>();
         do {
           // Pin queries intentionally never include mesh peers or browser lifecycle filters.
-          const page = await record.client.listSessions(buildListSessionsRequest({ cursor, pinned: true }));
+          const page = await this.listSessionPage(config, record, buildListSessionsRequest({ cursor, pinned: true }), force, 5 * 60_000, () => { shared = true; });
           if (!isCurrent()) return;
           const listed = mapAcpSessionsToDesktopSessions(page.sessions, { agentId, agentName: config.name })
             .map((session) => this.withKnownSessionParent(session));
@@ -1808,7 +1868,7 @@ export class AgentsStore {
         if (!isCurrent()) return;
         sessions = this.preserveNewerLifecycleWrites(sessions, lifecycleRevision);
         this.reconcileSessionPins(agentId, sessions);
-        this.sessionCatalogCache.set({ key: cacheKey, sessions, complete: true, checkedAt: Date.now(), hasSessions: sessions.length > 0 });
+        this.sessionCatalogCache.set({ key: cacheKey, sessions, complete: true, checkedAt: Date.now(), hasSessions: sessions.length > 0 }, !shared);
         this.sessionCatalogCache.flush();
       } catch (error) {
         if (isCurrent()) this.pinnedSessionsErrors = { ...this.pinnedSessionsErrors, [agentId]: `${config.name}: ${acpErrorMessage(error, 'Pinned sessions could not be loaded.')}` };
@@ -1872,6 +1932,7 @@ export class AgentsStore {
     if (!this.canSetSessionLifecycle(agentId)) throw new Error('Session lifecycle is unavailable for this agent.');
     this.sessionLifecyclePending = { ...this.sessionLifecyclePending, [key]: true };
     this.sessionLifecycleErrors = { ...this.sessionLifecycleErrors, [key]: null };
+    this.invalidateSharedSessionLists(agentId);
     try {
       const lifecycle = await this.clients.get(agentId)!.client.setSessionLifecycle(sessionId, patch);
       this.sessionLifecycleRevision += 1;
@@ -1904,7 +1965,8 @@ export class AgentsStore {
     const remoteNodeIds = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers.slice() : [];
     const signature = JSON.stringify([
       sessionCatalogKey(configs, remoteNodeIds, lifecycle),
-      configs.map((config) => [config.id, this.clients.get(config.id)?.client.supportsSessionLifecycle() ?? false]).sort()
+      configs.map((config) => [config.id, this.clients.get(config.id)?.client.supportsSessionLifecycle() ?? false]).sort(),
+      ...(isEmbedded ? [configs.map((config) => this.sessionListSource(config, this.clients.get(config.id)!))] : [])
     ]);
     const filtered = lifecycle.resolution !== 'any' || lifecycle.archive !== 'any';
     const excludedAgents = configs.filter((config) => filtered && !this.clients.get(config.id)?.client.supportsSessionLifecycle())
@@ -1933,11 +1995,13 @@ export class AgentsStore {
     this.sessionCatalogLoadedCount = 0;
   }
 
-  private invalidateSessionCatalogCache() {
+  private invalidateSessionCatalogCache(broadcast = true) {
+    if (broadcast) this.invalidateSharedSessionLists();
     this.openSessionPages = {};
     this.sessionCatalogGeneration += 1;
     this.sessionCatalogFlight = null;
-    this.sessionCatalogCache.clear();
+    this.sessionCatalogLoading = false;
+    this.sessionCatalogCache.clear(broadcast);
   }
 
   async ensureSessionCatalog(filter: SessionLifecycleFilter = this.sessionBrowser) {
@@ -1947,15 +2011,15 @@ export class AgentsStore {
     if (this.sessionCatalogFlight?.key === signature) return this.sessionCatalogFlight.promise;
     const cached = this.sessionCatalogCache.get(signature);
     if (cached && isCatalogFresh(cached)) return;
-    return this.refreshSessionCatalog(filter);
+    return this.refreshSessionCatalog(filter, false);
   }
 
   /** Explicit refresh reconciles the selected scope; ordinary navigation reuses fresh snapshots. */
-  async refreshSessionCatalog(filter: SessionLifecycleFilter = this.sessionBrowser) {
+  async refreshSessionCatalog(filter: SessionLifecycleFilter = this.sessionBrowser, fresh = true) {
     const context = this.sessionCatalogContext(filter);
     this.selectSessionCatalog(context);
     if (this.sessionCatalogFlight?.key === context.signature) return this.sessionCatalogFlight.promise;
-    const promise = this.readSessionCatalog(context);
+    const promise = this.readSessionCatalog(context, fresh);
     const flight = { key: context.signature, promise };
     this.sessionCatalogFlight = flight;
     try {
@@ -1966,14 +2030,15 @@ export class AgentsStore {
   }
 
   /** Keep catalog membership separate from runtime, Inbox and scheduling caches. */
-  private async readSessionCatalog({ lifecycle, configs: allConfigs, supportedConfigs: configs, remoteNodeIds, signature }: ReturnType<AgentsStore['sessionCatalogContext']>) {
+  private async readSessionCatalog({ lifecycle, configs: allConfigs, supportedConfigs: configs, remoteNodeIds, signature }: ReturnType<AgentsStore['sessionCatalogContext']>, fresh: boolean) {
     const generation = ++this.sessionCatalogGeneration;
+    let shared = false;
     const remember = (complete: boolean) => {
       if (generation !== this.sessionCatalogGeneration || !allConfigs.length) return;
       this.sessionCatalogCache.set({
         key: signature, sessions: this.sessionCatalog, complete,
         checkedAt: complete ? Date.now() : 0, hasSessions: this.sessionCatalogHasSessions
-      });
+      }, !this.sessionListSharing?.available || (complete && !shared));
     };
     this.sessionCatalogLoading = true;
     this.sessionCatalogLoadedCount = 0;
@@ -1990,9 +2055,9 @@ export class AgentsStore {
         const seen = new Set<string>();
         let cursor: string | undefined;
         do {
-          const page = await record.client.listSessions(buildListSessionsRequest({
+          const page = await this.listSessionPage(config, record, buildListSessionsRequest({
             cursor, remoteNodeIds, lifecycle: filtered ? lifecycle : undefined
-          }));
+          }), fresh, 5 * 60_000, () => { shared = true; });
           if (generation !== this.sessionCatalogGeneration) return;
           const incoming = this.mapSessionSummaries(page.sessions, { agentId: config.id, agentName: config.name });
           const previousCount = sessions.length;
@@ -2028,7 +2093,7 @@ export class AgentsStore {
             const seen = new Set<string>();
             let cursor: string | undefined;
             do {
-              const page = await record.client.listSessions(buildListSessionsRequest({ cursor, remoteNodeIds }));
+              const page = await this.listSessionPage(config, record, buildListSessionsRequest({ cursor, remoteNodeIds }), fresh, 5 * 60_000, () => { shared = true; });
               if (generation !== this.sessionCatalogGeneration) return null;
               if (page.sessions.length) return true;
               cursor = page.nextCursor ?? undefined;
@@ -2060,7 +2125,7 @@ export class AgentsStore {
     });
   }
 
-  async refreshSessionsForAgent(agentId: string, discoverAll = false) {
+  async refreshSessionsForAgent(agentId: string, discoverAll = false, fresh = true) {
     if (discoverAll) {
       const config = this.configs.find((candidate) => candidate.id === agentId);
       if (!config) return;
@@ -2073,7 +2138,7 @@ export class AgentsStore {
 
       const discovery = this.enqueueSessionListRefresh(agentId, async () => {
         if (this.openSessionListScope(config).key !== scopeKey) return;
-        await this.refreshSessionsForAgentRequest(agentId, true);
+        await this.refreshSessionsForAgentRequest(agentId, true, !fresh);
       }).finally(() => {
         if (this.workspaceDiscoveryPromises.get(agentId)?.promise === discovery) {
           this.workspaceDiscoveryPromises.delete(agentId);
@@ -2085,10 +2150,10 @@ export class AgentsStore {
     }
 
     // The queue already waits for prior discoveries; the map may point to one queued after us.
-    return this.enqueueSessionListRefresh(agentId, () => this.refreshSessionsForAgentRequest(agentId, false));
+    return this.enqueueSessionListRefresh(agentId, () => this.refreshSessionsForAgentRequest(agentId, false, !fresh));
   }
 
-  private async refreshSessionsForAgentRequest(agentId: string, discoverAll: boolean) {
+  private async refreshSessionsForAgentRequest(agentId: string, discoverAll: boolean, cooperative = false) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) {
       return;
@@ -2110,9 +2175,9 @@ export class AgentsStore {
 
     try {
       const lifecycleRevision = this.sessionLifecycleRevision;
-      const firstPage = await record.client.listSessions(buildListSessionsRequest({ remoteNodeIds: scope.remoteNodeIds }));
+      const firstPage = await this.listSessionPage(config, record, buildListSessionsRequest({ remoteNodeIds: scope.remoteNodeIds }), !cooperative);
       if (!isCurrent()) return;
-      const pages = discoverAll ? await this.collectSessionPages(record.client, firstPage, scope.remoteNodeIds, isCurrent) : [firstPage];
+      const pages = discoverAll ? await this.collectSessionPages(config, record, firstPage, scope.remoteNodeIds, isCurrent, !cooperative) : [firstPage];
       if (!isCurrent()) return;
       const listedSessions = pages.flatMap((page) => page.sessions);
       const previousSessions = this.sessionsByAgent[agentId] ?? [];
@@ -2241,7 +2306,7 @@ export class AgentsStore {
       const revision = this.sessionLifecycleRevision;
       const cursor = page.nextCursor;
       try {
-        const response = await record.client.listSessions(buildListSessionsRequest({ cursor, remoteNodeIds: scope.remoteNodeIds }));
+        const response = await this.listSessionPage(config, record, buildListSessionsRequest({ cursor, remoteNodeIds: scope.remoteNodeIds }));
         if (this.openSessionPages[config.id] !== page || this.clients.get(config.id) !== record ||
           this.openSessionListScope(config).key !== scope.key) return;
         const nextCursor = response.nextCursor ?? null;
@@ -2328,7 +2393,7 @@ export class AgentsStore {
     let cursor: string | null = null;
     do {
       if (!isCurrentLoad()) return null;
-      const page = await client.listSessions(this.buildSessionListRequest({ cursor }));
+      const page = await this.listSessionPage(config, this.clients.get(agentId)!, this.buildSessionListRequest({ cursor }));
       if (!isCurrentLoad()) return null;
       const match = page.sessions.find((session) => session.sessionId === sessionId &&
         session._meta?.location === 'remote' && typeof session._meta.nodeId === 'string' &&
@@ -2415,7 +2480,7 @@ export class AgentsStore {
   }
 
   private async collectSessionPages(
-    client: DesktopAcpClient, firstPage: ListSessionsResponse, remoteNodeIds: string[], isCurrent: () => boolean
+    config: AgentConfig, record: AgentClientRecord, firstPage: ListSessionsResponse, remoteNodeIds: string[], isCurrent: () => boolean, fresh: boolean
   ): Promise<ListSessionsResponse[]> {
     const pages = [firstPage];
     const seenCursors = new Set<string>();
@@ -2429,7 +2494,7 @@ export class AgentsStore {
     // crates/agent session list before relying on them across creates.
     while (nextCursor && !seenCursors.has(nextCursor) && isCurrent()) {
       seenCursors.add(nextCursor);
-      const page = await client.listSessions(buildListSessionsRequest({ cursor: nextCursor, remoteNodeIds }));
+      const page = await this.listSessionPage(config, record, buildListSessionsRequest({ cursor: nextCursor, remoteNodeIds }), fresh);
       pages.push(page);
       nextCursor = page.nextCursor ?? null;
     }
@@ -2543,7 +2608,7 @@ export class AgentsStore {
       }
       if (requestCursor) seenCursors.add(requestCursor);
       const lifecycleRevision = this.sessionLifecycleRevision;
-      const response = await record.client.listSessions(
+      const response = await this.listSessionPage(config, record,
         this.buildSessionListRequest({
           cwd: source.cwd,
           cursor: requestCursor
@@ -2622,6 +2687,7 @@ export class AgentsStore {
       throw new Error(`${config.name} does not support deleting sessions.`);
     }
 
+    this.invalidateSharedSessionLists(agentId);
     await record.client.deleteSession(sessionId);
     this.forgetRecentSessions(agentId, sessionId);
     this.pinVersions.set(agentId, (this.pinVersions.get(agentId) ?? 0) + 1);
@@ -4007,6 +4073,10 @@ export class AgentsStore {
   }
 
   private disposeClient(agentId: string) {
+    const sharedSource = this.sharedListSources.get(agentId);
+    if (sharedSource) this.sessionListSharing?.drop(sharedSource);
+    this.sharedListSources.delete(agentId);
+    this.sharedListVersions.set(agentId, (this.sharedListVersions.get(agentId) ?? 0) + 1);
     this.clearScheduledSessionRefresh(agentId);
     this.routineSessionRefreshes.delete(agentId);
     for (const key of new Set([...this.sessionRuntimeRefreshTimers.keys(), ...this.sessionRuntimeRefreshPromises.keys()])) {
@@ -4060,6 +4130,7 @@ export class AgentsStore {
         }
         if (notification.method === QMT_NOTIFICATION_SESSION_PINS_CHANGED) {
           this.sessionCatalogCache.clear();
+          this.invalidateSharedSessionLists(agentId);
           if (!this.pollingIsVisible()) return;
           if (!Object.entries(this.sessionPinPending).some(([key, pending]) => key.startsWith(`${agentId}:`) && pending)) {
             void this.ensurePinnedSessions(true, agentId);
