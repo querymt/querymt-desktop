@@ -1,10 +1,12 @@
 import { browser } from '$app/environment';
 
 const storageKey = 'querymt.sidebarCollapsed';
+const pinnedSessionsStorageKey = 'querymt.sidebarShowPinnedSessions';
 const constrainedViewportQuery = '(max-width: 1279px)';
 
 class SidebarStore {
   collapsed = $state(false);
+  showPinnedSessions = $state(false);
   viewportConstrained = $state(false);
   initialized = $state(false);
 
@@ -14,7 +16,12 @@ class SidebarStore {
 
   initialize() {
     if (!browser || this.initialized) return;
-    this.collapsed = window.localStorage.getItem(storageKey) === 'true';
+    try {
+      this.collapsed = window.localStorage.getItem(storageKey) === 'true';
+      this.showPinnedSessions = window.localStorage.getItem(pinnedSessionsStorageKey) === 'true';
+    } catch {
+      // Unavailable storage leaves the default sidebar preferences in place.
+    }
 
     const mediaQuery = window.matchMedia(constrainedViewportQuery);
     this.viewportConstrained = mediaQuery.matches;
@@ -23,6 +30,15 @@ class SidebarStore {
     });
 
     this.initialized = true;
+  }
+
+  setShowPinnedSessions(enabled: boolean) {
+    this.showPinnedSessions = enabled;
+    try {
+      if (browser) window.localStorage.setItem(pinnedSessionsStorageKey, String(enabled));
+    } catch {
+      // The preference still applies for this window if persistence is unavailable.
+    }
   }
 
   toggleCollapsed() {

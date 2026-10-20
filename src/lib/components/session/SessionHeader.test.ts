@@ -16,6 +16,31 @@ const usageFixture = {
 afterEach(cleanup);
 
 describe('SessionHeader', () => {
+  it.each([false, true])('offers pin/unpin only inside the ellipsis menu (pinned=%s)', async (pinned) => {
+    const onSetPinned = vi.fn(async () => {});
+    const onSetLifecycle = vi.fn(async () => {});
+    const summary = { sessionId: 'session-1', title: 'Task', pin: { session_id: 'session-1', pinned, pinned_at: pinned ? '2026-10-20T10:00:00Z' : null } } as DesktopSessionSummary;
+    const { container } = render(SessionHeader, { session: session(), summary, title: 'Task', workspace: 'work', updatedAt: 'Just now', canPin: true, onSetPinned, onSetLifecycle });
+    expect(screen.queryByRole('button', { name: /^(Pin|Unpin) session$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /^(Pin|Unpin) session$/ })).not.toBeInTheDocument();
+    expect(container.querySelector('.session-header-pin')).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Session actions for Task' }));
+    await fireEvent.click(screen.getByRole('menuitem', { name: pinned ? 'Unpin session' : 'Pin session' }));
+    expect(onSetPinned).toHaveBeenCalledExactlyOnceWith(!pinned);
+    expect(onSetLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('keeps pending pin actions disabled and errors inside the ellipsis menu', async () => {
+    const summary = { sessionId: 'session-1', title: 'Task' } as DesktopSessionSummary;
+    const { rerender } = render(SessionHeader, { session: session(), summary, title: 'Task', workspace: 'work', updatedAt: 'Just now', canPin: true, pinPending: true, pinError: 'Owner offline', onSetPinned: vi.fn(async () => {}) });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Session actions for Task' }));
+    expect(screen.getByRole('menuitem', { name: 'Pin session' })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('alert')).toHaveTextContent('Owner offline');
+    await rerender({ canPin: false });
+    expect(screen.queryByRole('menuitem', { name: 'Pin session' })).not.toBeInTheDocument();
+  });
+
   it('presents session identity and a compact ready state', () => {
     render(SessionHeader, {
       session: session(),

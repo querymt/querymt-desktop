@@ -11,6 +11,27 @@ const session = {
 afterEach(cleanup);
 
 describe('SessionActionsMenu', () => {
+  it.each([false, true])('offers the confirmed pin toggle without lifecycle side effects (pinned=%s)', async (pinned) => {
+    const onSetPinned = vi.fn(async () => {});
+    const onSetLifecycle = vi.fn(async () => {});
+    render(SessionActionsMenu, { session: { ...session, pin: { session_id: session.sessionId, pinned, pinned_at: pinned ? '2026-10-20T10:00:00Z' : null } }, canPin: true, onSetPinned, onSetLifecycle });
+    await fireEvent.click(screen.getByRole('button', { name: 'Session actions for Lifecycle task' }));
+    await fireEvent.click(screen.getByRole('menuitem', { name: pinned ? 'Unpin session' : 'Pin session' }));
+    expect(onSetPinned).toHaveBeenCalledExactlyOnceWith(!pinned);
+    expect(onSetLifecycle).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  });
+
+  it('keeps pin errors visible and does not offer pins for unsupported owners', async () => {
+    const onSetPinned = vi.fn(async () => { throw new Error('Owner offline'); });
+    const view = render(SessionActionsMenu, { session, canPin: false, onSetPinned });
+    await fireEvent.click(screen.getByRole('button', { name: 'Session actions for Lifecycle task' }));
+    expect(screen.queryByRole('menuitem', { name: 'Pin session' })).not.toBeInTheDocument();
+    await view.rerender({ canPin: true });
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Pin session' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Owner offline');
+  });
+
   it('shows actions without explanatory commentary', async () => {
     render(SessionActionsMenu, { session, canManage: true, onSetLifecycle: vi.fn(async () => {}) });
     await fireEvent.click(screen.getByRole('button', { name: 'Session actions for Lifecycle task' }));

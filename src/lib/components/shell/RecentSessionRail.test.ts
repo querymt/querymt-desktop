@@ -51,6 +51,77 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('RecentSessionRail pinned sessions', () => {
+  const pinned = Array.from({ length: 7 }, (_, index) => ({ ...activeSession, sessionId: `pinned-${index}`, title: `Pinned ${index}`,
+    pin: { session_id: `pinned-${index}`, pinned: true, pinned_at: '2026-10-20T10:00:00Z' }
+  }));
+  it.each([false, true])('defaults to no pinned section and reacts to enabling/disabling it without unpinning (compact=%s)', async (collapsed) => {
+    const onVisibleSessionItemsChange = vi.fn();
+    const onSetPinned = vi.fn(async () => {});
+    const { container, rerender } = render(RecentSessionRail, { current: 'Sessions', sessions: [...pinned, activeSession], pinnedSessions: pinned,
+      pinLoadError: 'Pins unavailable', collapsed, onVisibleSessionItemsChange, onSetPinned });
+    const selector = collapsed ? '.session-icon-link' : '.app-sidebar-session';
+    expect(container.querySelectorAll(selector)).toHaveLength(8);
+    expect(screen.queryByText('Pinned', { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByText('Pins unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show more pinned' })).not.toBeInTheDocument();
+    expect(container.querySelector('.session-icon-rail-list [role="separator"]')).toBeNull();
+    await rerender({ showPinnedSessions: true });
+    await waitFor(() => expect(container.querySelectorAll(selector)).toHaveLength(collapsed ? 8 : 6));
+    expect(container.querySelector(selector)).toHaveAccessibleName(/^Pinned 0,/);
+    if (collapsed) expect(container.querySelector('.session-icon-rail-list [role="separator"]')).not.toBeNull();
+    else expect(screen.getByText('Pinned', { exact: true })).toBeInTheDocument();
+    expect(onVisibleSessionItemsChange.mock.lastCall?.[0][0].session.sessionId).toBe('pinned-0');
+    await rerender({ showPinnedSessions: false });
+    expect(container.querySelectorAll(selector)).toHaveLength(8);
+    expect(screen.queryByText('Pinned', { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByText('Pins unavailable')).not.toBeInTheDocument();
+    expect(container.querySelector('.session-icon-rail-list [role="separator"]')).toBeNull();
+    expect(onVisibleSessionItemsChange.mock.lastCall?.[0]).toHaveLength(8);
+    expect(onSetPinned).not.toHaveBeenCalled();
+    expect(pinned.every((session) => session.pin.pinned)).toBe(true);
+  });
+  it('shows five pins above Open, reveals more, keeps current pins and excludes duplicates', async () => {
+    const { container } = render(RecentSessionRail, { current: 'Sessions', sessions: [...pinned, activeSession], pinnedSessions: pinned, showPinnedSessions: true,
+      currentAgentId: 'agent-1', currentSessionId: pinned[0].sessionId });
+    const links = container.querySelectorAll('.app-sidebar-session');
+    expect(links).toHaveLength(6);
+    expect(links[0]).toHaveAttribute('aria-current', 'page');
+    expect(links[0]).toHaveAccessibleName(/^Pinned 0/);
+    expect(links[5]).toHaveAccessibleName(/^Waiting session/);
+    expect(container.querySelector('.app-sidebar-section-heading')).toHaveTextContent('Pinned');
+    await fireEvent.click(screen.getByRole('button', { name: 'Show more pinned' }));
+    expect(container.querySelectorAll('.app-sidebar-session')).toHaveLength(8);
+  });
+  it.each([false, true])('keeps an older current pin inside the visible limit without reordering pins (compact=%s)', async (collapsed) => {
+    const rows = Array.from({ length: 14 }, (_, index) => ({ ...pinned[0], sessionId: `old-pin-${index}`, title: `Pin ${index}`,
+      pin: { session_id: `old-pin-${index}`, pinned: true, pinned_at: new Date(Date.UTC(2026, 9, 20, 10) - index * 60_000).toISOString() }
+    }));
+    const onVisibleSessionItemsChange = vi.fn();
+    const { container } = render(RecentSessionRail, { current: 'Sessions', sessions: rows, pinnedSessions: rows, showPinnedSessions: true, collapsed,
+      currentAgentId: 'agent-1', currentSessionId: rows[13].sessionId, onVisibleSessionItemsChange });
+    const selector = collapsed ? '.session-icon-link' : '.app-sidebar-session';
+    await waitFor(() => expect(container.querySelector(`${selector}[aria-current="page"]`)).toHaveAttribute('href', '/sessions/agent-1/old-pin-13'));
+    const links = [...container.querySelectorAll(selector)];
+    expect(links).toHaveLength(collapsed ? 10 : 5);
+    expect(links[0]).toHaveAccessibleName(/^Pin 0,/);
+    expect(links.at(-1)).toHaveAccessibleName(/^Pin 13,/);
+    expect(onVisibleSessionItemsChange.mock.lastCall?.[0].at(-1).session.sessionId).toBe('old-pin-13');
+  });
+  it.each([false, true])('keeps resolved pins but never archived or child pins (compact=%s)', (collapsed) => {
+    const resolved = { ...pinned[0], lifecycle: { ...pinned[0].lifecycle!, resolved: true } };
+    const archived = { ...pinned[1], lifecycle: { ...pinned[1].lifecycle!, archived: true } };
+    const child = { ...pinned[2], parentSessionId: 'root' };
+    const { container } = render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], pinnedSessions: [resolved, archived, child], showPinnedSessions: true, collapsed });
+    const links = container.querySelectorAll('a[href^="/sessions/agent-1/"]');
+    expect(links).toHaveLength(2);
+    expect(links[0]).toHaveAccessibleName(/^Pinned 0/);
+    expect(container.querySelector('a[href$="pinned-1"]')).toBeNull();
+    expect(container.querySelector('a[href$="pinned-2"]')).toBeNull();
+    if (collapsed) expect(container.querySelector('.session-icon-rail-list [role="separator"]')).not.toBeNull();
+  });
+});
+
 describe('RecentSessionRail navigation', () => {
   it('defaults to a labeled sidebar with grouped navigation and readable sessions', () => {
     render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });

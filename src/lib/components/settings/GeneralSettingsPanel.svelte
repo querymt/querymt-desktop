@@ -5,6 +5,7 @@
   import type { ImageSendMode } from '$lib/domain/types';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { sidebarStore } from '$lib/stores/sidebar.svelte';
   import { windowDecorationsStore } from '$lib/stores/window-decorations.svelte';
 
   let advancedOpen = $state(false);
@@ -16,6 +17,7 @@
 
   $effect(() => {
     chatPreferencesStore.initialize();
+    sidebarStore.initialize();
     void windowDecorationsStore.initialize();
   });
 
@@ -28,6 +30,18 @@
   <div class="settings-panel-header">
     <h2 id="general-settings-title">General</h2>
     <p>Everyday preferences for how QueryMT looks and behaves.</p>
+  </div>
+
+  <div class="settings-simple-row">
+    <div class="settings-simple-main">
+      <h3>Show pinned sessions in sidebar</h3>
+      <p>Keep pinned sessions above Open sessions.</p>
+    </div>
+    <AppSwitch
+      checked={sidebarStore.showPinnedSessions}
+      ariaLabel="Show pinned sessions in sidebar"
+      onCheckedChange={(checked) => sidebarStore.setShowPinnedSessions(checked)}
+    />
   </div>
 
   <div class="settings-simple-row">

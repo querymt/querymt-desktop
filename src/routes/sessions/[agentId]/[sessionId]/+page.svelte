@@ -533,6 +533,10 @@
   <SessionHeader
     session={agentsStore.activeSession}
     summary={selectedSession ?? null}
+    canPin={selectedSession ? agentsStore.canPinSession(selectedSession) : false}
+    pinPending={agentsStore.sessionPinPending[`${agentId}:${sessionId}`]}
+    pinError={agentsStore.sessionPinErrors[`${agentId}:${sessionId}`]}
+    onSetPinned={selectedSession ? (pinned) => agentsStore.setSessionPinned(selectedSession!, pinned) : null}
     canManageLifecycle={agentsStore.canSetSessionLifecycle(agentId) && selectedSession?.remoteConnectionState !== 'disconnected'}
     lifecyclePending={agentsStore.sessionLifecyclePending[`${agentId}:${sessionId}`]}
     lifecycleError={agentsStore.sessionLifecycleErrors[`${agentId}:${sessionId}`]}

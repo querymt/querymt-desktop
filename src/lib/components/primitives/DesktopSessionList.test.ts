@@ -41,6 +41,36 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('DesktopSessionList pinned sessions', () => {
+  const pinned = Array.from({ length: 12 }, (_, index) => ({ ...sessions[0], sessionId: `pin-${index}`, title: `Pinned task ${index}`,
+    pin: { session_id: `pin-${index}`, pinned: true, pinned_at: `2026-10-20T10:${String(index).padStart(2, '0')}:00Z` }
+  }));
+  it('places pins above recents and workspaces, removes recent duplicates, and reveals ten at a time', async () => {
+    const { container } = render(DesktopSessionList, { sessions: [...pinned, sessions[1]], pinnedSessions: pinned,
+      recentSessionKeys: [...pinned, sessions[1]].map(getSessionKey), catalogComplete: true });
+    const groups = container.querySelectorAll<HTMLElement>('.session-workspace-item');
+    expect(within(groups[0]).getByText('Pinned sessions')).toBeInTheDocument();
+    expect(within(groups[1]).getByText('Recent sessions')).toBeInTheDocument();
+    const pinGroup = within(groups[0]);
+    expect(pinGroup.getAllByRole('button', { name: /^Open session/ })).toHaveLength(10);
+    expect(pinGroup.getAllByRole('button', { name: /^Open session/ })[0]).toHaveAccessibleName('Open session Pinned task 11');
+    expect(within(groups[1]).queryByText('Pinned task 0')).not.toBeInTheDocument();
+    expect(pinGroup.queryByTitle('Copy project path')).not.toBeInTheDocument();
+    await fireEvent.click(pinGroup.getByRole('button', { name: 'Load 10 more' }));
+    expect(pinGroup.getAllByRole('button', { name: /^Open session/ })).toHaveLength(12);
+  });
+  it('finds old pins not in the activity catalog and honors lifecycle and search filters', async () => {
+    const old = { ...pinned[0], lifecycle: { ...pinned[0].lifecycle!, archived: true, resolved: true } };
+    render(DesktopSessionList, { sessions: [sessions[1]], pinnedSessions: [old], catalogComplete: true });
+    expect(screen.queryByText('Pinned sessions')).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Archived' }));
+    expect(screen.getByText('Pinned sessions')).toBeInTheDocument();
+    expect(screen.getAllByText('Pinned task 0').length).toBeGreaterThan(0);
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Search sessions' }), { target: { value: 'nonexistent' } });
+    expect(screen.queryByText('Pinned sessions')).not.toBeInTheDocument();
+  });
+});
+
 describe('DesktopSessionList recent sessions', () => {
   it('shows recents as the first expanded workspace with ten rows and local load-more', async () => {
     const catalog = Array.from({ length: 24 }, (_, index) => ({

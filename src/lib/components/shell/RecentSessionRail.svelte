@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { Tooltip } from 'bits-ui';
-  import { ChevronLeft, ChevronRight, LoaderCircle, Menu } from '@lucide/svelte';
+  import { ChevronLeft, ChevronRight, LoaderCircle, Menu, Pin } from '@lucide/svelte';
   import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
@@ -9,6 +9,7 @@
   import { formatAriaShortcut, formatShortcut } from '$lib/design/platform';
   import { sectionIcons, type SectionName } from '$lib/design/tokens';
   import {
+    compareSessionsByPin,
     formatSessionTimestamp,
     getRecentSessionRailItems,
     getSessionWorkspaceName,
@@ -30,6 +31,9 @@
   let {
     current,
     sessions,
+    showPinnedSessions = false,
+    pinnedSessions = [], pinLoadError = null, onRetryPins = null,
+    canPinSession = null, onSetPinned = null, pinPending = {}, pinErrors = {},
     attentionSessionKeys = [],
     currentAgentId = null,
     currentSessionId = null,
@@ -50,6 +54,14 @@
   }: {
     current: SectionName;
     sessions: DesktopSessionSummary[];
+    showPinnedSessions?: boolean;
+    pinnedSessions?: DesktopSessionSummary[];
+    pinLoadError?: string | null;
+    onRetryPins?: (() => void | Promise<void>) | null;
+    canPinSession?: ((session: DesktopSessionSummary) => boolean) | null;
+    onSetPinned?: ((session: DesktopSessionSummary, pinned: boolean) => Promise<unknown>) | null;
+    pinPending?: Record<string, boolean>;
+    pinErrors?: Record<string, string | null>;
     attentionSessionKeys?: string[];
     currentAgentId?: string | null;
     currentSessionId?: string | null;
@@ -95,6 +107,7 @@
   let mobileNavigation = $state(false);
   let menuSessionKey = $state<string | null>(null);
   let expandedSessionLimit = $state(SESSION_PAGE_SIZE);
+  let pinnedLimit = $state(5);
   let requestingMore = $state(false);
   let loadError = $state<string | null>(null);
 
@@ -115,19 +128,38 @@
       item.agentId && item.sessionId ? [`${item.agentId}:${item.sessionId}`] : []
     )
   );
+  const pinnedRoots = $derived(showPinnedSessions ? pinnedSessions.filter((session) => isRootSession(session) && session.pin?.pinned &&
+    sessionMatchesLifecycle(session.lifecycle, { resolution: 'any', archive: 'excluded' })).slice().sort(compareSessionsByPin) : []);
+  const pinnedKeys = $derived(new Set(pinnedRoots.map((session) => `${session.agentId}:${session.sessionId}`)));
+  const pinnedRailItems = $derived.by(() => {
+    const items = getRecentSessionRailItems(pinnedRoots, { attentionSessionKeys, actionRequiredSessionKeys, limit: pinnedRoots.length });
+    const byKey = new Map(items.map((item) => [item.key, item]));
+    return pinnedRoots.map((session) => byKey.get(`${session.agentId}:${session.sessionId}`)!);
+  });
   const visibleSessions = $derived.by(() =>
     sessions
       .filter(isRootSession)
+      .filter((session) => !pinnedKeys.has(`${session.agentId}:${session.sessionId}`))
       .filter((session) => sessionMatchesLifecycle(session.lifecycle, { resolution: 'open', archive: 'excluded' }))
       .filter((session) => !(session.agentId === currentAgentId && session.sessionId === currentSessionId))
   );
-  const railItems = $derived(
+  const openRailItems = $derived(
     getRecentSessionRailItems(visibleSessions, {
       attentionSessionKeys,
       actionRequiredSessionKeys,
       limit: compact ? sessionIconLimit : expandedSessionLimit
     })
   );
+
+  const visiblePinnedItems = $derived.by(() => {
+    const limit = compact ? sessionIconLimit : pinnedLimit;
+    const visible = pinnedRailItems.slice(0, limit);
+    const current = pinnedRailItems.find((item) => item.session.agentId === currentAgentId && item.session.sessionId === currentSessionId);
+    // Reserve the last visible slot for the current pin without changing pin-time order.
+    if (limit > 0 && current && !visible.includes(current)) return [...visible.slice(0, limit - 1), current];
+    return visible;
+  });
+  const railItems = $derived(compact ? [...visiblePinnedItems, ...openRailItems].slice(0, sessionIconLimit) : [...visiblePinnedItems, ...openRailItems]);
 
   $effect(() => {
     onVisibleSessionItemsChange?.(railItems.slice(0, MAX_SESSION_ICONS));
@@ -262,8 +294,10 @@
     {session}
     bind:open={() => menuSessionKey === key, (value) => (menuSessionKey = value ? key : null)}
     canManage={canManageLifecycle?.(session) ?? false}
-    pending={lifecyclePending[key]}
-    error={lifecycleErrors[key]}
+    canPin={canPinSession?.(session) ?? false}
+    onSetPinned={onSetPinned ? (pinned) => onSetPinned!(session, pinned) : null}
+    pending={pinPending[key] || lifecyclePending[key]}
+    error={pinErrors[key] || lifecycleErrors[key]}
     onSetLifecycle={onSetLifecycle ? (patch) => onSetLifecycle!(session, patch) : null}
   />
 {/snippet}
@@ -393,12 +427,13 @@
         <div class="session-icon-rail-list">
           {#each railItems as item, index (item.key)}
             {@const session = item.session}
+            {#if index === visiblePinnedItems.length && index > 0}<div class="app-icon-divider" role="separator" aria-label="Open sessions"></div>{/if}
 
             <div class="session-rail-entry session-rail-entry-compact" class:session-rail-entry-menu-open={menuSessionKey === item.key} role="group" aria-label={`Session ${session.title}`}>
             <Tooltip.Root>
               <Tooltip.Trigger>
                 {#snippet child({ props })}
-                  <a {...props} class="session-icon-link" href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
+                  <a {...props} class="session-icon-link" href={getSessionHref(session)} aria-current={pinnedKeys.has(item.key) && session.agentId === currentAgentId && session.sessionId === currentSessionId ? 'page' : undefined} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
                     <span class="session-icon-surface" aria-hidden="true">
                       <span class="session-icon-avatar">
                         <Identicon seed={session.sessionId} />
@@ -412,6 +447,7 @@
               <Tooltip.Portal>
                 <Tooltip.Content class="session-icon-tooltip" side="right" sideOffset={10}>
                   <div class="session-icon-tooltip-title">{session.title}</div>
+                  {#if pinnedKeys.has(item.key)}<div class="session-icon-tooltip-meta">Pinned</div>{/if}
                   {#if !session.lifecycle}<div class="session-icon-tooltip-meta">Lifecycle unavailable</div>{/if}
                   <div class="session-icon-tooltip-meta">{getStatusLabel(session.status, item)}{#if onlineAgentCount > 1} / {session.agentName}{/if} / {getSessionWorkspaceName(session.cwd)}</div>
                   <div class="session-icon-tooltip-meta">{formatSessionTimestamp(session.updatedAt)} / <SessionIdChip sessionId={session.sessionId} /> / {getSessionShortcutLabel(index)}</div>
@@ -453,16 +489,18 @@
       </div>
 
       <div class="app-sidebar-recent">
-        <div class="app-sidebar-section-heading"><span>Open sessions</span></div>
-        <div class="app-sidebar-session-list" bind:this={sessionListElement} onscroll={() => { void loadNearBottom(); }} aria-label="Open sessions" aria-busy={loadingMoreSessions || requestingMore}>
+        <div class="app-sidebar-session-list" bind:this={sessionListElement} onscroll={() => { void loadNearBottom(); }} aria-label={pinnedRoots.length ? 'Pinned and open sessions' : 'Open sessions'} aria-busy={loadingMoreSessions || requestingMore}>
+          {#if showPinnedSessions && pinLoadError}<div class="app-sidebar-session-load-error"><span>{pinLoadError}</span><button type="button" onclick={() => onRetryPins?.()}>Retry pins</button></div>{/if}
+          {#if !railItems.length}<div class="app-sidebar-section-heading"><span>Open sessions</span></div>{/if}
           {#if railItems.length === 0 && !hasMoreSessions && !loadingMoreSessions}
             <div class="app-sidebar-empty">No open sessions</div>
           {:else}
             {#each railItems as item, index (item.key)}
               {@const session = item.session}
-
+              {#if index === 0 && visiblePinnedItems.length}<div class="app-sidebar-section-heading app-sidebar-pinned-heading"><Pin size={12} /><span>Pinned</span></div>{/if}
+              {#if index === visiblePinnedItems.length}<div class="app-sidebar-section-heading"><span>Open sessions</span></div>{/if}
               <div class="session-rail-entry" class:session-rail-entry-menu-open={menuSessionKey === item.key} role="group" aria-label={`Session ${session.title}`}>
-              <a class="app-sidebar-session" href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
+              <a class="app-sidebar-session" href={getSessionHref(session)} aria-current={pinnedKeys.has(item.key) && session.agentId === currentAgentId && session.sessionId === currentSessionId ? 'page' : undefined} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
                 <span class="app-sidebar-session-avatar" aria-hidden="true">
                   <Identicon seed={session.sessionId} />
                   {#if item.isActive}<span class="app-sidebar-session-spinner"><LoaderCircle size={9} class="animate-spin" /></span>{/if}
@@ -472,7 +510,11 @@
               </a>
               {@render sessionMenu(session, item.key)}
               </div>
+              {#if index === visiblePinnedItems.length - 1 && pinnedRailItems.length > pinnedLimit}
+                <button class="app-sidebar-show-more" type="button" onclick={() => pinnedLimit += 5}>Show more pinned</button>
+              {/if}
             {/each}
+            {#if visiblePinnedItems.length && openRailItems.length === 0}<div class="app-sidebar-section-heading"><span>Open sessions</span></div><div class="app-sidebar-empty">No open sessions</div>{/if}
           {/if}
           {#if sessionsLoadError || loadError}
             <div class="app-sidebar-session-load-error"><span>{sessionsLoadError || loadError}</span><button type="button" onclick={() => { void loadNearBottom(true); }}>Retry</button></div>

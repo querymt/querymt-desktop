@@ -34,6 +34,38 @@ describe('sidebarStore', () => {
     expect(window.localStorage.getItem('querymt.sidebarCollapsed')).toBe('true');
   });
 
+  it('hides pinned sessions by default', async () => {
+    const store = await loadStore();
+    expect(store.showPinnedSessions).toBe(false);
+    store.initialize();
+    expect(store.showPinnedSessions).toBe(false);
+  });
+
+  it('persists and restores enabling and disabling sidebar pins without changing collapse', async () => {
+    const store = await loadStore();
+    store.initialize();
+    store.setShowPinnedSessions(true);
+    expect(store.showPinnedSessions).toBe(true);
+    expect(window.localStorage.getItem('querymt.sidebarShowPinnedSessions')).toBe('true');
+    const restored = await loadStore();
+    restored.initialize();
+    expect(restored.showPinnedSessions).toBe(true);
+    expect(restored.collapsed).toBe(false);
+    restored.setShowPinnedSessions(false);
+    expect(restored.showPinnedSessions).toBe(false);
+    expect(window.localStorage.getItem('querymt.sidebarShowPinnedSessions')).toBe('false');
+    const disabled = await loadStore();
+    disabled.initialize();
+    expect(disabled.showPinnedSessions).toBe(false);
+  });
+
+  it.each(['false', 'invalid', '1', ''])('does not enable sidebar pins for a non-true saved value (%s)', async (value) => {
+    window.localStorage.setItem('querymt.sidebarShowPinnedSessions', value);
+    const store = await loadStore();
+    store.initialize();
+    expect(store.showPinnedSessions).toBe(false);
+  });
+
   it('restores a saved collapsed preference', async () => {
     window.localStorage.setItem('querymt.sidebarCollapsed', 'true');
     const store = await loadStore();

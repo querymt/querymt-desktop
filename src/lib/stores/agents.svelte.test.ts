@@ -72,6 +72,8 @@ const mockClient = vi.hoisted(() => {
     listSessions: vi.fn(async (_request?: ListSessionsRequest): Promise<{ sessions: SessionInfo[]; nextCursor?: string }> => ({ sessions: [] })),
     deleteSession: vi.fn(async () => undefined),
     supportsSessionLifecycle: vi.fn(() => false),
+    supportsSessionPins: vi.fn(() => false),
+    setSessionPinned: vi.fn(async (session_id: string, pinned: boolean) => ({ session_id, pinned, pinned_at: pinned ? '2026-10-20T10:00:00Z' : null })),
     getSessionLifecycle: vi.fn(async (session_id: string) => ({ session_id, resolved: false, archived: false, resolved_at: null as string | null, archived_at: null as string | null })),
     setSessionLifecycle: vi.fn(async (session_id: string, patch: { resolved?: boolean; archived?: boolean }) => ({ session_id, resolved: patch.resolved ?? false, archived: patch.archived ?? false, resolved_at: patch.resolved ? '2026-10-18T12:00:00Z' : null, archived_at: patch.archived ? '2026-10-18T12:00:00Z' : null })),
     loadSession: vi.fn(async (_sessionId?: string, _cwd?: string): Promise<{
@@ -416,6 +418,8 @@ beforeEach(() => {
   mockClient.supportsQuerymtFeature.mockReset().mockReturnValue(false);
   mockClient.supportsQuerymtMethod.mockReset().mockReturnValue(true);
   mockClient.supportsSessionLifecycle.mockReset().mockReturnValue(false);
+  mockClient.supportsSessionPins.mockReset().mockReturnValue(false);
+  mockClient.setSessionPinned.mockReset().mockImplementation(async (session_id, pinned) => ({ session_id, pinned, pinned_at: pinned ? '2026-10-20T10:00:00Z' : null }));
   mockClient.getSessionLifecycle.mockClear();
   mockClient.setSessionLifecycle.mockClear();
   mockClient.steerSession.mockReset().mockImplementation(async (
@@ -877,6 +881,187 @@ describe('AgentsStore child-session sidebar isolation', () => {
     expect(store.activeSessionId).toBe('child');
     expect(mockClient.loadSession).toHaveBeenLastCalledWith('child', '/tmp/work');
     expect(openRoots(store)).toEqual(['root']);
+  });
+});
+
+describe('AgentsStore shared session pins', () => {
+  const pinTime = '2026-10-20T10:00:00Z';
+  function row(id: string, pin = true, extra: Record<string, unknown> = {}): SessionInfo {
+    return { sessionId: id, title: id, cwd: '/tmp/work', _meta: {
+      querymt: { pin: { pinned: pin, pinned_at: pin ? pinTime : null }, lifecycle: { session_id: id, resolved: false, archived: false, resolved_at: null, archived_at: null } }, ...extra
+    } } as SessionInfo;
+  }
+  async function connected() {
+    const store = createStore();
+    mockClient.supportsSessionPins.mockReturnValue(true);
+    await store.connectAgent('agent-1');
+    return store;
+  }
+  it('loads older root pins through every pin-only page without mesh or lifecycle filters', async () => {
+    const store = await connected();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('old-peer', true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('old-pin')], nextCursor: '100' })
+      .mockResolvedValueOnce({ sessions: [row('other-pin'), row('child', true, { parentSessionId: 'root' }), row('remote', true, { location: 'remote', nodeId: 'node-1' })] });
+    await Promise.all([store.ensurePinnedSessions(), store.ensurePinnedSessions()]);
+    expect(mockClient.listSessions.mock.calls.map(([request]) => request)).toEqual([
+      { _meta: { session_scope: 'root', querymt: { sessionFilters: { pinned: true } } } },
+      { cursor: '100', _meta: { session_scope: 'root', querymt: { sessionFilters: { pinned: true } } } }
+    ]);
+    expect(store.pinnedSessions.map((session) => session.sessionId)).toEqual(['old-pin', 'other-pin']);
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
+  });
+  it('uses the existing persistent cache then reconciles shared unpins and deletion notifications', async () => {
+    const store = await connected();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('pinned')] });
+    await store.ensurePinnedSessions();
+    store.dispose();
+    const restored = await connected();
+    mockClient.listSessions.mockClear();
+    await restored.ensurePinnedSessions();
+    expect(restored.pinnedSessions[0]?.sessionId).toBe('pinned');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    mockClient.listSessions.mockResolvedValue({ sessions: [] });
+    mockClient.emitExtensionNotification({ method: 'querymt/session/pinsChanged', params: { session_id: 'pinned' } });
+    await vi.waitFor(() => expect(restored.pinnedSessions).toEqual([]));
+  });
+  it('gates unsupported, mesh and child writes without sending them', async () => {
+    const store = await connected();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('root', false)] });
+    await store.refreshSessionsForAgent('agent-1');
+    const root = store.sessions[0];
+    expect(store.canPinSession(root)).toBe(true);
+    for (const invalid of [{ ...root, location: 'remote' as const }, { ...root, parentSessionId: 'parent' }]) {
+      await expect(store.setSessionPinned(invalid, true)).rejects.toThrow('Pins are only available');
+    }
+    mockClient.supportsSessionPins.mockReturnValue(false);
+    await store.ensurePinnedSessions();
+    await expect(store.setSessionPinned(root, true)).rejects.toThrow('Pins are only available');
+    expect(mockClient.setSessionPinned).not.toHaveBeenCalled();
+  });
+  it('updates only confirmed writes, preserves activity and prevents duplicate submissions', async () => {
+    const store = await connected();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('root', false)] });
+    await store.refreshSessionsForAgent('agent-1');
+    const root = store.sessions[0];
+    let release!: (pin: { session_id: string; pinned: boolean; pinned_at: string }) => void;
+    mockClient.setSessionPinned.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    mockClient.listSessions.mockResolvedValue({ sessions: [row('root')] });
+    const write = store.setSessionPinned(root, true);
+    await store.setSessionPinned(root, true);
+    expect(store.sessionPinPending['agent-1:root']).toBe(true);
+    expect(store.pinnedSessions).toEqual([]);
+    release({ session_id: 'root', pinned: true, pinned_at: pinTime });
+    await write;
+    await vi.waitFor(() => expect(store.pinnedSessions).toHaveLength(1));
+    expect(mockClient.setSessionPinned).toHaveBeenCalledOnce();
+    expect(store.sessions[0].pin?.pinned).toBe(true);
+    expect(store.sessions[0].updatedAt).toBe(root.updatedAt);
+    mockClient.setSessionPinned.mockRejectedValueOnce(new Error('Storage unavailable'));
+    await expect(store.setSessionPinned(store.sessions[0], false)).rejects.toThrow('Storage unavailable');
+    expect(store.sessionPinErrors['agent-1:root']).toContain('Storage unavailable');
+    expect(store.pinnedSessions).toHaveLength(1);
+  });
+  it('ignores a stale pinned page after a successful unpin', async () => {
+    const store = await connected();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('root')] });
+    await store.ensurePinnedSessions();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const old = store.ensurePinnedSessions(true);
+    mockClient.listSessions.mockResolvedValue({ sessions: [] });
+    await store.setSessionPinned(store.pinnedSessions[0], false);
+    release({ sessions: [row('root')] });
+    await old;
+    expect(store.pinnedSessions).toEqual([]);
+  });
+  it('retains known pins on load error and permits retry', async () => {
+    const store = await connected();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('root')] });
+    await store.ensurePinnedSessions();
+    mockClient.listSessions.mockRejectedValueOnce(new Error('Offline'));
+    await store.ensurePinnedSessions(true);
+    expect(store.pinnedSessions).toHaveLength(1);
+    expect(store.pinnedSessionsErrors['agent-1']).toContain('Offline');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [] });
+    await store.ensurePinnedSessions(true);
+    expect(store.pinnedSessionsErrors['agent-1']).toBeNull();
+    expect(store.pinnedSessions).toEqual([]);
+  });
+  it('clears stale ordinary pin metadata after a complete pin reconciliation, including a cache hit', async () => {
+    const store = await connected();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('stale-pin')] });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [] });
+    await store.ensurePinnedSessions();
+    expect(store.sessions[0].pin?.pinned).toBe(false);
+    store.dispose();
+    const restored = await connected();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('stale-pin')] });
+    await restored.refreshSessionsForAgent('agent-1');
+    mockClient.listSessions.mockClear();
+    await restored.ensurePinnedSessions();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(restored.sessions[0].pin?.pinned).toBe(false);
+  });
+  it('loads a pin outside activity pages with its known workspace and root metadata', async () => {
+    const store = await connected();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('old-pin')] });
+    await store.ensurePinnedSessions();
+    await store.loadSession('agent-1', 'old-pin');
+    expect(mockClient.loadSession).toHaveBeenCalledWith('old-pin', '/tmp/work');
+    expect(store.sessions.find((session) => session.sessionId === 'old-pin')).toMatchObject({
+      title: 'old-pin', cwd: '/tmp/work', relationshipKnown: true, pin: { pinned: true }
+    });
+  });
+  it('preserves a lifecycle write that completes while a pinned page is in flight', async () => {
+    const store = await connected();
+    mockClient.supportsSessionLifecycle.mockReturnValue(true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('old-pin')] });
+    await store.ensurePinnedSessions();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const read = store.ensurePinnedSessions(true);
+    await store.setSessionLifecycle('agent-1', 'old-pin', { archived: true });
+    release({ sessions: [row('old-pin')] });
+    await read;
+    expect(store.pinnedSessions[0].lifecycle?.archived).toBe(true);
+    const persisted = JSON.parse(window.localStorage.getItem(SESSION_CATALOG_STORAGE_KEY)!);
+    expect(persisted.entries.find((entry: { key: string }) => entry.key.startsWith('pins:')).sessions[0].lifecycle.archived).toBe(true);
+  });
+  it('ignores late pin reads after disposal', async () => {
+    const store = await connected();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const read = store.ensurePinnedSessions();
+    store.dispose();
+    release({ sessions: [row('late-pin')] });
+    await read;
+    expect(store.pinnedSessions).toEqual([]);
+  });
+  it('retires a pending pin write when its endpoint changes', async () => {
+    const store = await connected();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('root', false)] });
+    await store.refreshSessionsForAgent('agent-1');
+    let release!: (pin: { session_id: string; pinned: boolean; pinned_at: string }) => void;
+    mockClient.setSessionPinned.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const write = store.setSessionPinned(store.sessions[0], true);
+    store.updateConfig('agent-1', { commandLine: 'other-agent' });
+    expect(store.sessionPinPending['agent-1:root']).toBeFalsy();
+    release({ session_id: 'root', pinned: true, pinned_at: pinTime });
+    await write;
+    expect(store.pinnedSessions).toEqual([]);
+    expect(store.sessions[0].pin?.pinned).toBe(false);
+  });
+  it('does not accept a late pin page from a replaced endpoint', async () => {
+    const store = await connected();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const read = store.ensurePinnedSessions();
+    store.updateConfig('agent-1', { commandLine: 'other-agent' });
+    release({ sessions: [row('old-endpoint')] });
+    await read;
+    expect(store.pinnedSessions).toEqual([]);
   });
 });
 

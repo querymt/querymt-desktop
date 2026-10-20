@@ -30,6 +30,9 @@ import {
 import {
   buildListSessionsRequest,
   createSessionBrowserState,
+  compareSessionsByPin,
+  isRootSession,
+  readSessionPin,
   sessionMatchesLifecycle,
   buildSessionKey,
   getSessionById,
@@ -63,6 +66,7 @@ import type {
   SessionRunState,
   SessionStatus,
   SessionLifecycle,
+  SessionPin,
   SessionLifecyclePatch,
   SessionLifecycleFilter
 } from '$lib/domain/types';
@@ -125,7 +129,8 @@ import {
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK,
-  QMT_NOTIFICATION_SESSION_INPUT_STATE
+  QMT_NOTIFICATION_SESSION_INPUT_STATE,
+  QMT_NOTIFICATION_SESSION_PINS_CHANGED
 } from '$lib/querymt/querymt-extensions';
 import { sendDesktopNotification } from '$lib/querymt/notifications';
 import {
@@ -357,6 +362,15 @@ export class AgentsStore {
   sessionLifecycleErrors = $state<Record<string, string | null>>({});
   sessionLifecycles = $state<Record<string, SessionLifecycle | null>>({});
   sessionLifecycleRevision = $state(0);
+  sessionPinPending = $state<Record<string, boolean>>({});
+  sessionPinErrors = $state<Record<string, string | null>>({});
+  private sessionPins = $state<Record<string, SessionPin>>({});
+  private pinnedSessionsByAgent = $state<Record<string, DesktopSessionSummary[]>>({});
+  pinnedSessionsLoading = $state<Record<string, boolean>>({});
+  pinnedSessionsErrors = $state<Record<string, string | null>>({});
+  private pinWrites = new Map<string, symbol>();
+  private pinVersions = new Map<string, number>();
+  private pinFlights = new Map<string, { version: number; promise: Promise<void> }>();
   private sessionCatalogGeneration = 0;
   private sessionCatalogSignature = '';
   private sessionCatalogCache = new SessionCatalogCache();
@@ -521,7 +535,7 @@ export class AgentsStore {
     for (const session of summaries) {
       if (session.parentSessionId) this.rememberSessionChildren(agent.agentId, session.parentSessionId, [session.sessionId]);
     }
-    return summaries.map((session) => this.withKnownSessionParent(session));
+    return summaries.map((session) => this.withKnownSessionPin(this.withKnownSessionParent(session)));
   }
 
   private withKnownSessionParent(session: DesktopSessionSummary): DesktopSessionSummary {
@@ -552,6 +566,21 @@ export class AgentsStore {
     this.sessionCatalogCache.clear();
   }
 
+  private withKnownSessionPin(session: DesktopSessionSummary): DesktopSessionSummary {
+    const pin = this.sessionPins[getSessionKey(session)];
+    return pin ? { ...session, pin } : session;
+  }
+
+  get pinnedSessions(): DesktopSessionSummary[] {
+    const current = new Map(this.sessions.map((session) => [getSessionKey(session), session]));
+    const enabled = new Set(this.configs.filter((config) => config.enabled).map((config) => config.id));
+    return Object.values(this.pinnedSessionsByAgent).flat()
+      .filter((session) => enabled.has(session.agentId))
+      .map((session) => this.withKnownSessionPin(this.withKnownSessionParent({ ...session, ...current.get(getSessionKey(session)) })))
+      .filter((session) => session.location !== 'remote' && session.pin?.pinned && isRootSession(session))
+      .sort(compareSessionsByPin);
+  }
+
   get recentSessionKeys(): string[] {
     const sources = new Map(this.configs.filter((config) => config.enabled)
       .map((config) => [config.id, sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' })]));
@@ -578,7 +607,7 @@ export class AgentsStore {
   }
 
   get sessions(): DesktopSessionSummary[] {
-    return Object.values(this.sessionsByAgent).flat().map((session) => this.withKnownSessionParent(session))
+    return Object.values(this.sessionsByAgent).flat().map((session) => this.withKnownSessionPin(this.withKnownSessionParent(session)))
       .filter((session) => this.sessionVisibleInCatalog(session)).sort((a, b) => {
         const aValue = a.updatedAt ?? '';
         const bValue = b.updatedAt ?? '';
@@ -711,6 +740,7 @@ export class AgentsStore {
     this.sessionCatalogFlight = null;
     this.sessionCatalogCache.flush();
     this.lifecycleReads.clear();
+    for (const config of this.configs) this.clearSessionPins(config.id);
     this.sessionSelectionGeneration += 1;
     this.cancelPendingSessionNotifications();
     for (const agentId of [...this.sessionRefreshTimers.keys()]) {
@@ -1123,6 +1153,7 @@ export class AgentsStore {
         (normalizedUpdates.websocketUrl !== undefined &&
           normalizedUpdates.websocketUrl !== current.websocketUrl) ||
         (updates.commandLine !== undefined && updates.commandLine !== current.commandLine));
+    if (endpointChanged || normalizedUpdates.enabled === false) this.clearSessionPins(agentId);
     if (endpointChanged) {
       this.forgetRecentSessions(agentId);
       this.knownSessionParents = Object.fromEntries(Object.entries(this.knownSessionParents)
@@ -1152,6 +1183,7 @@ export class AgentsStore {
     this.invalidateSessionCatalogCache();
     this.invalidateConnectGeneration(agentId);
     await this.stopConfiguredAgent(agentId);
+    this.clearSessionPins(agentId);
     this.configs = this.configs.filter((config) => config.id !== agentId);
     this.forgetRecentSessions(agentId);
     delete this.statuses[agentId];
@@ -1541,6 +1573,159 @@ export class AgentsStore {
     }
   }
 
+  canPinSession(session: DesktopSessionSummary): boolean {
+    void this.controlCapabilitiesByAgent[session.agentId];
+    return this.configs.some((config) => config.id === session.agentId && config.enabled) &&
+      isRootSession(session) && session.location !== 'remote' &&
+      isOnlineConnectionState(this.connectionStates[session.agentId]) &&
+      (this.clients.get(session.agentId)?.client.supportsSessionPins() ?? false);
+  }
+
+  private clearSessionPins(agentId: string) {
+    this.pinVersions.set(agentId, (this.pinVersions.get(agentId) ?? 0) + 1);
+    this.pinFlights.delete(agentId);
+    for (const key of this.pinWrites.keys()) {
+      if (key.startsWith(`${agentId}:`)) this.pinWrites.delete(key);
+    }
+    this.sessionPinPending = Object.fromEntries(Object.entries(this.sessionPinPending).filter(([key]) => !key.startsWith(`${agentId}:`)));
+    this.sessionPinErrors = Object.fromEntries(Object.entries(this.sessionPinErrors).filter(([key]) => !key.startsWith(`${agentId}:`)));
+    delete this.pinnedSessionsByAgent[agentId];
+    delete this.pinnedSessionsLoading[agentId];
+    delete this.pinnedSessionsErrors[agentId];
+    this.sessionPins = Object.fromEntries(Object.entries(this.sessionPins).filter(([key]) => !key.startsWith(`${agentId}:`)));
+  }
+
+  private applySessionPin(agentId: string, pin: SessionPin) {
+    this.applySessionPins(agentId, [pin]);
+  }
+
+  private applySessionPins(agentId: string, pins: SessionPin[]) {
+    const updates = Object.fromEntries(pins.map((pin) => [buildSessionKey(agentId, pin.session_id), pin]));
+    this.sessionPins = { ...this.sessionPins, ...updates };
+    const update = (session: DesktopSessionSummary) => updates[getSessionKey(session)] ? { ...session, pin: updates[getSessionKey(session)] } : session;
+    this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: (this.sessionsByAgent[agentId] ?? []).map(update) };
+    this.sessionCatalog = this.sessionCatalog.map(update);
+    this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: (this.pinnedSessionsByAgent[agentId] ?? []).map(update) };
+    for (const source of Object.values(this.workspaceSessionSources[agentId] ?? {})) {
+      this.setWorkspaceSource({ ...source, sessions: source.sessions.map(update) });
+    }
+  }
+
+  private reconcileSessionPins(agentId: string, sessions: DesktopSessionSummary[]) {
+    const keys = new Set(sessions.map(getSessionKey));
+    const known = new Map([
+      ...(this.pinnedSessionsByAgent[agentId] ?? []), ...(this.sessionsByAgent[agentId] ?? []),
+      ...this.sessionCatalog, ...Object.values(this.workspaceSessionSources[agentId] ?? {}).flatMap((source) => source.sessions)
+    ].filter((session) => session.agentId === agentId && session.location !== 'remote' && isRootSession(session))
+      .map((session) => [getSessionKey(session), session]));
+    const removed = [...known.values()].filter((session) => !keys.has(getSessionKey(session)))
+      .map((session): SessionPin => ({ session_id: session.sessionId, pinned: false, pinned_at: null }));
+    this.applySessionPins(agentId, [...removed, ...sessions.map((session) => session.pin!)]);
+    const current = this.sessionsByAgent[agentId] ?? [];
+    const currentKeys = new Set(current.map(getSessionKey));
+    this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: mergeSessions(current, sessions.filter((session) => !currentKeys.has(getSessionKey(session)))) };
+    this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: sessions };
+  }
+
+  async setSessionPinned(session: DesktopSessionSummary, pinned: boolean) {
+    const { agentId, sessionId } = session;
+    const key = getSessionKey(session);
+    if (!this.canPinSession(session)) throw new Error('Pins are only available for root sessions owned by a directly connected supporting agent.');
+    if (this.sessionPinPending[key]) return;
+    const record = this.clients.get(agentId)!;
+    const write = Symbol();
+    this.pinWrites.set(key, write);
+    const isCurrent = () => this.clients.get(agentId) === record && this.pinWrites.get(key) === write;
+    this.sessionPinPending = { ...this.sessionPinPending, [key]: true };
+    this.sessionPinErrors = { ...this.sessionPinErrors, [key]: null };
+    this.pinVersions.set(agentId, (this.pinVersions.get(agentId) ?? 0) + 1);
+    try {
+      const response = await record.client.setSessionPinned(sessionId, pinned);
+      if (!isCurrent()) return;
+      const pin = response?.session_id === sessionId ? readSessionPin({ pin: response }, sessionId) : null;
+      if (!pin || pin.pinned !== pinned) throw new Error('Agent returned invalid session pin state.');
+      this.sessionCatalogCache.clear();
+      this.applySessionPin(agentId, pin);
+      if (pinned) this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent,
+        [agentId]: mergeSessions(this.pinnedSessionsByAgent[agentId] ?? [], [{ ...session, pin }]) };
+      return pin;
+    } catch (error) {
+      if (isCurrent()) this.sessionPinErrors = { ...this.sessionPinErrors, [key]: acpErrorMessage(error, 'Could not update session pin.') };
+      throw error;
+    } finally {
+      if (isCurrent()) {
+        this.pinWrites.delete(key);
+        this.sessionPinPending = { ...this.sessionPinPending, [key]: false };
+        void this.ensurePinnedSessions(true, agentId);
+      }
+    }
+  }
+
+  async ensurePinnedSessions(force = false, agentId?: string) {
+    await Promise.all(this.connectedAgents.filter((config) => (!agentId || config.id === agentId) && this.clients.get(config.id)?.client.supportsSessionPins())
+      .map((config) => this.readPinnedSessions(config, force)));
+  }
+
+  private async readPinnedSessions(config: AgentConfig, force: boolean) {
+    const agentId = config.id;
+    const record = this.initializedClientRecord(agentId);
+    if (!record) return;
+    if (force) this.pinVersions.set(agentId, (this.pinVersions.get(agentId) ?? 0) + 1);
+    const version = this.pinVersions.get(agentId) ?? 0;
+    const existing = this.pinFlights.get(agentId);
+    if (existing?.version === version) return existing.promise;
+    const source = sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' });
+    const cacheKey = `pins:${source}`;
+    const cached = force ? undefined : this.sessionCatalogCache.get(cacheKey);
+    if (cached) {
+      this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: cached.sessions };
+      if (isCatalogFresh(cached)) {
+        this.reconcileSessionPins(agentId, cached.sessions);
+        return;
+      }
+    }
+    const isCurrent = () => this.clients.get(agentId) === record && (this.pinVersions.get(agentId) ?? 0) === version &&
+      this.configs.some((candidate) => candidate.enabled && candidate.id === agentId &&
+        sessionCatalogKey([candidate], [], { resolution: 'any', archive: 'any' }) === source);
+    const lifecycleRevision = this.sessionLifecycleRevision;
+    const promise = (async () => {
+      this.pinnedSessionsLoading = { ...this.pinnedSessionsLoading, [agentId]: true };
+      this.pinnedSessionsErrors = { ...this.pinnedSessionsErrors, [agentId]: null };
+      try {
+        let sessions: DesktopSessionSummary[] = [];
+        let cursor: string | undefined;
+        const seen = new Set<string>();
+        do {
+          // Pin queries intentionally never include mesh peers or browser lifecycle filters.
+          const page = await record.client.listSessions(buildListSessionsRequest({ cursor, pinned: true }));
+          if (!isCurrent()) return;
+          const listed = mapAcpSessionsToDesktopSessions(page.sessions, { agentId, agentName: config.name })
+            .map((session) => this.withKnownSessionParent(session));
+          if (listed.some((session) => isRootSession(session) && session.location !== 'remote' && !session.pin?.pinned)) {
+            throw new Error('Agent did not return authoritative pinned-session metadata.');
+          }
+          const incoming = listed.filter((session) => isRootSession(session) && session.location !== 'remote' && session.pin?.pinned);
+          sessions = mergeSessions(sessions, incoming);
+          cursor = page.nextCursor ?? undefined;
+          if (cursor && seen.has(cursor)) throw new Error('Agent returned a repeated pin cursor.');
+          if (cursor) seen.add(cursor);
+        } while (cursor);
+        if (!isCurrent()) return;
+        sessions = this.preserveNewerLifecycleWrites(sessions, lifecycleRevision);
+        this.reconcileSessionPins(agentId, sessions);
+        this.sessionCatalogCache.set({ key: cacheKey, sessions, complete: true, checkedAt: Date.now(), hasSessions: sessions.length > 0 });
+        this.sessionCatalogCache.flush();
+      } catch (error) {
+        if (isCurrent()) this.pinnedSessionsErrors = { ...this.pinnedSessionsErrors, [agentId]: `${config.name}: ${acpErrorMessage(error, 'Pinned sessions could not be loaded.')}` };
+      } finally {
+        if (isCurrent()) this.pinnedSessionsLoading = { ...this.pinnedSessionsLoading, [agentId]: false };
+      }
+    })();
+    const flight = { version, promise };
+    this.pinFlights.set(agentId, flight);
+    try { await promise; } finally { if (this.pinFlights.get(agentId) === flight) this.pinFlights.delete(agentId); }
+  }
+
   canSetSessionLifecycle(agentId: string): boolean {
     // Read reactive connection/capability state before consulting the client record.
     const online = isOnlineConnectionState(this.connectionStates[agentId]);
@@ -1555,6 +1740,7 @@ export class AgentsStore {
       ? { ...session, lifecycle } : session;
     this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: (this.sessionsByAgent[agentId] ?? []).map(update) };
     this.sessionCatalog = this.sessionCatalog.map(update);
+    this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: (this.pinnedSessionsByAgent[agentId] ?? []).map(update) };
     for (const source of Object.values(this.workspaceSessionSources[agentId] ?? {})) {
       this.setWorkspaceSource({ ...source, sessions: source.sessions.map(update) });
     }
@@ -2346,6 +2532,9 @@ export class AgentsStore {
 
     await record.client.deleteSession(sessionId);
     this.forgetRecentSessions(agentId, sessionId);
+    this.pinVersions.set(agentId, (this.pinVersions.get(agentId) ?? 0) + 1);
+    this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: (this.pinnedSessionsByAgent[agentId] ?? []).filter((session) => session.sessionId !== sessionId) };
+    delete this.sessionPins[buildSessionKey(agentId, sessionId)];
     this.invalidateSessionCatalogCache();
     this.sessionCatalog = this.sessionCatalog.filter((session) => session.agentId !== agentId || session.sessionId !== sessionId);
     this.sessionsByAgent = {
@@ -3725,6 +3914,7 @@ export class AgentsStore {
     inboxStore.disconnectAgent(agentId);
     void record.client.disconnect();
     delete this.openSessionPages[agentId];
+    this.clearSessionPins(agentId);
     this.clients.delete(agentId);
   }
 
@@ -3749,6 +3939,12 @@ export class AgentsStore {
       record.unsubscribeExtensionNotifications = record.client.onExtensionNotification((notification) => {
         if (notification.method === 'querymt/models/changed') {
           void this.loadInitialModelsForAgent(agentId, 1);
+        }
+        if (notification.method === QMT_NOTIFICATION_SESSION_PINS_CHANGED) {
+          this.sessionCatalogCache.clear();
+          if (!Object.entries(this.sessionPinPending).some(([key, pending]) => key.startsWith(`${agentId}:`) && pending)) {
+            void this.ensurePinnedSessions(true, agentId);
+          }
         }
         if (notification.method === QMT_NOTIFICATION_SESSION_INPUT_STATE) {
           this.applyInputStateNotification(agentId, notification.params as SessionInputStateNotification);

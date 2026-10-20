@@ -19,7 +19,7 @@ import {
   type SessionNotification,
   type SetSessionConfigOptionRequest
 } from '@agentclientprotocol/sdk';
-import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment, PromptSendOptions, SessionLifecycle, SessionLifecyclePatch } from '$lib/domain/types';
+import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment, PromptSendOptions, SessionPin, SessionLifecycle, SessionLifecyclePatch } from '$lib/domain/types';
 import type {
   AttachRemoteSessionRequest,
   AuthMethod,
@@ -85,6 +85,7 @@ import {
   QMT_METHOD_SESSION_RUNTIME_STATE,
   QMT_METHOD_SESSION_GET_LIFECYCLE,
   QMT_METHOD_SESSION_SET_LIFECYCLE,
+  QMT_METHOD_SESSION_SET_PINNED,
   QMT_METHOD_SESSION_STEER,
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
@@ -644,6 +645,16 @@ export class DesktopAcpClient {
 
   supportsQuerymtFeature(feature: keyof CapabilitiesInfo['features']): boolean {
     return this.controlCapabilities?.features?.[feature] ?? false;
+  }
+
+  supportsSessionPins(): boolean {
+    return this.supportsQuerymtMethod(QMT_METHOD_SESSION_SET_PINNED);
+  }
+
+  async setSessionPinned(sessionId: string, pinned: boolean): Promise<SessionPin> {
+    if (!this.querymtExtensions) await this.connect();
+    if (!this.supportsSessionPins()) throw new Error('Session pins are unsupported by this agent.');
+    return this.querymtExtensions!.setSessionPinned(sessionId, pinned);
   }
 
   supportsSessionLifecycle(): boolean {

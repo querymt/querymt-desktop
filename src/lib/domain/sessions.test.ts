@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
-import { sessionMatchesLifecycle, buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
+import { readSessionPin, sessionMatchesLifecycle, buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 
 function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionId: string }): DesktopSessionSummary {
@@ -30,6 +30,25 @@ function createSession(meta?: Record<string, unknown>): SessionInfo {
     _meta: meta
   } as SessionInfo;
 }
+
+describe('session pin metadata and requests', () => {
+  it('parses only authoritative, valid pin metadata without changing lifecycle or activity', () => {
+    expect(readSessionPin(undefined, 's')).toBeNull();
+    expect(readSessionPin({ pin: { pinned: 'true', pinned_at: null } }, 's')).toBeNull();
+    expect(readSessionPin({ pin: { pinned: true, pinned_at: 'not a date' } }, 's')).toBeNull();
+    expect(readSessionPin({ pin: { pinned: false, pinned_at: null } }, 's')).toEqual({ session_id: 's', pinned: false, pinned_at: null });
+    const [summary] = mapAcpSessionsToDesktopSessions([createSession({ querymt: { pin: { pinned: true, pinned_at: '2026-10-20T10:00:00Z' } } })], { agentId: 'a', agentName: 'A' });
+    expect(summary.pin?.pinned).toBe(true);
+    expect(summary.lifecycle).toBeNull();
+    expect(summary.updatedAt).toBe('2026-06-17T12:00:00Z');
+  });
+  it('composes pin and lifecycle filters and rejects mesh aggregation explicitly', () => {
+    expect(buildListSessionsRequest({ pinned: true, lifecycle: { resolution: 'resolved', archive: 'only' } })._meta).toEqual({
+      session_scope: 'root', querymt: { sessionFilters: { resolution: 'resolved', archive: 'only', pinned: true } }
+    });
+    expect(() => buildListSessionsRequest({ pinned: false, remoteNodeIds: ['peer'] })).toThrow('directly connected');
+  });
+});
 
 function runtimeMeta(phase: string): Record<string, unknown> {
   return { phase, steerable: phase !== 'idle', pending_steering_count: 0, queued_input_count: 0 };

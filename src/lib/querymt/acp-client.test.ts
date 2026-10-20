@@ -97,6 +97,22 @@ const image = { id: 'img-1', name: 'screen shot.png', mimeType: 'image/png', siz
 const file = { id: 'file-1', name: 'notes.txt', mimeType: 'text/plain', size: 4, data: 'dGV4dA==' };
 const pdf = { id: 'pdf-1', name: 'report.pdf', mimeType: 'application/pdf', size: 3, data: 'cGRm' };
 
+describe('DesktopAcpClient session pins', () => {
+  it('requires the advertised pin method and returns the owner confirmation', async () => {
+    const { client } = promptClient({});
+    const setSessionPinned = vi.fn(async () => ({ session_id: 's', pinned: true, pinned_at: '2026-10-20T10:00:00Z' }));
+    const internal = client as unknown as { controlCapabilities: unknown; querymtExtensions: unknown };
+    internal.querymtExtensions = { setSessionPinned };
+    expect(client.supportsSessionPins()).toBe(false);
+    await expect(client.setSessionPinned('s', true)).rejects.toThrow('unsupported');
+    expect(setSessionPinned).not.toHaveBeenCalled();
+    internal.controlCapabilities = { methods: ['querymt/session/setPinned'] };
+    expect(client.supportsSessionPins()).toBe(true);
+    expect((await client.setSessionPinned('s', true)).pinned).toBe(true);
+    expect(setSessionPinned).toHaveBeenCalledExactlyOnceWith('s', true);
+  });
+});
+
 describe('DesktopAcpClient session lifecycle', () => {
   it('requires the lifecycle feature and both methods before allowing writes', async () => {
     const { client } = promptClient({});
