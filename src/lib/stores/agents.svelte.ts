@@ -362,6 +362,7 @@ export class AgentsStore {
   private sessionCatalogCache = new SessionCatalogCache();
   private sessionCatalogFlight: { key: string; promise: Promise<void> } | null = null;
   private lifecycleWriteVersions = new Map<string, number>();
+  private lifecycleReads = new Map<string, symbol>();
   workspaceSessionSources = $state<Record<string, Record<string, WorkspaceSessionSource>>>({});
   workspaceVisibleLimits = $state<Record<string, number>>({});
   attentionSessionKeys = $state<string[]>([]);
@@ -709,6 +710,7 @@ export class AgentsStore {
     this.sessionCatalogGeneration += 1;
     this.sessionCatalogFlight = null;
     this.sessionCatalogCache.flush();
+    this.lifecycleReads.clear();
     this.sessionSelectionGeneration += 1;
     this.cancelPendingSessionNotifications();
     for (const agentId of [...this.sessionRefreshTimers.keys()]) {
@@ -1562,17 +1564,24 @@ export class AgentsStore {
     if (!this.canSetSessionLifecycle(agentId)) return;
     const key = buildSessionKey(agentId, sessionId);
     const revision = this.sessionLifecycleRevision;
+    const record = this.clients.get(agentId)!;
+    const read = Symbol();
+    this.lifecycleReads.set(key, read);
+    const isCurrent = () => this.lifecycleReads.get(key) === read && this.clients.get(agentId) === record &&
+      revision === this.sessionLifecycleRevision;
     try {
-      const lifecycle = await this.clients.get(agentId)!.client.getSessionLifecycle(sessionId);
-      if (revision === this.sessionLifecycleRevision) {
+      const lifecycle = await record.client.getSessionLifecycle(sessionId);
+      if (isCurrent()) {
         this.applySessionLifecycle(agentId, lifecycle, sessionId);
         this.sessionLifecycleErrors = { ...this.sessionLifecycleErrors, [key]: null };
       }
     } catch (error) {
       // A failed read does not invalidate the last authoritative lifecycle.
-      if (revision === this.sessionLifecycleRevision) {
+      if (isCurrent()) {
         this.sessionLifecycleErrors = { ...this.sessionLifecycleErrors, [key]: acpErrorMessage(error, 'Could not refresh session lifecycle.') };
       }
+    } finally {
+      if (this.lifecycleReads.get(key) === read) this.lifecycleReads.delete(key);
     }
   }
 
@@ -2338,6 +2347,7 @@ export class AgentsStore {
     await record.client.deleteSession(sessionId);
     this.forgetRecentSessions(agentId, sessionId);
     this.invalidateSessionCatalogCache();
+    this.sessionCatalog = this.sessionCatalog.filter((session) => session.agentId !== agentId || session.sessionId !== sessionId);
     this.sessionsByAgent = {
       ...this.sessionsByAgent,
       [agentId]: (this.sessionsByAgent[agentId] ?? []).filter((session) => session.sessionId !== sessionId)
@@ -2353,6 +2363,7 @@ export class AgentsStore {
     }
     this.acknowledgeSession(agentId, sessionId);
     const key = buildSessionKey(agentId, sessionId);
+    this.lifecycleReads.delete(key);
     this.removeSessionModePreferences(agentId, sessionId);
     delete this.delegateAssignmentsBySession[key];
     delete this.delegateAssignmentsLoadingBySession[key];
@@ -3697,6 +3708,9 @@ export class AgentsStore {
   }
 
   private disposeClient(agentId: string) {
+    for (const key of this.lifecycleReads.keys()) {
+      if (key.startsWith(`${agentId}:`)) this.lifecycleReads.delete(key);
+    }
     const record = this.clients.get(agentId);
     if (!record) return;
     const flight = this.connectFlights.get(agentId);

@@ -566,10 +566,17 @@ describe('AgentsStore recent sessions', () => {
     const store = createStore();
     mockClient.connect.mockResolvedValueOnce({ protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { delete: {} } }, authMethods: [] });
     await store.loadSession('agent-1', 'session-1');
+    const deleted = store.sessionsByAgent['agent-1'][0];
+    const retained = [{ ...deleted, agentId: 'agent-2' }, { ...deleted, sessionId: 'session-2' }];
+    store.sessionCatalog = [deleted, ...retained];
     mockClient.deleteSession.mockRejectedValueOnce(new Error('Denied'));
     await expect(store.deleteSession('agent-1', 'session-1')).rejects.toThrow('Denied');
     expect(store.recentSessionKeys).toEqual(['agent-1:session-1']);
+    expect(store.sessionCatalog).toEqual([deleted, ...retained]);
+    expect(store.sessionsByAgent['agent-1']).toContainEqual(deleted);
     await store.deleteSession('agent-1', 'session-1');
+    expect(store.sessionCatalog).toEqual(retained);
+    expect(store.sessionsByAgent['agent-1']).toEqual([]);
     expect(store.recentSessionKeys).toEqual([]);
     expect(createStore().recentSessionKeys).toEqual([]);
   });
@@ -1458,6 +1465,65 @@ describe('AgentsStore session lifecycle', () => {
     expect(store.sessions[0].lifecycle).toBeNull();
     expect(sessionMatchesLifecycle(store.sessions[0].lifecycle, { resolution: 'open', archive: 'excluded' })).toBe(false);
     expect(store.sessionLifecycleErrors['agent-1:session-1']).toBe('Owner offline');
+  });
+
+  it.each([
+    ['success', 'success'], ['success', 'error'], ['error', 'success'], ['error', 'error']
+  ] as const)('ignores an older lifecycle read %s after a newer read %s', async (older, newer) => {
+    const store = await lifecycleStore();
+    const known = summary().lifecycle!;
+    store.sessionsByAgent = { 'agent-1': [summary()] };
+    store.sessionCatalog = [summary()];
+    let release!: (value: typeof known) => void;
+    let reject!: (error: Error) => void;
+    mockClient.getSessionLifecycle.mockImplementationOnce(() => new Promise((resolve, rejectRead) => { release = resolve; reject = rejectRead; }));
+    const old = store.refreshSessionLifecycle('agent-1', 'session-1');
+    const saved = { ...known, resolved: true, resolved_at: '2026-10-20T17:00:00Z' };
+    if (newer === 'success') mockClient.getSessionLifecycle.mockResolvedValueOnce(saved);
+    else mockClient.getSessionLifecycle.mockRejectedValueOnce(new Error('Latest read failed'));
+    await store.refreshSessionLifecycle('agent-1', 'session-1');
+    if (older === 'success') release(known);
+    else reject(new Error('Obsolete read failed'));
+    await old;
+    expect(mockClient.getSessionLifecycle).toHaveBeenCalledTimes(2);
+    expect(store.sessions[0].lifecycle).toEqual(newer === 'success' ? saved : known);
+    expect(store.sessionCatalog[0].lifecycle).toEqual(newer === 'success' ? saved : known);
+    expect(store.sessionLifecycleErrors['agent-1:session-1']).toBe(newer === 'success' ? null : 'Latest read failed');
+  });
+
+  it('owns lifecycle reads by both agent and session rather than globally', async () => {
+    const store = await lifecycleStore();
+    store.configs = [...store.configs, { ...store.configs[0], id: 'agent-2' }];
+    await store.connectAgent('agent-2');
+    store.sessionsByAgent = { 'agent-1': [summary(), summary('other')], 'agent-2': [{ ...summary(), agentId: 'agent-2' }] };
+    const saved = { ...summary().lifecycle!, resolved: true };
+    let release!: (value: typeof saved) => void;
+    mockClient.getSessionLifecycle.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = store.refreshSessionLifecycle('agent-1', 'session-1');
+    await store.refreshSessionLifecycle('agent-1', 'other');
+    await store.refreshSessionLifecycle('agent-2', 'session-1');
+    release(saved);
+    await first;
+    expect(store.sessionsByAgent['agent-1'][0].lifecycle).toEqual(saved);
+    expect(store.sessionsByAgent['agent-1'][1].lifecycle?.resolved).toBe(false);
+    expect(store.sessionsByAgent['agent-2'][0].lifecycle?.resolved).toBe(false);
+  });
+
+  it.each(['dispose', 'disconnect', 'delete'] as const)('retires pending lifecycle reads on %s', async (action) => {
+    mockClient.connect.mockResolvedValueOnce({ protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { delete: {} } }, authMethods: [] });
+    const store = await lifecycleStore();
+    store.sessionsByAgent = { 'agent-1': [summary()] };
+    const saved = { ...summary().lifecycle!, resolved: true };
+    let release!: (value: typeof saved) => void;
+    mockClient.getSessionLifecycle.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const read = store.refreshSessionLifecycle('agent-1', 'session-1');
+    if (action === 'dispose') store.dispose();
+    else if (action === 'disconnect') await store.stopConfiguredAgent('agent-1');
+    else await store.deleteSession('agent-1', 'session-1');
+    release(saved);
+    await read;
+    expect(store.sessionLifecycles['agent-1:session-1']).toBeUndefined();
+    expect(store.sessionLifecycleErrors['agent-1:session-1']).toBeUndefined();
   });
 
   it('ignores a stale read failure after a newer successful lifecycle write', async () => {
