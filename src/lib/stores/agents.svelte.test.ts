@@ -472,6 +472,248 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('AgentsStore visibility-aware polling', () => {
+  const activeRuntime: SessionRuntimeStatus = { phase: SessionRuntimePhase.Model, active_run_id: 'run-1', steerable: true, pending_steering_count: 0, queued_input_count: 0 };
+  const listed: SessionInfo = { sessionId: 'session-1', title: 'Task', cwd: '/tmp/work', updatedAt: '2026-10-20T20:00:00Z' };
+  function visibility(hidden: boolean) {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: hidden });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }
+  async function pollingStore() {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.startSessionPolling();
+    return store;
+  }
+  function select(store: AgentsStore) {
+    store.setRuntimePollingEnabled(true);
+    store.activeAgentId = 'agent-1'; store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1'; store.activeSession.runState = 'thinking';
+  }
+  beforeEach(() => { vi.useFakeTimers(); visibility(false); });
+  afterEach(() => { delete (document as { hidden?: boolean }).hidden; });
+
+  it('reconciles idle cross-client summaries every 30s globally using only the first page', async () => {
+    const store = await pollingStore();
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed], nextCursor: 'next-page' });
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+    expect(store.sessions[0].title).toBe('Task');
+    mockClient.listSessions.mockResolvedValue({ sessions: [{ ...listed, title: 'Changed elsewhere' }], nextCursor: 'next-page' });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    expect(store.sessions[0].title).toBe('Changed elsewhere');
+    expect(mockClient.listSessions.mock.calls.every(([request]) => !request?.cursor)).toBe(true);
+    expect(localStorage.getItem(SESSION_CATALOG_STORAGE_KEY)).toBeNull();
+  });
+
+  it('pauses hidden timers and coalesces repeated visibility catch-up without blocking manual refresh', async () => {
+    const store = await pollingStore();
+    visibility(true); await vi.advanceTimersByTimeAsync(120_000);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    visibility(false); visibility(false); visibility(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+    visibility(true); release({ sessions: [listed] });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+    await store.refreshSessionsForAgent('agent-1');
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    visibility(false); visibility(false); await vi.advanceTimersByTimeAsync(0);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(3);
+  });
+
+  it('updates chunk summaries in memory without 800ms list or 100ms runtime floods', async () => {
+    const store = createStore(); await store.connectAgent('agent-1');
+    store.setRuntimePollingEnabled(true);
+    store.activeAgentId = 'agent-1'; store.activeSessionId = 'session-1'; store.activeSession.sessionId = 'session-1';
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed] });
+    await store.refreshSessionsForAgent('agent-1'); mockClient.listSessions.mockClear();
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(activeRuntime);
+    for (let index = 0; index < 10; index++) {
+      mockClient.emitSessionUpdate({ sessionId: 'session-1', update: { sessionUpdate: 'agent_message_chunk', messageId: `chunk-${index}`, content: { type: 'text', text: String(index) } } });
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(store.sessions[0].status).toBe('thinking');
+    expect(store.activeSession.transcript.length).toBeGreaterThan(0);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(5);
+  });
+
+  it('polls runtime at 2s without overlap and stops on authoritative idle', async () => {
+    const store = await pollingStore(); select(store);
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(activeRuntime);
+    await store.refreshSessionRuntime();
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(1);
+    let release!: (runtime: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    await vi.advanceTimersByTimeAsync(1);
+    const shared = store.refreshSessionRuntime();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2);
+    release({ ...activeRuntime, phase: SessionRuntimePhase.Idle }); await shared;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('pauses runtime hidden and resumes once without off-route polling or clearing selection', async () => {
+    const store = await pollingStore(); select(store);
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(activeRuntime);
+    await store.refreshSessionRuntime();
+    visibility(true); await vi.advanceTimersByTimeAsync(10_000);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(1);
+    visibility(false); visibility(false); await vi.advanceTimersByTimeAsync(0);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2);
+    store.setRuntimePollingEnabled(false); await vi.advanceTimersByTimeAsync(10_000);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2);
+    expect(store.activeSessionId).toBe('session-1');
+    store.setRuntimePollingEnabled(true); await vi.advanceTimersByTimeAsync(0);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(3);
+  });
+
+  it('waits for an in-flight runtime read then performs a fresh pre-action check', async () => {
+    const store = await pollingStore(); select(store);
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'steering');
+    let release!: (runtime: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }))
+      .mockResolvedValueOnce({ ...activeRuntime, active_run_id: 'new-run' });
+    const background = store.refreshSessionRuntime(); await vi.advanceTimersByTimeAsync(0);
+    const action = store.sendPromptToActiveSession(); await vi.advanceTimersByTimeAsync(0);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(1);
+    expect(mockClient.steerSession).not.toHaveBeenCalled();
+    release(activeRuntime); await background; await action;
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2);
+    expect(mockClient.steerSession).toHaveBeenCalledWith('session-1', expect.any(String), expect.any(Array), expect.any(String), 'new-run', expect.anything());
+  });
+
+  it.each(['selection', 'disconnect', 'replace', 'dispose'] as const)('retires stale runtime and timers on %s', async (change) => {
+    const store = await pollingStore(); select(store);
+    let release!: (runtime: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const old = store.refreshSessionRuntime(); await vi.advanceTimersByTimeAsync(0);
+    if (change === 'selection') store.activeSessionId = 'other';
+    else if (change === 'dispose') store.dispose();
+    else if (change === 'disconnect') await store.stopConfiguredAgent('agent-1');
+    else await store.connectAgent('agent-1', true);
+    release(activeRuntime); await old;
+    expect(store.sessionRuntimeBySession['agent-1:session-1']?.active_run_id).not.toBe('run-1');
+    mockClient.getSessionRuntimeStatus.mockClear(); await vi.advanceTimersByTimeAsync(10_000);
+    expect(mockClient.getSessionRuntimeStatus).not.toHaveBeenCalled();
+  });
+
+  it('cleans global listeners and timers without reviving after dispose', async () => {
+    const store = await pollingStore(); select(store);
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(activeRuntime); await store.refreshSessionRuntime();
+    store.dispose(); visibility(true); visibility(false); visibility(false);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('defers hidden pin notifications until one reconciliation on return', async () => {
+    const store = await pollingStore(); mockClient.supportsSessionPins.mockReturnValue(true);
+    visibility(true);
+    mockClient.emitExtensionNotification({ method: 'querymt/session/pinsChanged', params: { session_id: 'session-1' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    visibility(false); visibility(false); await vi.advanceTimersByTimeAsync(0);
+    expect(mockClient.listSessions.mock.calls.filter(([request]) => (request?._meta?.querymt as { sessionFilters?: { pinned?: boolean } } | undefined)?.sessionFilters?.pinned)).toHaveLength(1);
+  });
+
+  it('does not list during hidden startup and catches up once when visible', async () => {
+    visibility(true);
+    const store = createStore();
+    const init = store.initialize();
+    await vi.advanceTimersByTimeAsync(5_000); await init;
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    visibility(false); visibility(false); await vi.advanceTimersByTimeAsync(0);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+    expect(mockClient.listSessions.mock.calls[0][0]?.cursor).toBeUndefined();
+  });
+
+  it('joins an explicit list already in flight instead of queueing visibility work', async () => {
+    const store = await pollingStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const manual = store.refreshSessionsForAgent('agent-1'); await vi.advanceTimersByTimeAsync(0);
+    for (let index = 0; index < 5; index++) { visibility(true); visibility(false); }
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+    release({ sessions: [listed] }); await manual; await vi.advanceTimersByTimeAsync(0);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains hidden critical input updates and permits explicit authoritative runtime reads', async () => {
+    const store = await pollingStore(); select(store); visibility(true);
+    mockClient.emitExtensionNotification({ method: 'querymt/session/inputState', params: {
+      version: 1, session_id: 'session-1', input_id: 'queued', delivery: SessionInputDelivery.Queue, state: SessionInputState.Started
+    } });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(mockClient.getSessionRuntimeStatus).not.toHaveBeenCalled();
+    await store.refreshSessionRuntime();
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(1);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+  });
+
+  it('preserves immediate reconnect discovery and restarts the slower visible fallback', async () => {
+    const store = await pollingStore();
+    store.configs = [{ ...store.configs[0], transport: 'websocket', websocketUrl: 'ws://127.0.0.1:3030' }];
+    mockClient.emitConnectionLoss('Disconnected');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['replace', 'dispose'] as const)('does not send or clear the composer after pre-action runtime loses ownership on %s', async (change) => {
+    const store = await pollingStore(); select(store);
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'steering');
+    let release!: (runtime: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const prompt = store.composerPrompt;
+    const action = store.sendPromptToActiveSession(); await vi.advanceTimersByTimeAsync(0);
+    if (change === 'dispose') store.dispose();
+    else await store.connectAgent('agent-1', true);
+    release(activeRuntime); await action;
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    expect(mockClient.steerSession).not.toHaveBeenCalled();
+    expect(mockClient.queueSession).not.toHaveBeenCalled();
+    expect(store.composerPrompt).toBe(prompt);
+    expect(store.activeSession.transcript).toHaveLength(0);
+  });
+
+  it('recovers an initialized live client after a transient list failure on visibility return', async () => {
+    const store = await pollingStore();
+    mockClient.listSessions.mockRejectedValueOnce(new Error('Temporary list timeout'));
+    await store.refreshSessionsForAgent('agent-1');
+    expect(store.connectionStates['agent-1']).toBe('failed');
+    expect(store.connectedAgents).toHaveLength(0);
+    visibility(true); visibility(false); visibility(false); await vi.advanceTimersByTimeAsync(0);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    expect(store.connectionStates['agent-1']).toBe('initialized');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(3);
+  });
+
+  it('coalesces meaningful metadata reconciliation without postponing the 30s fallback', async () => {
+    const store = await pollingStore();
+    for (let index = 0; index < 10; index++) {
+      mockClient.emitSessionUpdate({ sessionId: 'unknown-session', update: { sessionUpdate: 'session_info_update', title: 'New elsewhere' } });
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('AgentsStore recent sessions', () => {
   it('remembers successful opens in MRU order and restores them without loading history', async () => {
     const store = createStore();
@@ -5101,7 +5343,7 @@ describe('AgentsStore prompt session start', () => {
     expect(store.activeInputDelivery).toBe('queue');
   });
 
-  it('keeps the newest runtime response when refreshes resolve out of order', async () => {
+  it('keeps the replacement-client runtime when an older generation resolves out of order', async () => {
     let resolveOlder!: (runtime: SessionRuntimeStatus) => void;
     let resolveNewer!: (runtime: SessionRuntimeStatus) => void;
     mockClient.getSessionRuntimeStatus
@@ -5111,6 +5353,8 @@ describe('AgentsStore prompt session start', () => {
     await store.connectAgent('agent-1');
 
     const older = store.refreshSessionRuntime('agent-1', 'session-1');
+    await vi.waitFor(() => expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(1));
+    await store.connectAgent('agent-1', true);
     const newer = store.refreshSessionRuntime('agent-1', 'session-1');
     await vi.waitFor(() => expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2));
     const authoritative: SessionRuntimeStatus = {
@@ -5132,7 +5376,7 @@ describe('AgentsStore prompt session start', () => {
       run_started_at_ms: 1
     });
 
-    await expect(older).resolves.toEqual(authoritative);
+    await expect(older).resolves.toBeNull();
     expect(store.sessionRuntimeBySession['agent-1:session-1']).toEqual(authoritative);
   });
 

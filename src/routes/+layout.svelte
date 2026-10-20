@@ -53,6 +53,11 @@
   const isSessionCancellable = $derived(
     isActiveSessionRoute && CANCELLABLE_RUN_STATES.has(agentsStore.activeSession.runState)
   );
+  $effect(() => {
+    const enabled = isActiveSessionRoute;
+    untrack(() => agentsStore.setRuntimePollingEnabled(enabled));
+    return () => agentsStore.setRuntimePollingEnabled(false);
+  });
   const pinSources = $derived(JSON.stringify(agentsStore.connectedAgents.map((agent) => [
     agent.id, agent.transport, agent.websocketUrl, agent.commandLine, agentsStore.controlCapabilitiesByAgent[agent.id]?.methods
   ])));
@@ -248,6 +253,7 @@
         window.removeEventListener('auxclick', preventNewWindowNavigation, true);
       }
       cleanupDesktopWindow();
+      agentsStore.dispose();
     };
   });
 

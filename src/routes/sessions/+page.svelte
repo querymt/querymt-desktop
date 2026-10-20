@@ -23,7 +23,7 @@
 
   $effect(() => {
     void catalogTrigger;
-    untrack(() => { void agentsStore.ensureSessionCatalog(); });
+    untrack(() => { if (!document.hidden) void agentsStore.ensureSessionCatalog(); });
   });
 
   onMount(() => {
