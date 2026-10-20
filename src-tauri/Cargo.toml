@@ -30,7 +30,7 @@ tokio = { version = "1", features = ["macros", "sync", "time"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 # Tauri's CEF runtime is not published yet; Sable ports the experimental runtime to released Tauri crates.
 # This revision supports tauri-runtime 2.12 while retaining CEF 150.
-tauri-runtime-cef = { git = "https://github.com/SableClient/tauri-runtime-cef", rev = "a82eea03d36e19874efc5b2eef29086eb4948ce8", optional = true }
+tauri-runtime-cef = { git = "https://github.com/SableClient/tauri-runtime-cef", rev = "98deb1763c6c945f103542ee05c632e01edb55f2", optional = true }
 cef = { version = "=150.2.1", optional = true }
 
 [features]
