@@ -248,6 +248,7 @@ describe('Landing page session start', () => {
   });
 
   it('closes the delete dialog after confirmation without waiting for a catalog refresh', async () => {
+    agentsStore.sessionBrowser = { ...agentsStore.sessionBrowser, query: '', groupsInitialized: true, openGroups: ['/tmp/work'] };
     agentsStore.sessionCatalog = [{
       agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'task', title: 'Task to delete',
       cwd: '/tmp/work', updatedAt: '2026-07-18T01:23:00Z', runtimeId: 'agent-1',
