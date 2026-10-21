@@ -276,7 +276,7 @@ function meshNodes(ids: string[]): MeshNodesInfo {
 
 function createDistinctMockClient() {
   let connectionLossHandler: ((reason: string) => void) | null = null;
-  let extensionNotificationHandler: ((notification: { method: string; params: unknown }) => void) | null = null;
+  const extensionNotificationHandlers: Array<(notification: { method: string; params: unknown }) => void> = [];
   let elicitationHandler: ((request: unknown) => Promise<unknown>) | null = null;
 
   return {
@@ -315,12 +315,15 @@ function createDistinctMockClient() {
     emitConnectionLoss: (reason: string) => connectionLossHandler?.(reason),
     onSessionUpdate: vi.fn(() => () => undefined),
     onExtensionNotification: vi.fn((handler: (notification: { method: string; params: unknown }) => void) => {
-      extensionNotificationHandler = handler;
+      extensionNotificationHandlers.push(handler);
       return () => {
-        extensionNotificationHandler = null;
+        const index = extensionNotificationHandlers.indexOf(handler);
+        if (index >= 0) extensionNotificationHandlers.splice(index, 1);
       };
     }),
-    emitExtensionNotification: (notification: { method: string; params: unknown }) => extensionNotificationHandler?.(notification),
+    emitExtensionNotification: (notification: { method: string; params: unknown }) => {
+      for (const handler of [...extensionNotificationHandlers]) handler(notification);
+    },
     onPermissionRequest: vi.fn(() => vi.fn()),
     onElicitationRequest: vi.fn((handler: (request: unknown) => Promise<unknown>) => {
       elicitationHandler = handler;

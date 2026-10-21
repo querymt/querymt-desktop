@@ -14,6 +14,11 @@ import {
 import type { InboxFormField, InboxItem } from '$lib/domain/types';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
 import { sendDesktopNotification } from '$lib/querymt/notifications';
+import {
+  QMT_NOTIFICATION_ELICITATION_COMPLETED,
+  QMT_NOTIFICATION_ELICITATION_VALIDATION_FAILED,
+  type QuerymtExtensionNotification
+} from '$lib/querymt/querymt-extensions';
 
 interface PendingPermissionRequest {
   itemId: string;
@@ -30,6 +35,12 @@ interface PendingElicitationRequest {
   resolve: (response: CreateElicitationResponse) => void;
 }
 
+const ELICITATION_FORM_ACTIONS = [
+  { id: 'accept', label: 'Submit', kind: 'accept' },
+  { id: 'decline', label: 'Decline', kind: 'decline' },
+  { id: 'cancel', label: 'Cancel', kind: 'cancel' }
+] as const;
+
 export class InboxStore {
   private nextLiveItemId = 1;
   private pendingPermissionRequests = new Map<string, PendingPermissionRequest>();
@@ -37,6 +48,15 @@ export class InboxStore {
   private pendingElicitationKeys = new Map<string, string>();
   /** Cards whose resolver was retired offline, keyed by stable elicitation identity. */
   private offlineElicitationKeys = new Map<string, string>();
+  /**
+   * Cards answered with `accept` whose outcome the agent has not yet confirmed,
+   * keyed by stable elicitation identity. If the agent rejects the answer
+   * (`validationFailed`) the card is restored to pending and rebound to the
+   * question the agent re-delivers.
+   */
+  private submittedElicitationKeys = new Map<string, string>();
+  /** Cards restored after an agent-side validation failure, awaiting re-delivery. */
+  private failedElicitationKeys = new Map<string, string>();
 
   items = $state<InboxItem[]>([]);
 
@@ -106,10 +126,64 @@ export class InboxStore {
       return this.enqueueElicitationRequest(request, agentId, agentName);
     });
 
+    const unsubscribeNotifications =
+      typeof client.onExtensionNotification === 'function'
+        ? client.onExtensionNotification((notification) => {
+            this.handleElicitationNotification(notification, agentId);
+          })
+        : null;
+
     return () => {
       unsubscribePermissionRequests();
       unsubscribeElicitationRequests();
+      unsubscribeNotifications?.();
     };
+  }
+
+  private handleElicitationNotification(notification: QuerymtExtensionNotification, agentId: string) {
+    if (
+      notification.method !== QMT_NOTIFICATION_ELICITATION_VALIDATION_FAILED &&
+      notification.method !== QMT_NOTIFICATION_ELICITATION_COMPLETED
+    ) {
+      return;
+    }
+    const params = notification.params as { elicitation_id?: unknown; message?: unknown } | null;
+    const elicitationId = params?.elicitation_id;
+    if (typeof elicitationId !== 'string' || !elicitationId) return;
+    const key = `${agentId}:${elicitationId}`;
+
+    if (notification.method === QMT_NOTIFICATION_ELICITATION_COMPLETED) {
+      // Terminal outcome: the answer was accepted (or superseded elsewhere).
+      this.submittedElicitationKeys.delete(key);
+      this.failedElicitationKeys.delete(key);
+      return;
+    }
+
+    const itemId = this.submittedElicitationKeys.get(key);
+    if (!itemId) return;
+    this.submittedElicitationKeys.delete(key);
+    const message = typeof params?.message === 'string' && params.message ? params.message : null;
+    this.restoreRejectedElicitation(itemId, key, message);
+  }
+
+  /**
+   * The agent rejected a submitted answer and keeps the question pending.
+   * Make the card actionable again (drafts intact) with the agent's reason;
+   * the re-delivered question rebinds to it via `failedElicitationKeys`.
+   */
+  private restoreRejectedElicitation(itemId: string, key: string, message: string | null) {
+    this.items = this.items.map((item) =>
+      item.id === itemId
+        ? {
+            ...item,
+            status: 'pending',
+            resolution: null,
+            error: message ? `The agent rejected this answer: ${message}` : 'The agent rejected this answer.',
+            actions: ELICITATION_FORM_ACTIONS.map((action) => ({ ...action }))
+          }
+        : item
+    );
+    this.failedElicitationKeys.set(key, itemId);
   }
 
   disconnectAgent(agentId: string) {
@@ -219,6 +293,9 @@ export class InboxStore {
 
     this.removePendingElicitation(pending);
     this.markResolved(itemId, describeElicitationResolution(response));
+    if (pending.requestKey && response.action === 'accept') {
+      this.submittedElicitationKeys.set(pending.requestKey, itemId);
+    }
     pending.resolve(response);
   }
 
@@ -256,6 +333,22 @@ export class InboxStore {
     const offlineItemId = requestKey ? this.offlineElicitationKeys.get(requestKey) : null;
     if (offlineItemId) {
       return this.rebindOfflineElicitation(offlineItemId, requestKey!, request, agentId);
+    }
+
+    // A re-delivery of a question we already answered means the agent did not
+    // accept that answer. Reuse the same card so the draft is preserved.
+    const rejectedItemId = requestKey
+      ? (this.failedElicitationKeys.get(requestKey) ?? this.submittedElicitationKeys.get(requestKey))
+      : null;
+    if (rejectedItemId) {
+      const key = requestKey!;
+      const existing = this.items.find((candidate) => candidate.id === rejectedItemId);
+      if (existing?.status === 'resolved') {
+        this.restoreRejectedElicitation(rejectedItemId, key, null);
+      }
+      this.submittedElicitationKeys.delete(key);
+      this.failedElicitationKeys.delete(key);
+      return this.rebindOfflineElicitation(rejectedItemId, key, request, agentId, true);
     }
 
     const itemId = `live-elicitation-${this.nextLiveItemId++}`;
@@ -323,14 +416,15 @@ export class InboxStore {
     itemId: string,
     requestKey: string,
     request: CreateElicitationRequest,
-    agentId: string
+    agentId: string,
+    keepError = false
   ): Promise<CreateElicitationResponse> {
     this.items = this.items.map((item) =>
       item.id === itemId && item.status !== 'resolved'
         ? {
             ...item,
             offline: false,
-            error: null
+            error: keepError ? item.error : null
           }
         : item
     );
