@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import type { ReadFileOutputView } from '$lib/domain/session-tool-read-output';
   import {
     darkTheme,
@@ -29,8 +30,14 @@
     }));
   });
 
+  const highlightInput = $derived(JSON.stringify(view.sections.map((section) => [
+    section.path, section.lines.map((line) => line.text)
+  ])));
+
   $effect(() => {
-    const currentView = view;
+    // Equivalent read views must retain tokens while the rest of the turn streams.
+    void highlightInput;
+    const currentView = untrack(() => view);
     highlighted = null;
     rootStyle = '';
 

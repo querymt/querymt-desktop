@@ -1,5 +1,8 @@
+import '@testing-library/jest-dom/vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RequestError, type InitializeResponse, type PromptResponse, type SessionConfigOption, type SessionInfo, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
+import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
+import { RequestError, type InitializeResponse, type ListSessionsRequest, type PromptResponse, type SessionConfigOption, type SessionInfo, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
 import type { AgentConfig, DesktopSessionSummary, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { findModeConfigOption, findReasoningConfigOption, getModelSelectionKey } from '$lib/querymt/config-options';
 import { QMT_METHOD_MESH_NODES, QMT_METHOD_MESH_STATUS } from '$lib/querymt/querymt-extensions';
@@ -24,11 +27,16 @@ import {
 } from '$lib/querymt/generated/types';
 import { tick } from 'svelte';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
+import { BrowserClient } from '$lib/querymt/browser-client';
+import { buildSessionConversation } from '$lib/domain/session-conversation';
 import { startAgent } from '$native';
 import { AgentsStore } from './agents.svelte';
 import { chatPreferencesStore } from './chat-preferences.svelte';
 import { inboxStore } from './inbox.svelte';
-import { DEFAULT_SESSION_LIST_SCOPE } from '$lib/domain/sessions';
+import { DEFAULT_SESSION_LIST_SCOPE, isRootSession, sessionMatchesLifecycle } from '$lib/domain/sessions';
+import { SESSION_CATALOG_STORAGE_KEY, SESSION_CATALOG_FRESH_MS, sessionCatalogKey } from './session-catalog-cache';
+
+const RECENT_SESSIONS_STORAGE_KEY = 'querymt-desktop.recent-sessions';
 
 function listSessionsRequest(input: { cwd?: string; cursor?: string } = {}) {
   return {
@@ -61,8 +69,11 @@ const mockClient = vi.hoisted(() => {
       sessionId: 'session-1',
       configOptions: []
     })),
-    listSessions: vi.fn(async (): Promise<{ sessions: SessionInfo[]; nextCursor?: string }> => ({ sessions: [] })),
+    listSessions: vi.fn(async (_request?: ListSessionsRequest): Promise<{ sessions: SessionInfo[]; nextCursor?: string }> => ({ sessions: [] })),
     deleteSession: vi.fn(async () => undefined),
+    supportsSessionLifecycle: vi.fn(() => false),
+    getSessionLifecycle: vi.fn(async (session_id: string) => ({ session_id, resolved: false, archived: false, resolved_at: null as string | null, archived_at: null as string | null })),
+    setSessionLifecycle: vi.fn(async (session_id: string, patch: { resolved?: boolean; archived?: boolean }) => ({ session_id, resolved: patch.resolved ?? false, archived: patch.archived ?? false, resolved_at: patch.resolved ? '2026-10-18T12:00:00Z' : null, archived_at: patch.archived ? '2026-10-18T12:00:00Z' : null })),
     loadSession: vi.fn(async (_sessionId?: string, _cwd?: string): Promise<{
       response: { configOptions: SessionConfigOption[]; _meta?: Record<string, unknown> };
       replay: SessionNotification[];
@@ -351,6 +362,8 @@ function createStore() {
 }
 
 beforeEach(() => {
+  localStorage.removeItem(RECENT_SESSIONS_STORAGE_KEY);
+  localStorage.removeItem(SESSION_CATALOG_STORAGE_KEY);
   vi.clearAllMocks();
   vi.mocked(DesktopAcpClient).mockImplementation(function () {
     return mockClient;
@@ -402,6 +415,9 @@ beforeEach(() => {
   mockClient.setSessionConfigOption.mockReset().mockResolvedValue([]);
   mockClient.supportsQuerymtFeature.mockReset().mockReturnValue(false);
   mockClient.supportsQuerymtMethod.mockReset().mockReturnValue(true);
+  mockClient.supportsSessionLifecycle.mockReset().mockReturnValue(false);
+  mockClient.getSessionLifecycle.mockClear();
+  mockClient.setSessionLifecycle.mockClear();
   mockClient.steerSession.mockReset().mockImplementation(async (
     _sessionId: string,
     _prompt: string,
@@ -450,6 +466,1104 @@ afterEach(() => {
   }
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe('AgentsStore recent sessions', () => {
+  it('remembers successful opens in MRU order and restores them without loading history', async () => {
+    const store = createStore();
+    await store.loadSession('agent-1', 'first');
+    await store.loadSession('agent-1', 'second');
+    await store.loadSession('agent-1', 'first');
+    expect(store.recentSessionKeys).toEqual(['agent-1:first', 'agent-1:second']);
+    const stored = JSON.parse(localStorage.getItem(RECENT_SESSIONS_STORAGE_KEY)!);
+    expect(stored).toHaveLength(2);
+    expect(Object.keys(stored[0]).sort()).toEqual(['agentId', 'sessionId', 'source']);
+    mockClient.loadSession.mockClear();
+    const restored = createStore();
+    expect(restored.recentSessionKeys).toEqual(store.recentSessionKeys);
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+  });
+
+  it('preloads recent identities from the existing catalog cache without a second history or catalog request', async () => {
+    const store = createStore();
+    mockClient.supportsSessionLifecycle.mockReturnValue(true);
+    await store.connectAgent('agent-1');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{ sessionId: 'recent', title: 'Cached recent', cwd: '/tmp/work', _meta: {
+      querymt: { lifecycle: { session_id: 'recent', resolved: false, archived: false, resolved_at: null, archived_at: null } }
+    } }] });
+    await store.ensureSessionCatalog();
+    await store.loadSession('agent-1', 'recent');
+    store.dispose();
+    const restored = createStore();
+    await restored.connectAgent('agent-1');
+    mockClient.listSessions.mockClear();
+    mockClient.loadSession.mockClear();
+    await restored.ensureSessionCatalog();
+    expect(restored.recentSessionKeys).toEqual(['agent-1:recent']);
+    expect(restored.sessionCatalog[0].title).toBe('Cached recent');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
+  });
+
+  it('does not remember failed loads, known children, or background activity', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockRejectedValueOnce(new Error('Missing session'));
+    await store.loadSession('agent-1', 'missing');
+    expect(store.recentSessionKeys).toEqual([]);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{
+      sessionId: 'child', title: 'Child', cwd: '/tmp/work', _meta: { parentSessionId: 'root', forkOrigin: 'delegation' }
+    }] });
+    await store.refreshSessionsForAgent('agent-1');
+    await store.loadSession('agent-1', 'child');
+    expect(store.recentSessionKeys).toEqual([]);
+    await store.loadSession('agent-1', 'root');
+    mockClient.emitSessionUpdate({ sessionId: 'child', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Background work' } } });
+    await tick();
+    expect(store.recentSessionKeys).toEqual(['agent-1:root']);
+  });
+
+  it('remembers foreground creation but not background session creation', async () => {
+    const store = createStore();
+    await store.createBackgroundSession('agent-1', '/tmp/work');
+    expect(store.recentSessionKeys).toEqual([]);
+    await store.createSession('agent-1');
+    expect(store.recentSessionKeys).toEqual(['agent-1:session-1']);
+  });
+
+  it('remembers successful remote attachments', async () => {
+    const store = createStore();
+    await store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+    expect(store.recentSessionKeys).toEqual(['agent-1:remote-session-1']);
+  });
+
+  it('does not let a superseded successful load reorder recent sessions', async () => {
+    const store = createStore();
+    let release!: (value: { response: { configOptions: SessionConfigOption[] }; replay: SessionNotification[] }) => void;
+    mockClient.loadSession.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const old = store.loadSession('agent-1', 'old');
+    await vi.waitFor(() => expect(mockClient.loadSession).toHaveBeenCalledOnce());
+    await store.loadSession('agent-1', 'new');
+    release({ response: { configOptions: [] }, replay: [] });
+    await old;
+    expect(store.recentSessionKeys).toEqual(['agent-1:new']);
+  });
+
+  it('scopes identities to endpoints and removes them when changing endpoints', async () => {
+    const store = createStore();
+    await store.loadSession('agent-1', 'session-1');
+    const restored = createStore();
+    restored.configs = [{ ...restored.configs[0], commandLine: 'different-agent' }];
+    expect(restored.recentSessionKeys).toEqual([]);
+    store.updateConfig('agent-1', { name: 'Renamed' });
+    expect(store.recentSessionKeys).toEqual(['agent-1:session-1']);
+    store.updateConfig('agent-1', { commandLine: 'different-agent' });
+    expect(store.recentSessionKeys).toEqual([]);
+    expect(JSON.parse(localStorage.getItem(RECENT_SESSIONS_STORAGE_KEY)!)).toEqual([]);
+  });
+
+  it('forgets a session only after successful deletion', async () => {
+    const store = createStore();
+    mockClient.connect.mockResolvedValueOnce({ protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { delete: {} } }, authMethods: [] });
+    await store.loadSession('agent-1', 'session-1');
+    const deleted = store.sessionsByAgent['agent-1'][0];
+    const retained = [{ ...deleted, agentId: 'agent-2' }, { ...deleted, sessionId: 'session-2' }];
+    store.sessionCatalog = [deleted, ...retained];
+    mockClient.deleteSession.mockRejectedValueOnce(new Error('Denied'));
+    await expect(store.deleteSession('agent-1', 'session-1')).rejects.toThrow('Denied');
+    expect(store.recentSessionKeys).toEqual(['agent-1:session-1']);
+    expect(store.sessionCatalog).toEqual([deleted, ...retained]);
+    expect(store.sessionsByAgent['agent-1']).toContainEqual(deleted);
+    await store.deleteSession('agent-1', 'session-1');
+    expect(store.sessionCatalog).toEqual(retained);
+    expect(store.sessionsByAgent['agent-1']).toEqual([]);
+    expect(store.recentSessionKeys).toEqual([]);
+    expect(createStore().recentSessionKeys).toEqual([]);
+  });
+
+  it.each(['null', '{}', '[null, {"agentId":3}]', 'invalid json'])('ignores invalid stored recents (%s)', (raw) => {
+    localStorage.setItem(RECENT_SESSIONS_STORAGE_KEY, raw);
+    expect(createStore().recentSessionKeys).toEqual([]);
+  });
+
+  it('bounds and deduplicates persisted identities', async () => {
+    const seed = createStore();
+    const source = sessionCatalogKey(seed.configs, [], { resolution: 'any', archive: 'any' });
+    const entries = Array.from({ length: 65 }, (_, index) => ({ agentId: 'agent-1', sessionId: `session-${index}`, source }));
+    localStorage.setItem(RECENT_SESSIONS_STORAGE_KEY, JSON.stringify([entries[0], ...entries]));
+    const store = createStore();
+    expect(store.recentSessionKeys).toHaveLength(50);
+    await store.loadSession('agent-1', 'newest');
+    expect(store.recentSessionKeys[0]).toBe('agent-1:newest');
+    expect(JSON.parse(localStorage.getItem(RECENT_SESSIONS_STORAGE_KEY)!)).toHaveLength(50);
+  });
+
+  it('keeps successful opens usable when recent-session storage writes fail', async () => {
+    const store = createStore();
+    const original = Storage.prototype.setItem;
+    const storage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === RECENT_SESSIONS_STORAGE_KEY) throw new Error('Storage full');
+      original.call(this, key, value);
+    });
+    try {
+      await store.loadSession('agent-1', 'session-1');
+      expect(store.recentSessionKeys).toEqual(['agent-1:session-1']);
+      expect(store.activeSession.lastError).toBeNull();
+    } finally { storage.mockRestore(); }
+  });
+});
+
+describe('AgentsStore open-session sidebar pagination', () => {
+  function row(sessionId: string): SessionInfo {
+    return { sessionId, title: sessionId, cwd: '/tmp/work', _meta: { querymt: { lifecycle: { session_id: sessionId, resolved: false, archived: false, resolved_at: null, archived_at: null } } } } as SessionInfo;
+  }
+
+  async function pagingStore() {
+    const store = createStore();
+    mockClient.supportsSessionLifecycle.mockReturnValue(true);
+    await store.connectAgent('agent-1');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('first')], nextCursor: '100' });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.listSessions.mockClear();
+    return store;
+  }
+
+  it('continues the already loaded root page on demand instead of restarting a full catalog traversal', async () => {
+    const store = await pagingStore();
+    expect(store.hasMoreOpenSessions).toBe(true);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('older')], nextCursor: '200' });
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenCalledExactlyOnceWith(listSessionsRequest({ cursor: '100' }));
+    expect(store.sessionsByAgent['agent-1'].map((session) => session.sessionId)).toEqual(['first', 'older']);
+    expect(store.hasMoreOpenSessions).toBe(true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('last')] });
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest({ cursor: '200' }));
+    expect(store.hasMoreOpenSessions).toBe(false);
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces overlapping sidebar requests for the same agent and keeps existing rows while loading', async () => {
+    const store = await pagingStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = store.loadMoreOpenSessions();
+    const second = store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenCalledOnce();
+    expect(store.openSessionsLoading).toBe(true);
+    expect(store.sessionsByAgent['agent-1'][0].sessionId).toBe('first');
+    release({ sessions: [row('next')] });
+    await Promise.all([first, second]);
+    expect(store.openSessionsLoading).toBe(false);
+    expect(store.sessionsByAgent['agent-1']).toHaveLength(2);
+  });
+
+  it('does not reset the sidebar continuation when a recent-session head refresh runs', async () => {
+    const store = await pagingStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('older')], nextCursor: '200' });
+    await store.loadMoreOpenSessions();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('newer'), row('first')], nextCursor: '100' });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('last')] });
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest({ cursor: '200' }));
+    expect(store.sessionsByAgent['agent-1'].some((session) => session.sessionId === 'older')).toBe(true);
+  });
+
+  it('retains failed pages for retry without marking the agent or its catalog failed', async () => {
+    const store = await pagingStore();
+    mockClient.listSessions.mockRejectedValueOnce(new RequestError(-32603, 'Internal error', 'Remote owner is offline'));
+    await store.loadMoreOpenSessions();
+    expect(store.openSessionsLoadError).toBe('QMTCODE: Remote owner is offline');
+    expect(store.connectionStates['agent-1']).toBe('initialized');
+    expect(store.sessionCatalogError).toBeNull();
+    expect(store.sessionsByAgent['agent-1']).toHaveLength(1);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('retry')] });
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest({ cursor: '100' }));
+    expect(store.openSessionsLoadError).toBeNull();
+    expect(store.hasMoreOpenSessions).toBe(false);
+  });
+
+  it('rejects repeated cursors instead of automatically requesting the same page forever', async () => {
+    const store = await pagingStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('bad')], nextCursor: '100' });
+    await store.loadMoreOpenSessions();
+    expect(store.openSessionsLoadError).toContain('repeated session cursor');
+    expect(mockClient.listSessions).toHaveBeenCalledOnce();
+    expect(store.sessionsByAgent['agent-1'].some((session) => session.sessionId === 'bad')).toBe(false);
+  });
+
+  it('starts a new traversal when selected remote peers change and ignores the old in-flight response', async () => {
+    const store = await pagingStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const old = store.loadMoreOpenSessions();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('peer-owner', true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('new-scope')] });
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith({ _meta: { session_scope: 'root', remoteNodeIds: ['peer-owner'] } });
+    release({ sessions: [row('old-scope')] });
+    await old;
+    expect(store.sessionsByAgent['agent-1'].some((session) => session.sessionId === 'old-scope')).toBe(false);
+    expect(store.hasMoreOpenSessions).toBe(false);
+  });
+
+  it('invalidates stale offsets after a lifecycle write and does not resurrect an older response', async () => {
+    const store = await pagingStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const old = store.loadMoreOpenSessions();
+    await store.setSessionLifecycle('agent-1', 'first', { resolved: true });
+    release({ sessions: [row('first'), row('obsolete')] });
+    await old;
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'first')?.lifecycle?.resolved).toBe(true);
+    expect(store.sessionsByAgent['agent-1'].some((session) => session.sessionId === 'obsolete')).toBe(false);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [row('new-head')] });
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest());
+  });
+
+  it('does not issue lifecycle-dependent sidebar discovery for unsupported agents', async () => {
+    const store = await pagingStore();
+    mockClient.supportsSessionLifecycle.mockReturnValue(false);
+    expect(store.hasMoreOpenSessions).toBe(false);
+    await store.loadMoreOpenSessions();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentsStore child-session sidebar isolation', () => {
+  function info(sessionId: string, meta: Record<string, unknown> = {}): SessionInfo {
+    return {
+      sessionId, title: `Task: ${sessionId}`, cwd: '/tmp/work',
+      _meta: { querymt: { lifecycle: { session_id: sessionId, resolved: false, archived: false, resolved_at: null, archived_at: null } }, ...meta }
+    } as SessionInfo;
+  }
+
+  function openRoots(store: AgentsStore) {
+    return store.sessions.filter(isRootSession)
+      .filter((session) => sessionMatchesLifecycle(session.lifecycle, { resolution: 'open', archive: 'excluded' }))
+      .map((session) => session.sessionId);
+  }
+
+  it('does not promote a child reviewed from a log when its lifecycle is refreshed', async () => {
+    const store = createStore();
+    mockClient.supportsSessionLifecycle.mockReturnValue(true);
+    await store.loadSession('agent-1', 'unlisted-child');
+    await store.refreshSessionLifecycle('agent-1', 'unlisted-child');
+    mockClient.emitSessionUpdate({ sessionId: 'unlisted-child', update: {
+      sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working' }
+    } });
+    await tick();
+
+    await vi.waitFor(() => expect(store.sessions.find((session) => session.sessionId === 'unlisted-child')?.status).toBe('thinking'));
+    expect(store.activeSessionId).toBe('unlisted-child');
+    expect(store.sessions.find((session) => session.sessionId === 'unlisted-child')?.lifecycle?.resolved).toBe(false);
+    expect(openRoots(store)).toEqual([]);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+
+    // Only a root-scoped listing can establish that an otherwise unknown load is a root.
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('unlisted-child')] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(openRoots(store)).toEqual(['unlisted-child']);
+  });
+
+  it.each(['load', 'attach'] as const)('preserves known parentage through remote %s and partial catalog refreshes', async (operation) => {
+    const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('remote-session-1', {
+      location: 'remote', nodeId: 'node-1', parentSessionId: 'root', forkOrigin: 'delegation'
+    })] });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: { location: 'remote', nodeId: 'node-1' } }, replay: [] });
+    if (operation === 'load') await store.loadSession('agent-1', 'remote-session-1');
+    else await store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+    expect(store.error).toBeNull();
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'remote-session-1'))
+      .toMatchObject({ parentSessionId: 'root', forkOrigin: 'delegation' });
+
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('remote-session-1', { location: 'remote', nodeId: 'node-1' })] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(openRoots(store)).toEqual([]);
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'remote-session-1'))
+      .toMatchObject({ parentSessionId: 'root', forkOrigin: 'delegation' });
+  });
+
+  it.each([false, true])('remembers live child links before discovery even with an unselected parent (snake case=%s)', async (snakeCase) => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'other-root';
+    mockClient.emitExtensionNotification({ method: 'querymt/session/delegationUpdate', params: snakeCase
+      ? { session_id: 'root', child_session_id: 'child', tool_call_id: 'delegate-1' }
+      : { sessionId: 'root', childSessionId: 'child', toolCallId: 'delegate-1' }
+    });
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('root'), info('child')] });
+    await store.refreshSessionsForAgent('agent-1');
+    store.attentionSessionKeys = ['agent-1:child'];
+    mockClient.emitSessionUpdate({ sessionId: 'child', update: {
+      sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working' }
+    } });
+    await tick();
+
+    await vi.waitFor(() => expect(store.sessions.find((session) => session.sessionId === 'child')?.status).toBe('thinking'));
+    expect(store.sessions.find((session) => session.sessionId === 'child')).toMatchObject({ parentSessionId: 'root' });
+    expect(openRoots(store)).toEqual(['root']);
+    expect(store.attentionSessionKeys).toContain('agent-1:child');
+    expect(mockClient.listSessions).toHaveBeenCalledWith(listSessionsRequest());
+  });
+
+  it('keeps a live child link across a delayed catalog response and persisted cache hydration', async () => {
+    const store = createStore();
+    mockClient.supportsSessionLifecycle.mockReturnValue(true);
+    await store.connectAgent('agent-1');
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const refresh = store.ensureSessionCatalog();
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledOnce());
+    mockClient.emitExtensionNotification({ method: 'querymt/session/delegationUpdate', params: {
+      sessionId: 'root', childSessionId: 'child', toolCallId: 'delegate-1'
+    } });
+    release({ sessions: [info('root'), info('child')] });
+    await refresh;
+    expect(store.sessionCatalog.find((session) => session.sessionId === 'child')?.parentSessionId).toBe('root');
+    store.dispose();
+
+    const restored = createStore();
+    await restored.connectAgent('agent-1');
+    mockClient.listSessions.mockClear();
+    await restored.ensureSessionCatalog();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(openRoots(restored)).toEqual(['root']);
+    expect(restored.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'child')?.parentSessionId).toBe('root');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('root'), info('child')] });
+    await restored.refreshSessionsForAgent('agent-1', true);
+    expect(openRoots(restored)).toEqual(['root']);
+  });
+
+  it.each(['local', 'remote'])('uses owner-supplied child parentage on a direct %s load', async (location) => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      location, nodeId: 'node-1', parentSessionId: 'root', forkOrigin: 'delegation'
+    } }, replay: [] });
+    await store.loadSession('agent-1', 'child');
+    expect(store.error).toBeNull();
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'child'))
+      .toMatchObject({ parentSessionId: 'root', forkOrigin: 'delegation' });
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('root'), info('child')] });
+    await store.refreshSessionsForAgent('agent-1', true);
+    expect(openRoots(store)).toEqual(['root']);
+  });
+
+  it('restores child classification from the parent log while leaving child review available', async () => {
+    const store = createStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('root'), info('child')] });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+        { seq: 1, kind: { type: 'tool_call_start', data: { tool_call_id: 'delegate-1', tool_name: 'delegate', arguments: '{}' } } },
+        { seq: 2, kind: { type: 'session_forked', data: { parent_session_id: 'root', child_session_id: 'child', tool_call_id: 'delegate-1', origin: 'delegation' } } }
+      ] } }
+    } }, replay: [] });
+    await store.loadSession('agent-1', 'root');
+    expect(store.activeSession.toolCalls[0]?.childSessionId).toBe('child');
+    expect(openRoots(store)).toEqual(['root']);
+    await store.loadSession('agent-1', 'child');
+    expect(store.activeSessionId).toBe('child');
+    expect(mockClient.loadSession).toHaveBeenLastCalledWith('child', '/tmp/work');
+    expect(openRoots(store)).toEqual(['root']);
+  });
+});
+
+describe('AgentsStore session lifecycle', () => {
+  async function lifecycleStore() {
+    const store = createStore();
+    mockClient.supportsSessionLifecycle.mockReturnValue(true);
+    await store.connectAgent('agent-1');
+    mockClient.listSessions.mockClear();
+    return store;
+  }
+
+  function summary(sessionId = 'session-1'): DesktopSessionSummary {
+    return { agentId: 'agent-1', agentName: 'QMTCODE', sessionId, title: sessionId, cwd: '/tmp/work', updatedAt: '2026-10-01T00:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'thinking', lifecycle: { session_id: sessionId, resolved: false, archived: false, resolved_at: null, archived_at: null } };
+  }
+
+  function listed(sessionId: string): SessionInfo {
+    return { sessionId, title: sessionId, cwd: '/tmp/work', _meta: { querymt: { lifecycle: summary(sessionId).lifecycle } } } as SessionInfo;
+  }
+
+  it('reuses a fresh completed catalog when returning to the page instead of reloading every session', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('first')], nextCursor: '10' })
+      .mockResolvedValueOnce({ sessions: [listed('later')] });
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    await store.ensureSessionCatalog();
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['first', 'later']);
+  });
+
+  it('shares one in-flight catalog fill across repeated requests for the same scope', async () => {
+    const store = await lifecycleStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = store.ensureSessionCatalog();
+    const second = store.ensureSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenCalledOnce();
+    release({ sessions: [listed('shared')] });
+    await Promise.all([first, second]);
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['shared']);
+  });
+
+  it('restores a fresh persisted catalog into a new store without a second catalog request', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('persisted')] });
+    await store.ensureSessionCatalog();
+    const restored = await lifecycleStore();
+    await restored.ensureSessionCatalog();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(restored.sessionCatalog.map((session) => session.sessionId)).toEqual(['persisted']);
+    expect(restored.sessionsByAgent['agent-1'].some((session) => session.sessionId === 'persisted')).toBe(true);
+  });
+
+  it('shows stale cached rows immediately while reconciling in the background', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('stale')] });
+    await store.ensureSessionCatalog();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + SESSION_CATALOG_FRESH_MS + 1);
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    try {
+      const refresh = store.ensureSessionCatalog();
+      expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['stale']);
+      expect(store.sessionCatalogLoading).toBe(true);
+      release({ sessions: [listed('fresh')] });
+      await refresh;
+      expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['fresh']);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('restores an incomplete snapshot but restarts from page one instead of reusing an old offset', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('partial')], nextCursor: '10' })
+      .mockRejectedValueOnce(new Error('Owner offline'));
+    await store.ensureSessionCatalog();
+    const restored = await lifecycleStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const refresh = restored.ensureSessionCatalog();
+    expect(restored.sessionCatalog.map((session) => session.sessionId)).toEqual(['partial']);
+    expect(mockClient.listSessions).toHaveBeenCalledWith({ _meta: { session_scope: 'root', querymt: { sessionFilters: { resolution: 'open', archive: 'excluded' } } } });
+    release({ sessions: [listed('new-first')] });
+    await refresh;
+    expect(restored.sessionCatalog.map((session) => session.sessionId)).toEqual(['new-first']);
+  });
+
+  it('caches lifecycle views separately and restores the first view without reloading it', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('open-view')] });
+    await store.ensureSessionCatalog();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{ ...listed('resolved-view'), _meta: { querymt: { lifecycle: { ...summary('resolved-view').lifecycle!, resolved: true } } } }] });
+    await store.ensureSessionCatalog({ resolution: 'resolved', archive: 'excluded' });
+    expect(store.sessionCatalog[0].sessionId).toBe('resolved-view');
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog[0].sessionId).toBe('open-view');
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps explicit Refresh authoritative even when a snapshot is fresh', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('old')] });
+    await store.ensureSessionCatalog();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('new')] });
+    await store.refreshSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['new']);
+  });
+
+  it('invalidates snapshots after confirmed lifecycle writes but not after rejected writes', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('task')] });
+    await store.ensureSessionCatalog();
+    mockClient.setSessionLifecycle.mockRejectedValueOnce(new Error('Write rejected'));
+    await expect(store.setSessionLifecycle('agent-1', 'task', { resolved: true })).rejects.toThrow('Write rejected');
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenCalledOnce();
+    await store.setSessionLifecycle('agent-1', 'task', { resolved: true });
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    expect(store.sessionCatalog).toEqual([]);
+  });
+
+  it('isolates remote peer selections even when the selected lifecycle view is unchanged', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('local-only')] });
+    await store.ensureSessionCatalog();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('new-peer', true);
+    try {
+      mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('with-peer')] });
+      await store.ensureSessionCatalog();
+      expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+      expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['with-peer']);
+    } finally {
+      chatPreferencesStore.setRemoteSessionPeer('new-peer', false);
+      chatPreferencesStore.setShowRemoteSessions(false);
+    }
+  });
+
+  it('does not query a discovered but excluded peer for lifecycle statuses', async () => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    store.meshNodesByAgent = { 'agent-1': meshNodes(['legacy-peer']) };
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', false);
+    mockClient.listSessions.mockImplementation(async (request) => {
+      if (request?._meta?.remoteNodeIds) throw new Error('Legacy peer has no lifecycle support');
+      return { sessions: [listed('local')] };
+    });
+    await store.refreshAllSessions();
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalogError).toBeNull();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['local']);
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith({
+      _meta: { session_scope: 'root', querymt: { sessionFilters: { resolution: 'open', archive: 'excluded' } } }
+    });
+    expect(mockClient.listSessions.mock.calls.every(([request]) => !request?._meta?.remoteNodeIds)).toBe(true);
+  });
+
+  it.each(['peer', 'all-remotes'])('clears an excluded peer error immediately when disabling %s, without mounting Sessions', async (setting) => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', true);
+    mockClient.listSessions.mockRejectedValueOnce(new RequestError(-32603, 'Internal error',
+      'Remote session owner cannot provide lifecycle-filtered results: unsupported'));
+    await store.refreshSessionCatalog();
+    expect(store.sessionCatalogError).toContain('unsupported');
+
+    if (setting === 'peer') chatPreferencesStore.setRemoteSessionPeer('legacy-peer', false);
+    else chatPreferencesStore.setShowRemoteSessions(false);
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('local')] });
+    const refresh = store.refreshAllSessions();
+    expect(store.sessionCatalogError).toBeNull();
+    await refresh;
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['local']);
+    expect(store.sessionCatalogError).toBeNull();
+  });
+
+  it.each(['reject', 'resolve'] as const)('ignores an excluded peer catalog response (%s) even while Sessions is unmounted', async (outcome) => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', true);
+    let release!: (page: { sessions: SessionInfo[]; nextCursor?: string }) => void;
+    let reject!: (error: Error) => void;
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('old-local')], nextCursor: 'remote:0:0:live' })
+      .mockImplementationOnce(() => new Promise((resolve, rejectPage) => { release = resolve; reject = rejectPage; }));
+    const old = store.refreshSessionCatalog();
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledTimes(2));
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', false);
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('new-local')] });
+    await store.refreshAllSessions();
+    if (outcome === 'reject') reject(new Error('Remote session owner is unavailable for lifecycle-filtered results: deadline has elapsed'));
+    else release({ sessions: [listed('obsolete')], nextCursor: 'remote:0:100:live' });
+    await old;
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(3);
+    expect(store.sessionCatalogError).toBeNull();
+    expect(store.sessionCatalogLoading).toBe(false);
+    expect(store.sessionCatalog.some((session) => session.sessionId === 'obsolete')).toBe(false);
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['new-local']);
+  });
+
+  it.each(['reject', 'resolve'] as const)('restarts discovery with no excluded peer instead of coalescing with an old scope (%s)', async (outcome) => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', true);
+    let release!: (page: { sessions: SessionInfo[]; nextCursor?: string }) => void;
+    let reject!: (error: Error) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve, rejectPage) => { release = resolve; reject = rejectPage; }));
+    const old = store.refreshSessionsForAgent('agent-1', true);
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledOnce());
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', false);
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('local')] });
+    const refresh = store.refreshAllSessions();
+    if (outcome === 'reject') reject(new Error('Obsolete remote request failed'));
+    else release({ sessions: [listed('obsolete')], nextCursor: 'remote:0:0:live' });
+    await Promise.all([old, refresh]);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest());
+    expect(store.sessionsByAgent['agent-1'].map((session) => session.sessionId)).toEqual(['local']);
+    expect(store.connectionStates['agent-1']).toBe('initialized');
+    expect(store.agentErrors['agent-1']).toBeNull();
+    expect(store.error).toBeNull();
+  });
+
+  it('keeps other included peers in lifecycle requests when an unsupported peer is excluded', async () => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', true);
+    chatPreferencesStore.setRemoteSessionPeer('updated-peer', true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', false);
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('local')] });
+    await store.refreshAllSessions();
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith({ _meta: {
+      session_scope: 'root', remoteNodeIds: ['updated-peer'],
+      querymt: { sessionFilters: { resolution: 'open', archive: 'excluded' } }
+    } });
+    expect(store.sessionCatalogError).toBeNull();
+    mockClient.listSessions.mockRejectedValueOnce(new Error('Included owner failed'));
+    await store.refreshSessionCatalog();
+    expect(store.sessionCatalogError).toContain('Included owner failed');
+  });
+
+  it('still coalesces full discoveries for the same peer scope', async () => {
+    const store = await lifecycleStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = store.refreshSessionsForAgent('agent-1', true);
+    const second = store.refreshSessionsForAgent('agent-1', true);
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledOnce());
+    release({ sessions: [listed('local')] });
+    await Promise.all([first, second]);
+    expect(mockClient.listSessions).toHaveBeenCalledOnce();
+  });
+
+  it('does not deadlock a queued activity refresh when exclusion queues a replacement discovery', async () => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', true);
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const old = store.refreshSessionsForAgent('agent-1', true);
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledOnce());
+    const activity = store.refreshSessionsForAgent('agent-1');
+    chatPreferencesStore.setRemoteSessionPeer('legacy-peer', false);
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('local')] });
+    const refresh = store.refreshAllSessions();
+    release({ sessions: [listed('obsolete')] });
+    await Promise.all([old, activity, refresh]);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(3);
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest());
+    expect(store.sessionsByAgent['agent-1'].map((session) => session.sessionId)).toEqual(['local']);
+  });
+
+  it('applies lifecycle predicates on every server page without discarding the global cache', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = { 'agent-1': [summary('history')] };
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('first')], nextCursor: '10' }).mockResolvedValueOnce({ sessions: [listed('later')] });
+    await store.refreshSessionCatalog({ resolution: 'open', archive: 'excluded' });
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(1, { _meta: { session_scope: 'root', querymt: { sessionFilters: { resolution: 'open', archive: 'excluded' } } } });
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { cursor: '10', _meta: { session_scope: 'root', querymt: { sessionFilters: { resolution: 'open', archive: 'excluded' } } } });
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['first', 'later']);
+    expect(store.sessionsByAgent['agent-1'].some((session) => session.sessionId === 'history')).toBe(true);
+  });
+
+  it('publishes the first page while the next page is still pending', async () => {
+    const store = await lifecycleStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('first')], nextCursor: '10' })
+      .mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const refresh = store.refreshSessionCatalog();
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledTimes(2));
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['first']);
+    expect(store.sessionCatalogLoading).toBe(true);
+    release({ sessions: [listed('later')] });
+    await refresh;
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['first', 'later']);
+    expect(store.sessionCatalogLoading).toBe(false);
+  });
+
+  it('counts only unique sessions received in the current load rather than retained cached rows', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('cached'), listed('first')] });
+    await store.refreshSessionCatalog();
+    expect(store.sessionCatalogLoadedCount).toBe(2);
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('first')], nextCursor: '10' })
+      .mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const refresh = store.refreshSessionCatalog();
+    expect(store.sessionCatalogLoadedCount).toBe(0);
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledTimes(3));
+    expect(store.sessionCatalog).toHaveLength(2);
+    expect(store.sessionCatalogLoadedCount).toBe(1);
+    release({ sessions: [listed('first'), listed('later')] });
+    await refresh;
+    expect(store.sessionCatalogLoadedCount).toBe(2);
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['first', 'later']);
+  });
+
+  it('publishes a fast agent without waiting for another agent', async () => {
+    const store = await lifecycleStore();
+    store.configs = [...store.configs, { ...store.configs[0], id: 'agent-2', name: 'Second agent' }];
+    store.statuses = { ...store.statuses, 'agent-2': { ...store.statuses['agent-1'], agentId: 'agent-2' } };
+    await store.connectAgent('agent-2');
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockClear().mockResolvedValueOnce({ sessions: [listed('fast')] })
+      .mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const refresh = store.refreshSessionCatalog();
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledTimes(2));
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['fast']);
+    expect(store.sessionCatalogLoadedCount).toBe(1);
+    expect(store.sessionCatalogLoading).toBe(true);
+    release({ sessions: [listed('slow')] });
+    await refresh;
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['fast', 'slow']);
+    expect(store.sessionCatalogLoadedCount).toBe(2);
+  });
+
+  it('retains successful pages when a later page fails and clears the error on retry', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('first')], nextCursor: '10' })
+      .mockRejectedValueOnce(new Error('Later page timed out'));
+    await store.refreshSessionCatalog();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['first']);
+    expect(store.sessionCatalogError).toContain('Later page timed out');
+    expect(store.sessionCatalogLoading).toBe(false);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('first')], nextCursor: '10' })
+      .mockResolvedValueOnce({ sessions: [listed('later')] });
+    await store.refreshSessionCatalog();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['first', 'later']);
+    expect(store.sessionCatalogError).toBeNull();
+  });
+
+  it.each([
+    'Remote session owner cannot provide lifecycle-filtered results: lifecycle filtering is unsupported by the owner store',
+    { message: 'Remote session owner is unavailable for lifecycle-filtered results: request timed out' }
+  ])('shows ACP error details without dropping remote lifecycle filters (%j)', async (data) => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('peer-owner', true);
+    try {
+      mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('local')], nextCursor: 'remote:0:0:live' })
+        .mockRejectedValueOnce(new RequestError(-32603, 'Internal error', data));
+      await store.refreshSessionCatalog();
+      const detail = typeof data === 'string' ? data : data.message;
+      expect(store.sessionCatalogError).toBe(`QMTCODE: ${detail}`);
+      expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['local']);
+      expect(store.sessionCatalogLoading).toBe(false);
+      expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+      expect(mockClient.listSessions).toHaveBeenLastCalledWith({
+        cursor: 'remote:0:0:live',
+        _meta: { session_scope: 'root', remoteNodeIds: ['peer-owner'], querymt: { sessionFilters: { resolution: 'open', archive: 'excluded' } } }
+      });
+    } finally {
+      chatPreferencesStore.setRemoteSessionPeer('peer-owner', false);
+      chatPreferencesStore.setShowRemoteSessions(false);
+    }
+  });
+
+  it('preserves cached rows on a failed refresh but removes missing rows after a complete refresh', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('cached')] });
+    await store.refreshSessionCatalog();
+    mockClient.listSessions.mockRejectedValueOnce(new Error('Owner offline'));
+    await store.refreshSessionCatalog();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['cached']);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [] });
+    await store.refreshSessionCatalog();
+    expect(store.sessionCatalog).toEqual([]);
+    expect(store.sessionCatalogError).toBeNull();
+  });
+
+  it('does not let an obsolete later-page error affect the current view', async () => {
+    const store = await lifecycleStore();
+    let reject!: (error: Error) => void;
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('old-first')], nextCursor: '10' })
+      .mockImplementationOnce(() => new Promise((_resolve, rejectPage) => { reject = rejectPage; }));
+    const old = store.refreshSessionCatalog();
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledTimes(2));
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('new-view')] });
+    await store.refreshSessionCatalog({ resolution: 'any', archive: 'any' });
+    reject(new Error('Obsolete page failed'));
+    await old;
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['new-view']);
+    expect(store.sessionCatalogError).toBeNull();
+    expect(store.sessionCatalogLoading).toBe(false);
+  });
+
+  it('distinguishes an empty lifecycle category from sessions on a later unfiltered remote page', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = {};
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('peer-owner', true);
+    try {
+      mockClient.listSessions.mockResolvedValueOnce({ sessions: [] })
+        .mockResolvedValueOnce({ sessions: [], nextCursor: 'remote:0:0:live' })
+        .mockResolvedValueOnce({ sessions: [listed('other-category')] });
+      await store.refreshSessionCatalog({ resolution: 'resolved', archive: 'excluded' });
+      expect(store.sessionCatalog).toEqual([]);
+      expect(store.sessionCatalogHasSessions).toBe(true);
+      expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { _meta: { session_scope: 'root', remoteNodeIds: ['peer-owner'] } });
+      expect(mockClient.listSessions).toHaveBeenLastCalledWith({ cursor: 'remote:0:0:live', _meta: { session_scope: 'root', remoteNodeIds: ['peer-owner'] } });
+    } finally {
+      chatPreferencesStore.setRemoteSessionPeer('peer-owner', false);
+      chatPreferencesStore.setShowRemoteSessions(false);
+    }
+  });
+
+  it('confirms the whole catalog is empty before offering first-session recovery', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = {};
+    await store.refreshSessionCatalog({ resolution: 'any', archive: 'only' });
+    expect(store.sessionCatalogHasSessions).toBe(false);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(listSessionsRequest());
+  });
+
+  it('does not label a failed existence check as an empty catalog', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = {};
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [] }).mockRejectedValueOnce(new Error('Unfiltered history unavailable'));
+    await store.refreshSessionCatalog({ resolution: 'resolved', archive: 'excluded' });
+    expect(store.sessionCatalogHasSessions).toBeNull();
+    expect(store.sessionCatalog).toEqual([]);
+    expect(store.sessionCatalogLoading).toBe(false);
+  });
+
+  it('uses known sessions without an extra existence request for empty categories', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = { 'agent-1': [summary('known-open')] };
+    await store.refreshSessionCatalog({ resolution: 'resolved', archive: 'excluded' });
+    expect(store.sessionCatalogHasSessions).toBe(true);
+    expect(mockClient.listSessions).toHaveBeenCalledOnce();
+  });
+
+  it('excludes an unsupported agent without turning compatibility into an error or repeated refresh', async () => {
+    const store = await lifecycleStore();
+    mockClient.supportsSessionLifecycle.mockReturnValue(false);
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(store.sessionCatalogError).toBeNull();
+    expect(store.sessionCatalogExcludedAgents).toEqual([{ id: 'agent-1', name: 'QMTCODE' }]);
+    expect(store.sessionCatalogSupportedAgentCount).toBe(0);
+    expect(store.sessionCatalogHasSessions).toBeNull();
+    expect(store.sessionCatalogLoading).toBe(false);
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    await store.ensureSessionCatalog({ resolution: 'any', archive: 'any' });
+    expect(mockClient.listSessions).toHaveBeenCalledWith(listSessionsRequest());
+    expect(store.sessionCatalogExcludedAgents).toEqual([]);
+    expect(store.sessionCatalogError).toBeNull();
+  });
+
+  it('loads and caches supported agents in a mixed-version setup while keeping real failures separate', async () => {
+    const store = await lifecycleStore();
+    const legacy = { ...createDistinctMockClient(), supportsSessionLifecycle: vi.fn(() => false) };
+    vi.mocked(DesktopAcpClient).mockImplementationOnce(function () { return legacy as unknown as DesktopAcpClient; });
+    store.configs = [...store.configs, { ...store.configs[0], id: 'legacy', name: 'Older agent' }];
+    store.statuses = { ...store.statuses, legacy: { ...store.statuses['agent-1'], agentId: 'legacy' } };
+    await store.connectAgent('legacy');
+    legacy.listSessions.mockClear();
+    mockClient.listSessions.mockClear().mockResolvedValueOnce({ sessions: [listed('supported-result')] });
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['supported-result']);
+    expect(store.sessionCatalogExcludedAgents).toEqual([{ id: 'legacy', name: 'Older agent' }]);
+    expect(store.sessionCatalogSupportedAgentCount).toBe(1);
+    expect(store.sessionCatalogError).toBeNull();
+    expect(legacy.listSessions).not.toHaveBeenCalled();
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenCalledOnce();
+    mockClient.listSessions.mockRejectedValueOnce(new Error('Owner timed out'));
+    await store.refreshSessionCatalog();
+    expect(store.sessionCatalogError).toBe('QMTCODE: Owner timed out');
+    expect(store.sessionCatalogExcludedAgents).toEqual([{ id: 'legacy', name: 'Older agent' }]);
+    expect(store.sessionCatalog).toHaveLength(1);
+  });
+
+  it('does not let a slow old view overwrite a newer catalog', async () => {
+    const store = await lifecycleStore();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const old = store.refreshSessionCatalog({ resolution: 'open', archive: 'excluded' });
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('new-view')] });
+    await store.refreshSessionCatalog({ resolution: 'any', archive: 'any' });
+    release({ sessions: [listed('old-view')] });
+    await old;
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['new-view']);
+    expect(store.sessionCatalogLoadedCount).toBe(1);
+    expect(store.sessionCatalogLoading).toBe(false);
+  });
+
+  it('reports listing failures instead of presenting an unavailable owner as an empty success', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockRejectedValueOnce(new Error('Remote owner is offline'));
+    await store.refreshSessionCatalog();
+    expect(store.sessionCatalogError).toContain('QMTCODE: Remote owner is offline');
+    expect(store.sessionCatalogLoading).toBe(false);
+  });
+
+  it('updates only the requested lifecycle field after persistence, without affecting execution or parents', async () => {
+    const store = await lifecycleStore();
+    const child = { ...summary(), parentSessionId: 'parent', lifecycle: { ...summary().lifecycle!, archived: true, archived_at: '2026-09-01T00:00:00Z' } };
+    store.sessionsByAgent = { 'agent-1': [child, summary('parent')] };
+    store.sessionCatalog = [child];
+    store.activeSession.runState = 'thinking';
+    const saved = { ...child.lifecycle!, resolved: true, resolved_at: '2026-10-18T00:00:00Z' };
+    let release!: (value: typeof saved) => void;
+    mockClient.setSessionLifecycle.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const write = store.setSessionLifecycle('agent-1', 'session-1', { resolved: true });
+    expect(store.sessionsByAgent['agent-1'][0].lifecycle?.resolved).toBe(false);
+    expect(store.sessionLifecyclePending['agent-1:session-1']).toBe(true);
+    release(saved);
+    await write;
+    expect(mockClient.setSessionLifecycle).toHaveBeenCalledWith('session-1', { resolved: true });
+    expect(store.sessionsByAgent['agent-1'][0]).toMatchObject({ lifecycle: saved, updatedAt: child.updatedAt, status: 'thinking' });
+    expect(store.sessionsByAgent['agent-1'][1].lifecycle?.resolved).toBe(false);
+    expect(store.activeSession.runState).toBe('thinking');
+    expect(mockClient.cancelSession).not.toHaveBeenCalled();
+    expect(store.sessionLifecyclePending['agent-1:session-1']).toBe(false);
+  });
+
+  it('retains listed lifecycle, Open membership and menu controls on a failed read, then reconciles on retry', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('session-1')] });
+    await store.ensureSessionCatalog();
+    const known = store.sessions[0].lifecycle;
+    const key = 'agent-1:session-1';
+    mockClient.getSessionLifecycle.mockRejectedValueOnce(new RequestError(-32603, 'Internal error', 'Owner timed out'));
+    await store.refreshSessionLifecycle('agent-1', 'session-1');
+    expect(store.sessions[0].lifecycle).toEqual(known);
+    expect(store.sessionCatalog[0].lifecycle).toEqual(known);
+    expect(store.sessions.filter((session) => isRootSession(session) && sessionMatchesLifecycle(session.lifecycle,
+      { resolution: 'open', archive: 'excluded' })).map((session) => session.sessionId)).toEqual(['session-1']);
+    expect(store.sessionLifecycleErrors[key]).toBe('Owner timed out');
+
+    try {
+      const menu = render(SessionActionsMenu, { session: store.sessions[0], canManage: store.canSetSessionLifecycle('agent-1'),
+        error: store.sessionLifecycleErrors[key], onSetLifecycle: vi.fn(async () => {}) });
+      await fireEvent.click(screen.getByRole('button', { name: 'Session actions for session-1' }));
+      expect(screen.getByRole('menuitem', { name: 'Mark resolved' })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: 'Archive' })).toBeInTheDocument();
+      expect(screen.queryByText(/Lifecycle controls unavailable/)).not.toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('Owner timed out');
+
+      const saved = { ...known!, resolved: true, resolved_at: '2026-10-20T16:00:00Z' };
+      mockClient.getSessionLifecycle.mockResolvedValueOnce(saved);
+      await store.refreshSessionLifecycle('agent-1', 'session-1');
+      expect(store.sessions[0].lifecycle).toEqual(saved);
+      expect(store.sessionCatalog[0].lifecycle).toEqual(saved);
+      expect(store.sessionLifecycleErrors[key]).toBeNull();
+      await menu.rerender({ session: store.sessions[0], error: store.sessionLifecycleErrors[key] });
+      expect(screen.getByRole('menuitem', { name: 'Reopen' })).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    } finally { cleanup(); }
+  });
+
+  it('keeps unknown lifecycle out of Open on read failure without inventing state', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = { 'agent-1': [{ ...summary(), lifecycle: null }] };
+    mockClient.getSessionLifecycle.mockRejectedValueOnce(new Error('Owner offline'));
+    await store.refreshSessionLifecycle('agent-1', 'session-1');
+    expect(store.sessions[0].lifecycle).toBeNull();
+    expect(sessionMatchesLifecycle(store.sessions[0].lifecycle, { resolution: 'open', archive: 'excluded' })).toBe(false);
+    expect(store.sessionLifecycleErrors['agent-1:session-1']).toBe('Owner offline');
+  });
+
+  it.each([
+    ['success', 'success'], ['success', 'error'], ['error', 'success'], ['error', 'error']
+  ] as const)('ignores an older lifecycle read %s after a newer read %s', async (older, newer) => {
+    const store = await lifecycleStore();
+    const known = summary().lifecycle!;
+    store.sessionsByAgent = { 'agent-1': [summary()] };
+    store.sessionCatalog = [summary()];
+    let release!: (value: typeof known) => void;
+    let reject!: (error: Error) => void;
+    mockClient.getSessionLifecycle.mockImplementationOnce(() => new Promise((resolve, rejectRead) => { release = resolve; reject = rejectRead; }));
+    const old = store.refreshSessionLifecycle('agent-1', 'session-1');
+    const saved = { ...known, resolved: true, resolved_at: '2026-10-20T17:00:00Z' };
+    if (newer === 'success') mockClient.getSessionLifecycle.mockResolvedValueOnce(saved);
+    else mockClient.getSessionLifecycle.mockRejectedValueOnce(new Error('Latest read failed'));
+    await store.refreshSessionLifecycle('agent-1', 'session-1');
+    if (older === 'success') release(known);
+    else reject(new Error('Obsolete read failed'));
+    await old;
+    expect(mockClient.getSessionLifecycle).toHaveBeenCalledTimes(2);
+    expect(store.sessions[0].lifecycle).toEqual(newer === 'success' ? saved : known);
+    expect(store.sessionCatalog[0].lifecycle).toEqual(newer === 'success' ? saved : known);
+    expect(store.sessionLifecycleErrors['agent-1:session-1']).toBe(newer === 'success' ? null : 'Latest read failed');
+  });
+
+  it('owns lifecycle reads by both agent and session rather than globally', async () => {
+    const store = await lifecycleStore();
+    store.configs = [...store.configs, { ...store.configs[0], id: 'agent-2' }];
+    await store.connectAgent('agent-2');
+    store.sessionsByAgent = { 'agent-1': [summary(), summary('other')], 'agent-2': [{ ...summary(), agentId: 'agent-2' }] };
+    const saved = { ...summary().lifecycle!, resolved: true };
+    let release!: (value: typeof saved) => void;
+    mockClient.getSessionLifecycle.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = store.refreshSessionLifecycle('agent-1', 'session-1');
+    await store.refreshSessionLifecycle('agent-1', 'other');
+    await store.refreshSessionLifecycle('agent-2', 'session-1');
+    release(saved);
+    await first;
+    expect(store.sessionsByAgent['agent-1'][0].lifecycle).toEqual(saved);
+    expect(store.sessionsByAgent['agent-1'][1].lifecycle?.resolved).toBe(false);
+    expect(store.sessionsByAgent['agent-2'][0].lifecycle?.resolved).toBe(false);
+  });
+
+  it.each(['dispose', 'disconnect', 'delete'] as const)('retires pending lifecycle reads on %s', async (action) => {
+    mockClient.connect.mockResolvedValueOnce({ protocolVersion: 1, agentCapabilities: { loadSession: true, sessionCapabilities: { delete: {} } }, authMethods: [] });
+    const store = await lifecycleStore();
+    store.sessionsByAgent = { 'agent-1': [summary()] };
+    const saved = { ...summary().lifecycle!, resolved: true };
+    let release!: (value: typeof saved) => void;
+    mockClient.getSessionLifecycle.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const read = store.refreshSessionLifecycle('agent-1', 'session-1');
+    if (action === 'dispose') store.dispose();
+    else if (action === 'disconnect') await store.stopConfiguredAgent('agent-1');
+    else await store.deleteSession('agent-1', 'session-1');
+    release(saved);
+    await read;
+    expect(store.sessionLifecycles['agent-1:session-1']).toBeUndefined();
+    expect(store.sessionLifecycleErrors['agent-1:session-1']).toBeUndefined();
+  });
+
+  it('ignores a stale read failure after a newer successful lifecycle write', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = { 'agent-1': [summary()] };
+    let reject!: (error: Error) => void;
+    mockClient.getSessionLifecycle.mockImplementationOnce(() => new Promise((_resolve, rejectRead) => { reject = rejectRead; }));
+    const refresh = store.refreshSessionLifecycle('agent-1', 'session-1');
+    await store.setSessionLifecycle('agent-1', 'session-1', { resolved: true });
+    reject(new Error('Obsolete timeout'));
+    await refresh;
+    expect(store.sessions[0].lifecycle?.resolved).toBe(true);
+    expect(store.sessionLifecycleErrors['agent-1:session-1']).toBeNull();
+  });
+
+  it('keeps a failed mutation visible with an actionable error and allows retry', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = { 'agent-1': [summary()] };
+    store.sessionCatalog = [summary()];
+    mockClient.setSessionLifecycle.mockRejectedValueOnce(new Error('Owner refused update'));
+    await expect(store.setSessionLifecycle('agent-1', 'session-1', { archived: true })).rejects.toThrow('Owner refused update');
+    expect(store.sessionCatalog).toHaveLength(1);
+    expect(store.sessionsByAgent['agent-1'][0].lifecycle?.archived).toBe(false);
+    expect(store.sessionLifecycleErrors['agent-1:session-1']).toBe('Owner refused update');
+    await store.setSessionLifecycle('agent-1', 'session-1', { archived: true });
+    expect(store.sessionCatalog).toHaveLength(0);
+  });
+
+  it('protects a successful mutation from an older global list response', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = { 'agent-1': [summary()] };
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const refresh = store.refreshSessionsForAgent('agent-1');
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalled());
+    await store.setSessionLifecycle('agent-1', 'session-1', { resolved: true });
+    release({ sessions: [listed('session-1')] });
+    await refresh;
+    expect(store.sessionsByAgent['agent-1'][0].lifecycle?.resolved).toBe(true);
+  });
 });
 
 describe('AgentsStore connections', () => {
@@ -3627,6 +4741,129 @@ describe('AgentsStore mesh node availability', () => {
 });
 
 describe('AgentsStore prompt session start', () => {
+  it.each(['capture', 'live', 'drain'] as const)('keeps one first prompt when navigation overlaps a snapshot with its %s echo', async (delivery) => {
+    const store = createStore();
+    let finishPrompt!: (response: PromptResponse) => void;
+    mockClient.sendPrompt.mockImplementationOnce(() => new Promise((resolve) => { finishPrompt = resolve; }));
+    const prompt = 'Check whether this project uses the requested shader';
+    store.composerPrompt = prompt;
+    const sessionId = await store.startSessionWithPrompt('agent-1');
+    expect(sessionId).toBe('session-1');
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    const clientPromptId = mockClient.sendPrompt.mock.calls[0][3]?.clientPromptId;
+    const response = { configOptions: [] as SessionConfigOption[], _meta: {
+      'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+        { seq: 1, kind: { type: 'prompt_received', data: { message_id: 'user-1', content: prompt } } },
+        { seq: 2, kind: { type: 'assistant_message_stored', data: { message_id: 'assistant-1', content: 'I will inspect the project.' } } },
+        { seq: 3, kind: { type: 'tool_call_start', data: { tool_call_id: 'inspect-1', tool_name: 'read_file', arguments: '{}' } } }
+      ] } }
+    } };
+    // The route loads history while the first prompt is running. Capture begins
+    // before the snapshot is read, so these are both live updates AND history.
+    const browser = new BrowserClient();
+    browser.onSessionUpdate((notification) => mockClient.emitSessionUpdate(notification));
+    const echo: SessionNotification = { sessionId: 'session-1', update: {
+      sessionUpdate: 'user_message_chunk', messageId: 'user-1', content: { type: 'text', text: prompt },
+      _meta: { querymt: { client_prompt_id: clientPromptId } }
+    } };
+    mockClient.loadSession.mockImplementationOnce(async () => {
+      const capture = browser.beginSessionReplay('session-1');
+      if (delivery === 'capture') await browser.sessionUpdate(echo);
+      if (delivery === 'drain') mockDrainAgentSessionUpdates.mockResolvedValueOnce([echo]);
+      return { response, replay: capture.notifications, finishReplay: () => browser.completeSessionReplay(capture) };
+    });
+    try {
+      await store.loadSession('agent-1', 'session-1');
+      if (delivery === 'live') await browser.sessionUpdate(echo);
+      expect(store.activeSession.toolCalls).toHaveLength(1);
+      expect(store.activeSession.transcript.filter((item) => item.kind === 'agent_message_chunk').map((item) => item.text))
+        .toEqual(['I will inspect the project.']);
+      const afterNavigation = buildSessionConversation(store.activeSession).map((turn) => turn.user?.text);
+      // A manual refresh has no overlapping echo, matching the issue's second image.
+      mockClient.loadSession.mockResolvedValueOnce({ response, replay: [] });
+      await store.loadSession('agent-1', 'session-1');
+      const afterRefresh = buildSessionConversation(store.activeSession).map((turn) => turn.user?.text);
+      expect(afterRefresh).toEqual([prompt]);
+      expect(afterNavigation).toEqual(afterRefresh);
+      expect(mockClient.sendPrompt).toHaveBeenCalledOnce();
+    } finally {
+      finishPrompt({ stopReason: 'end_turn' });
+    }
+  });
+
+  it('keeps complete snapshot attachments once while preserving new captured prompt blocks with identical text', async () => {
+    const store = createStore();
+    const blocks: SessionNotification['update'][] = [
+      { sessionUpdate: 'user_message_chunk', messageId: 'user-old', content: { type: 'text', text: 'Repeat this' } },
+      { sessionUpdate: 'user_message_chunk', messageId: 'user-old', content: { type: 'image', data: 'aW1n', mimeType: 'image/png' } },
+      { sessionUpdate: 'user_message_chunk', messageId: 'user-old', content: { type: 'resource', resource: { uri: 'file:///notes.txt', text: 'Notes', mimeType: 'text/plain' } } },
+      { sessionUpdate: 'user_message_chunk', messageId: 'user-new', content: { type: 'text', text: 'Repeat this' } },
+      { sessionUpdate: 'user_message_chunk', messageId: 'user-new', content: { type: 'image', data: 'bmV3', mimeType: 'image/png' } }
+    ];
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      'querymt/sessionLoadSnapshot.v1': {
+        user_prompts: [{ message_id: 'user-old', blocks: blocks.slice(0, 3).map((update) => 'content' in update ? update.content : null) }],
+        audit: { events: [
+          { seq: 1, kind: { type: 'prompt_received', data: { message_id: 'user-old', content: 'Repeat this' } } },
+          { seq: 2, kind: { type: 'assistant_message_stored', data: { message_id: 'answer', content: 'First reply' } } }
+        ] }
+      }
+    } }, replay: blocks.map((update) => ({ sessionId: 'session-1', update })) });
+    await store.loadSession('agent-1', 'session-1');
+    const turns = buildSessionConversation(store.activeSession);
+    expect(turns.map((turn) => turn.user?.text)).toEqual(['Repeat this', 'Repeat this']);
+    expect(turns[0].user?.blocks?.map((block) => block.type)).toEqual(['text', 'image', 'resource']);
+    expect(turns[1].user?.blocks?.map((block) => block.type)).toEqual(['text', 'image']);
+    expect(turns[0].content[0]).toMatchObject({ type: 'assistant', text: 'First reply' });
+  });
+
+  it('does not drop uncorrelated user chunks or a genuinely new live message after snapshot hydration', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+        { seq: 1, kind: { type: 'prompt_received', data: { message_id: 'old', content: 'Same text' } } }
+      ] } }
+    } }, replay: [{ sessionId: 'session-1', update: {
+      sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'No ID' }
+    } }] });
+    await store.loadSession('agent-1', 'session-1');
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'user_message_chunk', messageId: 'new', content: { type: 'text', text: 'Same text' }
+    } });
+    expect(buildSessionConversation(store.activeSession).map((turn) => turn.user?.text))
+      .toEqual(['Same text', 'No ID', 'Same text']);
+  });
+
+  it('does not carry snapshot message identities into a different session or an undo reload', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+        { seq: 1, kind: { type: 'prompt_received', data: { message_id: 'shared-id', content: 'First' } } }
+      ] } }
+    } }, replay: [] });
+    await store.loadSession('agent-1', 'session-1');
+    await store.loadSession('agent-1', 'session-2');
+    mockClient.emitSessionUpdate({ sessionId: 'session-2', update: {
+      sessionUpdate: 'user_message_chunk', messageId: 'shared-id', content: { type: 'text', text: 'Second' }
+    } });
+    expect(store.activeSession.transcript.map((item) => item.text)).toEqual(['Second']);
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [] }, replay: [{ sessionId: 'session-2', update: {
+      sessionUpdate: 'user_message_chunk', messageId: 'shared-id', content: { type: 'text', text: 'Second' }
+    } }] });
+    await store.loadSession('agent-1', 'session-2', 'undo');
+    expect(store.activeSession.transcript.map((item) => item.text)).toEqual(['Second']);
+  });
+
+  it('ignores late snapshot-covered user echoes after remote attach', async () => {
+    const store = createStore();
+    await store.attachRemoteSession('agent-1', 'node-1', 'remote-session-1');
+    const before = buildSessionConversation(store.activeSession).map((turn) => turn.user?.text);
+    mockClient.emitSessionUpdate({ sessionId: 'remote-session-1', update: {
+      sessionUpdate: 'user_message_chunk', messageId: 'm1', content: { type: 'text', text: 'Review deployment' }
+    } });
+    expect(buildSessionConversation(store.activeSession).map((turn) => turn.user?.text)).toEqual(before);
+  });
+
   it('does not redirect an input when the selected session changes during runtime refresh', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
     let resolveRuntime!: (runtime: SessionRuntimeStatus) => void;

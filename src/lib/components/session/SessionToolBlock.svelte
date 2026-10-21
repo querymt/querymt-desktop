@@ -49,19 +49,23 @@
   const presentation = $derived(getSessionToolPresentation(tool));
   const READ_FILE_TOOLS = new Set(['read_tool', 'get_function', 'get_symbol', 'read', 'read_shared']);
   const toolName = $derived(getSessionToolName(tool));
-  const diffs = $derived(buildSessionToolDiffs(toolName, tool.status, tool.arguments, tool.result));
+  // Active-turn updates replace tool wrappers even when this output is unchanged.
+  const toolStatus = $derived(tool.status);
+  const toolArguments = $derived(tool.arguments);
+  const toolResult = $derived(tool.result);
+  const diffs = $derived(buildSessionToolDiffs(toolName, toolStatus, toolArguments, toolResult));
   const isRead = $derived(READ_FILE_TOOLS.has(toolName));
   const isShell = $derived(toolName === 'shell' || toolName === 'execute');
   const readOutputView = $derived.by(() => {
     if (!isRead) return null;
-    const args = parseObject(tool.arguments);
+    const args = parseObject(toolArguments);
     const paths = args?.paths;
     const path = args ? toolFilePath(args) || (Array.isArray(paths) && typeof paths[0] === 'string' ? paths[0] : '') : '';
-    return parseReadFileOutput(tool.result, path);
+    return parseReadFileOutput(toolResult, path);
   });
   const terminalOutput = $derived.by(() => {
     if (!isShell) return null;
-    const raw = tool.result?.trim() ?? '';
+    const raw = toolResult?.trim() ?? '';
     if (!raw) return { stdout: '', stderr: '', exitCode: null };
     const parsed = parseShellToolOutput(raw);
     if (parsed) return parsed;

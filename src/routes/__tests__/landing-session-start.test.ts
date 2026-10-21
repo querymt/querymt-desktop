@@ -5,7 +5,7 @@ import type { PromptAttachment } from '$lib/domain/types';
 import LandingPage from '../+page.svelte';
 import SessionsPage from '../sessions/+page.svelte';
 import { groupSessionsByWorkspace } from '$lib/domain/sessions';
-import type { DesktopSessionSummary } from '$lib/domain/types';
+import type { DesktopSessionSummary, SessionBrowserState } from '$lib/domain/types';
 
 function createAgentsStore() {
   return {
@@ -51,6 +51,22 @@ function createAgentsStore() {
     composerTargetId: 'local',
     composerAgentId: null as string | null,
     workspaceSessionGroups: [] as ReturnType<typeof groupSessionsByWorkspace>,
+    sessionBrowser: { query: '', resolution: 'any', archive: 'any', runtime: 'all', location: 'all', openGroups: [], groupsInitialized: false, visibleLimits: {}, scrollTop: 0 } as SessionBrowserState,
+    sessionCatalog: [] as DesktopSessionSummary[],
+    sessionCatalogLoading: false,
+    sessionCatalogLoadedCount: 0,
+    sessionCatalogError: null as string | null,
+    sessionCatalogExcludedAgents: [],
+    sessionCatalogSupportedAgentCount: 1,
+    sessionCatalogHasSessions: null as boolean | null,
+    sessionLifecycleRevision: 0,
+    sessionLifecyclePending: {},
+    sessionLifecycleErrors: {},
+    connectionStates: { 'agent-1': 'initialized' } as Record<string, string>,
+    canSetSessionLifecycle: vi.fn(() => true),
+    setSessionLifecycle: vi.fn(),
+    refreshSessionCatalog: vi.fn(),
+    ensureSessionCatalog: vi.fn(),
     promptAttachments: [] as PromptAttachment[],
     promptFocusToken: 0,
     loading: false,
@@ -209,7 +225,7 @@ describe('Landing page session start', () => {
       runtimeName: 'Second agent', source: 'acp', location: 'remote', remoteNodeId: 'peer-2',
       remoteNodeLabel: 'Laptop', status: 'idle'
     };
-    agentsStore.workspaceSessionGroups = groupSessionsByWorkspace([remoteSession]);
+    agentsStore.sessionCatalog = [remoteSession];
 
     render(SessionsPage);
     await fireEvent.click(screen.getByRole('button', { name: 'New session in work' }));
@@ -232,10 +248,10 @@ describe('Landing page session start', () => {
       cwd: '/shared', updatedAt: '2026-07-18T01:23:00Z', runtimeId: 'agent-1',
       runtimeName: 'QMTCODE', source: 'acp', location: 'local', status: 'idle'
     };
-    agentsStore.workspaceSessionGroups = groupSessionsByWorkspace([
+    agentsStore.sessionCatalog = [
       localSession,
       { ...localSession, sessionId: 'remote-1', location: 'remote', remoteNodeId: 'peer-1', remoteNodeLabel: 'Laptop' }
-    ]);
+    ];
     agentsStore.composerTargetId = 'peer-1';
     agentsStore.composerAgentId = 'agent-2';
 
@@ -259,10 +275,10 @@ describe('Landing page session start', () => {
       runtimeName: 'QMTCODE', source: 'acp', location: 'remote', remoteNodeId: 'peer-1',
       remoteNodeLabel: 'Laptop', status: 'idle'
     };
-    agentsStore.workspaceSessionGroups = groupSessionsByWorkspace([
+    agentsStore.sessionCatalog = [
       remoteSession,
       { ...remoteSession, sessionId: 'remote-2', agentId: 'agent-2', remoteNodeId: 'peer-2', remoteNodeLabel: 'Server' }
-    ]);
+    ];
 
     render(SessionsPage);
     await fireEvent.click(screen.getByLabelText('New session in shared'));

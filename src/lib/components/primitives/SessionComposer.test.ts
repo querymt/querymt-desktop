@@ -1,8 +1,15 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { tick } from 'svelte';
 import SessionComposer from './SessionComposer.svelte';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
+
+const mockSuggestWorkspacePaths = vi.hoisted(() => vi.fn(async (_query: string, _limit: number) => [
+  { path: '/tmp/workspace', name: 'workspace' },
+  { path: '/tmp/other-project', name: 'other-project' }
+]));
+vi.mock('$native', () => ({ suggestWorkspacePaths: mockSuggestWorkspacePaths }));
 
 const elementAnimateDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'animate');
 
@@ -20,6 +27,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  mockSuggestWorkspacePaths.mockClear();
   if (elementAnimateDescriptor) {
     Object.defineProperty(Element.prototype, 'animate', elementAnimateDescriptor);
   } else {
@@ -886,6 +894,154 @@ describe('SessionComposer', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Dismiss error' }));
 
     expect(onDismissError).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SessionComposer workspace focus and suggestions', () => {
+  it('keeps suggestions open after quickly returning to the workspace field', async () => {
+    vi.useFakeTimers();
+    renderComposer({ launch: true, recentWorkspaces: ['/tmp/workspace', '/tmp/other-project'] });
+    await tick();
+    const input = screen.getByPlaceholderText('/absolute/path/to/workspace') as HTMLInputElement;
+    const prompt = screen.getByPlaceholderText(/Ask QueryMT/i);
+    input.focus();
+    await tick();
+    expect(screen.getByRole('button', { name: /other-project/ })).toBeInTheDocument();
+    prompt.focus();
+    await vi.advanceTimersByTimeAsync(20);
+    input.focus();
+    input.setSelectionRange(0, 0);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(input).toHaveFocus();
+    expect(input.selectionStart).toBe(0);
+    expect(screen.getByRole('button', { name: /other-project/ })).toBeInTheDocument();
+  });
+
+  it('keeps the typed path selected and does not let suggestions steal focus', async () => {
+    renderComposer({ launch: true, cwd: '/tmp/workspace' });
+    await tick();
+    const input = screen.getByPlaceholderText('/absolute/path/to/workspace') as HTMLInputElement;
+    input.focus();
+    input.setSelectionRange(5, 14);
+    await screen.findByRole('button', { name: /other-project/ });
+    expect(input).toHaveFocus();
+    expect(input.selectionStart).toBe(5);
+    expect(input.selectionEnd).toBe(14);
+  });
+
+  it('lets mouse selection apply a suggested workspace without losing input focus', async () => {
+    const onCwdInput = vi.fn();
+    renderComposer({ launch: true, cwd: '/tmp/workspace', onCwdInput });
+    await tick();
+    const input = screen.getByPlaceholderText('/absolute/path/to/workspace');
+    input.focus();
+    const suggestion = await screen.findByRole('button', { name: /other-project/ });
+    const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    suggestion.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+    await fireEvent.click(suggestion);
+    expect(onCwdInput).toHaveBeenCalledWith('/tmp/other-project');
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole('button', { name: /other-project/ })).not.toBeInTheDocument();
+  });
+
+  it.each(['mouse', 'touch'] as const)('applies a suggestion when %s interaction blurs the input before click', async (pointerType) => {
+    vi.useFakeTimers();
+    const onCwdInput = vi.fn();
+    renderComposer({ launch: true, recentWorkspaces: ['/tmp/workspace', '/tmp/other-project'], onCwdInput });
+    await tick();
+    const input = screen.getByPlaceholderText('/absolute/path/to/workspace');
+    input.focus();
+    await tick();
+    const suggestion = screen.getByRole('button', { name: /other-project/ });
+    await fireEvent.pointerDown(suggestion, { pointerType, button: 0 });
+    // A webview can blur to the document before click, even with mousedown prevented.
+    input.blur();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(suggestion).toBeInTheDocument();
+    expect(onCwdInput).not.toHaveBeenCalled();
+    await fireEvent.pointerUp(suggestion, { pointerType, button: 0 });
+    await fireEvent.click(suggestion);
+    expect(onCwdInput).toHaveBeenCalledExactlyOnceWith('/tmp/other-project');
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole('button', { name: /other-project/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps suggestion buttons available while focus moves within the widget', async () => {
+    const onCwdInput = vi.fn();
+    renderComposer({ launch: true, recentWorkspaces: ['/tmp/workspace'], onCwdInput });
+    await tick();
+    const input = screen.getByPlaceholderText('/absolute/path/to/workspace');
+    input.focus();
+    await tick();
+    const suggestion = screen.getByRole('button', { name: /workspace/ });
+    suggestion.focus();
+    await tick();
+    expect(suggestion).toBeInTheDocument();
+    await fireEvent.click(suggestion);
+    expect(onCwdInput).toHaveBeenCalledWith('/tmp/workspace');
+    expect(input).toHaveFocus();
+  });
+
+  it('does not apply a pressed suggestion when the interaction is cancelled outside the widget', async () => {
+    const onCwdInput = vi.fn();
+    renderComposer({ launch: true, recentWorkspaces: ['/tmp/workspace'], onCwdInput });
+    await tick();
+    const input = screen.getByPlaceholderText('/absolute/path/to/workspace');
+    input.focus();
+    await tick();
+    const suggestion = screen.getByRole('button', { name: /workspace/ });
+    await fireEvent.pointerDown(suggestion, { button: 0, pointerType: 'touch' });
+    input.blur();
+    await fireEvent.pointerCancel(suggestion, { pointerType: 'touch' });
+    await fireEvent.pointerDown(screen.getByPlaceholderText(/Ask QueryMT/i), { button: 0 });
+    expect(onCwdInput).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /workspace/ })).not.toBeInTheDocument();
+  });
+
+  it.each(['blur', 'Escape', 'selection'] as const)('ignores an async response after suggestion dismissal by %s', async (action) => {
+    vi.useFakeTimers();
+    let release!: (value: Array<{ path: string; name: string }>) => void;
+    mockSuggestWorkspacePaths.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const onCwdInput = vi.fn();
+    renderComposer({ launch: true, recentWorkspaces: ['/tmp/recent'], onCwdInput });
+    await tick();
+    const input = screen.getByPlaceholderText('/absolute/path/to/workspace');
+    input.focus();
+    await tick();
+    await fireEvent.input(input, { target: { value: '/tmp/w' } });
+    if (action === 'blur') screen.getByPlaceholderText(/Ask QueryMT/i).focus();
+    else if (action === 'Escape') await fireEvent.keyDown(input, { key: 'Escape' });
+    else await fireEvent.click(screen.getByRole('button', { name: /recent/ }));
+    await vi.advanceTimersByTimeAsync(150);
+    release([{ path: '/tmp/late-result', name: 'late-result' }]);
+    await tick();
+    await tick();
+    expect(screen.queryByRole('button', { name: /late-result/ })).not.toBeInTheDocument();
+    expect(document.querySelector('.workspace-input-loading')).toBeNull();
+    if (action === 'blur') expect(input).not.toHaveFocus();
+    else expect(input).toHaveFocus();
+  });
+
+  it('keeps keyboard completion and Escape from submitting a session', async () => {
+    const onCwdInput = vi.fn();
+    const onSendPrompt = vi.fn();
+    renderComposer({ launch: true, recentWorkspaces: ['/tmp/workspace', '/tmp/other-project'], onCwdInput, onSendPrompt });
+    await tick();
+    const input = screen.getByPlaceholderText('/absolute/path/to/workspace');
+    input.focus();
+    await tick();
+    await fireEvent.keyDown(input, { key: 'ArrowDown' });
+    await fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onCwdInput).toHaveBeenLastCalledWith('/tmp/other-project');
+    expect(input).toHaveFocus();
+    expect(onSendPrompt).not.toHaveBeenCalled();
+    screen.getByPlaceholderText(/Ask QueryMT/i).focus();
+    input.focus();
+    await tick();
+    await fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByRole('button', { name: /other-project/ })).not.toBeInTheDocument();
+    expect(input).toHaveFocus();
   });
 });
 

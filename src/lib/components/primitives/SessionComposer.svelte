@@ -538,9 +538,13 @@
 
   async function focusPrompt(options: { force?: boolean } = {}) {
     await tick();
-    // A prompt focus scheduled before the picker opens must not steal the
-    // search field. Close-restore passes force so it still wins after dismiss.
-    if (!options.force && document.querySelector('[data-blocking-overlay="true"]')) return;
+    // Deferred autofocus must not override a workspace/control click made while
+    // it was waiting. Explicit picker close-restore still returns to the prompt.
+    if (!options.force) {
+      if (document.querySelector('[data-blocking-overlay="true"]')) return;
+      const focused = document.activeElement;
+      if (focused && focused !== promptElement && dockElement?.contains(focused)) return;
+    }
     promptElement?.focus();
   }
 </script>

@@ -3,10 +3,13 @@ import { cleanup, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SessionToolReadOutput from './SessionToolReadOutput.svelte';
 import type { ReadFileOutputView } from '$lib/domain/session-tool-read-output';
+import { getHighlighter } from './shiki';
+import { tick } from 'svelte';
 
 const codeToTokens = vi.hoisted(() => vi.fn());
 
 const mockHighlighter = vi.hoisted(() => ({
+  codeToHtml: vi.fn(),
   loadLanguage: vi.fn(async () => undefined),
   codeToTokens
 }));
@@ -42,6 +45,7 @@ function view(overrides: Partial<ReadFileOutputView> = {}): ReadFileOutputView {
 
 beforeEach(() => {
   codeToTokens.mockReset();
+  codeToTokens.mockReturnValue({ tokens: [[{ content: 'const value = 1;' }], []], rootStyle: {} });
 });
 
 afterEach(() => {
@@ -83,6 +87,63 @@ describe('SessionToolReadOutput', () => {
     });
     const rootStyle = container.querySelector('.session-tool-read-output')!.getAttribute('style')!.replace(/\s+/g, '');
     expect(rootStyle).toContain('--shiki-dark:#eeeeee');
+  });
+
+  it('keeps highlighted tokens when an equivalent read view arrives with a new object identity', async () => {
+    codeToTokens.mockReturnValue({
+      tokens: [[{ content: 'const value = 1;', htmlStyle: { '--shiki-dark': '#c586c0' } }], []],
+      rootStyle: { '--shiki-dark': '#eeeeee' }
+    });
+    const { container, rerender } = render(SessionToolReadOutput, { view: view() });
+    await waitFor(() => expect(container.querySelector('.session-tool-read-text span[style]')).not.toBeNull());
+    const token = container.querySelector('.session-tool-read-text span[style]');
+    await rerender({ view: view() });
+    await waitFor(() => expect(container.querySelector('.session-tool-read-text span[style]')).not.toBeNull());
+    expect(container.querySelector('.session-tool-read-text span[style]')).toBe(token);
+    expect(codeToTokens).toHaveBeenCalledOnce();
+  });
+
+  it('updates gutters and metadata without rehighlighting identical source', async () => {
+    const { container, rerender } = render(SessionToolReadOutput, { view: view() });
+    await waitFor(() => expect(codeToTokens).toHaveBeenCalledOnce());
+    const row = container.querySelector('.session-tool-read-text');
+    const next = view({ truncated: true });
+    next.sections[0].lines[0].lineNumber = '00100';
+    await rerender({ view: next });
+    expect(screen.getByText('00100')).toBeInTheDocument();
+    expect(container.querySelector('.session-tool-read-text')).toBe(row);
+    expect(codeToTokens).toHaveBeenCalledOnce();
+  });
+
+  it('rehighlights when the source or its language path actually changes', async () => {
+    const { container, rerender } = render(SessionToolReadOutput, { view: view() });
+    await waitFor(() => expect(codeToTokens).toHaveBeenCalledOnce());
+    const next = view();
+    next.sections[0].lines[0].text = 'const changed = 2;';
+    codeToTokens.mockReturnValue({ tokens: [[{ content: 'const changed = 2;' }], []], rootStyle: {} });
+    await rerender({ view: next });
+    await waitFor(() => expect(codeToTokens).toHaveBeenCalledTimes(2));
+    expect(container.querySelector('.session-tool-read-row')).toHaveTextContent('const changed = 2;');
+    next.sections[0].path = 'README.unknown';
+    await rerender({ view: structuredClone(next) });
+    expect(container.querySelector('.session-tool-read-text span')).toBeNull();
+    expect(container.querySelector('.session-tool-read-row')).toHaveTextContent('const changed = 2;');
+  });
+
+  it('discards stale async highlighting instead of painting the wrong source', async () => {
+    let release!: (value: typeof mockHighlighter) => void;
+    vi.mocked(getHighlighter).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const { container, rerender } = render(SessionToolReadOutput, { view: view() });
+    const next = view();
+    next.sections[0].lines[0].text = 'new source';
+    codeToTokens.mockReturnValue({ tokens: [[{ content: 'new source' }], []], rootStyle: {} });
+    await rerender({ view: next });
+    await waitFor(() => expect(codeToTokens).toHaveBeenCalledOnce());
+    release(mockHighlighter);
+    await tick();
+    await tick();
+    expect(codeToTokens).toHaveBeenCalledOnce();
+    expect(container.querySelector('.session-tool-read-row')).toHaveTextContent('new source');
   });
 
   it('renders one labeled section per file for multi-section views', async () => {

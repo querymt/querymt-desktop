@@ -74,6 +74,44 @@ export interface SessionItem {
   updatedAt: string;
 }
 
+export interface SessionLifecycle {
+  session_id: string;
+  resolved: boolean;
+  archived: boolean;
+  resolved_at: string | null;
+  archived_at: string | null;
+}
+
+export interface SessionLifecyclePatch {
+  resolved?: boolean;
+  archived?: boolean;
+}
+
+export interface SessionLifecycleFilter {
+  resolution: 'any' | 'open' | 'resolved';
+  archive: 'any' | 'excluded' | 'only';
+}
+
+export type SessionLifecycleView = 'open' | 'resolved' | 'archived' | 'all';
+
+export interface ExcludedSessionAgent {
+  id: string;
+  name: string;
+}
+
+export interface SessionBrowserState {
+  query: string;
+  resolution: SessionLifecycleFilter['resolution'];
+  archive: SessionLifecycleFilter['archive'];
+  runtime: 'all' | 'running' | 'needs-input';
+  location: 'all' | 'local' | 'remote';
+  openGroups: string[];
+  groupsInitialized: boolean;
+  recentGroupInitialized?: boolean;
+  visibleLimits: Record<string, number>;
+  scrollTop: number;
+}
+
 export interface DesktopSessionSummary {
   agentId: string;
   agentName: string;
@@ -91,6 +129,9 @@ export interface DesktopSessionSummary {
   remoteProfileLabel?: string;
   remoteConnectionState?: 'available' | 'disconnected';
   status: SessionStatus;
+  lifecycle?: SessionLifecycle | null;
+  /** False when load/bookmark metadata does not establish parentage. */
+  relationshipKnown?: boolean;
   parentSessionId?: string | null;
   forkOrigin?: string | null;
   sessionKind?: string | null;

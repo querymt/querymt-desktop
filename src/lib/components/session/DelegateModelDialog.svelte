@@ -24,7 +24,7 @@
     type OrphanedDelegateAssignment
   } from '$lib/querymt/generated/types';
   import { getModelSelectionKey } from '$lib/querymt/config-options';
-  import { createRoundIdenticon } from '$lib/vendor/round-identicon';
+  import Identicon from '$lib/components/primitives/Identicon.svelte';
 
   type AssignmentTarget =
     | { kind: 'delegate'; assignment: DelegateAssignmentInfo }
@@ -330,12 +330,6 @@
       <div class="delegate-model-list" aria-label="Delegate routes">
         {#each assignments.assignments as assignment}
           {@const assignedModel = findModel(assignment.model)}
-          {@const agentIdenticon = createRoundIdenticon(assignment.agent_id, {
-            width: 48,
-            size: 4,
-            segments: 7,
-            symmetricAxisAngle: 180
-          })}
           <button
             class="delegate-model-row"
             class:delegate-model-row-unavailable={assignment.model && !assignedModel}
@@ -344,21 +338,7 @@
             onclick={() => selectDelegate(assignment)}
           >
             <span class="delegate-model-agent-mark" aria-hidden="true">
-              <svg
-                class="session-identicon-svg"
-                style={`--identicon-color: ${agentIdenticon.color}`}
-                width={agentIdenticon.width}
-                height={agentIdenticon.width}
-                viewBox={`0 0 ${agentIdenticon.width} ${agentIdenticon.width}`}
-                preserveAspectRatio="xMinYMin"
-              >
-                <circle cx={agentIdenticon.center} cy={agentIdenticon.center} r={agentIdenticon.centerRadius} fill="currentColor" />
-                <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                  {#each agentIdenticon.arcs as arc}
-                    <path d={arc.d} stroke-width={arc.strokeWidth} />
-                  {/each}
-                </g>
-              </svg>
+              <Identicon seed={assignment.agent_id} size={48} />
             </span>
             <span class="delegate-model-row-copy">
               <span class="delegate-model-row-title">

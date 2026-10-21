@@ -1,5 +1,5 @@
 import type { ListSessionsRequest, SessionInfo } from '@agentclientprotocol/sdk';
-import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
+import type { DesktopSessionSummary, SessionBrowserState, SessionLifecycle, SessionLifecycleFilter, SessionLifecycleView, SessionStatus } from '$lib/domain/types';
 import {
   type SessionMeta as QuerymtSessionMeta,
   SessionRuntimePhase as QuerymtSessionRuntimePhase
@@ -40,7 +40,10 @@ export interface WorkspaceRemoteMachine {
   label: string | null;
 }
 
+export const RECENT_SESSION_GROUP_KEY = '__recent_sessions__';
+
 export interface WorkspaceSessionGroup {
+  kind?: 'recent';
   key: string;
   cwd: string;
   name: string;
@@ -89,11 +92,13 @@ export function buildListSessionsRequest(input: {
   cwd?: string | null;
   cursor?: string | null;
   remoteNodeIds?: string[];
+  lifecycle?: SessionLifecycleFilter;
 } = {}): ListSessionsRequest {
   const request: ListSessionsRequest = {
     _meta: { session_scope: DEFAULT_SESSION_LIST_SCOPE }
   };
   if (input.remoteNodeIds?.length) request._meta = { ...request._meta, remoteNodeIds: input.remoteNodeIds };
+  if (input.lifecycle) request._meta = { ...request._meta, querymt: { sessionFilters: input.lifecycle } };
   if (input.cwd) request.cwd = input.cwd;
   if (input.cursor) request.cursor = input.cursor;
   return request;
@@ -107,8 +112,8 @@ export function isActiveSessionStatus(status: SessionStatus): boolean {
   return ACTIVE_SESSION_STATUSES.has(status);
 }
 
-export function isRootSession(session: Pick<DesktopSessionSummary, 'parentSessionId'>): boolean {
-  return !session.parentSessionId?.trim();
+export function isRootSession(session: Pick<DesktopSessionSummary, 'parentSessionId' | 'forkOrigin' | 'relationshipKnown'>): boolean {
+  return session.relationshipKnown !== false && !session.parentSessionId?.trim() && !session.forkOrigin?.trim();
 }
 
 /** Preserve owner-sourced location, profile, and availability metadata in desktop summaries. */
@@ -134,8 +139,41 @@ export function mapAcpSessionsToDesktopSessions(
     remoteConnectionState: session._meta?.connectionState === 'disconnected' ? 'disconnected' :
       session._meta?.connectionState === 'available' ? 'available' : undefined,
     status: inferSessionStatus(session),
+    lifecycle: readSessionLifecycle(session._meta?.querymt, session.sessionId),
+    // Disconnected bookmark fallbacks do not carry owner-sourced parentage.
+    relationshipKnown: session._meta?.location !== 'remote' || session._meta?.connectionState !== 'disconnected',
     ...readSessionRelationshipMeta(session)
   }));
+}
+
+export function createSessionBrowserState(): SessionBrowserState {
+  return { query: '', resolution: 'open', archive: 'excluded', runtime: 'all', location: 'all', openGroups: [], groupsInitialized: false, visibleLimits: {}, scrollTop: 0 };
+}
+
+export const SESSION_LIFECYCLE_VIEWS: Array<{ value: SessionLifecycleView; label: string; filter: SessionLifecycleFilter }> = [
+  { value: 'open', label: 'Open', filter: { resolution: 'open', archive: 'excluded' } },
+  { value: 'resolved', label: 'Resolved', filter: { resolution: 'resolved', archive: 'excluded' } },
+  { value: 'archived', label: 'Archived', filter: { resolution: 'any', archive: 'only' } },
+  { value: 'all', label: 'All', filter: { resolution: 'any', archive: 'any' } }
+];
+
+export function sessionMatchesLifecycle(lifecycle: SessionLifecycle | null | undefined, filter: SessionLifecycleFilter): boolean {
+  if (filter.resolution === 'any' && filter.archive === 'any') return true;
+  if (!lifecycle) return false;
+  return (filter.resolution === 'any' || lifecycle.resolved === (filter.resolution === 'resolved')) &&
+    (filter.archive === 'any' || lifecycle.archived === (filter.archive === 'only'));
+}
+
+/** Missing owner metadata is unknown, never an inferred open/unarchived state. */
+export function readSessionLifecycle(namespace: unknown, sessionId: string): SessionLifecycle | null {
+  if (!namespace || typeof namespace !== 'object' || !('lifecycle' in namespace)) return null;
+  const value = namespace.lifecycle as Partial<SessionLifecycle> | null;
+  if (!value || value.session_id !== sessionId || typeof value.resolved !== 'boolean' || typeof value.archived !== 'boolean') return null;
+  return {
+    session_id: sessionId, resolved: value.resolved, archived: value.archived,
+    resolved_at: typeof value.resolved_at === 'string' ? value.resolved_at : null,
+    archived_at: typeof value.archived_at === 'string' ? value.archived_at : null
+  };
 }
 
 export function inferSessionStatus(session: SessionInfo): SessionStatus {
@@ -179,7 +217,7 @@ function readOperationalSessionMeta(session: SessionInfo): QuerymtSessionMeta | 
   return candidate as QuerymtSessionMeta;
 }
 
-export function readSessionRelationshipMeta(session: SessionInfo): SessionRelationshipMeta {
+export function readSessionRelationshipMeta(session: Pick<SessionInfo, '_meta'>): SessionRelationshipMeta {
   const meta = session._meta;
   if (!meta || typeof meta !== 'object') {
     return emptySessionRelationshipMeta();

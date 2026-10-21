@@ -19,7 +19,7 @@ import {
   type SessionNotification,
   type SetSessionConfigOptionRequest
 } from '@agentclientprotocol/sdk';
-import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
+import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment, PromptSendOptions, SessionLifecycle, SessionLifecyclePatch } from '$lib/domain/types';
 import type {
   AttachRemoteSessionRequest,
   AuthMethod,
@@ -83,6 +83,8 @@ import {
   QMT_METHOD_SESSION_QUEUE,
   QMT_METHOD_SESSION_REDO,
   QMT_METHOD_SESSION_RUNTIME_STATE,
+  QMT_METHOD_SESSION_GET_LIFECYCLE,
+  QMT_METHOD_SESSION_SET_LIFECYCLE,
   QMT_METHOD_SESSION_STEER,
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
@@ -642,6 +644,25 @@ export class DesktopAcpClient {
 
   supportsQuerymtFeature(feature: keyof CapabilitiesInfo['features']): boolean {
     return this.controlCapabilities?.features?.[feature] ?? false;
+  }
+
+  supportsSessionLifecycle(): boolean {
+    const features = this.controlCapabilities?.features as { session_lifecycle?: boolean } | undefined;
+    return features?.session_lifecycle === true &&
+      this.supportsQuerymtMethod(QMT_METHOD_SESSION_GET_LIFECYCLE) &&
+      this.supportsQuerymtMethod(QMT_METHOD_SESSION_SET_LIFECYCLE);
+  }
+
+  async getSessionLifecycle(sessionId: string): Promise<SessionLifecycle> {
+    if (!this.querymtExtensions) await this.connect();
+    if (!this.supportsSessionLifecycle()) throw new Error('Session lifecycle is unsupported by this agent.');
+    return this.querymtExtensions!.getSessionLifecycle(sessionId);
+  }
+
+  async setSessionLifecycle(sessionId: string, patch: SessionLifecyclePatch): Promise<SessionLifecycle> {
+    if (!this.querymtExtensions) await this.connect();
+    if (!this.supportsSessionLifecycle()) throw new Error('Session lifecycle is unsupported by this agent.');
+    return this.querymtExtensions!.setSessionLifecycle(sessionId, patch);
   }
 
   async getUndoStack(sessionId: string): Promise<QuerymtUndoStackResponse> {

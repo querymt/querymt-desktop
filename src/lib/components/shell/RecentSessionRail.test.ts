@@ -31,6 +31,7 @@ const activeSession: DesktopSessionSummary = {
   runtimeId: 'agent-1',
   runtimeName: 'QMTCODE',
   source: 'acp',
+  lifecycle: { session_id: 'session-1', resolved: false, archived: false, resolved_at: null, archived_at: null },
   status: 'waiting'
 };
 
@@ -56,10 +57,113 @@ describe('RecentSessionRail navigation', () => {
 
     expect(screen.getByText('Work')).toBeInTheDocument();
     expect(screen.getByText('Manage')).toBeInTheDocument();
-    expect(screen.getByText('Recent sessions')).toBeInTheDocument();
+    expect(screen.getByText('Open sessions')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Browse sessions' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Sessions' })).toHaveLength(1);
+    expect(screen.queryByRole('link', { name: 'View all' })).not.toBeInTheDocument();
     expect(screen.getByText('Waiting session')).toBeInTheDocument();
     expect(screen.getByText('work · Waiting')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
+  });
+
+  it('shows more than ten sessions without number badges and maps shortcuts only to the first ten', async () => {
+    const sessions = Array.from({ length: 25 }, (_, index) => ({
+      ...activeSession, sessionId: `session-${index + 1}`, title: `Session ${String(index + 1).padStart(2, '0')}`
+    }));
+    const onVisibleSessionItemsChange = vi.fn();
+    const { container } = render(RecentSessionRail, { current: 'Sessions', sessions, onVisibleSessionItemsChange });
+    expect(container.querySelectorAll('.app-sidebar-session')).toHaveLength(20);
+    expect(container.querySelectorAll('.app-sidebar-session kbd')).toHaveLength(0);
+    const links = [...container.querySelectorAll('.app-sidebar-session')];
+    expect(links[0]).toHaveAttribute('aria-keyshortcuts', 'Control+1');
+    expect(links[9]).toHaveAttribute('aria-keyshortcuts', 'Control+0');
+    expect(links[10]).not.toHaveAttribute('aria-keyshortcuts');
+    expect(links[10]).toHaveAccessibleName('Session 11, Waiting');
+    await waitFor(() => expect(onVisibleSessionItemsChange).toHaveBeenCalled());
+    expect(onVisibleSessionItemsChange.mock.lastCall?.[0]).toHaveLength(10);
+  });
+
+  it('reveals cached rows first and requests another page only when scrolling reaches the end', async () => {
+    const sessions = Array.from({ length: 45 }, (_, index) => ({
+      ...activeSession, sessionId: `session-${index + 1}`, title: `Session ${String(index + 1).padStart(2, '0')}`
+    }));
+    let release!: () => void;
+    const onLoadMoreSessions = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const { container, rerender } = render(RecentSessionRail, { current: 'Sessions', sessions, hasMoreSessions: true, onLoadMoreSessions });
+    const list = container.querySelector<HTMLElement>('.app-sidebar-session-list')!;
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 2000 });
+    await fireEvent.scroll(list);
+    expect(onLoadMoreSessions).not.toHaveBeenCalled();
+    list.scrollTop = 1300;
+    await fireEvent.scroll(list);
+    expect(container.querySelectorAll('.app-sidebar-session')).toHaveLength(40);
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 4000 });
+    expect(onLoadMoreSessions).not.toHaveBeenCalled();
+    list.scrollTop = 3300;
+    await fireEvent.scroll(list);
+    expect(container.querySelectorAll('.app-sidebar-session')).toHaveLength(45);
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 4400 });
+    list.scrollTop = 3700;
+    await fireEvent.scroll(list);
+    await fireEvent.scroll(list);
+    expect(onLoadMoreSessions).toHaveBeenCalledOnce();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading more open sessions');
+    expect(screen.getByText('Session 01')).toBeInTheDocument();
+    release();
+    await rerender({ current: 'Sessions', sessions: [...sessions, { ...activeSession, sessionId: 'session-46', title: 'Session 46' }], hasMoreSessions: false, onLoadMoreSessions });
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(screen.getByText('Session 46')).toBeInTheDocument();
+    expect(list.scrollTop).toBe(3700);
+  });
+
+  it('fills an underfull sidebar, pauses after a failed page, and allows an explicit retry', async () => {
+    const onLoadMoreSessions = vi.fn(async () => {}).mockRejectedValueOnce(new Error('Owner offline'));
+    const { container } = render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], hasMoreSessions: true, onLoadMoreSessions });
+    const list = container.querySelector<HTMLElement>('.app-sidebar-session-list')!;
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 100 });
+    await fireEvent.scroll(list);
+    expect(await screen.findByText('Owner offline')).toBeInTheDocument();
+    await fireEvent.scroll(list);
+    expect(onLoadMoreSessions).toHaveBeenCalledOnce();
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onLoadMoreSessions).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.queryByText('Owner offline')).not.toBeInTheDocument());
+  });
+
+  it('does not fetch pages for the compact rail or hidden mobile sidebar', async () => {
+    const onLoadMoreSessions = vi.fn(async () => {});
+    const { container } = render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed: true, hasMoreSessions: true, onLoadMoreSessions });
+    const list = container.querySelector<HTMLElement>('.app-icon-rail-sessions')!;
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 50 });
+    window.dispatchEvent(new Event('resize'));
+    expect(onLoadMoreSessions).not.toHaveBeenCalled();
+  });
+
+  it('includes only known open/unarchived roots without mutating attention requests', () => {
+    inboxStore.actionableItems = [{ id: 'permission', agentId: 'agent-1', sessionId: 'resolved' }];
+    render(RecentSessionRail, { current: 'Sessions', sessions: [
+      activeSession,
+      { ...activeSession, sessionId: 'resolved', title: 'Resolved work', lifecycle: { ...activeSession.lifecycle!, resolved: true } },
+      { ...activeSession, sessionId: 'archived', title: 'Archived work', lifecycle: { ...activeSession.lifecycle!, archived: true } },
+      { ...activeSession, sessionId: 'unknown', title: 'Unknown work', lifecycle: null }
+    ] });
+    expect(screen.getByText('Waiting session')).toBeInTheDocument();
+    expect(screen.queryByText('Resolved work')).not.toBeInTheDocument();
+    expect(screen.queryByText('Archived work')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unknown work')).not.toBeInTheDocument();
+    expect(inboxStore.actionableItems).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Inbox, 1 action required' })).toBeInTheDocument();
+  });
+
+  it.each([false, true])('exposes the same actions with a keyboard context menu (collapsed=%s)', async (collapsed) => {
+    const onSetLifecycle = vi.fn(async () => {});
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed, canManageLifecycle: () => true, onSetLifecycle });
+    const link = screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl+1' });
+    link.focus();
+    await fireEvent.keyDown(link, { key: 'F10', shiftKey: true });
+    await fireEvent.click(await screen.findByRole('menuitem', { name: 'Mark resolved' }));
+    expect(onSetLifecycle).toHaveBeenCalledWith(activeSession, { resolved: true });
+    expect(link).toHaveAttribute('href', '/sessions/agent-1/session-1');
   });
 
   it('replaces the desktop rail with app-style navigation on mobile', async () => {
@@ -100,7 +204,7 @@ describe('RecentSessionRail navigation', () => {
 
     expect(screen.getByRole('link', { name: 'Waiting session, Waiting, Ctrl+1' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Expand sidebar' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Recent sessions')).not.toBeInTheDocument();
+    expect(screen.queryByText('Open sessions')).not.toBeInTheDocument();
   });
 
   it('shows the compact brand subtitle only in the expanded sidebar', () => {
@@ -110,6 +214,16 @@ describe('RecentSessionRail navigation', () => {
 
     rerender({ current: 'Start', sessions: [], collapsed: true });
     expect(screen.queryByText('Agents command and control')).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])('uses only activity and attention circles for active sessions, without a row highlight (collapsed=%s)', (collapsed) => {
+    inboxStore.actionableItems = [{ id: 'request-1', agentId: 'agent-1', sessionId: 'session-1' }];
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed });
+    const link = screen.getByRole('link', { name: 'Waiting session, Waiting, action required, Ctrl+1' });
+    expect(link).not.toHaveClass('app-sidebar-session-active', 'session-icon-link-active');
+    expect(link.querySelector('.app-icon-activity-pill')).toBeNull();
+    expect(link.querySelector(collapsed ? '.session-icon-status-active' : '.app-sidebar-session-spinner')).not.toBeNull();
+    expect(link.querySelector('.sidebar-attention-dot')).not.toBeNull();
   });
 
   it('shows activity and the shared attention dot together for a session requiring action', () => {
@@ -144,7 +258,7 @@ describe('RecentSessionRail navigation', () => {
     expect(sessionLink).toHaveClass('session-icon-link');
     expect(surface).not.toBeNull();
     expect(avatar).not.toBeNull();
-    expect(avatar?.querySelector('.session-identicon-svg')).not.toBeNull();
+    expect(avatar?.querySelector('.hex-identicon svg polygon')).not.toBeNull();
   });
 
   it('keeps only the activity spinner when no session action is required', () => {
@@ -166,6 +280,30 @@ describe('RecentSessionRail navigation', () => {
     render(RecentSessionRail, { current: 'Sessions', sessions, collapsed: true });
 
     expect(screen.getAllByRole('link', { name: /Session \d, Waiting/ })).toHaveLength(1);
+  });
+
+  it.each([false, true])('never promotes active or attention-requesting children into Open sessions (collapsed=%s)', async (collapsed) => {
+    const children: DesktopSessionSummary[] = [
+      { ...activeSession, sessionId: 'child-active', title: 'Active child', status: 'thinking', parentSessionId: 'root' },
+      { ...activeSession, sessionId: 'child-waiting', title: 'Waiting child', status: 'waiting', forkOrigin: 'delegation' },
+      { ...activeSession, sessionId: 'child-attention', title: 'Attention child', status: 'completed', parentSessionId: 'root' },
+      { ...activeSession, sessionId: 'fork', title: 'User fork', forkOrigin: 'user' },
+      { ...activeSession, sessionId: 'unlisted-child', title: 'Reviewed child', relationshipKnown: false }
+    ];
+    inboxStore.actionableItems = [{ id: 'child-permission', agentId: 'agent-1', sessionId: 'child-waiting' }];
+    const onVisibleSessionItemsChange = vi.fn();
+    const root = { ...activeSession, title: 'Task: real root work', sessionKind: 'recurring' };
+    const { container } = render(RecentSessionRail, {
+      current: 'Sessions', sessions: [...children, root], collapsed,
+      attentionSessionKeys: ['agent-1:child-attention'], onVisibleSessionItemsChange
+    });
+
+    expect(container.querySelectorAll('a[href^="/sessions/agent-1/"]')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Task: real root work, Waiting, Ctrl+1' })).toBeInTheDocument();
+    await waitFor(() => expect(onVisibleSessionItemsChange).toHaveBeenCalled());
+    expect(onVisibleSessionItemsChange.mock.lastCall?.[0].map((item: { session: DesktopSessionSummary }) => item.session.sessionId)).toEqual(['session-1']);
+    expect(inboxStore.actionableItems).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Inbox, 1 action required' })).toBeInTheDocument();
   });
 
   it('lists only root sessions and hides delegate session summaries', () => {
@@ -314,6 +452,62 @@ describe('RecentSessionRail agents count', () => {
 });
 
 describe('RecentSessionRail Mesh node count', () => {
+  const statusDescriptionId = 'app-sidebar-mesh-status-description';
+
+  it.each([1, 3])('explains %i available nodes in an expanded tooltip on hover', async (count) => {
+    agentsStore.meshNodeCount = count;
+    const status = `${count} ${count === 1 ? 'node' : 'nodes'} available`;
+    render(RecentSessionRail, { current: 'Mesh', sessions: [activeSession] });
+
+    const meshLink = screen.getByRole('link', { name: `Mesh, ${count} ${count === 1 ? 'node' : 'nodes'}` });
+    expect(meshLink).toHaveAttribute('href', '/mesh');
+    expect(meshLink).toHaveAttribute('aria-current', 'page');
+    expect(meshLink).toHaveAttribute('aria-describedby', statusDescriptionId);
+    expect(document.querySelectorAll(`[id="${statusDescriptionId}"]`)).toHaveLength(1);
+    expect(document.getElementById(statusDescriptionId)).toHaveClass('sr-only');
+    expect(document.getElementById(statusDescriptionId)).toHaveTextContent(status);
+    expect(document.querySelector('.app-icon-tooltip')).toBeNull();
+
+    await fireEvent.pointerEnter(meshLink);
+    await waitFor(() => expect(document.querySelector('.app-icon-tooltip')).toHaveTextContent(status));
+    expect(document.querySelector('.app-icon-tooltip')).toHaveAttribute('data-side', 'right');
+    expect(document.querySelector('.app-icon-tooltip-arrow')).not.toBeNull();
+    expect(meshLink).toHaveAttribute('aria-describedby', statusDescriptionId);
+  });
+
+  it.each([false, true])('exposes the Mesh count tooltip to keyboard focus (collapsed=%s)', async (collapsed) => {
+    agentsStore.meshNodeCount = 2;
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed });
+    const meshLink = screen.getByRole('link', { name: 'Mesh, 2 nodes' });
+    meshLink.focus();
+    await waitFor(() => expect(document.querySelector('.app-icon-tooltip'))
+      .toHaveTextContent(collapsed ? 'Mesh, 2 nodes available' : '2 nodes available'));
+    expect(meshLink).toHaveAttribute('aria-describedby', statusDescriptionId);
+    expect(document.querySelectorAll(`[id="${statusDescriptionId}"]`)).toHaveLength(1);
+  });
+
+  it('keeps a plain expanded Mesh link when there are no reported nodes', async () => {
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
+    const meshLink = screen.getByRole('link', { name: 'Mesh' });
+    expect(meshLink).not.toHaveAttribute('aria-describedby');
+    expect(document.getElementById(statusDescriptionId)).toBeNull();
+    await fireEvent.pointerEnter(meshLink);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(document.querySelector('.app-icon-tooltip')).toBeNull();
+  });
+
+  it('keeps Mesh and Agents status descriptions distinct', () => {
+    agentsStore.configs = [{ id: 'agent-1' }];
+    agentsStore.connectedAgents = [{ id: 'agent-1' }];
+    agentsStore.meshNodeCount = 2;
+    render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
+    const meshLink = screen.getByRole('link', { name: 'Mesh, 2 nodes' });
+    const agentsLink = screen.getByRole('link', { name: 'Agents' });
+    expect(meshLink).toHaveAccessibleDescription('2 nodes available');
+    expect(agentsLink).toHaveAccessibleDescription('1 agent active, 1 agent available');
+    expect(meshLink.getAttribute('aria-describedby')).not.toBe(agentsLink.getAttribute('aria-describedby'));
+  });
+
   it('labels the expanded Mesh link with a trailing node count and no icon badge', () => {
     agentsStore.meshNodeCount = 3;
 

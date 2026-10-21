@@ -38,6 +38,10 @@
   let host: HTMLDivElement | undefined = $state();
   let errorMessage = $state<string | null>(null);
 
+  // Primitive derivations stop equivalent parent props from rebuilding the renderer.
+  const sourcePatch = $derived(patch);
+  const disableFileHeader = $derived(hideFileHeader);
+  const rendererRoot = $derived(scrollRoot);
   const options = $derived({
     theme: { dark: 'github-dark', light: 'github-light' },
     themeType: appearanceStore.resolvedTheme,
@@ -48,14 +52,14 @@
     disableLineNumbers: false,
     useCSSClasses: true,
     disableBackground: true,
-    disableFileHeader: hideFileHeader
+    disableFileHeader
   });
 
   $effect(() => {
     const el = host;
-    const nextPatch = patch;
+    const nextPatch = sourcePatch;
     const nextOptions = options;
-    const root = scrollRoot;
+    const root = rendererRoot;
     if (!el) return;
 
     let instance: FileDiff | null = null;

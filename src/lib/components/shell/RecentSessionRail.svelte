@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { Tooltip } from 'bits-ui';
   import { ChevronLeft, ChevronRight, LoaderCircle, Menu } from '@lucide/svelte';
   import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
+  import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
   import { autoCollapsePopover } from '$lib/design/details-popover';
   import { formatAriaShortcut, formatShortcut } from '$lib/design/platform';
   import { sectionIcons, type SectionName } from '$lib/design/tokens';
@@ -12,14 +13,16 @@
     getRecentSessionRailItems,
     getSessionWorkspaceName,
     isRootSession,
+    sessionMatchesLifecycle,
     type SessionRailItem
   } from '$lib/domain/sessions';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
-  import { createRoundIdenticon } from '$lib/vendor/round-identicon';
-  import type { DesktopSessionSummary, SessionStatus } from '$lib/domain/types';
+  import Identicon from '$lib/components/primitives/Identicon.svelte';
+  import type { DesktopSessionSummary, SessionLifecyclePatch, SessionStatus } from '$lib/domain/types';
 
   const MAX_SESSION_ICONS = 10;
+  const SESSION_PAGE_SIZE = 20;
   const SESSION_ICON_REM = 2.4;
   const SESSION_ICON_GAP_REM = 0.52;
   const SESSION_LIST_OFFSET_REM = 0.6;
@@ -35,7 +38,15 @@
     mobileHidden = false,
     onToggleCollapsed = null,
     onOpenSession = null,
-    onVisibleSessionItemsChange = null
+    onVisibleSessionItemsChange = null,
+    canManageLifecycle = null,
+    lifecyclePending = {},
+    lifecycleErrors = {},
+    onSetLifecycle = null,
+    hasMoreSessions = false,
+    loadingMoreSessions = false,
+    sessionsLoadError = null,
+    onLoadMoreSessions = null
   }: {
     current: SectionName;
     sessions: DesktopSessionSummary[];
@@ -48,6 +59,14 @@
     onToggleCollapsed?: (() => void) | null;
     onOpenSession?: ((session: DesktopSessionSummary) => void) | null;
     onVisibleSessionItemsChange?: ((items: SessionRailItem[]) => void) | null;
+    canManageLifecycle?: ((session: DesktopSessionSummary) => boolean) | null;
+    lifecyclePending?: Record<string, boolean>;
+    lifecycleErrors?: Record<string, string | null>;
+    onSetLifecycle?: ((session: DesktopSessionSummary, patch: SessionLifecyclePatch) => Promise<unknown>) | null;
+    hasMoreSessions?: boolean;
+    loadingMoreSessions?: boolean;
+    sessionsLoadError?: string | null;
+    onLoadMoreSessions?: (() => Promise<void>) | null;
   } = $props();
 
   const routeMap: Record<SectionName, string> = {
@@ -65,6 +84,7 @@
   // Point at a persistent visually hidden description instead; it must not collide with the
   // expanded and collapsed rails because only one renders at a time.
   const AGENTS_STATUS_DESCRIPTION_ID = 'app-sidebar-agents-status-description';
+  const MESH_STATUS_DESCRIPTION_ID = 'app-sidebar-mesh-status-description';
   const workSections: SectionName[] = ['Inbox', 'Sessions', 'Workspaces'];
   const manageSections: SectionName[] = ['Agents', 'Automations', 'Mesh'];
   const mobilePrimarySections: SectionName[] = ['Start', 'Inbox', 'Sessions', 'Agents'];
@@ -73,6 +93,16 @@
 
   let sessionListElement = $state<HTMLElement | null>(null);
   let mobileNavigation = $state(false);
+  let menuSessionKey = $state<string | null>(null);
+  let expandedSessionLimit = $state(SESSION_PAGE_SIZE);
+  let requestingMore = $state(false);
+  let loadError = $state<string | null>(null);
+
+  function openSessionMenu(event: MouseEvent | KeyboardEvent, key: string) {
+    if (event instanceof KeyboardEvent && event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+    event.preventDefault();
+    menuSessionKey = key;
+  }
   let sessionIconLimit = $state(MAX_SESSION_ICONS);
   const compact = $derived(collapsed);
   const onlineAgentCount = $derived(agentsStore.connectedAgents.length);
@@ -88,18 +118,19 @@
   const visibleSessions = $derived.by(() =>
     sessions
       .filter(isRootSession)
+      .filter((session) => sessionMatchesLifecycle(session.lifecycle, { resolution: 'open', archive: 'excluded' }))
       .filter((session) => !(session.agentId === currentAgentId && session.sessionId === currentSessionId))
   );
   const railItems = $derived(
     getRecentSessionRailItems(visibleSessions, {
       attentionSessionKeys,
       actionRequiredSessionKeys,
-      limit: compact ? sessionIconLimit : MAX_SESSION_ICONS
+      limit: compact ? sessionIconLimit : expandedSessionLimit
     })
   );
 
   $effect(() => {
-    onVisibleSessionItemsChange?.(railItems);
+    onVisibleSessionItemsChange?.(railItems.slice(0, MAX_SESSION_ICONS));
   });
 
   onMount(() => {
@@ -112,25 +143,63 @@
     return () => mediaQuery.removeEventListener('change', updateMobileNavigation);
   });
 
-  onMount(() => {
+  $effect(() => {
+    const element = sessionListElement;
+    const isCompact = compact;
+    if (!element) return;
     const updateSessionIconLimit = () => {
-      if (!sessionListElement || !compact) return;
+      if (!isCompact) {
+        void loadNearBottom();
+        return;
+      }
       const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
       const iconHeight = SESSION_ICON_REM * rootFontSize;
       const iconGap = SESSION_ICON_GAP_REM * rootFontSize;
-      const availableHeight = Math.max(0, sessionListElement.clientHeight - SESSION_LIST_OFFSET_REM * rootFontSize);
+      const availableHeight = Math.max(0, element.clientHeight - SESSION_LIST_OFFSET_REM * rootFontSize);
       sessionIconLimit = Math.max(0, Math.min(MAX_SESSION_ICONS, Math.floor((availableHeight + iconGap) / (iconHeight + iconGap))));
     };
 
-    updateSessionIconLimit();
+    untrack(updateSessionIconLimit);
     const resizeObserver = new ResizeObserver(updateSessionIconLimit);
-    if (sessionListElement) resizeObserver.observe(sessionListElement);
+    resizeObserver.observe(element);
     window.addEventListener('resize', updateSessionIconLimit);
     return () => {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateSessionIconLimit);
     };
   });
+
+  $effect(() => {
+    void railItems.length;
+    void hasMoreSessions;
+    void loadingMoreSessions;
+    void sessionsLoadError;
+    void compact;
+    void mobileNavigation;
+    const frame = requestAnimationFrame(() => { void loadNearBottom(); });
+    return () => cancelAnimationFrame(frame);
+  });
+
+  async function loadNearBottom(retry = false) {
+    const element = sessionListElement;
+    if (compact || mobileNavigation || !element || requestingMore || loadingMoreSessions) return;
+    if (!retry && (element.clientHeight <= 0 || element.scrollHeight <= 0 ||
+      element.scrollHeight - element.scrollTop - element.clientHeight > 120)) return;
+    if (railItems.length < visibleSessions.length) {
+      expandedSessionLimit += SESSION_PAGE_SIZE;
+      return;
+    }
+    if (!onLoadMoreSessions || !hasMoreSessions || (!retry && (sessionsLoadError || loadError))) return;
+    requestingMore = true;
+    loadError = null;
+    try {
+      await onLoadMoreSessions();
+    } catch (error) {
+      loadError = error instanceof Error ? error.message : 'Could not load more sessions.';
+    } finally {
+      requestingMore = false;
+    }
+  }
 
   function getSessionHref(session: DesktopSessionSummary): string {
     return `/sessions/${encodeURIComponent(session.agentId)}/${encodeURIComponent(session.sessionId)}`;
@@ -146,6 +215,10 @@
     return `${active}, ${available}`;
   }
 
+  function getMeshStatus(): string {
+    return `${meshNodeCount} ${meshNodeCount === 1 ? 'node' : 'nodes'} available`;
+  }
+
   function getSectionLabel(section: SectionName): string {
     if (section === 'Inbox' && inboxActionCount > 0) {
       return `Inbox, ${inboxActionCount} ${inboxActionCount === 1 ? 'action' : 'actions'} required`;
@@ -159,14 +232,17 @@
 
   function getSectionTooltip(section: SectionName): string {
     if (section === 'Agents' && configuredAgentCount > 0) return `Agents, ${getAgentsStatus()}`;
+    if (section === 'Mesh' && meshNodeCount > 0) return `Mesh, ${getMeshStatus()}`;
     return getSectionLabel(section);
   }
 
   function getSessionShortcutLabel(index: number): string {
+    if (index >= MAX_SESSION_ICONS) return '';
     return formatShortcut(index === 9 ? '0' : String(index + 1));
   }
 
-  function getSessionAriaShortcut(index: number): string {
+  function getSessionAriaShortcut(index: number): string | undefined {
+    if (index >= MAX_SESSION_ICONS) return undefined;
     return formatAriaShortcut(index === 9 ? '0' : String(index + 1));
   }
 
@@ -180,6 +256,17 @@
     onOpenSession?.(session);
   }
 </script>
+
+{#snippet sessionMenu(session: DesktopSessionSummary, key: string)}
+  <SessionActionsMenu
+    {session}
+    bind:open={() => menuSessionKey === key, (value) => (menuSessionKey = value ? key : null)}
+    canManage={canManageLifecycle?.(session) ?? false}
+    pending={lifecyclePending[key]}
+    error={lifecycleErrors[key]}
+    onSetLifecycle={onSetLifecycle ? (patch) => onSetLifecycle!(session, patch) : null}
+  />
+{/snippet}
 
 {#snippet navIndicator(section: SectionName)}
   {#if section === 'Agents' && compact && onlineAgentCount > 0}
@@ -197,37 +284,43 @@
     <div class="app-sidebar-group-label">{label}</div>
     {#each sections as section}
       {@const Icon = sectionIcons[section]}
-      {#if section === 'Agents' && configuredAgentCount > 0}
+      {#if (section === 'Agents' && configuredAgentCount > 0) || (section === 'Mesh' && meshNodeCount > 0)}
+        {@const status = section === 'Agents' ? getAgentsStatus() : getMeshStatus()}
+        {@const descriptionId = section === 'Agents' ? AGENTS_STATUS_DESCRIPTION_ID : MESH_STATUS_DESCRIPTION_ID}
         <Tooltip.Root>
           <Tooltip.Trigger>
             {#snippet child({ props })}
               <a
                 {...props}
-                class={`app-sidebar-link ${current === 'Agents' ? 'app-sidebar-link-current' : ''}`}
-                href={routeMap.Agents}
-                aria-current={current === 'Agents' ? 'page' : undefined}
-                aria-label={getSectionLabel('Agents')}
-                aria-describedby={AGENTS_STATUS_DESCRIPTION_ID}
+                class={`app-sidebar-link ${current === section ? 'app-sidebar-link-current' : ''}`}
+                href={routeMap[section]}
+                aria-current={current === section ? 'page' : undefined}
+                aria-label={getSectionLabel(section)}
+                aria-describedby={descriptionId}
               >
-                <span class="app-sidebar-link-icon"><Icon size={16} />{@render navIndicator('Agents')}</span>
-                <span>Agents</span>
-                <small
-                  class={`app-sidebar-agents-count ${onlineAgentCount > 0 ? 'app-sidebar-agents-count-active' : ''}`}
-                  aria-hidden="true"
-                >
-                  <span class="app-sidebar-agents-count-n">{onlineAgentCount}</span> / {configuredAgentCount}
-                </small>
+                <span class="app-sidebar-link-icon"><Icon size={16} />{@render navIndicator(section)}</span>
+                <span>{section}</span>
+                {#if section === 'Agents'}
+                  <small
+                    class={`app-sidebar-agents-count ${onlineAgentCount > 0 ? 'app-sidebar-agents-count-active' : ''}`}
+                    aria-hidden="true"
+                  >
+                    <span class="app-sidebar-agents-count-n">{onlineAgentCount}</span> / {configuredAgentCount}
+                  </small>
+                {:else}
+                  <small aria-hidden="true">{meshNodeCount}</small>
+                {/if}
               </a>
             {/snippet}
           </Tooltip.Trigger>
           <Tooltip.Portal>
             <Tooltip.Content class="app-icon-tooltip" side="right" sideOffset={10}>
-              {getAgentsStatus()}
+              {status}
               <Tooltip.Arrow class="app-icon-tooltip-arrow" />
             </Tooltip.Content>
           </Tooltip.Portal>
         </Tooltip.Root>
-        <span class="sr-only" id={AGENTS_STATUS_DESCRIPTION_ID}>{getAgentsStatus()}</span>
+        <span class="sr-only" id={descriptionId}>{status}</span>
       {:else}
         <a
           class={`app-sidebar-link ${current === section ? 'app-sidebar-link-current' : ''}`}
@@ -238,7 +331,6 @@
           <span class="app-sidebar-link-icon"><Icon size={16} />{@render navIndicator(section)}</span>
           <span>{section}</span>
           {#if section === 'Inbox' && inboxActionCount > 0}<small>{inboxActionCount}</small>{/if}
-          {#if section === 'Mesh' && meshNodeCount > 0}<small>{meshNodeCount}</small>{/if}
         </a>
       {/if}
     {/each}
@@ -277,7 +369,8 @@
                     href={routeMap[section]}
                     aria-current={current === section ? 'page' : undefined}
                     aria-label={getSectionLabel(section)}
-                    aria-describedby={section === 'Agents' && configuredAgentCount > 0 ? AGENTS_STATUS_DESCRIPTION_ID : undefined}
+                    aria-describedby={section === 'Agents' && configuredAgentCount > 0 ? AGENTS_STATUS_DESCRIPTION_ID :
+                      section === 'Mesh' && meshNodeCount > 0 ? MESH_STATUS_DESCRIPTION_ID : undefined}
                   >
                     <span class="app-icon-activity-pill" aria-hidden="true"></span>
                     <span class="app-nav-icon-surface" aria-hidden="true"><Icon size={16} />{@render navIndicator(section)}</span>
@@ -288,6 +381,8 @@
             </Tooltip.Root>
             {#if section === 'Agents' && configuredAgentCount > 0}
               <span class="sr-only" id={AGENTS_STATUS_DESCRIPTION_ID}>{getAgentsStatus()}</span>
+            {:else if section === 'Mesh' && meshNodeCount > 0}
+              <span class="sr-only" id={MESH_STATUS_DESCRIPTION_ID}>{getMeshStatus()}</span>
             {/if}
           {/each}
         </div>
@@ -298,18 +393,15 @@
         <div class="session-icon-rail-list">
           {#each railItems as item, index (item.key)}
             {@const session = item.session}
-            {@const identicon = createRoundIdenticon(session.sessionId)}
+
+            <div class="session-rail-entry session-rail-entry-compact" class:session-rail-entry-menu-open={menuSessionKey === item.key} role="group" aria-label={`Session ${session.title}`}>
             <Tooltip.Root>
               <Tooltip.Trigger>
                 {#snippet child({ props })}
-                  <a {...props} class={`session-icon-link ${item.isActive ? 'session-icon-link-active' : ''}`} href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}, ${getSessionShortcutLabel(index)}`} aria-keyshortcuts={getSessionAriaShortcut(index)} onclick={() => openSession(session)}>
-                    <span class="app-icon-activity-pill" aria-hidden="true"></span>
+                  <a {...props} class="session-icon-link" href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
                     <span class="session-icon-surface" aria-hidden="true">
                       <span class="session-icon-avatar">
-                        <svg class="session-identicon-svg" style={`--identicon-color: ${identicon.color}`} width={identicon.width} height={identicon.width} viewBox={`0 0 ${identicon.width} ${identicon.width}`} preserveAspectRatio="xMinYMin">
-                          <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill="currentColor" />
-                          <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">{#each identicon.arcs as arc}<path d={arc.d} stroke-width={arc.strokeWidth} />{/each}</g>
-                        </svg>
+                        <Identicon seed={session.sessionId} />
                       </span>
                       {#if item.isActive}<span class="session-icon-status session-icon-status-active"><LoaderCircle size={10} class="animate-spin" /></span>{/if}
                       {#if item.requiresAttention}<SidebarAttentionDot />{/if}
@@ -320,12 +412,15 @@
               <Tooltip.Portal>
                 <Tooltip.Content class="session-icon-tooltip" side="right" sideOffset={10}>
                   <div class="session-icon-tooltip-title">{session.title}</div>
+                  {#if !session.lifecycle}<div class="session-icon-tooltip-meta">Lifecycle unavailable</div>{/if}
                   <div class="session-icon-tooltip-meta">{getStatusLabel(session.status, item)}{#if onlineAgentCount > 1} / {session.agentName}{/if} / {getSessionWorkspaceName(session.cwd)}</div>
                   <div class="session-icon-tooltip-meta">{formatSessionTimestamp(session.updatedAt)} / <SessionIdChip sessionId={session.sessionId} /> / {getSessionShortcutLabel(index)}</div>
                   <Tooltip.Arrow class="session-icon-tooltip-arrow" />
                 </Tooltip.Content>
               </Tooltip.Portal>
             </Tooltip.Root>
+            {@render sessionMenu(session, item.key)}
+            </div>
           {/each}
         </div>
       </div>
@@ -357,28 +452,32 @@
         {@render expandedSection(manageSections, 'Manage')}
       </div>
 
-      <div class="app-sidebar-recent" bind:this={sessionListElement}>
-        <div class="app-sidebar-section-heading"><span>Recent sessions</span><a href="/sessions">View all</a></div>
-        <div class="app-sidebar-session-list">
-          {#if railItems.length === 0}
-            <div class="app-sidebar-empty">No recent sessions</div>
+      <div class="app-sidebar-recent">
+        <div class="app-sidebar-section-heading"><span>Open sessions</span></div>
+        <div class="app-sidebar-session-list" bind:this={sessionListElement} onscroll={() => { void loadNearBottom(); }} aria-label="Open sessions" aria-busy={loadingMoreSessions || requestingMore}>
+          {#if railItems.length === 0 && !hasMoreSessions && !loadingMoreSessions}
+            <div class="app-sidebar-empty">No open sessions</div>
           {:else}
             {#each railItems as item, index (item.key)}
               {@const session = item.session}
-              {@const identicon = createRoundIdenticon(session.sessionId)}
-              <a class={`app-sidebar-session ${item.isActive ? 'app-sidebar-session-active' : ''}`} href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}, ${getSessionShortcutLabel(index)}`} aria-keyshortcuts={getSessionAriaShortcut(index)} onclick={() => openSession(session)}>
+
+              <div class="session-rail-entry" class:session-rail-entry-menu-open={menuSessionKey === item.key} role="group" aria-label={`Session ${session.title}`}>
+              <a class="app-sidebar-session" href={getSessionHref(session)} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
                 <span class="app-sidebar-session-avatar" aria-hidden="true">
-                  <svg class="session-identicon-svg" style={`--identicon-color: ${identicon.color}`} width={identicon.width} height={identicon.width} viewBox={`0 0 ${identicon.width} ${identicon.width}`} preserveAspectRatio="xMinYMin">
-                    <circle cx={identicon.center} cy={identicon.center} r={identicon.centerRadius} fill="currentColor" />
-                    <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">{#each identicon.arcs as arc}<path d={arc.d} stroke-width={arc.strokeWidth} />{/each}</g>
-                  </svg>
+                  <Identicon seed={session.sessionId} />
                   {#if item.isActive}<span class="app-sidebar-session-spinner"><LoaderCircle size={9} class="animate-spin" /></span>{/if}
                   {#if item.requiresAttention}<SidebarAttentionDot />{/if}
                 </span>
-                <span class="app-sidebar-session-copy"><strong>{session.title}</strong><small>{getSessionWorkspaceName(session.cwd)} · {getStatusLabel(session.status, item)}</small></span>
-                <kbd>{index === 9 ? '0' : index + 1}</kbd>
+                <span class="app-sidebar-session-copy"><strong>{session.title}</strong><small>{getSessionWorkspaceName(session.cwd)} · {getStatusLabel(session.status, item)}{#if !session.lifecycle} · Lifecycle unavailable{/if}</small></span>
               </a>
+              {@render sessionMenu(session, item.key)}
+              </div>
             {/each}
+          {/if}
+          {#if sessionsLoadError || loadError}
+            <div class="app-sidebar-session-load-error"><span>{sessionsLoadError || loadError}</span><button type="button" onclick={() => { void loadNearBottom(true); }}>Retry</button></div>
+          {:else if loadingMoreSessions || requestingMore}
+            <div class="app-sidebar-session-loading" role="status"><LoaderCircle size={13} class="animate-spin" /><span class="sr-only">Loading more open sessions</span></div>
           {/if}
         </div>
       </div>

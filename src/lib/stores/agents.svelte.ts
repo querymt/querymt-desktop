@@ -29,6 +29,8 @@ import {
 } from '$lib/domain/session-updates';
 import {
   buildListSessionsRequest,
+  createSessionBrowserState,
+  sessionMatchesLifecycle,
   buildSessionKey,
   getSessionById,
   getSessionKey,
@@ -38,6 +40,7 @@ import {
   getWorkspaceRemoteMachines,
   isActiveSessionStatus,
   mapAcpSessionsToDesktopSessions,
+  readSessionRelationshipMeta,
   newestTimestamp,
   type WorkspaceSessionGroup,
   type WorkspaceSessionSource
@@ -50,6 +53,7 @@ import type {
   AgentRuntimeStatus,
   ComposerOption,
   DesktopSessionSummary,
+  ExcludedSessionAgent,
   ModelEntry,
   ModelInfo,
   PendingSessionInput,
@@ -57,7 +61,10 @@ import type {
   SessionContentBlock,
   SessionInputDeliveryMode,
   SessionRunState,
-  SessionStatus
+  SessionStatus,
+  SessionLifecycle,
+  SessionLifecyclePatch,
+  SessionLifecycleFilter
 } from '$lib/domain/types';
 import { DelegateAssignmentSource, SessionInputDelivery, SessionInputState } from '$lib/querymt/generated/types';
 import type {
@@ -144,6 +151,7 @@ import {
   type AgentLogEntry
 } from '$native';
 import { inboxStore } from '$lib/stores/inbox.svelte';
+import { SessionCatalogCache, isCatalogFresh, sessionCatalogKey } from '$lib/stores/session-catalog-cache';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import {
   loadSessionModePreferences,
@@ -160,6 +168,8 @@ import { normalizeAcpWebSocketEndpoint, usesSecureWebSocket } from '$lib/querymt
 
 const AGENTS_STORAGE_KEY = 'querymt-desktop.agents';
 const RECENT_MODELS_STORAGE_KEY = 'querymt-desktop.recent-models';
+const RECENT_SESSIONS_STORAGE_KEY = 'querymt-desktop.recent-sessions';
+const RECENT_SESSIONS_LIMIT = 50;
 const RECENT_DELEGATE_MODELS_STORAGE_KEY = 'querymt-desktop.recent-delegate-models';
 const RECENT_WORKSPACES_STORAGE_KEY = 'querymt-desktop.recent-workspaces';
 const RECENT_MODELS_LIMIT = 5;
@@ -200,6 +210,21 @@ interface AgentClientRecord {
   unsubscribeConnectionLoss: (() => void) | null;
   unsubscribeInbox: (() => void) | null;
   recentSessionUpdateKeys: string[];
+}
+
+interface RecentSessionEntry {
+  agentId: string;
+  sessionId: string;
+  source: string;
+}
+
+interface OpenSessionPage {
+  scopeKey: string;
+  nextCursor: string | null;
+  initialized: boolean;
+  loading: boolean;
+  error: string | null;
+  seenCursors: string[];
 }
 
 interface ConnectFlight {
@@ -249,9 +274,10 @@ export class AgentsStore {
   private workspaceSourceVersions = new Map<string, number>();
   private seenWorkspaceCursors = new Map<string, Set<string>>();
   private completedWorkspaceDiscoveries = new Set<string>();
-  private workspaceDiscoveryPromises = new Map<string, Promise<void>>();
+  private workspaceDiscoveryPromises = new Map<string, { scopeKey: string; promise: Promise<void> }>();
   private sessionListRefreshChain = new Map<string, Promise<void>>();
   private hydratedRemoteSessionKeys = new Set<string>();
+  private snapshotUserMessageIds = new Set<string>();
   private sessionSelectionGeneration = 0;
   private unlistenAgentLogs: UnlistenFn | null = null;
   private agentLogSubscriptionPending = false;
@@ -316,6 +342,27 @@ export class AgentsStore {
   lastRemoteAttachByAgent = $state<Record<string, RemoteSessionAttachInfo | null>>({});
   lastRemoteDismissByAgent = $state<Record<string, RemoteSessionDismissInfo | null>>({});
   sessionsByAgent = $state<Record<string, DesktopSessionSummary[]>>({});
+  private knownSessionParents = $state<Record<string, string>>({});
+  private recentSessionEntries = $state<RecentSessionEntry[]>(loadRecentSessions());
+  private openSessionPages = $state<Record<string, OpenSessionPage>>({});
+  sessionBrowser = $state(createSessionBrowserState());
+  sessionCatalog = $state<DesktopSessionSummary[]>([]);
+  sessionCatalogLoading = $state(false);
+  sessionCatalogLoadedCount = $state(0);
+  sessionCatalogError = $state<string | null>(null);
+  sessionCatalogHasSessions = $state<boolean | null>(null);
+  sessionCatalogExcludedAgents = $state<ExcludedSessionAgent[]>([]);
+  sessionCatalogSupportedAgentCount = $state(0);
+  sessionLifecyclePending = $state<Record<string, boolean>>({});
+  sessionLifecycleErrors = $state<Record<string, string | null>>({});
+  sessionLifecycles = $state<Record<string, SessionLifecycle | null>>({});
+  sessionLifecycleRevision = $state(0);
+  private sessionCatalogGeneration = 0;
+  private sessionCatalogSignature = '';
+  private sessionCatalogCache = new SessionCatalogCache();
+  private sessionCatalogFlight: { key: string; promise: Promise<void> } | null = null;
+  private lifecycleWriteVersions = new Map<string, number>();
+  private lifecycleReads = new Map<string, symbol>();
   workspaceSessionSources = $state<Record<string, Record<string, WorkspaceSessionSource>>>({});
   workspaceVisibleLimits = $state<Record<string, number>>({});
   attentionSessionKeys = $state<string[]>([]);
@@ -466,12 +513,77 @@ export class AgentsStore {
       chatPreferencesStore.remoteSessionPeers.includes(session.remoteNodeId ?? ''));
   }
 
+  private mapSessionSummaries(sessions: SessionInfo[], agent: { agentId: string; agentName: string }): DesktopSessionSummary[] {
+    const incoming = mapAcpSessionsToDesktopSessions(sessions, agent);
+    const incomingKeys = new Set(incoming.map(getSessionKey));
+    const summaries = mergeSessions(this.sessionsByAgent[agent.agentId] ?? [], incoming)
+      .filter((session) => incomingKeys.has(getSessionKey(session)));
+    for (const session of summaries) {
+      if (session.parentSessionId) this.rememberSessionChildren(agent.agentId, session.parentSessionId, [session.sessionId]);
+    }
+    return summaries.map((session) => this.withKnownSessionParent(session));
+  }
+
+  private withKnownSessionParent(session: DesktopSessionSummary): DesktopSessionSummary {
+    const parentSessionId = this.knownSessionParents[getSessionKey(session)];
+    return parentSessionId ? { ...session, parentSessionId, relationshipKnown: true } : session;
+  }
+
+  private rememberSessionChildren(agentId: string, parentSessionId: string, childIds: Array<string | null | undefined>) {
+    if (typeof parentSessionId !== 'string' || !parentSessionId.trim()) return;
+    parentSessionId = parentSessionId.trim();
+    const parents = { ...this.knownSessionParents };
+    let changed = false;
+    for (const childId of childIds) {
+      const childSessionId = typeof childId === 'string' ? childId.trim() : null;
+      if (!childSessionId || childSessionId === parentSessionId) continue;
+      const key = buildSessionKey(agentId, childSessionId);
+      if (parents[key] === parentSessionId) continue;
+      parents[key] = parentSessionId;
+      changed = true;
+    }
+    // A child can be announced before its summary arrives, or while another root is selected.
+    if (!changed) return;
+    this.knownSessionParents = parents;
+    const update = (session: DesktopSessionSummary) => this.withKnownSessionParent(session);
+    this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: (this.sessionsByAgent[agentId] ?? []).map(update) };
+    this.sessionCatalog = this.sessionCatalog.map(update);
+    // Old scopes may have cached an incomplete child summary. Do not reset the live paging cursor.
+    this.sessionCatalogCache.clear();
+  }
+
+  get recentSessionKeys(): string[] {
+    const sources = new Map(this.configs.filter((config) => config.enabled)
+      .map((config) => [config.id, sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' })]));
+    return this.recentSessionEntries.filter((entry) => sources.get(entry.agentId) === entry.source)
+      .map((entry) => buildSessionKey(entry.agentId, entry.sessionId));
+  }
+
+  private rememberRecentSession(agentId: string, sessionId: string) {
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) return;
+    const summary = this.sessionsByAgent[agentId]?.find((session) => session.sessionId === sessionId);
+    // Unknown deep links may become roots after discovery; explicit children never do.
+    if (summary && (summary.parentSessionId || summary.forkOrigin || this.knownSessionParents[buildSessionKey(agentId, sessionId)])) return;
+    const entry = { agentId, sessionId, source: sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' }) };
+    this.recentSessionEntries = [entry, ...this.recentSessionEntries
+      .filter((current) => current.agentId !== agentId || current.sessionId !== sessionId)].slice(0, RECENT_SESSIONS_LIMIT);
+    persistRecentSessions(this.recentSessionEntries);
+  }
+
+  private forgetRecentSessions(agentId: string, sessionId?: string) {
+    this.recentSessionEntries = this.recentSessionEntries.filter((entry) => entry.agentId !== agentId ||
+      (sessionId !== undefined && entry.sessionId !== sessionId));
+    persistRecentSessions(this.recentSessionEntries);
+  }
+
   get sessions(): DesktopSessionSummary[] {
-    return Object.values(this.sessionsByAgent).flat().filter((session) => this.sessionVisibleInCatalog(session)).sort((a, b) => {
-      const aValue = a.updatedAt ?? '';
-      const bValue = b.updatedAt ?? '';
-      return bValue.localeCompare(aValue);
-    });
+    return Object.values(this.sessionsByAgent).flat().map((session) => this.withKnownSessionParent(session))
+      .filter((session) => this.sessionVisibleInCatalog(session)).sort((a, b) => {
+        const aValue = a.updatedAt ?? '';
+        const bValue = b.updatedAt ?? '';
+        return bValue.localeCompare(aValue);
+      });
   }
 
   get workspaceSessionGroups(): WorkspaceSessionGroup[] {
@@ -594,6 +706,11 @@ export class AgentsStore {
   }
 
   dispose() {
+    this.openSessionPages = {};
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogFlight = null;
+    this.sessionCatalogCache.flush();
+    this.lifecycleReads.clear();
     this.sessionSelectionGeneration += 1;
     this.cancelPendingSessionNotifications();
     for (const agentId of [...this.sessionRefreshTimers.keys()]) {
@@ -1007,6 +1124,10 @@ export class AgentsStore {
           normalizedUpdates.websocketUrl !== current.websocketUrl) ||
         (updates.commandLine !== undefined && updates.commandLine !== current.commandLine));
     if (endpointChanged) {
+      this.forgetRecentSessions(agentId);
+      this.knownSessionParents = Object.fromEntries(Object.entries(this.knownSessionParents)
+        .filter(([key]) => !key.startsWith(`${agentId}:`)));
+      this.invalidateSessionCatalogCache();
       clearElicitationResumeAuthoritiesForAgent(agentId);
     }
     if (current?.transport === 'websocket' && (normalizedUpdates.transport || normalizedUpdates.websocketUrl !== undefined || normalizedUpdates.enabled === false)) {
@@ -1028,9 +1149,11 @@ export class AgentsStore {
 
   async deleteConfig(agentId: string) {
     if (isEmbedded && agentId === EMBEDDED_AGENT_ID) return;
+    this.invalidateSessionCatalogCache();
     this.invalidateConnectGeneration(agentId);
     await this.stopConfiguredAgent(agentId);
     this.configs = this.configs.filter((config) => config.id !== agentId);
+    this.forgetRecentSessions(agentId);
     delete this.statuses[agentId];
     delete this.connectionStates[agentId];
     delete this.agentErrors[agentId];
@@ -1054,6 +1177,8 @@ export class AgentsStore {
     delete this.lastRemoteAttachByAgent[agentId];
     delete this.lastRemoteDismissByAgent[agentId];
     delete this.sessionsByAgent[agentId];
+    this.knownSessionParents = Object.fromEntries(Object.entries(this.knownSessionParents)
+      .filter(([key]) => !key.startsWith(`${agentId}:`)));
     this.completedWorkspaceDiscoveries.delete(agentId);
     this.invalidateWorkspaceSources(agentId);
     delete this.workspaceSessionSources[agentId];
@@ -1378,6 +1503,8 @@ export class AgentsStore {
 
   async refreshAllSessions() {
     this.workspaceVisibleLimits = {};
+    // Mesh/settings changes must retire the old catalog even when Sessions is unmounted.
+    this.selectSessionCatalog(this.sessionCatalogContext(this.sessionBrowser));
     await Promise.allSettled(
       this.configs
         .filter((config) => this.statuses[config.id]?.state === 'running')
@@ -1414,6 +1541,233 @@ export class AgentsStore {
     }
   }
 
+  canSetSessionLifecycle(agentId: string): boolean {
+    // Read reactive connection/capability state before consulting the client record.
+    const online = isOnlineConnectionState(this.connectionStates[agentId]);
+    void this.controlCapabilitiesByAgent[agentId];
+    return online && (this.clients.get(agentId)?.client.supportsSessionLifecycle() ?? false);
+  }
+
+  private applySessionLifecycle(agentId: string, lifecycle: SessionLifecycle | null, sessionId: string) {
+    const key = buildSessionKey(agentId, sessionId);
+    this.sessionLifecycles = { ...this.sessionLifecycles, [key]: lifecycle };
+    const update = (session: DesktopSessionSummary) => session.agentId === agentId && session.sessionId === sessionId
+      ? { ...session, lifecycle } : session;
+    this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: (this.sessionsByAgent[agentId] ?? []).map(update) };
+    this.sessionCatalog = this.sessionCatalog.map(update);
+    for (const source of Object.values(this.workspaceSessionSources[agentId] ?? {})) {
+      this.setWorkspaceSource({ ...source, sessions: source.sessions.map(update) });
+    }
+  }
+
+  async refreshSessionLifecycle(agentId: string, sessionId: string) {
+    if (!this.canSetSessionLifecycle(agentId)) return;
+    const key = buildSessionKey(agentId, sessionId);
+    const revision = this.sessionLifecycleRevision;
+    const record = this.clients.get(agentId)!;
+    const read = Symbol();
+    this.lifecycleReads.set(key, read);
+    const isCurrent = () => this.lifecycleReads.get(key) === read && this.clients.get(agentId) === record &&
+      revision === this.sessionLifecycleRevision;
+    try {
+      const lifecycle = await record.client.getSessionLifecycle(sessionId);
+      if (isCurrent()) {
+        this.applySessionLifecycle(agentId, lifecycle, sessionId);
+        this.sessionLifecycleErrors = { ...this.sessionLifecycleErrors, [key]: null };
+      }
+    } catch (error) {
+      // A failed read does not invalidate the last authoritative lifecycle.
+      if (isCurrent()) {
+        this.sessionLifecycleErrors = { ...this.sessionLifecycleErrors, [key]: acpErrorMessage(error, 'Could not refresh session lifecycle.') };
+      }
+    } finally {
+      if (this.lifecycleReads.get(key) === read) this.lifecycleReads.delete(key);
+    }
+  }
+
+  async setSessionLifecycle(agentId: string, sessionId: string, patch: SessionLifecyclePatch) {
+    const key = buildSessionKey(agentId, sessionId);
+    if (this.sessionLifecyclePending[key]) throw new Error('A lifecycle change is already in progress.');
+    if (!this.canSetSessionLifecycle(agentId)) throw new Error('Session lifecycle is unavailable for this agent.');
+    this.sessionLifecyclePending = { ...this.sessionLifecyclePending, [key]: true };
+    this.sessionLifecycleErrors = { ...this.sessionLifecycleErrors, [key]: null };
+    try {
+      const lifecycle = await this.clients.get(agentId)!.client.setSessionLifecycle(sessionId, patch);
+      this.sessionLifecycleRevision += 1;
+      this.lifecycleWriteVersions.set(key, this.sessionLifecycleRevision);
+      this.invalidateSessionCatalogCache();
+      this.applySessionLifecycle(agentId, lifecycle, sessionId);
+      this.sessionCatalog = this.sessionCatalog.filter((session) => sessionMatchesLifecycle(session.lifecycle, this.sessionBrowser));
+      return lifecycle;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not update session lifecycle.';
+      this.sessionLifecycleErrors = { ...this.sessionLifecycleErrors, [key]: message };
+      throw error;
+    } finally {
+      this.sessionLifecyclePending = { ...this.sessionLifecyclePending, [key]: false };
+    }
+  }
+
+  private preserveNewerLifecycleWrites(sessions: DesktopSessionSummary[], revision: number): DesktopSessionSummary[] {
+    return sessions.map((session) => {
+      const key = getSessionKey(session);
+      return (this.lifecycleWriteVersions.get(key) ?? 0) > revision
+        ? { ...session, lifecycle: this.sessionLifecycles[key] } : session;
+    });
+  }
+
+  private sessionCatalogContext(filter: SessionLifecycleFilter) {
+    const lifecycle = { resolution: filter.resolution, archive: filter.archive };
+    const configs = this.connectedAgents.slice();
+    chatPreferencesStore.initialize();
+    const remoteNodeIds = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers.slice() : [];
+    const signature = JSON.stringify([
+      sessionCatalogKey(configs, remoteNodeIds, lifecycle),
+      configs.map((config) => [config.id, this.clients.get(config.id)?.client.supportsSessionLifecycle() ?? false]).sort()
+    ]);
+    const filtered = lifecycle.resolution !== 'any' || lifecycle.archive !== 'any';
+    const excludedAgents = configs.filter((config) => filtered && !this.clients.get(config.id)?.client.supportsSessionLifecycle())
+      .map(({ id, name }) => ({ id, name }));
+    const excludedIds = new Set(excludedAgents.map((agent) => agent.id));
+    const supportedConfigs = configs.filter((config) => !excludedIds.has(config.id));
+    return { lifecycle, configs, supportedConfigs, excludedAgents, remoteNodeIds, signature };
+  }
+
+  private selectSessionCatalog({ signature, supportedConfigs, excludedAgents }: ReturnType<AgentsStore['sessionCatalogContext']>) {
+    this.sessionCatalogExcludedAgents = excludedAgents;
+    this.sessionCatalogSupportedAgentCount = supportedConfigs.length;
+    if (this.sessionCatalogSignature === signature) return;
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogFlight = null;
+    this.sessionCatalogSignature = signature;
+    const cached = this.sessionCatalogCache.get(signature);
+    this.sessionCatalog = cached?.sessions.slice() ?? [];
+    for (const agentId of new Set(this.sessionCatalog.map((session) => session.agentId))) {
+      const summaries = this.sessionCatalog.filter((session) => session.agentId === agentId);
+      this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: mergeSessions(summaries, this.sessionsByAgent[agentId] ?? []) };
+    }
+    this.sessionCatalogHasSessions = cached?.hasSessions ?? null;
+    this.sessionCatalogError = null;
+    this.sessionCatalogLoading = false;
+    this.sessionCatalogLoadedCount = 0;
+  }
+
+  private invalidateSessionCatalogCache() {
+    this.openSessionPages = {};
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogFlight = null;
+    this.sessionCatalogCache.clear();
+  }
+
+  async ensureSessionCatalog(filter: SessionLifecycleFilter = this.sessionBrowser) {
+    const context = this.sessionCatalogContext(filter);
+    const { signature } = context;
+    this.selectSessionCatalog(context);
+    if (this.sessionCatalogFlight?.key === signature) return this.sessionCatalogFlight.promise;
+    const cached = this.sessionCatalogCache.get(signature);
+    if (cached && isCatalogFresh(cached)) return;
+    return this.refreshSessionCatalog(filter);
+  }
+
+  /** Explicit refresh reconciles the selected scope; ordinary navigation reuses fresh snapshots. */
+  async refreshSessionCatalog(filter: SessionLifecycleFilter = this.sessionBrowser) {
+    const context = this.sessionCatalogContext(filter);
+    this.selectSessionCatalog(context);
+    if (this.sessionCatalogFlight?.key === context.signature) return this.sessionCatalogFlight.promise;
+    const promise = this.readSessionCatalog(context);
+    const flight = { key: context.signature, promise };
+    this.sessionCatalogFlight = flight;
+    try {
+      await promise;
+    } finally {
+      if (this.sessionCatalogFlight === flight) this.sessionCatalogFlight = null;
+    }
+  }
+
+  /** Keep catalog membership separate from runtime, Inbox and scheduling caches. */
+  private async readSessionCatalog({ lifecycle, configs: allConfigs, supportedConfigs: configs, remoteNodeIds, signature }: ReturnType<AgentsStore['sessionCatalogContext']>) {
+    const generation = ++this.sessionCatalogGeneration;
+    const remember = (complete: boolean) => {
+      if (generation !== this.sessionCatalogGeneration || !allConfigs.length) return;
+      this.sessionCatalogCache.set({
+        key: signature, sessions: this.sessionCatalog, complete,
+        checkedAt: complete ? Date.now() : 0, hasSessions: this.sessionCatalogHasSessions
+      });
+    };
+    this.sessionCatalogLoading = true;
+    this.sessionCatalogLoadedCount = 0;
+    this.sessionCatalogError = null;
+    this.sessionCatalogHasSessions = configs.some((config) => (this.sessionsByAgent[config.id] ?? [])
+      .some((session) => !session.parentSessionId && this.sessionVisibleInCatalog(session))) ? true : null;
+    const filtered = lifecycle.resolution !== 'any' || lifecycle.archive !== 'any';
+    const errors = new Map<string, string>();
+    await Promise.all(configs.map(async (config) => {
+      try {
+        const record = this.initializedClientRecord(config.id);
+        if (!record) throw new Error('Agent disconnected.');
+        let sessions: DesktopSessionSummary[] = [];
+        const seen = new Set<string>();
+        let cursor: string | undefined;
+        do {
+          const page = await record.client.listSessions(buildListSessionsRequest({
+            cursor, remoteNodeIds, lifecycle: filtered ? lifecycle : undefined
+          }));
+          if (generation !== this.sessionCatalogGeneration) return;
+          const incoming = this.mapSessionSummaries(page.sessions, { agentId: config.id, agentName: config.name });
+          const previousCount = sessions.length;
+          sessions = mergeSessions(sessions, incoming);
+          this.sessionCatalogLoadedCount += sessions.length - previousCount;
+          this.sessionCatalog = mergeSessions(this.sessionCatalog, incoming);
+          if (incoming.length) this.sessionCatalogHasSessions = true;
+          remember(false);
+          this.sessionsByAgent = { ...this.sessionsByAgent, [config.id]: mergeSessions(this.sessionsByAgent[config.id] ?? [], incoming) };
+          cursor = page.nextCursor ?? undefined;
+          if (cursor && seen.has(cursor)) throw new Error('Agent returned a repeated session cursor.');
+          if (cursor) seen.add(cursor);
+        } while (cursor);
+        // Remove stale cached rows only after this agent's entire refresh succeeds.
+        this.sessionCatalog = mergeSessions(this.sessionCatalog.filter((session) => session.agentId !== config.id), sessions);
+        remember(false);
+      } catch (error) {
+        if (generation !== this.sessionCatalogGeneration) return;
+        errors.set(config.id, `${config.name}: ${acpErrorMessage(error, 'Sessions could not be loaded.')}`);
+        this.sessionCatalogError = [...errors.values()].join(' ');
+      }
+    }));
+    if (generation !== this.sessionCatalogGeneration) return;
+    if (!errors.size && configs.length) {
+      if (!filtered) {
+        this.sessionCatalogHasSessions = this.sessionCatalog.length > 0;
+      } else if (this.sessionCatalogHasSessions === null) {
+        // An empty lifecycle category does not establish that the whole catalog is empty.
+        const existence = await Promise.all(configs.map(async (config): Promise<boolean | null> => {
+          try {
+            const record = this.initializedClientRecord(config.id);
+            if (!record) return null;
+            const seen = new Set<string>();
+            let cursor: string | undefined;
+            do {
+              const page = await record.client.listSessions(buildListSessionsRequest({ cursor, remoteNodeIds }));
+              if (generation !== this.sessionCatalogGeneration) return null;
+              if (page.sessions.length) return true;
+              cursor = page.nextCursor ?? undefined;
+              if (cursor && seen.has(cursor)) return null;
+              if (cursor) seen.add(cursor);
+            } while (cursor);
+            return false;
+          } catch {
+            return null;
+          }
+        }));
+        if (generation !== this.sessionCatalogGeneration) return;
+        this.sessionCatalogHasSessions = existence.includes(true) ? true : existence.every((value) => value === false) ? false : null;
+      }
+    }
+    this.sessionCatalogLoading = false;
+    remember(!errors.size);
+    this.sessionCatalogCache.flush();
+  }
+
   private enqueueSessionListRefresh(agentId: string, task: () => Promise<void>): Promise<void> {
     const previous = this.sessionListRefreshChain.get(agentId) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(task);
@@ -1427,29 +1781,30 @@ export class AgentsStore {
 
   async refreshSessionsForAgent(agentId: string, discoverAll = false) {
     if (discoverAll) {
+      const config = this.configs.find((candidate) => candidate.id === agentId);
+      if (!config) return;
+      const scopeKey = this.openSessionListScope(config).key;
       const existingDiscovery = this.workspaceDiscoveryPromises.get(agentId);
-      if (existingDiscovery) {
-        await existingDiscovery;
+      if (existingDiscovery?.scopeKey === scopeKey) {
+        await existingDiscovery.promise;
         return;
       }
 
-      const discovery = this.enqueueSessionListRefresh(agentId, () =>
-        this.refreshSessionsForAgentRequest(agentId, true)
-      ).finally(() => {
-        if (this.workspaceDiscoveryPromises.get(agentId) === discovery) {
+      const discovery = this.enqueueSessionListRefresh(agentId, async () => {
+        if (this.openSessionListScope(config).key !== scopeKey) return;
+        await this.refreshSessionsForAgentRequest(agentId, true);
+      }).finally(() => {
+        if (this.workspaceDiscoveryPromises.get(agentId)?.promise === discovery) {
           this.workspaceDiscoveryPromises.delete(agentId);
         }
       });
-      this.workspaceDiscoveryPromises.set(agentId, discovery);
+      this.workspaceDiscoveryPromises.set(agentId, { scopeKey, promise: discovery });
       await discovery;
       return;
     }
 
-    return this.enqueueSessionListRefresh(agentId, async () => {
-      const existingDiscovery = this.workspaceDiscoveryPromises.get(agentId);
-      if (existingDiscovery) await existingDiscovery;
-      await this.refreshSessionsForAgentRequest(agentId, false);
-    });
+    // The queue already waits for prior discoveries; the map may point to one queued after us.
+    return this.enqueueSessionListRefresh(agentId, () => this.refreshSessionsForAgentRequest(agentId, false));
   }
 
   private async refreshSessionsForAgentRequest(agentId: string, discoverAll: boolean) {
@@ -1469,22 +1824,36 @@ export class AgentsStore {
 
     record.connectionState = 'loading-sessions';
     record.error = null;
+    const scope = this.openSessionListScope(config);
+    const isCurrent = () => this.clients.get(agentId) === record && this.openSessionListScope(config).key === scope.key;
 
     try {
-      const firstPage = await record.client.listSessions(this.buildSessionListRequest());
-      const pages = discoverAll ? await this.collectSessionPages(record.client, firstPage) : [firstPage];
+      const lifecycleRevision = this.sessionLifecycleRevision;
+      const firstPage = await record.client.listSessions(buildListSessionsRequest({ remoteNodeIds: scope.remoteNodeIds }));
+      if (!isCurrent()) return;
+      const pages = discoverAll ? await this.collectSessionPages(record.client, firstPage, scope.remoteNodeIds, isCurrent) : [firstPage];
+      if (!isCurrent()) return;
       const listedSessions = pages.flatMap((page) => page.sessions);
       const previousSessions = this.sessionsByAgent[agentId] ?? [];
-      const nextSessions = mapAcpSessionsToDesktopSessions(listedSessions, {
+      const nextSessions = this.preserveNewerLifecycleWrites(this.mapSessionSummaries(listedSessions, {
         agentId: config.id,
         agentName: config.name
-      });
+      }), lifecycleRevision);
       const mergedSessions = discoverAll ? nextSessions : mergeSessions(previousSessions, nextSessions);
       this.updateSessionAttention(agentId, previousSessions, mergedSessions);
       this.sessionsByAgent = {
         ...this.sessionsByAgent,
         [agentId]: mergedSessions
       };
+      const openPage = this.openSessionPages[agentId];
+      if (this.openSessionListScope(config).key === scope.key && this.clients.get(agentId) === record &&
+        (discoverAll || !openPage || openPage.scopeKey !== scope.key)) {
+        const nextCursor = discoverAll ? null : firstPage.nextCursor ?? null;
+        this.openSessionPages[agentId] = {
+          scopeKey: scope.key, nextCursor, initialized: true, loading: false, error: null,
+          seenCursors: nextCursor ? [nextCursor] : []
+        };
+      }
       this.updateWorkspaceDiscovery(config, nextSessions, discoverAll);
       if (discoverAll) this.completedWorkspaceDiscoveries.add(agentId);
       if (nextSessions.some((session) => isActiveSessionStatus(session.status))) {
@@ -1493,6 +1862,7 @@ export class AgentsStore {
         this.clearScheduledSessionRefresh(agentId);
       }
       const models = await record.client.listModels().catch(() => this.modelsByAgent[agentId] ?? []);
+      if (!isCurrent()) return;
       if (models.length > 0) {
         this.modelsByAgent = {
           ...this.modelsByAgent,
@@ -1510,6 +1880,7 @@ export class AgentsStore {
         [config.id]: null
       };
     } catch (error) {
+      if (!isCurrent()) return;
       if (discoverAll) this.completedWorkspaceDiscoveries.delete(agentId);
       record.error = error instanceof Error ? error.message : `Failed to load sessions for ${config.name}.`;
       record.connectionState = 'failed';
@@ -1522,6 +1893,8 @@ export class AgentsStore {
         [config.id]: record.error
       };
       this.error = record.error;
+    } finally {
+      if (!isCurrent() && record.connectionState === 'loading-sessions') record.connectionState = 'initialized';
     }
   }
 
@@ -1543,6 +1916,75 @@ export class AgentsStore {
   }
 
   /** Include remote peers only when the catalog preference explicitly enables them. */
+  private openSessionListScope(config: AgentConfig) {
+    chatPreferencesStore.initialize();
+    const remoteNodeIds = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers.slice() : [];
+    return { remoteNodeIds, key: sessionCatalogKey([config], remoteNodeIds, { resolution: 'any', archive: 'any' }) };
+  }
+
+  get hasMoreOpenSessions(): boolean {
+    return this.connectedAgents.some((config) => {
+      if (!this.canSetSessionLifecycle(config.id)) return false;
+      const page = this.openSessionPages[config.id];
+      return !page || page.scopeKey !== this.openSessionListScope(config).key || !page.initialized || page.nextCursor !== null;
+    });
+  }
+
+  get openSessionsLoading(): boolean {
+    return this.connectedAgents.some((config) => {
+      const page = this.openSessionPages[config.id];
+      return page?.scopeKey === this.openSessionListScope(config).key && page.loading;
+    });
+  }
+
+  get openSessionsLoadError(): string | null {
+    return this.connectedAgents.flatMap((config) => {
+      const page = this.openSessionPages[config.id];
+      return page?.scopeKey === this.openSessionListScope(config).key && page.error ? [`${config.name}: ${page.error}`] : [];
+    }).join(' ') || null;
+  }
+
+  /** Continue the existing root list only as the sidebar exhausts its loaded rows. */
+  async loadMoreOpenSessions() {
+    await Promise.all(this.connectedAgents.map(async (config) => {
+      if (!this.canSetSessionLifecycle(config.id)) return;
+      const record = this.initializedClientRecord(config.id);
+      if (!record) return;
+      const scope = this.openSessionListScope(config);
+      if (this.openSessionPages[config.id]?.scopeKey !== scope.key) {
+        this.openSessionPages[config.id] = {
+          scopeKey: scope.key, nextCursor: null, initialized: false, loading: false, error: null, seenCursors: []
+        };
+      }
+      const page = this.openSessionPages[config.id];
+      if (page.loading || (page.initialized && page.nextCursor === null)) return;
+      page.loading = true;
+      page.error = null;
+      const revision = this.sessionLifecycleRevision;
+      const cursor = page.nextCursor;
+      try {
+        const response = await record.client.listSessions(buildListSessionsRequest({ cursor, remoteNodeIds: scope.remoteNodeIds }));
+        if (this.openSessionPages[config.id] !== page || this.clients.get(config.id) !== record ||
+          this.openSessionListScope(config).key !== scope.key) return;
+        const nextCursor = response.nextCursor ?? null;
+        if (nextCursor && (nextCursor === cursor || page.seenCursors.includes(nextCursor))) {
+          throw new Error('Agent returned a repeated session cursor.');
+        }
+        const sessions = this.preserveNewerLifecycleWrites(this.mapSessionSummaries(response.sessions, {
+          agentId: config.id, agentName: config.name
+        }), revision);
+        this.sessionsByAgent = { ...this.sessionsByAgent, [config.id]: mergeSessions(this.sessionsByAgent[config.id] ?? [], sessions) };
+        page.initialized = true;
+        page.nextCursor = nextCursor;
+        if (nextCursor) page.seenCursors.push(nextCursor);
+      } catch (error) {
+        if (this.openSessionPages[config.id] === page) page.error = acpErrorMessage(error, 'Could not load more sessions.');
+      } finally {
+        page.loading = false;
+      }
+    }));
+  }
+
   private buildSessionListRequest(input: { cwd?: string | null; cursor?: string | null } = {}) {
     chatPreferencesStore.initialize();
     const remoteNodeIds = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers : [];
@@ -1576,6 +2018,7 @@ export class AgentsStore {
       runtimeName: config.name,
       source: 'acp',
       location: 'local',
+      relationshipKnown: false,
       status: 'idle'
     };
     this.sessionsByAgent = {
@@ -1613,7 +2056,7 @@ export class AgentsStore {
         session._meta?.location === 'remote' && typeof session._meta.nodeId === 'string' &&
         selectedPeers.includes(session._meta.nodeId));
       if (match) {
-        const summary = mapAcpSessionsToDesktopSessions([match], { agentId, agentName: config.name })[0];
+        const summary = this.mapSessionSummaries([match], { agentId, agentName: config.name })[0];
         this.sessionsByAgent = {
           ...this.sessionsByAgent,
           [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [summary])
@@ -1693,7 +2136,9 @@ export class AgentsStore {
     }
   }
 
-  private async collectSessionPages(client: DesktopAcpClient, firstPage: ListSessionsResponse): Promise<ListSessionsResponse[]> {
+  private async collectSessionPages(
+    client: DesktopAcpClient, firstPage: ListSessionsResponse, remoteNodeIds: string[], isCurrent: () => boolean
+  ): Promise<ListSessionsResponse[]> {
     const pages = [firstPage];
     const seenCursors = new Set<string>();
     let nextCursor = firstPage.nextCursor ?? null;
@@ -1704,9 +2149,9 @@ export class AgentsStore {
     // skip/duplicate. Desktop currently only uses these cursors for discovery
     // and "load more"; replace with a stable keyset/id cursor in
     // crates/agent session list before relying on them across creates.
-    while (nextCursor && !seenCursors.has(nextCursor)) {
+    while (nextCursor && !seenCursors.has(nextCursor) && isCurrent()) {
       seenCursors.add(nextCursor);
-      const page = await client.listSessions(this.buildSessionListRequest({ cursor: nextCursor }));
+      const page = await client.listSessions(buildListSessionsRequest({ cursor: nextCursor, remoteNodeIds }));
       pages.push(page);
       nextCursor = page.nextCursor ?? null;
     }
@@ -1819,6 +2264,7 @@ export class AgentsStore {
         throw new Error(`${source.agentName} returned a repeated session cursor.`);
       }
       if (requestCursor) seenCursors.add(requestCursor);
+      const lifecycleRevision = this.sessionLifecycleRevision;
       const response = await record.client.listSessions(
         this.buildSessionListRequest({
           cwd: source.cwd,
@@ -1826,10 +2272,10 @@ export class AgentsStore {
         })
       );
       if ((this.workspaceSourceVersions.get(source.agentId) ?? 0) !== sourceVersion || !current) return;
-      const pageSessions = mapAcpSessionsToDesktopSessions(response.sessions, {
+      const pageSessions = this.preserveNewerLifecycleWrites(this.mapSessionSummaries(response.sessions, {
         agentId: config.id,
         agentName: config.name
-      });
+      }), lifecycleRevision);
       current = {
         ...current,
         sessions: mergeSessions(current.sessions, pageSessions),
@@ -1899,6 +2345,9 @@ export class AgentsStore {
     }
 
     await record.client.deleteSession(sessionId);
+    this.forgetRecentSessions(agentId, sessionId);
+    this.invalidateSessionCatalogCache();
+    this.sessionCatalog = this.sessionCatalog.filter((session) => session.agentId !== agentId || session.sessionId !== sessionId);
     this.sessionsByAgent = {
       ...this.sessionsByAgent,
       [agentId]: (this.sessionsByAgent[agentId] ?? []).filter((session) => session.sessionId !== sessionId)
@@ -1914,6 +2363,7 @@ export class AgentsStore {
     }
     this.acknowledgeSession(agentId, sessionId);
     const key = buildSessionKey(agentId, sessionId);
+    this.lifecycleReads.delete(key);
     this.removeSessionModePreferences(agentId, sessionId);
     delete this.delegateAssignmentsBySession[key];
     delete this.delegateAssignmentsLoadingBySession[key];
@@ -1956,6 +2406,7 @@ export class AgentsStore {
       normalizedCwd,
       profileId === 'default' ? null : profileId
     );
+    this.invalidateSessionCatalogCache();
     this.lastCreatedSession = response;
     this.applySessionConfigOptionsSnapshot(agentId, response.sessionId, response.configOptions ?? []);
     this.restoreSessionModel(agentId, response.sessionId, response.configOptions ?? [], response);
@@ -2004,6 +2455,7 @@ export class AgentsStore {
         await this.applyComposerLaunchConfig(agentId, sessionId, launch);
         await this.applySelectedModelToSession(agentId, sessionId, launch.modelId);
         this.captureLaunchSessionPreference(agentId, sessionId, launch);
+        this.rememberRecentSession(agentId, sessionId);
         return sessionId;
       }
 
@@ -2016,6 +2468,7 @@ export class AgentsStore {
       this.captureLaunchSessionPreference(agentId, sessionId, launch);
       await this.drainQueuedSessionUpdates(agentId, sessionId);
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
+      this.rememberRecentSession(agentId, sessionId);
       return sessionId;
     } catch (error) {
       this.error = error instanceof Error ? error.message : `Failed to create session for ${config.name}.`;
@@ -2514,6 +2967,7 @@ export class AgentsStore {
       this.isSelectedSession(agentId, sessionId)
     ) {
       this.acknowledgeSession(agentId, sessionId);
+      this.rememberRecentSession(agentId, sessionId);
       await this.refreshDelegateAssignments(agentId, sessionId);
       return;
     }
@@ -2637,7 +3091,9 @@ export class AgentsStore {
           // Discovery may have populated or refreshed the summary while session/load was in flight.
           const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId) ?? target;
           const summary: DesktopSessionSummary = {
+            ...current,
             agentId, agentName: config.name, sessionId,
+            relationshipKnown: current?.relationshipKnown ?? false,
             title: typeof loadMeta.title === 'string' ? loadMeta.title : current?.title ?? sessionId,
             cwd: typeof loadMeta.cwd === 'string' ? loadMeta.cwd : current?.cwd ?? '',
             updatedAt: current?.updatedAt ?? null, runtimeId: agentId,
@@ -2664,6 +3120,12 @@ export class AgentsStore {
       } else if (!target) {
         this.ensureSessionLoadTarget(agentId, sessionId);
       }
+      const relationship = readSessionRelationshipMeta(loadedSession);
+      if (relationship.parentSessionId || relationship.forkOrigin) {
+        const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+        if (current) this.syncLoadedSessionSummary(agentId, { ...current, ...relationship, relationshipKnown: true });
+        if (relationship.parentSessionId) this.rememberSessionChildren(agentId, relationship.parentSessionId, [sessionId]);
+      }
       await Promise.resolve();
       await tick();
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -2680,12 +3142,16 @@ export class AgentsStore {
       // advertised that it hydrates history from the load-response snapshot.
       // Detect that case so we only transform the authoritative representation
       // instead of building both.
+      const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
+      this.rememberSnapshotUserMessages(snapshotSession);
+      this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
+      // Capture starts before the snapshot read. User messages in that snapshot
+      // are already complete, so their captured echoes must not create new turns.
+      replay = replay.filter((notification) => !this.isSnapshotUserEcho(notification));
       const replayIsEmpty = replay.length === 0;
       const replaySession = replayIsEmpty
         ? null
         : reduceSessionReplay(sessionId, replay);
-      this.activeLoadMeasurement?.increment('replayCapturedNotifications', replay.length);
-      const snapshotSession = activeSessionFromLoadResponse(sessionId, loadedSession);
       checkpoint('frontend.snapshot_transform');
       // The lifecycle override below must read the snapshot's pristine run
       // verdict; folding the captured updates into the baseline mutates it in
@@ -2768,6 +3234,7 @@ export class AgentsStore {
         this.activeSession.lastError = snapshotLifecycle.lastError;
       }
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });
+      this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
       checkpoint('frontend.normalize');
       this.activeSession.undo.pendingOperation = pendingOperation;
       this.reconcileInputStatesFromSnapshot(agentId, sessionId, loadedSession);
@@ -2790,6 +3257,7 @@ export class AgentsStore {
       this.hydrateLoadedSessionSummary(agentId, sessionId, replay);
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
       checkpoint('frontend.model_hydrate');
+      if (isCurrentLoad() && pendingOperation === null) this.rememberRecentSession(agentId, sessionId);
       void this.refreshDelegateAssignments(agentId, sessionId);
       await tick();
       await new Promise<void>((resolve) => {
@@ -2864,6 +3332,7 @@ export class AgentsStore {
     this.activeSession.activityLabel = 'Creating fork...';
     try {
       const response = await record.client.forkSession(sessionId, source.cwd, messageId);
+      this.invalidateSessionCatalogCache();
       if (!this.isSelectedSession(agentId, sessionId)) return null;
 
       await this.refreshSessionsForAgent(agentId);
@@ -3048,7 +3517,7 @@ export class AgentsStore {
       this.delegateAssignmentsErrorBySession = { ...this.delegateAssignmentsErrorBySession, [key]: null };
     } catch (error) {
       if (this.delegateAssignmentRefreshVersions.get(key) !== refreshVersion) return;
-      const message = delegateAssignmentErrorMessage(error, 'Failed to load delegate models.');
+      const message = acpErrorMessage(error, 'Failed to load delegate models.');
       this.delegateAssignmentsErrorBySession = { ...this.delegateAssignmentsErrorBySession, [key]: message };
     } finally {
       if (this.delegateAssignmentRefreshVersions.get(key) === refreshVersion) {
@@ -3122,7 +3591,7 @@ export class AgentsStore {
           await this.refreshDelegateAssignments(ownerAgentId, sessionId);
           return false;
         }
-        const message = delegateAssignmentErrorMessage(error, 'Failed to update delegate model.');
+        const message = acpErrorMessage(error, 'Failed to update delegate model.');
         this.delegateAssignmentsErrorBySession = { ...this.delegateAssignmentsErrorBySession, [key]: message };
         return false;
       }
@@ -3239,6 +3708,9 @@ export class AgentsStore {
   }
 
   private disposeClient(agentId: string) {
+    for (const key of this.lifecycleReads.keys()) {
+      if (key.startsWith(`${agentId}:`)) this.lifecycleReads.delete(key);
+    }
     const record = this.clients.get(agentId);
     if (!record) return;
     const flight = this.connectFlights.get(agentId);
@@ -3252,6 +3724,7 @@ export class AgentsStore {
     record.unsubscribeInbox?.();
     inboxStore.disconnectAgent(agentId);
     void record.client.disconnect();
+    delete this.openSessionPages[agentId];
     this.clients.delete(agentId);
   }
 
@@ -3296,8 +3769,11 @@ export class AgentsStore {
             child_session_id?: string;
           };
           const sessionId = params.sessionId ?? params.session_id;
-          if (sessionId && this.isSelectedSession(agentId, sessionId)) {
-            this.activeSession = applyDelegationChildSession(this.activeSession, params);
+          if (sessionId) {
+            this.rememberSessionChildren(agentId, sessionId, [params.childSessionId ?? params.child_session_id]);
+            if (this.isSelectedSession(agentId, sessionId)) {
+              this.activeSession = applyDelegationChildSession(this.activeSession, params);
+            }
           }
         }
         if (notification.method === 'querymt/schedules/changed') {
@@ -3688,6 +4164,7 @@ export class AgentsStore {
       throw new Error('Failed to connect to the agent.');
     }
     const result = await record.client.createRemoteSession({ node_id, cwd, attach: true });
+    this.invalidateSessionCatalogCache();
     this.lastRemoteAttachByAgent = {
       ...this.lastRemoteAttachByAgent,
       [agentId]: result
@@ -3750,6 +4227,8 @@ export class AgentsStore {
     });
     snapshot.configOptions = configOptions;
     this.activeSession = normalizeHistoricalSession(snapshot, { loadCompleted: true });
+    this.rememberSnapshotUserMessages(snapshot);
+    this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
     this.reconcileInputStatesFromSnapshot(agentId, sessionId, {
       _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
     });
@@ -3760,10 +4239,13 @@ export class AgentsStore {
     // Remote attach is a load: seed the active mode from agent-reported state.
     this.seedSessionModePreferenceFromLoad(agentId, sessionId);
 
+    const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
     const summary: DesktopSessionSummary = {
+      ...current,
       agentId,
       agentName: config.name,
       sessionId,
+      relationshipKnown: current?.relationshipKnown ?? false,
       title: remoteSession.title?.trim() || sessionId,
       cwd: remoteSession.cwd ?? '',
       updatedAt: remoteSession.updated_at ?? new Date().toISOString(),
@@ -3785,6 +4267,7 @@ export class AgentsStore {
     };
     this.updateWorkspaceDiscovery(config, [summary], false);
     this.hydratedRemoteSessionKeys.add(buildSessionKey(agentId, sessionId));
+    this.rememberRecentSession(agentId, sessionId);
     // Attachment is committed; a retryable catalog refresh must not fail its load.
     await this.refreshRemoteSessionsForAgent(agentId, nodeId).catch((error) => {
       console.warn('Remote session attached, but catalog refresh failed', error);
@@ -4319,6 +4802,7 @@ export class AgentsStore {
     this.activeSessionId = sessionId;
     this.activeSession = createEmptyActiveSession();
     this.activeSession.sessionId = sessionId;
+    this.snapshotUserMessageIds.clear();
     this.sessionHistoryLoading = false;
     this.promptFailure = null;
 
@@ -4408,6 +4892,17 @@ export class AgentsStore {
       messageId: id
     });
     return eventIndex;
+  }
+
+  private rememberSnapshotUserMessages(snapshot: ActiveSessionViewModel) {
+    this.snapshotUserMessageIds = new Set(snapshot.transcript.flatMap((item) =>
+      item.kind === 'user_message_chunk' && item.messageId ? [item.messageId] : []));
+  }
+
+  private isSnapshotUserEcho(notification: SessionNotification): boolean {
+    const update = notification.update;
+    return update.sessionUpdate === 'user_message_chunk' && !!update.messageId &&
+      this.snapshotUserMessageIds.has(update.messageId);
   }
 
   private reconcileOptimisticUserPrompt(notification: SessionNotification): number | undefined {
@@ -4581,7 +5076,7 @@ export class AgentsStore {
 
     if (!this.applyingDrainedUpdates) this.activeLoadMeasurement?.increment('liveNotifications');
     const notificationKey = getSessionNotificationKey(notification);
-    if (record.recentSessionUpdateKeys.includes(notificationKey)) {
+    if (this.isSnapshotUserEcho(notification) || record.recentSessionUpdateKeys.includes(notificationKey)) {
       this.activeLoadMeasurement?.increment('duplicateNotifications');
       console.debug('querymt session/update duplicate', {
         agentId,
@@ -4941,6 +5436,35 @@ function persistRecentModels(value: Record<string, string[]>, storageKey = RECEN
   localStorage.setItem(storageKey, JSON.stringify(value));
 }
 
+function loadRecentSessions(): RecentSessionEntry[] {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const parsed: unknown = JSON.parse(localStorage.getItem(RECENT_SESSIONS_STORAGE_KEY) ?? '[]');
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set<string>();
+    return parsed.filter((value): value is RecentSessionEntry => {
+      if (!value || typeof value !== 'object') return false;
+      const { agentId, sessionId, source } = value as Partial<RecentSessionEntry>;
+      if (typeof agentId !== 'string' || !agentId.trim() || typeof sessionId !== 'string' || !sessionId.trim() ||
+        typeof source !== 'string' || !source) return false;
+      const key = buildSessionKey(agentId, sessionId);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, RECENT_SESSIONS_LIMIT).map(({ agentId, sessionId, source }) => ({ agentId, sessionId, source }));
+  } catch {
+    return [];
+  }
+}
+
+function persistRecentSessions(entries: RecentSessionEntry[]) {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(RECENT_SESSIONS_STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // Recent navigation remains usable in memory when browser storage is unavailable.
+  }
+}
+
 function loadRecentWorkspaces(): string[] {
   if (typeof localStorage === 'undefined') {
     return [];
@@ -5041,7 +5565,7 @@ function readDelegateAssignmentConflict(error: unknown): { expected_revision: nu
     : null;
 }
 
-function delegateAssignmentErrorMessage(error: unknown, fallback: string): string {
+function acpErrorMessage(error: unknown, fallback: string): string {
   const data = (error as { data?: unknown } | null)?.data;
   if (typeof data === 'string' && data.trim()) return data;
   if (data && typeof data === 'object') {
@@ -5089,7 +5613,15 @@ function mergeSessions(current: DesktopSessionSummary[], incoming: DesktopSessio
     // timestamp backwards past what live notifications already recorded.
     const key = getSessionKey(session);
     const existing = sessions.get(key);
-    sessions.set(key, existing ? { ...session, updatedAt: newestTimestamp(existing.updatedAt, session.updatedAt) } : session);
+    sessions.set(key, existing ? {
+      ...existing,
+      ...session,
+      // Parentage is immutable; an incomplete list/load must not promote a known child.
+      parentSessionId: session.parentSessionId ?? existing.parentSessionId,
+      forkOrigin: session.forkOrigin ?? existing.forkOrigin,
+      relationshipKnown: existing.relationshipKnown === true ? true : session.relationshipKnown ?? existing.relationshipKnown,
+      updatedAt: newestTimestamp(existing.updatedAt, session.updatedAt)
+    } : session);
   }
   return [...sessions.values()].sort(compareSessionsByActivity);
 }

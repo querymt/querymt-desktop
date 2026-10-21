@@ -32,11 +32,22 @@ describe('dark theme palette', () => {
     expect(composerHover).toContain('border-color: color-mix(in srgb, var(--border), var(--border-strong) 42%);');
   });
 
-  it('gives workspace affordances distinct but neutral contrast', () => {
+  it('uses diff-addition green only for the resolved header icon', () => {
+    const resolved = appCss.match(/\.session-header-lifecycle-icon-resolved \{([\s\S]*?)\n\}/)?.[1] ?? '';
+    const added = appCss.match(/\.session-tool-change-added \{([\s\S]*?)\n\}/)?.[1] ?? '';
+    expect(resolved.trim()).toBe(added.trim());
+    expect(resolved).toContain('color: var(--status-success);');
+    const lifecycle = appCss.match(/\.session-header-lifecycle \{([\s\S]*?)\n\}/)?.[1] ?? '';
+    expect(lifecycle).toContain('color: var(--muted);');
+    expect(lifecycle).not.toMatch(/border:|background:|box-shadow:/);
+    const mobileMetadata = appCss.match(/\.session-header-mobile-meta \{([\s\S]*?)\n\}/)?.[1] ?? '';
+    expect(mobileMetadata).toContain('min-height: 13px;');
+  });
+
+  it('keeps workspace folders unframed and loading controls neutral', () => {
     const workspaceIcon = appCss.match(/\.session-workspace-icon \{([\s\S]*?)\n\}/)?.[1] ?? '';
     const loadMore = appCss.match(/\.session-workspace-load-more \{([\s\S]*?)\n\}/)?.[1] ?? '';
-    expect(workspaceIcon).toContain('background: var(--icon-surface);');
-    expect(workspaceIcon).toContain('border: 1px solid var(--subtle-border);');
+    expect(workspaceIcon).not.toMatch(/background:|border:|box-shadow:/);
     expect(workspaceIcon).toContain('color: var(--text-muted);');
     expect(loadMore).toContain('width: 100%;');
     expect(loadMore).toContain('background: var(--subtle-surface);');
