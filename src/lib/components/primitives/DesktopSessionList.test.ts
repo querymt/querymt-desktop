@@ -906,7 +906,7 @@ describe('DesktopSessionList', () => {
 
     expect(screen.getByLabelText('Loading sessions')).toBeInTheDocument();
     expect(screen.getByLabelText('0 loaded sessions')).toHaveTextContent('0');
-    expect(screen.getByLabelText('10 loaded sessions, total may be incomplete')).toHaveTextContent('10+');
+    expect(screen.getByLabelText('10 loaded sessions, more available')).toHaveTextContent('10+');
     expect(screen.getByLabelText('10 loaded sessions')).toHaveTextContent('10');
   });
 
@@ -937,15 +937,43 @@ describe('DesktopSessionList', () => {
     expect(container.querySelectorAll('.session-row')).toHaveLength(10);
   });
 
-  it('marks full-catalog counts as lower bounds while loading or after a partial-load failure', async () => {
+  it('does not add plus for catalog loading, errors, or rows hidden by the preview limit', async () => {
     const catalog = Array.from({ length: 25 }, (_, index) => ({ ...sessions[0], sessionId: `loading-${index}` }));
     const { rerender, container } = render(DesktopSessionList, { sessions: catalog, catalogComplete: true, loading: true });
-    expect(screen.getByLabelText('25 loaded sessions, total may be incomplete')).toHaveTextContent(/^25\+$/);
+    expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
     await rerender({ sessions: catalog, catalogComplete: true, loading: false, error: 'Later page failed' });
-    expect(screen.getByLabelText('25 loaded sessions, total may be incomplete')).toHaveTextContent(/^25\+$/);
+    expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
     await rerender({ sessions: catalog, catalogComplete: true, loading: false, error: null });
     expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
     expect(container.querySelectorAll('.session-row')).toHaveLength(10);
+  });
+
+  it.each([
+    { loading: false, error: null },
+    { loading: true, error: null },
+    { loading: false, error: 'Another page failed' },
+    { loading: true, error: 'Another page failed' }
+  ])('adds plus only for known uncounted sessions, not loading=$loading or error=$error', ({ loading, error }) => {
+    const fourSessions = Array.from({ length: 4 }, (_, index) => ({ ...sessions[0], sessionId: `exact-${index}` }));
+    render(DesktopSessionList, {
+      loading, error,
+      workspaceGroups: [
+        createWorkspaceGroup({ key: '/done', cwd: '/done', name: 'done', sessions: fourSessions, initialized: true, loading, error }),
+        createWorkspaceGroup({ key: '/more', cwd: '/more', name: 'more', sessions, initialized: true, hasMore: true, loading, error })
+      ]
+    });
+    expect(screen.getByLabelText('4 loaded sessions')).toHaveTextContent(/^4$/);
+    expect(screen.getByLabelText('2 loaded sessions, more available')).toHaveTextContent(/^2\+$/);
+  });
+
+  it('removes plus once the remaining workspace sessions have been counted', async () => {
+    const page = Array.from({ length: 4 }, (_, index) => ({ ...sessions[0], sessionId: `page-${index}` }));
+    const { rerender } = render(DesktopSessionList, {
+      workspaceGroups: [createWorkspaceGroup({ sessions: page, initialized: true, hasMore: true })]
+    });
+    expect(screen.getByLabelText('4 loaded sessions, more available')).toHaveTextContent(/^4\+$/);
+    await rerender({ workspaceGroups: [createWorkspaceGroup({ sessions: page, initialized: true, hasMore: false })] });
+    expect(screen.getByLabelText('4 loaded sessions')).toHaveTextContent(/^4$/);
   });
 
   it('shows full recent and pinned counts even when only ten rows are displayed', () => {
