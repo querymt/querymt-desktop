@@ -2,7 +2,7 @@
   import '../app.css';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { onMount, setContext } from 'svelte';
+  import { onMount, setContext, untrack } from 'svelte';
   import { Maximize, Minimize, X } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
   import RecentSessionRail from '$lib/components/shell/RecentSessionRail.svelte';
@@ -53,6 +53,21 @@
   const isSessionCancellable = $derived(
     isActiveSessionRoute && CANCELLABLE_RUN_STATES.has(agentsStore.activeSession.runState)
   );
+  const pinSources = $derived(JSON.stringify(agentsStore.connectedAgents.map((agent) => [
+    agent.id, agent.transport, agent.websocketUrl, agent.commandLine, agentsStore.controlCapabilitiesByAgent[agent.id]?.methods
+  ])));
+  $effect(() => {
+    void pinSources;
+    untrack(() => { void agentsStore.ensurePinnedSessions(); });
+  });
+
+  onMount(() => {
+    const reconcilePins = () => { if (!document.hidden) void agentsStore.ensurePinnedSessions(); };
+    const timer = setInterval(reconcilePins, 5 * 60_000);
+    document.addEventListener('visibilitychange', reconcilePins);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', reconcilePins); };
+  });
+
   const layoutClass = $derived(sidebarStore.initialized && sidebarStore.effectiveCollapsed ? 'app-grid-sidebar-collapsed' : 'app-grid-sidebar-expanded');
 
   const section = $derived.by(() => {
@@ -333,6 +348,14 @@
     <RecentSessionRail
       current={section}
       sessions={agentsStore.sessions}
+      showPinnedSessions={sidebarStore.showPinnedSessions}
+      pinnedSessions={agentsStore.pinnedSessions}
+      pinLoadError={Object.values(agentsStore.pinnedSessionsErrors).filter(Boolean).join(' ') || null}
+      onRetryPins={() => agentsStore.ensurePinnedSessions(true)}
+      canPinSession={(session) => agentsStore.canPinSession(session)}
+      pinPending={agentsStore.sessionPinPending}
+      pinErrors={agentsStore.sessionPinErrors}
+      onSetPinned={(session, pinned) => agentsStore.setSessionPinned(session, pinned)}
       attentionSessionKeys={agentsStore.attentionSessionKeys}
       currentAgentId={currentRailAgentId}
       currentSessionId={currentRailSessionId}

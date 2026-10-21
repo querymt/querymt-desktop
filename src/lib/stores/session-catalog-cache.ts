@@ -1,5 +1,5 @@
 import type { AgentConfig, DesktopSessionSummary, SessionLifecycleFilter } from '$lib/domain/types';
-import { readSessionLifecycle } from '$lib/domain/sessions';
+import { readSessionLifecycle, readSessionPin } from '$lib/domain/sessions';
 
 export const SESSION_CATALOG_STORAGE_KEY = 'querymt-desktop.session-catalog.v1';
 export const SESSION_CATALOG_FRESH_MS = 5 * 60_000;
@@ -127,7 +127,7 @@ function persistedSummary(session: DesktopSessionSummary): DesktopSessionSummary
     location: session.location, remoteNodeId: session.remoteNodeId, remoteNodeLabel: session.remoteNodeLabel,
     remoteProfileId: session.remoteProfileId, remoteProfileLabel: session.remoteProfileLabel,
     remoteConnectionState: session.location === 'remote' ? 'disconnected' : undefined,
-    lifecycle: session.lifecycle, relationshipKnown: session.relationshipKnown,
+    pin: session.pin, lifecycle: session.lifecycle, relationshipKnown: session.relationshipKnown,
     parentSessionId: session.parentSessionId, forkOrigin: session.forkOrigin,
     sessionKind: session.sessionKind, hasChildren: session.hasChildren, forkCount: session.forkCount
   };
@@ -147,5 +147,7 @@ function readSummary(value: unknown): DesktopSessionSummary | null {
     (row.forkCount !== undefined && (!Number.isSafeInteger(row.forkCount) || row.forkCount < 0))) return null;
   const lifecycle = readSessionLifecycle({ lifecycle: row.lifecycle }, row.sessionId);
   if (row.lifecycle != null && lifecycle === null) return null;
-  return persistedSummary({ ...row, lifecycle });
+  const pin = readSessionPin({ pin: row.pin }, row.sessionId);
+  if (row.pin != null && (pin === null || row.pin.session_id !== row.sessionId)) return null;
+  return persistedSummary({ ...row, lifecycle, pin });
 }

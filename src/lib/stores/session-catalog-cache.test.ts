@@ -33,6 +33,16 @@ describe('SessionCatalogCache', () => {
       .toMatchObject({ relationshipKnown, parentSessionId: 'root', forkOrigin: 'delegation' });
   });
 
+  it('round trips pin metadata and rejects malformed pin snapshots', () => {
+    const pin = { session_id: session.sessionId, pinned: true, pinned_at: '2026-10-20T10:00:00Z' };
+    const cache = new SessionCatalogCache();
+    cache.set(entry({ sessions: [{ ...session, pin }] }));
+    cache.flush();
+    expect(new SessionCatalogCache().get('scope')?.sessions[0].pin).toEqual(pin);
+    localStorage.setItem(SESSION_CATALOG_STORAGE_KEY, JSON.stringify({ version: 1, entries: [entry({ sessions: [{ ...session, pin: { ...pin, pinned_at: 'bad date' } }] })] }));
+    expect(new SessionCatalogCache().get('scope')).toBeUndefined();
+  });
+
   it('rejects invalid persisted relationship flags', () => {
     localStorage.setItem(SESSION_CATALOG_STORAGE_KEY, JSON.stringify({ version: 1, entries: [entry({
       sessions: [{ ...session, relationshipKnown: 'yes' } as unknown as DesktopSessionSummary]

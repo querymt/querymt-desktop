@@ -8769,8 +8769,36 @@ summary:focus-visible {
   padding: 0.25rem 0.55rem 0.45rem;
 }
 
+.session-pin-indicator {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.app-sidebar-pinned-heading {
+  justify-content: flex-start;
+  gap: 0.4rem;
+}
+
+.app-sidebar-show-more {
+  justify-self: start;
+  margin: 0.15rem 0.5rem 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.app-sidebar-show-more:hover,
+.app-sidebar-show-more:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.app-sidebar-session[aria-current='page'] {
+  background: var(--row-surface-hover);
+}
+
 .app-sidebar-session-list {
   display: grid;
+  align-content: start;
   gap: 0.18rem;
   overflow-y: auto;
   padding: 0 0.1rem;

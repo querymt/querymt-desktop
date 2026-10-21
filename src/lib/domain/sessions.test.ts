@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
-import { sessionMatchesLifecycle, buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
+import { compareSessionsByPin, readSessionPin, sessionMatchesLifecycle, buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 
 function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionId: string }): DesktopSessionSummary {
@@ -30,6 +30,56 @@ function createSession(meta?: Record<string, unknown>): SessionInfo {
     _meta: meta
   } as SessionInfo;
 }
+
+describe('session pin metadata and requests', () => {
+  it('parses only authoritative, valid pin metadata without changing lifecycle or activity', () => {
+    expect(readSessionPin(undefined, 's')).toBeNull();
+    expect(readSessionPin({ pin: { pinned: 'true', pinned_at: null } }, 's')).toBeNull();
+    expect(readSessionPin({ pin: { pinned: true, pinned_at: 'not a date' } }, 's')).toBeNull();
+    expect(readSessionPin({ pin: { pinned: false, pinned_at: null } }, 's')).toEqual({ session_id: 's', pinned: false, pinned_at: null });
+    const [summary] = mapAcpSessionsToDesktopSessions([createSession({ querymt: { pin: { pinned: true, pinned_at: '2026-10-20T10:00:00Z' } } })], { agentId: 'a', agentName: 'A' });
+    expect(summary.pin?.pinned).toBe(true);
+    expect(summary.lifecycle).toBeNull();
+    expect(summary.updatedAt).toBe('2026-06-17T12:00:00Z');
+  });
+  it('composes pin and lifecycle filters and rejects mesh aggregation explicitly', () => {
+    expect(buildListSessionsRequest({ pinned: true, lifecycle: { resolution: 'resolved', archive: 'only' } })._meta).toEqual({
+      session_scope: 'root', querymt: { sessionFilters: { resolution: 'resolved', archive: 'only', pinned: true } }
+    });
+    expect(() => buildListSessionsRequest({ pinned: false, remoteNodeIds: ['peer'] })).toThrow('directly connected');
+  });
+});
+
+describe('compareSessionsByPin', () => {
+  function pinned(sessionId: string, timestamp: string): DesktopSessionSummary {
+    const pin = readSessionPin({ pin: { pinned: true, pinned_at: timestamp } }, sessionId);
+    expect(pin).not.toBeNull();
+    return { ...createDesktopSession({ sessionId }), pin };
+  }
+
+  it.each([
+    ['fractional seconds', '2026-10-20T10:00:00.500Z', '2026-10-20T10:00:00Z'],
+    ['UTC offsets', '2026-10-20T10:30:00Z', '2026-10-20T12:00:00+02:00']
+  ])('orders valid pin %s chronologically, newest first', (_label, newer, older) => {
+    const rows = [pinned('older', older), pinned('newer', newer)];
+    expect(rows.sort(compareSessionsByPin).map((session) => session.sessionId)).toEqual(['newer', 'older']);
+  });
+
+  it('uses the stable full session key for equivalent instants with different timestamp spellings', () => {
+    const rows = [pinned('c', '2026-10-20T10:00:00Z'), pinned('b', '2026-10-20T10:00:00.000Z'),
+      pinned('a', '2026-10-20T12:00:00+02:00')];
+    rows.push({ ...pinned('a', '2026-10-20T10:00:00Z'), agentId: 'agent-2' });
+    expect(rows.sort(compareSessionsByPin).map((session) => `${session.agentId}:${session.sessionId}`))
+      .toEqual(['agent-1:a', 'agent-1:b', 'agent-1:c', 'agent-2:a']);
+  });
+
+  it('keeps absent and known-unpinned metadata behind valid pins with a stable tie-break', () => {
+    const absent = createDesktopSession({ sessionId: 'a' });
+    const unpinned = { ...createDesktopSession({ sessionId: 'b' }), pin: readSessionPin({ pin: { pinned: false, pinned_at: null } }, 'b') };
+    expect([unpinned, absent, pinned('c', '1969-12-31T23:59:59Z')].sort(compareSessionsByPin).map((session) => session.sessionId))
+      .toEqual(['c', 'a', 'b']);
+  });
+});
 
 function runtimeMeta(phase: string): Record<string, unknown> {
   return { phase, steerable: phase !== 'idle', pending_steering_count: 0, queued_input_count: 0 };

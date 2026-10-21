@@ -82,6 +82,12 @@ export interface SessionLifecycle {
   archived_at: string | null;
 }
 
+export interface SessionPin {
+  session_id: string;
+  pinned: boolean;
+  pinned_at: string | null;
+}
+
 export interface SessionLifecyclePatch {
   resolved?: boolean;
   archived?: boolean;
@@ -108,6 +114,7 @@ export interface SessionBrowserState {
   openGroups: string[];
   groupsInitialized: boolean;
   recentGroupInitialized?: boolean;
+  pinnedGroupInitialized?: boolean;
   visibleLimits: Record<string, number>;
   scrollTop: number;
 }
@@ -130,6 +137,7 @@ export interface DesktopSessionSummary {
   remoteConnectionState?: 'available' | 'disconnected';
   status: SessionStatus;
   lifecycle?: SessionLifecycle | null;
+  pin?: SessionPin | null;
   /** False when load/bookmark metadata does not establish parentage. */
   relationshipKnown?: boolean;
   parentSessionId?: string | null;

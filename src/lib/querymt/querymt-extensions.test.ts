@@ -246,6 +246,18 @@ describe('QuerymtExtensions session lifecycle', () => {
   });
 });
 
+describe('QuerymtExtensions session pins', () => {
+  it('uses the exact wire contract with an explicit desired state, not a local toggle', async () => {
+    const { extensions, extMethod } = extensionClient();
+    const pin = { session_id: 'session-a', pinned: true, pinned_at: '2026-10-20T10:00:00Z' };
+    extMethod.mockResolvedValueOnce(pin);
+    expect(await extensions.setSessionPinned('session-a', true)).toEqual(pin);
+    expect(extMethod).toHaveBeenLastCalledWith('_querymt/session/setPinned', { session_id: 'session-a', pinned: true });
+    await extensions.setSessionPinned('session-a', false);
+    expect(extMethod).toHaveBeenLastCalledWith('_querymt/session/setPinned', { session_id: 'session-a', pinned: false });
+  });
+});
+
 describe('QuerymtExtensions control methods', () => {
   it('fetches profiles through the profiles method', async () => {
     const { extensions, extMethod } = extensionClient();

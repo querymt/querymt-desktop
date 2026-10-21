@@ -104,6 +104,14 @@ vi.mock('$lib/stores/appearance.svelte', async (importOriginal) => {
 
 vi.mock('$lib/stores/chat-preferences.svelte', () => ({ chatPreferencesStore }));
 
+const sidebarStore = vi.hoisted(() => ({
+  showPinnedSessions: false,
+  initialize: vi.fn(),
+  setShowPinnedSessions: vi.fn()
+}));
+
+vi.mock('$lib/stores/sidebar.svelte', () => ({ sidebarStore }));
+
 Object.defineProperty(navigator, 'clipboard', {
   value: {
     writeText: vi.fn(async () => {})
@@ -123,6 +131,7 @@ const windowDecorationsStore = vi.hoisted(() => ({
 vi.mock('$lib/stores/window-decorations.svelte', () => ({ windowDecorationsStore }));
 
 beforeEach(() => {
+  sidebarStore.showPinnedSessions = false;
   window.history.replaceState({}, '', '/settings');
   HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
   HTMLElement.prototype.releasePointerCapture = vi.fn();
@@ -240,6 +249,17 @@ describe('Settings controls', () => {
 
     await fireEvent.click(titlebarSwitch);
     expect(windowDecorationsStore.toggleCustomTitlebar).toHaveBeenCalledWith(true);
+  });
+
+  it.each([false, true])('toggles sidebar pins in General without opening Advanced (enabled=%s)', async (enabled) => {
+    sidebarStore.showPinnedSessions = enabled;
+    render(SettingsPage);
+    expect(sidebarStore.initialize).toHaveBeenCalled();
+    const toggle = screen.getByRole('switch', { name: 'Show pinned sessions in sidebar' });
+    expect(toggle).toHaveAttribute('aria-checked', String(enabled));
+    expect(screen.getByRole('button', { name: /Advanced/ })).toHaveAttribute('aria-expanded', 'false');
+    await fireEvent.click(toggle);
+    expect(sidebarStore.setShowPinnedSessions).toHaveBeenCalledExactlyOnceWith(!enabled);
   });
 
   it('defaults to Enter and updates the send shortcut preference', async () => {

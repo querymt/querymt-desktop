@@ -1,5 +1,5 @@
 import type { ListSessionsRequest, SessionInfo } from '@agentclientprotocol/sdk';
-import type { DesktopSessionSummary, SessionBrowserState, SessionLifecycle, SessionLifecycleFilter, SessionLifecycleView, SessionStatus } from '$lib/domain/types';
+import type { DesktopSessionSummary, SessionBrowserState, SessionPin, SessionLifecycle, SessionLifecycleFilter, SessionLifecycleView, SessionStatus } from '$lib/domain/types';
 import {
   type SessionMeta as QuerymtSessionMeta,
   SessionRuntimePhase as QuerymtSessionRuntimePhase
@@ -41,9 +41,10 @@ export interface WorkspaceRemoteMachine {
 }
 
 export const RECENT_SESSION_GROUP_KEY = '__recent_sessions__';
+export const PINNED_SESSION_GROUP_KEY = '__pinned_sessions__';
 
 export interface WorkspaceSessionGroup {
-  kind?: 'recent';
+  kind?: 'recent' | 'pinned';
   key: string;
   cwd: string;
   name: string;
@@ -93,12 +94,16 @@ export function buildListSessionsRequest(input: {
   cursor?: string | null;
   remoteNodeIds?: string[];
   lifecycle?: SessionLifecycleFilter;
+  pinned?: boolean;
 } = {}): ListSessionsRequest {
   const request: ListSessionsRequest = {
     _meta: { session_scope: DEFAULT_SESSION_LIST_SCOPE }
   };
   if (input.remoteNodeIds?.length) request._meta = { ...request._meta, remoteNodeIds: input.remoteNodeIds };
-  if (input.lifecycle) request._meta = { ...request._meta, querymt: { sessionFilters: input.lifecycle } };
+  if (input.pinned !== undefined && input.remoteNodeIds?.length) throw new Error('Pin filtering is only available on directly connected agents.');
+  if (input.lifecycle || input.pinned !== undefined) request._meta = { ...request._meta, querymt: { sessionFilters: {
+    ...input.lifecycle, ...(input.pinned !== undefined ? { pinned: input.pinned } : {})
+  } } };
   if (input.cwd) request.cwd = input.cwd;
   if (input.cursor) request.cursor = input.cursor;
   return request;
@@ -140,10 +145,27 @@ export function mapAcpSessionsToDesktopSessions(
       session._meta?.connectionState === 'available' ? 'available' : undefined,
     status: inferSessionStatus(session),
     lifecycle: readSessionLifecycle(session._meta?.querymt, session.sessionId),
+    pin: readSessionPin(session._meta?.querymt, session.sessionId),
     // Disconnected bookmark fallbacks do not carry owner-sourced parentage.
     relationshipKnown: session._meta?.location !== 'remote' || session._meta?.connectionState !== 'disconnected',
     ...readSessionRelationshipMeta(session)
   }));
+}
+
+export function readSessionPin(namespace: unknown, sessionId: string): SessionPin | null {
+  if (!namespace || typeof namespace !== 'object' || !('pin' in namespace)) return null;
+  const pin = namespace.pin as Partial<SessionPin> | null;
+  if (!pin || typeof pin.pinned !== 'boolean' ||
+    (pin.pinned ? typeof pin.pinned_at !== 'string' || !Number.isFinite(Date.parse(pin.pinned_at)) : pin.pinned_at !== null)) return null;
+  return { session_id: sessionId, pinned: pin.pinned, pinned_at: pin.pinned_at ?? null };
+}
+
+export function compareSessionsByPin(a: DesktopSessionSummary, b: DesktopSessionSummary): number {
+  const aTime = Date.parse(a.pin?.pinned_at ?? '');
+  const bTime = Date.parse(b.pin?.pinned_at ?? '');
+  const aValue = Number.isFinite(aTime) ? aTime : Number.NEGATIVE_INFINITY;
+  const bValue = Number.isFinite(bTime) ? bTime : Number.NEGATIVE_INFINITY;
+  return aValue === bValue ? getSessionKey(a).localeCompare(getSessionKey(b)) : bValue - aValue;
 }
 
 export function createSessionBrowserState(): SessionBrowserState {

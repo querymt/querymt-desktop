@@ -1,4 +1,4 @@
-import type { ModelEntry, ModelInfo, SessionLifecycle, SessionLifecyclePatch } from '$lib/domain/types';
+import type { ModelEntry, ModelInfo, SessionPin, SessionLifecycle, SessionLifecyclePatch } from '$lib/domain/types';
 import { readSessionLifecycle } from '$lib/domain/sessions';
 import type {
   AuthMethod,
@@ -129,6 +129,8 @@ export const QMT_METHOD_SESSION_DISCARD_QUEUED_INPUT = 'querymt/session/discardQ
 export const QMT_METHOD_SESSION_RUNTIME_STATE = 'querymt/session/runtimeState';
 export const QMT_METHOD_SESSION_GET_LIFECYCLE = 'querymt/session/getLifecycle';
 export const QMT_METHOD_SESSION_SET_LIFECYCLE = 'querymt/session/setLifecycle';
+export const QMT_METHOD_SESSION_SET_PINNED = 'querymt/session/setPinned';
+export const QMT_NOTIFICATION_SESSION_PINS_CHANGED = 'querymt/session/pinsChanged';
 export const QMT_NOTIFICATION_SESSION_INPUT_STATE = 'querymt/session/inputState';
 
 export interface QuerymtProfileInfo {
@@ -442,6 +444,10 @@ export class QuerymtExtensions {
     const lifecycle = readSessionLifecycle({ lifecycle: response }, session_id);
     if (!lifecycle) throw new QuerymtExtensionResponseError(QMT_METHOD_SESSION_SET_LIFECYCLE);
     return lifecycle;
+  }
+
+  async setSessionPinned(session_id: string, pinned: boolean): Promise<SessionPin> {
+    return this.call(QMT_METHOD_SESSION_SET_PINNED, { session_id, pinned });
   }
 
   async capabilities(): Promise<CapabilitiesInfo> {

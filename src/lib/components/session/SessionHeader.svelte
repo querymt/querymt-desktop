@@ -16,6 +16,7 @@
     lifecyclePending = false,
     lifecycleError = null,
     onSetLifecycle = null,
+    canPin = false, pinPending = false, pinError = null, onSetPinned = null,
     title,
     workspace,
     workspacePath = null,
@@ -34,6 +35,10 @@
     session: ActiveSessionViewModel;
     summary?: DesktopSessionSummary | null;
     canManageLifecycle?: boolean;
+    canPin?: boolean;
+    pinPending?: boolean;
+    pinError?: string | null;
+    onSetPinned?: ((pinned: boolean) => Promise<unknown>) | null;
     lifecyclePending?: boolean;
     lifecycleError?: string | null;
     onSetLifecycle?: ((patch: SessionLifecyclePatch) => Promise<unknown>) | null;
@@ -156,7 +161,7 @@
   <div class="session-header-controls">
     <div class="session-header-action-group" aria-label="Session actions">
       {#if summary}
-        <SessionActionsMenu session={summary} canManage={canManageLifecycle} pending={lifecyclePending} error={lifecycleError} {onSetLifecycle} triggerClass="icon-btn" />
+        <SessionActionsMenu session={summary} canManage={canManageLifecycle} {canPin} {onSetPinned} pending={pinPending || lifecyclePending} error={pinError || lifecycleError} {onSetLifecycle} triggerClass="icon-btn" />
       {/if}
       <details class="session-header-details" use:autoCollapsePopover>
         <summary class="icon-btn" aria-label="Session details" title="Session details"><Info size={16} /></summary>

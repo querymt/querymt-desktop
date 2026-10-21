@@ -79,7 +79,7 @@
         iconClass={refreshing ? 'animate-spin' : ''}
         size={16}
         disabled={agentsStore.sessionCatalogLoading}
-        onclick={() => agentsStore.refreshSessionCatalog()}
+        onclick={() => Promise.all([agentsStore.refreshSessionCatalog(), agentsStore.ensurePinnedSessions(true)])}
       />
     </div>
   </div>
@@ -87,6 +87,11 @@
     <DesktopSessionList
       sessions={agentsStore.sessionCatalog}
       recentSessionKeys={agentsStore.recentSessionKeys}
+      pinnedSessions={agentsStore.pinnedSessions}
+      canPinSession={(session) => agentsStore.canPinSession(session)}
+      pinPending={agentsStore.sessionPinPending}
+      pinErrors={agentsStore.sessionPinErrors}
+      onSetPinned={(session, pinned) => agentsStore.setSessionPinned(session, pinned)}
       bind:browserState={agentsStore.sessionBrowser}
       catalogComplete={true}
       hasAnySessions={agentsStore.sessionCatalogHasSessions}
@@ -100,7 +105,7 @@
       showAgentNames={connectedAgentCount > 1}
       showRemoteSessions={chatPreferencesStore.showRemoteSessions}
       showToolbarRefresh={false}
-      onRefresh={() => agentsStore.refreshSessionCatalog()}
+      onRefresh={() => Promise.all([agentsStore.refreshSessionCatalog(), agentsStore.ensurePinnedSessions(true)]).then(() => {})}
       onCreateSession={() => goto('/')}
       onOpenAgents={() => goto('/agents')}
       onCreateWorkspaceSession={createWorkspaceSession}

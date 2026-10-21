@@ -1,16 +1,19 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { DropdownMenu } from 'bits-ui';
-  import { Archive, ArchiveRestore, Check, Copy, Ellipsis, LoaderCircle, RotateCcw, Trash2 } from '@lucide/svelte';
+  import { Archive, ArchiveRestore, Check, Copy, Ellipsis, LoaderCircle, Pin, PinOff, RotateCcw, Trash2 } from '@lucide/svelte';
   import type { DesktopSessionSummary, SessionLifecyclePatch } from '$lib/domain/types';
 
   let {
     session, canManage = false, pending = false, error = null,
+    canPin = false, onSetPinned = null,
     onSetLifecycle = null, onCopy = null, onDelete = null, copied = false,
     triggerClass = 'session-row-menu-trigger', open = $bindable(false)
   }: {
-    session: Pick<DesktopSessionSummary, 'sessionId' | 'title' | 'lifecycle'>;
+    session: Pick<DesktopSessionSummary, 'sessionId' | 'title' | 'lifecycle' | 'pin'>;
     canManage?: boolean;
+    canPin?: boolean;
+    onSetPinned?: ((pinned: boolean) => Promise<unknown>) | null;
     pending?: boolean;
     error?: string | null;
     onSetLifecycle?: ((patch: SessionLifecyclePatch) => Promise<unknown>) | null;
@@ -26,6 +29,15 @@
   let saving = $state(false);
   let localError = $state<string | null>(null);
   const busy = $derived(pending || saving);
+
+  async function togglePin() {
+    if (!onSetPinned || busy) return;
+    saving = true;
+    localError = null;
+    try { await onSetPinned(!session.pin?.pinned); open = false; }
+    catch (cause) { localError = cause instanceof Error ? cause.message : 'Could not update session pin.'; }
+    finally { saving = false; }
+  }
 
   async function update(patch: SessionLifecyclePatch) {
     if (!onSetLifecycle || busy) return;
@@ -49,6 +61,11 @@
   <DropdownMenu.Portal to={portalTarget}>
     <DropdownMenu.Content class="session-actions-content" sideOffset={5} align="end" loop>
       {#if localError || error}<div class="session-actions-error" role="alert">{localError || error} Retry the action.</div>{/if}
+      {#if canPin && onSetPinned}
+        <DropdownMenu.Item disabled={busy} closeOnSelect={false} onSelect={togglePin}>
+          {#if session.pin?.pinned}<PinOff size={14} />Unpin session{:else}<Pin size={14} />Pin session{/if}
+        </DropdownMenu.Item>
+      {/if}
       {#if canManage && session.lifecycle && onSetLifecycle}
         <DropdownMenu.Item disabled={busy} closeOnSelect={false} onSelect={() => update({ resolved: !session.lifecycle!.resolved })}>
           {#if session.lifecycle.resolved}<RotateCcw size={14} />Reopen{:else}<Check size={14} />Mark resolved{/if}
