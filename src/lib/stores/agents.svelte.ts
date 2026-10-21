@@ -266,6 +266,7 @@ export class AgentsStore {
   private clients = new Map<string, AgentClientRecord>();
   private connectFlights = new Map<string, ConnectFlight>();
   private connectGenerations = new Map<string, number>();
+  private sessionMutationScopes = new Map<string, symbol>();
   // Monotonic per-agent mesh refresh tokens. The key is kept after
   // deleteConfig (like connectGenerations): deleting it would restart the
   // token at the initial value and let a pre-delete request pass the token
@@ -1319,6 +1320,10 @@ export class AgentsStore {
     if (existingIndex === -1) {
       this.configs = [input, ...this.configs];
     } else {
+      const lifecycle = { resolution: 'any', archive: 'any' } as const;
+      if (sessionCatalogKey([this.configs[existingIndex]], [], lifecycle) !== sessionCatalogKey([input], [], lifecycle)) {
+        this.sessionMutationScopes.delete(input.id);
+      }
       this.configs = this.configs.map((config) => (config.id === input.id ? input : config));
     }
 
@@ -1344,9 +1349,11 @@ export class AgentsStore {
       ((updates.transport !== undefined && updates.transport !== current.transport) ||
         (normalizedUpdates.websocketUrl !== undefined &&
           normalizedUpdates.websocketUrl !== current.websocketUrl) ||
-        (updates.commandLine !== undefined && updates.commandLine !== current.commandLine));
+        (updates.commandLine !== undefined && updates.commandLine !== current.commandLine) ||
+        (normalizedUpdates.websocketSecure !== undefined && normalizedUpdates.websocketSecure !== (current.websocketSecure ?? false)));
     if (endpointChanged || normalizedUpdates.enabled === false) this.clearSessionPins(agentId);
     if (endpointChanged) {
+      this.sessionMutationScopes.delete(agentId);
       this.forgetRecentSessions(agentId);
       this.knownSessionParents = Object.fromEntries(Object.entries(this.knownSessionParents)
         .filter(([key]) => !key.startsWith(`${agentId}:`)));
@@ -1372,6 +1379,7 @@ export class AgentsStore {
 
   async deleteConfig(agentId: string) {
     if (isEmbedded && agentId === EMBEDDED_AGENT_ID) return;
+    this.sessionMutationScopes.delete(agentId);
     this.invalidateSessionCatalogCache();
     this.invalidateConnectGeneration(agentId);
     await this.stopConfiguredAgent(agentId);
@@ -1611,6 +1619,25 @@ export class AgentsStore {
         return;
       }
     }
+  }
+
+  /** Catalog mutations survive reconnects, but not endpoint changes or removal/recreation. */
+  private sessionMutationScope(agentId: string): () => boolean {
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    const lifecycle = { resolution: 'any', archive: 'any' } as const;
+    const source = config ? sessionCatalogKey([config], [], lifecycle) : null;
+    let token = this.sessionMutationScopes.get(agentId);
+    if (!token) this.sessionMutationScopes.set(agentId, token = Symbol());
+    return () => !this.pollingDisposed && this.sessionMutationScopes.get(agentId) === token &&
+      this.configs.some((candidate) => candidate.id === agentId && sessionCatalogKey([candidate], [], lifecycle) === source);
+  }
+
+  /** A reconnect cannot turn server-confirmed creation into failure; reconcile its metadata instead. */
+  private canPublishCreatedSession(agentId: string, record: AgentClientRecord, isCurrentSource: () => boolean): boolean {
+    if (!isCurrentSource()) return false;
+    if (this.clients.get(agentId) === record) return true;
+    this.invalidateSessionCatalogCache();
+    return false;
   }
 
   private initializedClientRecord(agentId: string): AgentClientRecord | undefined {
@@ -2818,6 +2845,7 @@ export class AgentsStore {
   }
 
   async deleteSession(agentId: string, sessionId: string) {
+    const isCurrentSource = this.sessionMutationScope(agentId);
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) {
       throw new Error('Unable to locate the agent for this session.');
@@ -2831,9 +2859,10 @@ export class AgentsStore {
       throw new Error(`${config.name} does not support deleting sessions.`);
     }
 
+    if (!isCurrentSource()) throw new Error('Agent endpoint changed before deleting the session.');
     this.invalidateSharedSessionLists(agentId);
     await record.client.deleteSession(sessionId);
-    if (this.pollingDisposed || this.clients.get(agentId) !== record) return;
+    if (!isCurrentSource()) return;
     this.forgetRecentSessions(agentId, sessionId);
     this.pinVersions.set(agentId, (this.pinVersions.get(agentId) ?? 0) + 1);
     this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: (this.pinnedSessionsByAgent[agentId] ?? []).filter((session) => session.sessionId !== sessionId) };
@@ -2854,6 +2883,8 @@ export class AgentsStore {
         sessions: source.sessions.filter((session) => session.sessionId !== sessionId)
       });
     }
+    // Catalog cleanup is endpoint-owned; the runtime below belongs to this connection.
+    if (this.clients.get(agentId) !== record) return;
     this.acknowledgeSession(agentId, sessionId);
     const key = buildSessionKey(agentId, sessionId);
     this.lifecycleReads.delete(key);
@@ -2879,6 +2910,7 @@ export class AgentsStore {
   }
 
   async createBackgroundSession(agentId: string, cwd: string, profileId = this.composerProfileId) {
+    const isCurrentSource = this.sessionMutationScope(agentId);
     const config = this.configs.find((candidate) => candidate.id === agentId);
     const normalizedCwd = cwd.trim();
     if (!config || !normalizedCwd) {
@@ -2897,16 +2929,12 @@ export class AgentsStore {
       throw new Error(`Failed to connect ${config.name}.`);
     }
 
+    if (!isCurrentSource()) throw new Error('Agent endpoint changed before creating the session.');
     const response = await record.client.createSession(
       normalizedCwd,
       profileId === 'default' ? null : profileId
     );
-    this.invalidateSharedSessionLists(agentId);
-    delete this.openSessionPages[agentId];
-    this.lastCreatedSession = response;
-    this.applySessionConfigOptionsSnapshot(agentId, response.sessionId, response.configOptions ?? []);
-    this.restoreSessionModel(agentId, response.sessionId, response.configOptions ?? [], response);
-    this.rememberRecentWorkspace(normalizedCwd);
+    if (!this.canPublishCreatedSession(agentId, record, isCurrentSource)) return response;
     const summary: DesktopSessionSummary = {
       agentId,
       agentName: config.name,
@@ -2923,7 +2951,13 @@ export class AgentsStore {
       lifecycle: record.client.supportsSessionLifecycle()
         ? await record.client.getSessionLifecycle(response.sessionId).catch(() => null) : null
     };
-    if (this.pollingDisposed || this.clients.get(agentId) !== record) throw new Error('Agent connection changed while creating the session.');
+    if (!this.canPublishCreatedSession(agentId, record, isCurrentSource)) return response;
+    this.invalidateSharedSessionLists(agentId);
+    delete this.openSessionPages[agentId];
+    this.lastCreatedSession = response;
+    this.applySessionConfigOptionsSnapshot(agentId, response.sessionId, response.configOptions ?? []);
+    this.restoreSessionModel(agentId, response.sessionId, response.configOptions ?? [], response);
+    this.rememberRecentWorkspace(normalizedCwd);
     this.patchSessionCatalog(agentId, response.sessionId, summary);
     this.sessionsByAgent = {
       ...this.sessionsByAgent,
@@ -2931,13 +2965,14 @@ export class AgentsStore {
     };
     this.upsertWorkspaceSessions(agentId, [summary]);
     await this.refreshSessionsForAgent(agentId);
-    if (this.clients.get(agentId) === record) {
+    if (isCurrentSource() && this.clients.get(agentId) === record) {
       this.patchSessionCatalog(agentId, response.sessionId, this.findSessionSummary(agentId, response.sessionId) ?? summary);
     }
     return response;
   }
 
   async createSession(agentId: string): Promise<string | null> {
+    const isCurrentSource = this.sessionMutationScope(agentId);
     this.error = null;
     const config = this.configs.find((candidate) => candidate.id === agentId);
     const cwd = this.composerCwd.trim();
@@ -2956,6 +2991,7 @@ export class AgentsStore {
     try {
       if (launch.targetId !== 'local') {
         const sessionId = await this.createAttachedRemoteSession(agentId, launch.targetId, cwd);
+        if (!isCurrentSource() || !this.isSelectedSession(agentId, sessionId)) return sessionId;
         await this.applyComposerLaunchConfig(agentId, sessionId, launch);
         await this.applySelectedModelToSession(agentId, sessionId, launch.modelId);
         this.captureLaunchSessionPreference(agentId, sessionId, launch);
@@ -2965,6 +3001,7 @@ export class AgentsStore {
 
       const response = await this.createBackgroundSession(agentId, cwd, launch.profileId);
       const sessionId = response.sessionId;
+      if (!isCurrentSource()) return sessionId;
       this.resetActiveSession(agentId, sessionId);
       this.activeSession.configOptions = response.configOptions ?? [];
       await this.applyComposerLaunchConfig(agentId, sessionId, launch);
@@ -4697,13 +4734,17 @@ export class AgentsStore {
   }
 
   async createRemoteSession(agentId: string, node_id: string, cwd?: string) {
+    const isCurrentSource = this.sessionMutationScope(agentId);
     const result = await this.createRemoteSessionAttach(agentId, node_id, cwd);
-    await this.refreshRemoteSessionsForAgent(agentId, node_id);
+    if (isCurrentSource()) await this.refreshRemoteSessionsForAgent(agentId, node_id);
     return result;
   }
 
   private async createAttachedRemoteSession(agentId: string, node_id: string, cwd: string): Promise<string> {
+    const isCurrentSource = this.sessionMutationScope(agentId);
+    const record = await this.connectInitializedRecord(agentId);
     const result = await this.createRemoteSessionAttach(agentId, node_id, cwd);
+    if (!isCurrentSource() || this.clients.get(agentId) !== record) return result.session_id;
     return this.hydrateRemoteAttach(agentId, node_id, result, {
       id: result.session_id,
       node_id,
@@ -4713,17 +4754,19 @@ export class AgentsStore {
   }
 
   private async createRemoteSessionAttach(agentId: string, node_id: string, cwd?: string) {
+    const isCurrentSource = this.sessionMutationScope(agentId);
     const record = await this.connectInitializedRecord(agentId);
     if (!record) {
       throw new Error('Failed to connect to the agent.');
     }
+    if (!isCurrentSource()) throw new Error('Agent endpoint changed before creating the session.');
     const result = await record.client.createRemoteSession({ node_id, cwd, attach: true });
-    if (this.pollingDisposed || this.clients.get(agentId) !== record) throw new Error('Agent connection changed while creating the session.');
+    if (!this.canPublishCreatedSession(agentId, record, isCurrentSource)) return result;
     const config = this.configs.find((candidate) => candidate.id === agentId)!;
     if (cwd) {
       const lifecycle = record.client.supportsSessionLifecycle()
         ? await record.client.getSessionLifecycle(result.session_id).catch(() => null) : null;
-      if (this.pollingDisposed || this.clients.get(agentId) !== record) throw new Error('Agent connection changed while creating the session.');
+      if (!this.canPublishCreatedSession(agentId, record, isCurrentSource)) return result;
       const summary: DesktopSessionSummary = {
         agentId, agentName: config.name, sessionId: result.session_id, title: 'Untitled session', cwd,
         updatedAt: new Date().toISOString(), runtimeId: agentId, runtimeName: config.name,

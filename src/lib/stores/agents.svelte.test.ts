@@ -1563,6 +1563,189 @@ describe('AgentsStore session lifecycle', () => {
     expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['task']);
   });
 
+  it('reconciles a confirmed deletion after reconnect without reloading or clearing newer runtime state', async () => {
+    mockClient.connect.mockResolvedValue({ protocolVersion: 1, agentCapabilities: { sessionCapabilities: { delete: {} } }, authMethods: [] });
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('deleted')] });
+    await store.ensureSessionCatalog();
+    let confirm!: () => void;
+    mockClient.deleteSession.mockImplementationOnce(() => new Promise<undefined>((resolve) => { confirm = () => resolve(undefined); }));
+    const deletion = store.deleteSession('agent-1', 'deleted');
+    await vi.waitFor(() => expect(confirm).toBeTypeOf('function'));
+    await store.connectAgent('agent-1', true);
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'deleted';
+    store.activeSession.sessionId = 'deleted';
+    confirm();
+    await deletion;
+    const reads = mockClient.listSessions.mock.calls.length;
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(reads);
+    expect(store.sessionCatalog).toEqual([]);
+    expect(store.sessionsByAgent['agent-1']).toEqual([]);
+    expect(store.workspaceSessionGroups.flatMap((group) => group.sessions)).toEqual([]);
+    expect(store.activeSessionId).toBe('deleted');
+    store.dispose();
+    const cached = JSON.parse(localStorage.getItem(SESSION_CATALOG_STORAGE_KEY)!).entries;
+    expect(cached.every((entry: { sessions: unknown[] }) => !entry.sessions.length)).toBe(true);
+  });
+
+  it.each(['create-response', 'lifecycle-response'] as const)('returns confirmed local creation after reconnect at %s and reconciles on the next catalog read', async (boundary) => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('existing')] });
+    await store.ensureSessionCatalog();
+    let release!: () => void;
+    const response = { sessionId: 'confirmed-local', configOptions: [] };
+    if (boundary === 'create-response') {
+      mockClient.createSession.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(response); }));
+    } else {
+      mockClient.createSession.mockResolvedValueOnce(response);
+      mockClient.getSessionLifecycle.mockImplementationOnce(() => new Promise((resolve) => {
+        release = () => resolve(summary('confirmed-local').lifecycle!);
+      }));
+    }
+    const creation = store.createBackgroundSession('agent-1', '/tmp/work');
+    const outcome = expect(creation).resolves.toEqual(response);
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    await store.connectAgent('agent-1', true);
+    release();
+    await outcome;
+    expect(store.lastCreatedSession).toBeNull();
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('existing'), listed('confirmed-local')] });
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog.some((session) => session.sessionId === 'confirmed-local')).toBe(true);
+    expect(mockClient.createSession).toHaveBeenCalledOnce();
+  });
+
+  it.each(['create-response', 'lifecycle-response'] as const)('returns confirmed remote creation after reconnect at %s without publishing the old attachment', async (boundary) => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('existing')] });
+    await store.ensureSessionCatalog();
+    let release!: () => void;
+    const response: RemoteSessionAttachInfo = { session_id: 'confirmed-remote', node_id: 'node-1', attached: true,
+      config_options: [], snapshot: { audit: { events: [] } } };
+    if (boundary === 'create-response') {
+      mockClient.createRemoteSession.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(response); }));
+    } else {
+      mockClient.createRemoteSession.mockResolvedValueOnce(response);
+      mockClient.getSessionLifecycle.mockImplementationOnce(() => new Promise((resolve) => {
+        release = () => resolve(summary('confirmed-remote').lifecycle!);
+      }));
+    }
+    const creation = store.createRemoteSession('agent-1', 'node-1', '/remote/work');
+    const outcome = expect(creation).resolves.toEqual(response);
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    await store.connectAgent('agent-1', true);
+    release();
+    await outcome;
+    expect(store.lastRemoteAttachByAgent['agent-1']).toBeUndefined();
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('existing'), { ...listed('confirmed-remote'),
+      _meta: { querymt: { lifecycle: summary('confirmed-remote').lifecycle, remote: true, node_id: 'node-1' } } }] });
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog.some((session) => session.sessionId === 'confirmed-remote')).toBe(true);
+    expect(mockClient.createRemoteSession).toHaveBeenCalledOnce();
+  });
+
+  it.each((['delete', 'local-create', 'remote-create'] as const).flatMap((mutation) =>
+    (['replace', 'replace-restore', 'save-restore', 'remove-recreate', 'dispose'] as const).map((change) => ({ mutation, change }))
+  ))('does not apply a confirmed $mutation to retired state after $change', async ({ mutation, change }) => {
+    mockClient.connect.mockResolvedValue({ protocolVersion: 1, agentCapabilities: { sessionCapabilities: { delete: {} } }, authMethods: [] });
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('same-id')] });
+    await store.ensureSessionCatalog();
+    let confirm!: () => void;
+    const localResponse = { sessionId: 'old-created', configOptions: [] };
+    const remoteResponse: RemoteSessionAttachInfo = { session_id: 'old-created', node_id: 'node-1', attached: true,
+      config_options: [], snapshot: { audit: { events: [] } } };
+    const expected = mutation === 'delete' ? undefined : mutation === 'local-create' ? localResponse : remoteResponse;
+    if (mutation === 'delete') mockClient.deleteSession.mockImplementationOnce(() => new Promise<undefined>((resolve) => { confirm = () => resolve(undefined); }));
+    if (mutation === 'local-create') mockClient.createSession.mockImplementationOnce(() => new Promise((resolve) => {
+      confirm = () => resolve(localResponse);
+    }));
+    if (mutation === 'remote-create') mockClient.createRemoteSession.mockImplementationOnce(() => new Promise((resolve) => {
+      confirm = () => resolve(remoteResponse);
+    }));
+    const operation = mutation === 'delete' ? store.deleteSession('agent-1', 'same-id') : mutation === 'local-create'
+      ? store.createBackgroundSession('agent-1', '/tmp/work') : store.createRemoteSession('agent-1', 'node-1', '/remote/work');
+    const outcome = expect(operation).resolves.toEqual(expected);
+    await vi.waitFor(() => expect(confirm).toBeTypeOf('function'));
+    const original = { ...store.configs[0] };
+    if (change === 'dispose') store.dispose();
+    else if (change === 'remove-recreate') {
+      const runtime = { ...store.statuses['agent-1'] };
+      await store.deleteConfig('agent-1');
+      store.saveConfig(original);
+      store.statuses = { ...store.statuses, 'agent-1': runtime };
+      await store.connectAgent('agent-1');
+    } else if (change === 'save-restore') {
+      store.saveConfig({ ...original, commandLine: 'other-agent' });
+      store.saveConfig(original);
+    } else {
+      store.updateConfig('agent-1', { commandLine: 'other-agent' });
+      if (change === 'replace-restore') store.updateConfig('agent-1', { commandLine: original.commandLine });
+    }
+    if (change !== 'dispose') await store.ensureSessionCatalog();
+    const reads = mockClient.listSessions.mock.calls.length;
+    const remoteReads = mockClient.listRemoteSessions.mock.calls.length;
+    confirm();
+    await outcome;
+    if (change !== 'dispose') await store.ensureSessionCatalog();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['same-id']);
+    expect(store.sessionsByAgent['agent-1'].map((session) => session.sessionId)).toEqual(['same-id']);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(reads);
+    expect(mockClient.listRemoteSessions).toHaveBeenCalledTimes(remoteReads);
+    expect(store.lastCreatedSession).toBeNull();
+    expect(store.lastRemoteAttachByAgent['agent-1']).toBeUndefined();
+  });
+
+  it('returns the created remote session ID after reconnect without hydrating an old attachment over a newer selection', async () => {
+    const store = await lifecycleStore();
+    store.composerTargetId = 'node-1';
+    let confirm!: () => void;
+    mockClient.createRemoteSession.mockImplementationOnce(() => new Promise((resolve) => {
+      confirm = () => resolve({ session_id: 'created-remote', node_id: 'node-1', attached: true, config_options: [], snapshot: { audit: { events: [] } } });
+    }));
+    const creation = store.createSession('agent-1');
+    const outcome = expect(creation).resolves.toBe('created-remote');
+    await vi.waitFor(() => expect(confirm).toBeTypeOf('function'));
+    await store.connectAgent('agent-1', true);
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'newer-selection';
+    store.activeSession.sessionId = 'newer-selection';
+    confirm();
+    await outcome;
+    expect(store.activeSessionId).toBe('newer-selection');
+    expect(store.lastRemoteAttachByAgent['agent-1']).toBeUndefined();
+    expect(store.error).toBeNull();
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
+  it.each(['local', 'node-1'])('does not select or configure a session from a replaced endpoint when composer target is %s', async (target) => {
+    const store = await lifecycleStore();
+    store.composerTargetId = target;
+    let confirm!: () => void;
+    if (target === 'local') mockClient.createSession.mockImplementationOnce(() => new Promise((resolve) => {
+      confirm = () => resolve({ sessionId: 'old-created', configOptions: [] });
+    }));
+    else mockClient.createRemoteSession.mockImplementationOnce(() => new Promise((resolve) => {
+      confirm = () => resolve({ session_id: 'old-created', node_id: target, attached: true, config_options: [], snapshot: { audit: { events: [] } } });
+    }));
+    const creation = store.createSession('agent-1');
+    const outcome = expect(creation).resolves.toBe('old-created');
+    await vi.waitFor(() => expect(confirm).toBeTypeOf('function'));
+    store.updateConfig('agent-1', { commandLine: 'other-agent' });
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'replacement-selection';
+    store.activeSession.sessionId = 'replacement-selection';
+    confirm();
+    await outcome;
+    expect(store.activeSessionId).toBe('replacement-selection');
+    expect(store.error).toBeNull();
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
   it('isolates remote peer selections even when the selected lifecycle view is unchanged', async () => {
     const store = await lifecycleStore();
     mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('local-only')] });
