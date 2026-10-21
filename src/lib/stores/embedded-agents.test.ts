@@ -31,6 +31,7 @@ vi.mock('$lib/querymt/acp-client', () => ({
       getSessionRuntimeStatus: mocks.runtime,
       listProfiles: mocks.listProfiles,
       listModels: mocks.listModels,
+      getModelInfo: vi.fn(async () => ({})),
       listAuthProviders: vi.fn(async () => []),
       getControlCapabilities: vi.fn(() => ({
         methods: ['querymt/profiles'],
@@ -68,7 +69,7 @@ beforeEach(() => {
   mocks.listSessions.mockReset().mockResolvedValue({ sessions: [] });
 });
 const created: AgentsStore[] = [];
-afterEach(() => { for (const store of created.splice(0)) store.dispose(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+afterEach(() => { for (const store of created.splice(0)) store.dispose(); delete (document as { hidden?: boolean }).hidden; vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 function channels() {
   const ports = new Set<FakeChannel>();
@@ -170,12 +171,157 @@ describe.runIf(isEmbedded)('AgentsStore embedded startup', () => {
     const late = Promise.all([a.refreshSessionCatalog(), b.refreshSessionCatalog()]); await vi.advanceTimersByTimeAsync(100);
     mocks.pins = true;
     const write = mutation === 'lifecycle' ? a.setSessionLifecycle(EMBEDDED_AGENT_ID, 'one', { resolved: true }) : a.setSessionPinned(a.sessions.find((row) => row.sessionId === 'one')!, true);
-    await write; await vi.advanceTimersByTimeAsync(200);
+    await write;
+    const committed = listed('one', mutation === 'pin');
+    committed._meta.querymt.lifecycle.resolved = mutation === 'lifecycle';
+    mocks.listSessions.mockResolvedValue({ sessions: [committed] });
+    await vi.advanceTimersByTimeAsync(200);
     release({ sessions: [listed('one')] }); await late; await vi.advanceTimersByTimeAsync(100);
     const current = a.sessions.find((row) => row.sessionId === 'one')!;
     if (mutation === 'lifecycle') expect(current.lifecycle?.resolved).toBe(true);
     else expect(current.pin?.pinned).toBe(true);
     expect(a.sessionCatalogLoading).toBe(false); expect(b.sessionCatalogLoading).toBe(false);
+    expect(a.sessionCatalogError).toBeNull(); expect(b.sessionCatalogError).toBeNull();
+    expect(a.connectionStates[EMBEDDED_AGENT_ID]).toBe('initialized');
+    expect(b.connectionStates[EMBEDDED_AGENT_ID]).toBe('initialized');
+    expect(a.agentErrors[EMBEDDED_AGENT_ID]).toBeNull(); expect(b.agentErrors[EMBEDDED_AGENT_ID]).toBeNull();
+    expect(a.error).toBeNull(); expect(b.error).toBeNull();
+  });
+
+  it.each(['local-pin', 'peer-lifecycle', 'profile'] as const)('supersedes a pending summary without losing the agent after %s and retries promptly', async (change) => {
+    vi.useFakeTimers(); channels(); const [a, b] = await twoTabs();
+    mocks.listSessions.mockResolvedValue({ sessions: [listed('one')] });
+    const seed = Promise.all([a.refreshSessionCatalog(), b.refreshSessionCatalog()]); await vi.advanceTimersByTimeAsync(200); await seed;
+    let release!: (page: ListSessionsResponse) => void;
+    mocks.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const pending = a.refreshSessionsForAgent(EMBEDDED_AGENT_ID); await vi.advanceTimersByTimeAsync(100);
+    if (change === 'local-pin') { mocks.pins = true; await a.setSessionPinned(a.sessions[0], true); }
+    else if (change === 'peer-lifecycle') await b.setSessionLifecycle(EMBEDDED_AGENT_ID, 'one', { resolved: true });
+    else a.setComposerProfile('other-profile');
+    release({ sessions: [listed('obsolete')] }); await pending; await vi.advanceTimersByTimeAsync(0);
+    expect(a.connectionStates[EMBEDDED_AGENT_ID]).toBe('initialized');
+    expect(a.connectedAgents).toHaveLength(1);
+    expect(a.agentErrors[EMBEDDED_AGENT_ID]).toBeNull(); expect(a.error).toBeNull();
+    const count = mocks.listSessions.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mocks.listSessions.mock.calls.length).toBeGreaterThan(count);
+    expect(a.sessions.some((row) => row.sessionId === 'obsolete')).toBe(false);
+  });
+
+  it('does not mark a superseded filtered-existence probe complete or wait 30s to retry', async () => {
+    vi.useFakeTimers(); channels(); const [a] = await twoTabs();
+    mocks.listSessions.mockResolvedValueOnce({ sessions: [] });
+    let release!: (page: ListSessionsResponse) => void;
+    mocks.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const read = a.refreshSessionCatalog(); await vi.advanceTimersByTimeAsync(200);
+    a.setComposerProfile('new-profile'); release({ sessions: [] }); await read;
+    expect(a.sessionCatalogLoading).toBe(false); expect(a.sessionCatalogError).toBeNull();
+    const persisted = localStorage.getItem(SESSION_CATALOG_STORAGE_KEY);
+    expect(persisted == null || !JSON.parse(persisted).entries.some((entry: { complete: boolean }) => entry.complete)).toBe(true);
+    mocks.listSessions.mockResolvedValue({ sessions: [listed('new-profile-row')] });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(a.sessionCatalog.some((row) => row.sessionId === 'new-profile-row')).toBe(true);
+  });
+
+  it('clears pin loading/error on a profile cancellation and retries the correct scope', async () => {
+    vi.useFakeTimers(); channels(); const [a] = await twoTabs(); mocks.pins = true;
+    let release!: (page: ListSessionsResponse) => void;
+    mocks.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const read = a.ensurePinnedSessions(true); await vi.advanceTimersByTimeAsync(100);
+    a.setComposerProfile('new-profile'); release({ sessions: [listed('obsolete', true)] }); await read;
+    expect(a.pinnedSessionsLoading[EMBEDDED_AGENT_ID]).toBe(false);
+    expect(a.pinnedSessionsErrors[EMBEDDED_AGENT_ID]).toBeNull();
+    mocks.listSessions.mockResolvedValue({ sessions: [listed('current-pin', true)] });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(a.pinnedSessions.map((row) => row.sessionId)).toEqual(['current-pin']);
+  });
+
+  it.each(['open', 'workspace'] as const)('rolls back a canceled %s page cursor and retries without a false error', async (kind) => {
+    vi.useFakeTimers(); channels(); const [a] = await twoTabs();
+    await a.setSessionLifecycle(EMBEDDED_AGENT_ID, 'one', { resolved: false });
+    mocks.listSessions.mockResolvedValueOnce({ sessions: [listed('one')], nextCursor: 'next' });
+    const seed = a.refreshSessionsForAgent(EMBEDDED_AGENT_ID); await vi.advanceTimersByTimeAsync(100); await seed;
+    a.workspaceSessionSources = { [EMBEDDED_AGENT_ID]: { '/work': {
+      agentId: EMBEDDED_AGENT_ID, agentName: 'QMTCODE', cwd: '/work', sessions: [], latestActivity: null,
+      nextCursor: 'next', initialized: true, loading: false, error: null
+    } } };
+    let release!: (page: ListSessionsResponse) => void;
+    mocks.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const load = kind === 'open' ? a.loadMoreOpenSessions() : a.loadWorkspaceSessions('/work');
+    await vi.advanceTimersByTimeAsync(100);
+    a.setComposerProfile('new-profile'); release({ sessions: [listed('obsolete')] }); await load;
+    expect(a.openSessionsLoadError).toBeNull(); expect(a.openSessionsLoading).toBe(false);
+    expect(a.workspaceSessionSources[EMBEDDED_AGENT_ID]['/work'].error).toBeNull();
+    expect(a.workspaceSessionSources[EMBEDDED_AGENT_ID]['/work'].loading).toBe(false);
+    mocks.listSessions.mockResolvedValue({ sessions: [listed('current')] });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(a.sessions.some((row) => row.sessionId === 'current')).toBe(true);
+    expect(a.sessions.some((row) => row.sessionId === 'obsolete')).toBe(false);
+    expect(mocks.listSessions.mock.lastCall?.[0]?.cursor).toBe('next');
+    expect(a.workspaceSessionSources[EMBEDDED_AGENT_ID]['/work'].error).toBeNull();
+  });
+
+  it('does not turn an old-profile transport rejection into a current agent failure', async () => {
+    vi.useFakeTimers(); channels(); const [a] = await twoTabs();
+    let reject!: (error: Error) => void;
+    mocks.listSessions.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const read = a.refreshSessionsForAgent(EMBEDDED_AGENT_ID); await vi.advanceTimersByTimeAsync(100);
+    a.setComposerProfile('new-profile'); reject(new Error('Old profile failure')); await read;
+    expect(a.connectionStates[EMBEDDED_AGENT_ID]).toBe('initialized');
+    expect(a.agentErrors[EMBEDDED_AGENT_ID]).toBeNull(); expect(a.error).toBeNull();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mocks.listSessions.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('defers and coalesces superseded reads while hidden, with at most one automatic retry per wave', async () => {
+    vi.useFakeTimers(); channels(); const [a] = await twoTabs();
+    const releases: Array<(page: ListSessionsResponse) => void> = [];
+    mocks.listSessions.mockImplementation(() => new Promise((resolve) => { releases.push(resolve); }));
+    const first = a.refreshSessionsForAgent(EMBEDDED_AGENT_ID); await vi.advanceTimersByTimeAsync(100);
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange'));
+    a.setComposerProfile('new-profile'); releases.shift()!({ sessions: [] }); await first;
+    mocks.listSessions.mockClear(); await vi.advanceTimersByTimeAsync(5_000);
+    expect(mocks.listSessions).not.toHaveBeenCalled();
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange'));
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(mocks.listSessions).toHaveBeenCalledTimes(1);
+    a.setComposerProfile('newer-profile'); releases.shift()!({ sessions: [] });
+    await vi.advanceTimersByTimeAsync(1_000);
+    // The visibility request and retry share the serialized list flight; they cannot replay unboundedly.
+    expect(mocks.listSessions.mock.calls.length).toBeLessThanOrEqual(2);
+    while (releases.length) { releases.shift()!({ sessions: [] }); await vi.advanceTimersByTimeAsync(0); }
+    delete (document as { hidden?: boolean }).hidden;
+  });
+
+  it.each(['disconnect', 'dispose'] as const)('does not reconnect or retry after superseded pending work on %s', async (change) => {
+    vi.useFakeTimers(); channels(); const [a] = await twoTabs();
+    let release!: (page: ListSessionsResponse) => void;
+    mocks.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const read = a.refreshSessionCatalog(); await vi.advanceTimersByTimeAsync(100);
+    if (change === 'dispose') a.dispose(); else await a.stopConfiguredAgent(EMBEDDED_AGENT_ID);
+    release({ sessions: [listed('obsolete')] }); await read;
+    const calls = mocks.listSessions.mock.calls.length, connects = mocks.connect.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mocks.listSessions).toHaveBeenCalledTimes(calls); expect(mocks.connect).toHaveBeenCalledTimes(connects);
+    expect(a.sessionCatalogError).toBeNull(); expect(a.sessionCatalog.some((row) => row.sessionId === 'obsolete')).toBe(false);
+  });
+
+  it('still exposes genuine list, catalog, pin and page RPC failures', async () => {
+    vi.useFakeTimers(); channels(); const [a] = await twoTabs();
+    await a.setSessionLifecycle(EMBEDDED_AGENT_ID, 'one', { resolved: false });
+    mocks.listSessions.mockRejectedValue(new Error('Real list failure'));
+    const catalog = a.refreshSessionCatalog(); await vi.advanceTimersByTimeAsync(100); await catalog;
+    expect(a.sessionCatalogError).toContain('Real list failure');
+    mocks.pins = true;
+    const pins = a.ensurePinnedSessions(true); await vi.advanceTimersByTimeAsync(100); await pins;
+    expect(a.pinnedSessionsErrors[EMBEDDED_AGENT_ID]).toContain('Real list failure');
+    const more = a.loadMoreOpenSessions(); await vi.advanceTimersByTimeAsync(100); await more;
+    expect(a.openSessionsLoadError).toContain('Real list failure');
+    const refresh = a.refreshSessionsForAgent(EMBEDDED_AGENT_ID); await vi.advanceTimersByTimeAsync(100); await refresh;
+    expect(a.connectionStates[EMBEDDED_AGENT_ID]).toBe('failed');
+    expect(a.agentErrors[EMBEDDED_AGENT_ID]).toBe('Real list failure');
+    expect(a.error).toBe('Real list failure');
   });
 
   it.each(['replace', 'profile', 'dispose'] as const)('does not apply a page from an obsolete embedded source after %s', async (change) => {

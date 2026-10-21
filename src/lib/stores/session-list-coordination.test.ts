@@ -168,6 +168,48 @@ describe('SessionListCoordinator', () => {
     expect(channels.messages).toHaveLength(count);
   });
 
+  it.each(['invalid', 'too-many-rows', 'oversized'] as const)('releases followers before lease expiry for an unshareable %s result', async (kind) => {
+    const a = tab('a'), b = tab('b');
+    const result = kind === 'invalid' ? { sessions: [{ ...page.sessions[0], updatedAt: 3 }] } :
+      kind === 'too-many-rows' ? { sessions: Array.from({ length: 2001 }, () => page.sessions[0]) } :
+        { sessions: [{ ...page.sessions[0], title: 'x'.repeat(500_000) }] };
+    const ownerFetch = vi.fn(async () => result as unknown as typeof page);
+    const followerFetch = vi.fn(async () => page);
+    const owner = a.coordinator.read('source', 'root', ownerFetch);
+    const follower = b.coordinator.read('source', 'root', followerFetch);
+    await settle(300);
+    await expect(owner).resolves.toEqual(result);
+    expect(followerFetch).toHaveBeenCalledTimes(1);
+    await expect(follower).resolves.toEqual(page);
+    expect(channels.messages.filter((data) => typeof data === 'string' && JSON.parse(data).type === 'yield')).not.toHaveLength(0);
+  });
+
+  it('falls back promptly when a cached page fits locally but its reply envelope is oversized', async () => {
+    const a = tab('a'), b = tab('b');
+    const source = 'source'.repeat(300);
+    const large = { sessions: [{ ...page.sessions[0], title: 'x'.repeat(499_000) }] };
+    const first = a.coordinator.read(source, 'root', async () => large); await settle(); await first;
+    const fetch = vi.fn(async () => page);
+    const follower = b.coordinator.read(source, 'root', fetch); await settle(300);
+    await expect(follower).resolves.toEqual(page);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not deadlock or fetch twice when snapshot posting throws during completion', async () => {
+    const port = channels.open();
+    const post = port.postMessage;
+    port.postMessage = (data) => {
+      if (typeof data === 'string' && JSON.parse(data).type === 'snapshot') throw new Error('Channel closed');
+      post(data);
+    };
+    const a = new SessionListCoordinator({ id: 'a', createChannel: () => port }); stores.push(a);
+    const fetch = vi.fn(async () => page);
+    const read = a.read('source', 'root', fetch); await settle();
+    await expect(read).resolves.toEqual(page);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(a.available).toBe(false);
+  });
+
   it('does not replace the local transport deadline with the ownership lease', async () => {
     const a = tab('a'); let release!: (value: typeof page) => void;
     const read = a.coordinator.read('source', 'root', () => new Promise<typeof page>((resolve) => { release = resolve; }));

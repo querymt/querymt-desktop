@@ -158,7 +158,7 @@ import {
 } from '$native';
 import { inboxStore } from '$lib/stores/inbox.svelte';
 import { SessionCatalogCache, isCatalogFresh, sessionCatalogKey } from '$lib/stores/session-catalog-cache';
-import { SessionListCoordinator } from '$lib/stores/session-list-coordination';
+import { SessionListCoordinator, SupersededSessionListError } from '$lib/stores/session-list-coordination';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import {
   loadSessionModePreferences,
@@ -386,6 +386,8 @@ export class AgentsStore {
   private sessionListSharing: SessionListCoordinator | null = null;
   private sharedListSources = new Map<string, string>();
   private sharedListVersions = new Map<string, number>();
+  private supersededListRetries = new Map<string, { agentId: string; record: AgentClientRecord; timer: ReturnType<typeof setTimeout> | null; run: () => Promise<unknown> }>();
+  private retryingSessionLists = new Set<string>();
   private sessionCatalogCache = new SessionCatalogCache();
   private sessionCatalogFlight: { key: string; promise: Promise<void> } | null = null;
   private lifecycleWriteVersions = new Map<string, number>();
@@ -778,12 +780,40 @@ export class AgentsStore {
     if (previous && previous !== source) sharing.drop(previous);
     this.sharedListSources.set(config.id, source);
     const version = this.sharedListVersions.get(config.id) ?? 0;
+    const isCurrent = () => !this.pollingDisposed && this.clients.get(config.id) === record &&
+      this.sharedListSources.get(config.id) === source && this.sessionListSource(config, record) === source &&
+      (this.sharedListVersions.get(config.id) ?? 0) === version;
     return sharing.read(source, JSON.stringify(request), () => record.client.listSessions(request), { fresh, maxAge, allowHidden: !this.pollingIsVisible() }).then((page) => {
+      if (!isCurrent()) throw new SupersededSessionListError();
       if (sharing.isShared(page)) onShared?.();
-      if (this.pollingDisposed || this.clients.get(config.id) !== record || this.sharedListSources.get(config.id) !== source || this.sessionListSource(config, record) !== source ||
-        (this.sharedListVersions.get(config.id) ?? 0) !== version) throw new Error('Session list source changed during refresh.');
       return page;
+    }, (error) => {
+      if (!isCurrent()) throw new SupersededSessionListError();
+      throw error;
     });
+  }
+
+  private retrySupersededList(key: string, agentId: string, record: AgentClientRecord, run: () => Promise<unknown>) {
+    if (this.pollingDisposed || this.clients.get(agentId) !== record || this.retryingSessionLists.has(key) ||
+      this.supersededListRetries.has(key) || this.supersededListRetries.size >= 16 ||
+      !this.configs.some((config) => config.id === agentId && config.enabled)) return;
+    this.supersededListRetries.set(key, { agentId, record, run, timer: null });
+    this.resumeSupersededListRetries();
+  }
+
+  private resumeSupersededListRetries() {
+    if (!this.pollingIsVisible()) return;
+    for (const [key, retry] of this.supersededListRetries) {
+      if (retry.timer !== null) continue;
+      retry.timer = setTimeout(() => {
+        this.supersededListRetries.delete(key);
+        if (!this.pollingIsVisible() || this.clients.get(retry.agentId) !== retry.record ||
+          !this.configs.some((config) => config.id === retry.agentId && config.enabled)) return;
+        // A retry canceled again waits for the next external action or routine fallback.
+        this.retryingSessionLists.add(key);
+        void retry.run().catch(() => null).finally(() => this.retryingSessionLists.delete(key));
+      }, 150);
+    }
   }
 
   private invalidateSharedSessionLists(agentId?: string) {
@@ -815,10 +845,15 @@ export class AgentsStore {
       this.pollingVisible = visible;
       this.sessionListSharing?.visibilityChanged();
       if (!visible) {
+        for (const retry of this.supersededListRetries.values()) {
+          if (retry.timer !== null) clearTimeout(retry.timer);
+          retry.timer = null;
+        }
         for (const agentId of this.sessionRefreshTimers.keys()) this.clearScheduledSessionRefresh(agentId);
         for (const key of this.sessionRuntimeRefreshTimers.keys()) this.cancelSessionRuntimeRefresh(key);
         return;
       }
+      this.resumeSupersededListRetries();
       for (const config of this.sessionPollingAgents()) void this.refreshRoutineSessions(config.id);
       this.resumeSelectedRuntime();
       void this.ensurePinnedSessions();
@@ -876,6 +911,9 @@ export class AgentsStore {
     this.pollingDisposed = true;
     this.sessionListSharing?.dispose();
     this.sessionListSharing = null;
+    for (const retry of this.supersededListRetries.values()) if (retry.timer !== null) clearTimeout(retry.timer);
+    this.supersededListRetries.clear();
+    this.retryingSessionLists.clear();
     this.sharedListSources.clear();
     this.sharedListVersions.clear();
     this.sessionPollingStarted = false;
@@ -1871,6 +1909,10 @@ export class AgentsStore {
         this.sessionCatalogCache.set({ key: cacheKey, sessions, complete: true, checkedAt: Date.now(), hasSessions: sessions.length > 0 }, !shared);
         this.sessionCatalogCache.flush();
       } catch (error) {
+        if (error instanceof SupersededSessionListError) {
+          this.retrySupersededList(`pins:${agentId}`, agentId, record, () => this.pinFlights.get(agentId)?.promise ?? this.ensurePinnedSessions(true, agentId));
+          return;
+        }
         if (isCurrent()) this.pinnedSessionsErrors = { ...this.pinnedSessionsErrors, [agentId]: `${config.name}: ${acpErrorMessage(error, 'Pinned sessions could not be loaded.')}` };
       } finally {
         if (isCurrent()) this.pinnedSessionsLoading = { ...this.pinnedSessionsLoading, [agentId]: false };
@@ -2033,6 +2075,11 @@ export class AgentsStore {
   private async readSessionCatalog({ lifecycle, configs: allConfigs, supportedConfigs: configs, remoteNodeIds, signature }: ReturnType<AgentsStore['sessionCatalogContext']>, fresh: boolean) {
     const generation = ++this.sessionCatalogGeneration;
     let shared = false;
+    let superseded = false;
+    const retry = (config: AgentConfig, record: AgentClientRecord | undefined) => {
+      superseded = true;
+      if (record) this.retrySupersededList('catalog', config.id, record, () => this.refreshSessionCatalog());
+    };
     const remember = (complete: boolean) => {
       if (generation !== this.sessionCatalogGeneration || !allConfigs.length) return;
       this.sessionCatalogCache.set({
@@ -2047,6 +2094,7 @@ export class AgentsStore {
       .some((session) => !session.parentSessionId && this.sessionVisibleInCatalog(session))) ? true : null;
     const filtered = lifecycle.resolution !== 'any' || lifecycle.archive !== 'any';
     const errors = new Map<string, string>();
+    const records = new Map(configs.map((config) => [config.id, this.initializedClientRecord(config.id)]));
     await Promise.all(configs.map(async (config) => {
       try {
         const record = this.initializedClientRecord(config.id);
@@ -2075,13 +2123,14 @@ export class AgentsStore {
         this.sessionCatalog = mergeSessions(this.sessionCatalog.filter((session) => session.agentId !== config.id), sessions);
         remember(false);
       } catch (error) {
+        if (error instanceof SupersededSessionListError) { retry(config, records.get(config.id) ?? undefined); return; }
         if (generation !== this.sessionCatalogGeneration) return;
         errors.set(config.id, `${config.name}: ${acpErrorMessage(error, 'Sessions could not be loaded.')}`);
         this.sessionCatalogError = [...errors.values()].join(' ');
       }
     }));
     if (generation !== this.sessionCatalogGeneration) return;
-    if (!errors.size && configs.length) {
+    if (!errors.size && !superseded && configs.length) {
       if (!filtered) {
         this.sessionCatalogHasSessions = this.sessionCatalog.length > 0;
       } else if (this.sessionCatalogHasSessions === null) {
@@ -2101,7 +2150,8 @@ export class AgentsStore {
               if (cursor) seen.add(cursor);
             } while (cursor);
             return false;
-          } catch {
+          } catch (error) {
+            if (error instanceof SupersededSessionListError) retry(config, records.get(config.id) ?? undefined);
             return null;
           }
         }));
@@ -2110,7 +2160,7 @@ export class AgentsStore {
       }
     }
     this.sessionCatalogLoading = false;
-    remember(!errors.size);
+    remember(!errors.size && !superseded);
     this.sessionCatalogCache.flush();
   }
 
@@ -2222,6 +2272,14 @@ export class AgentsStore {
         [config.id]: null
       };
     } catch (error) {
+      if (error instanceof SupersededSessionListError) {
+        if (isCurrent()) {
+          record.connectionState = 'initialized';
+          this.connectionStates = { ...this.connectionStates, [agentId]: 'initialized' };
+          this.retrySupersededList(`summary:${agentId}`, agentId, record, () => this.sessionListRefreshChain.get(agentId) ?? this.refreshSessionsForAgent(agentId, discoverAll));
+        }
+        return;
+      }
       if (!isCurrent()) return;
       if (discoverAll) this.completedWorkspaceDiscoveries.delete(agentId);
       record.error = error instanceof Error ? error.message : `Failed to load sessions for ${config.name}.`;
@@ -2253,7 +2311,8 @@ export class AgentsStore {
         group!.sessions.length >= target &&
         sources.every((source) => source.initialized);
       if (initializedEnough) return;
-      await Promise.all(candidates.map((source) => this.loadWorkspaceSourcePage(source)));
+      const loaded = await Promise.all(candidates.map((source) => this.loadWorkspaceSourcePage(source)));
+      if (loaded.includes(false)) return;
     }
   }
 
@@ -2321,6 +2380,10 @@ export class AgentsStore {
         page.nextCursor = nextCursor;
         if (nextCursor) page.seenCursors.push(nextCursor);
       } catch (error) {
+        if (error instanceof SupersededSessionListError) {
+          this.retrySupersededList(`open:${config.id}`, config.id, record, () => this.loadMoreOpenSessions());
+          return;
+        }
         if (this.openSessionPages[config.id] === page) page.error = acpErrorMessage(error, 'Could not load more sessions.');
       } finally {
         page.loading = false;
@@ -2590,16 +2653,18 @@ export class AgentsStore {
     const sourceKey = buildWorkspaceSourceKey(source.agentId, source.cwd);
     const seenCursors = this.seenWorkspaceCursors.get(sourceKey) ?? new Set<string>();
     this.seenWorkspaceCursors.set(sourceKey, seenCursors);
+    let requestCursor: string | null | undefined;
+    let record: AgentClientRecord | undefined;
     try {
       const config = this.configs.find((candidate) => candidate.id === source.agentId);
       if (!config) throw new Error(`Unable to locate ${source.agentName} for workspace sessions.`);
-      const record = await this.connectInitializedRecord(source.agentId);
+      record = await this.connectInitializedRecord(source.agentId);
       if (!record) {
         throw new Error(`Unable to connect ${source.agentName} for workspace sessions.`);
       }
       current = this.workspaceSessionSources[source.agentId]?.[source.cwd];
 
-      const requestCursor = current?.initialized ? current.nextCursor : null;
+      requestCursor = current?.initialized ? current.nextCursor : null;
       // TODO(backend): these cwd cursors are QueryMT integer offsets. A create
       // that lands at the top of the workspace list makes "load more" skip or
       // duplicate until session/list uses a stable keyset cursor.
@@ -2637,6 +2702,11 @@ export class AgentsStore {
         };
       }
     } catch (error) {
+      if (error instanceof SupersededSessionListError) {
+        if (requestCursor) seenCursors.delete(requestCursor);
+        if (record) this.retrySupersededList(`workspace:${sourceKey}`, source.agentId, record, () => this.loadWorkspaceSourcePage(source));
+        return false;
+      }
       if ((this.workspaceSourceVersions.get(source.agentId) ?? 0) === sourceVersion) {
         const message = error instanceof Error ? error.message : `Failed to load sessions for ${source.agentName}.`;
         this.updateWorkspaceSource(source.agentId, source.cwd, { error: message });
@@ -3644,6 +3714,14 @@ export class AgentsStore {
         telemetryStatus = 'cancelled';
         return;
       }
+      if (error instanceof SupersededSessionListError) {
+        telemetryStatus = 'cancelled';
+        endSessionWork(this.activeSession);
+        this.retrySupersededList(`load:${sessionKey}`, agentId, record, async () => {
+          if (isCurrentLoad()) await this.loadSession(agentId, sessionId, pendingOperation);
+        });
+        return;
+      }
       telemetryStatus = 'error';
       const message = error instanceof Error ? error.message : 'Failed to load ACP session.';
       this.activeSession.runState = 'failed';
@@ -4073,6 +4151,10 @@ export class AgentsStore {
   }
 
   private disposeClient(agentId: string) {
+    for (const [key, retry] of this.supersededListRetries) if (retry.agentId === agentId) {
+      if (retry.timer !== null) clearTimeout(retry.timer);
+      this.supersededListRetries.delete(key);
+    }
     const sharedSource = this.sharedListSources.get(agentId);
     if (sharedSource) this.sessionListSharing?.drop(sharedSource);
     this.sharedListSources.delete(agentId);

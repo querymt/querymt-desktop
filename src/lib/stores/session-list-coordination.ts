@@ -5,6 +5,12 @@ export interface SessionListChannel {
   postMessage(data: unknown): void;
   close(): void;
 }
+export class SupersededSessionListError extends Error {
+  constructor(message = 'Session list source changed during refresh.') {
+    super(message);
+    this.name = 'SupersededSessionListError';
+  }
+}
 const CHANNEL = 'querymt.session-lists.v1';
 const ELECT_MS = 60;
 const LEASE_MS = 6_000;
@@ -73,7 +79,7 @@ export class SessionListCoordinator {
   isShared(page: ListSessionsResponse) { return this.sharedPages.has(page); }
 
   read(source: string, key: string, fetch: () => Promise<ListSessionsResponse>, options: { fresh?: boolean; maxAge?: number; allowHidden?: boolean } = {}): Promise<ListSessionsResponse> {
-    if (this.disposed) return Promise.reject(new Error('Session coordinator disposed.'));
+    if (this.disposed) return Promise.reject(new SupersededSessionListError('Session coordinator disposed.'));
     if (!this.available || (!this.visible() && options.allowHidden) || !validString(source) || !validString(key) || this.pending.size >= MAX_PENDING) return fetch();
     const scope = scopeKey(source, key);
     const cached = this.cache.get(scope);
@@ -106,7 +112,7 @@ export class SessionListCoordinator {
   drop(source: string) {
     for (const [scope, pending] of this.pending) if (pending.source === source) {
       this.send('yield', pending);
-      this.finish(scope, new Error('Session source disconnected.'));
+      this.finish(scope, new SupersededSessionListError('Session source disconnected.'));
     }
     for (const scope of this.cache.keys()) if (JSON.parse(scope)[0] === source) this.cache.delete(scope);
   }
@@ -120,23 +126,26 @@ export class SessionListCoordinator {
 
   dispose() {
     if (this.disposed) return;
-    for (const [scope, pending] of this.pending) { this.send('yield', pending); this.finish(scope, new Error('Session coordinator disposed.')); }
+    for (const [scope, pending] of this.pending) { this.send('yield', pending); this.finish(scope, new SupersededSessionListError('Session coordinator disposed.')); }
     this.disposed = true;
     if (this.channel) { this.channel.onmessage = null; this.channel.close(); }
     this.channel = null; this.cache.clear(); this.revisions.clear(); this.seenInvalidations.clear();
   }
 
-  private send(type: string, context: { source: string; key: string; revision: Revision }, extra: Record<string, unknown> = {}) {
-    if (!this.channel) return;
+  private send(type: string, context: { source: string; key: string; revision: Revision }, extra: Record<string, unknown> = {}): boolean {
+    if (!this.channel) return false;
     try {
       const message = JSON.stringify({ version: 1, type, peer: this.id,
         source: context.source, key: context.key, revision: context.revision, ...extra });
-      if (message.length <= MAX_BYTES) this.channel.postMessage(message);
+      if (message.length > MAX_BYTES) return false;
+      this.channel.postMessage(message);
+      return true;
     } catch {
       this.channel.onmessage = null;
       try { this.channel.close(); } catch { /* Failed channels must not disable local reads. */ }
       this.channel = null;
       for (const pending of this.pending.values()) if (!pending.fetching) this.run(pending);
+      return false;
     }
   }
 
@@ -171,11 +180,13 @@ export class SessionListCoordinator {
     const revision = pending.revision;
     void pending.fetch().then((page) => {
       if (this.pending.get(scope) !== pending || compare(this.revisions.get(pending.source) ?? initial, revision)) return;
+      let shared = false;
       if (validSessionListPage(page)) {
         const snapshot = { page, at: Date.now(), revision: pending.revision };
         this.remember(scope, snapshot);
-        this.send('snapshot', pending, { page, at: snapshot.at });
+        shared = this.send('snapshot', pending, { page, at: snapshot.at });
       }
+      if (!shared) this.send('yield', pending);
       this.finish(scope, page);
     }, (error) => {
       if (this.pending.get(scope) !== pending || compare(this.revisions.get(pending.source) ?? initial, revision)) return;
@@ -255,7 +266,9 @@ export class SessionListCoordinator {
         const cached = this.cache.get(scope);
         this.send('epoch', { source, key: message.key, revision: current });
         if (cached && message.fresh === false && Date.now() - cached.at < Number(message.maxAge)) {
-          this.send('snapshot', { source, key: message.key, revision: current }, { page: cached.page, at: cached.at });
+          if (!this.send('snapshot', { source, key: message.key, revision: current }, { page: cached.page, at: cached.at })) {
+            this.send('yield', { source, key: message.key, revision: current });
+          }
         }
       }
       return;
@@ -274,7 +287,9 @@ export class SessionListCoordinator {
     if (type === 'want') {
       const cached = this.cache.get(scope);
       if (cached && message.fresh === false && Date.now() - cached.at < Number(message.maxAge)) {
-        this.send('snapshot', { source, key: message.key, revision }, { page: cached.page, at: cached.at });
+        if (!this.send('snapshot', { source, key: message.key, revision }, { page: cached.page, at: cached.at })) {
+          this.send('yield', { source, key: message.key, revision });
+        }
       }
       const own = pending?.claims.get(this.id);
       if (pending && own && this.visible()) this.send('claim', pending, own);
