@@ -15,6 +15,7 @@ vi.mock('$lib/querymt/notifications', () => ({
 function createClient() {
   let elicitationHandler: ((request: CreateElicitationRequest) => Promise<CreateElicitationResponse>) | null = null;
   let permissionHandler: ((request: RequestPermissionRequest) => Promise<RequestPermissionResponse>) | null = null;
+  let notificationHandler: ((notification: { method: string; params: unknown }) => void) | null = null;
 
   return {
     onElicitationRequest: vi.fn((handler: typeof elicitationHandler) => {
@@ -29,8 +30,15 @@ function createClient() {
         permissionHandler = null;
       };
     }),
+    onExtensionNotification: vi.fn((handler: typeof notificationHandler) => {
+      notificationHandler = handler;
+      return () => {
+        notificationHandler = null;
+      };
+    }),
     elicit: (request: CreateElicitationRequest) => elicitationHandler!(request),
-    permission: (request: RequestPermissionRequest) => permissionHandler!(request)
+    permission: (request: RequestPermissionRequest) => permissionHandler!(request),
+    notify: (method: string, params: unknown) => notificationHandler?.({ method, params } as never)
   };
 }
 
@@ -245,6 +253,88 @@ describe('InboxStore elicitations', () => {
     // One answer only: a second action cannot re-resolve the rebound card.
     await store.handleAction(item.id, 'decline');
     expect(store.items.find((candidate) => candidate.id === item.id)?.resolution).toBe('Submitted');
+  });
+
+  it('restores a rejected custom answer and rebinds the re-delivered question to the same card', async () => {
+    sendDesktopNotification.mockClear();
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    const first = client.elicit(elicitation());
+    const item = store.pendingElicitationsForSession('agent-1', 'session-1')[0];
+
+    store.setCustomFieldActive(item.id, 'selection', true);
+    store.updateCustomField(item.id, 'selection', 'my own answer');
+    await store.handleAction(item.id, 'accept');
+    await expect(first).resolves.toEqual({ action: 'accept', content: { selection: 'my own answer' } });
+    expect(store.items.find((candidate) => candidate.id === item.id)?.status).toBe('resolved');
+
+    client.notify('querymt/elicitation/validationFailed', {
+      session_id: 'session-1',
+      elicitation_id: 'elicit-session-1',
+      message: 'bad content'
+    });
+
+    const restored = store.pendingElicitationsForSession('agent-1', 'session-1');
+    expect(restored).toHaveLength(1);
+    expect(restored[0].id).toBe(item.id);
+    expect(restored[0].error).toContain('bad content');
+    expect(restored[0].formFields?.[0].customValue).toBe('my own answer');
+    // Controls stay disabled until the re-delivered question installs a resolver.
+    expect(restored[0].offline).toBe(true);
+    await store.handleAction(item.id, 'accept');
+    expect(store.items.find((candidate) => candidate.id === item.id)?.status).toBe('pending');
+
+    const redelivered = client.elicit(elicitation());
+    const rebound = store.pendingElicitationsForSession('agent-1', 'session-1');
+    expect(rebound).toHaveLength(1);
+    expect(rebound[0].id).toBe(item.id);
+    expect(rebound[0].offline).toBe(false);
+    expect(rebound[0].error).toContain('bad content');
+    expect(sendDesktopNotification).toHaveBeenCalledTimes(1);
+
+    store.updateField(item.id, 'selection', 'prod');
+    await store.handleAction(item.id, 'accept');
+    await expect(redelivered).resolves.toEqual({ action: 'accept', content: { selection: 'prod' } });
+  });
+
+  it('rebinds a re-delivery to a submitted card even if validationFailed is missed', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    void client.elicit(elicitation());
+    const item = store.pendingElicitationsForSession('agent-1', 'session-1')[0];
+    store.updateField(item.id, 'selection', 'prod');
+    await store.handleAction(item.id, 'accept');
+
+    void client.elicit(elicitation());
+    const rebound = store.pendingElicitationsForSession('agent-1', 'session-1');
+    expect(rebound).toHaveLength(1);
+    expect(rebound[0].id).toBe(item.id);
+  });
+
+  it('forgets a submitted card once the agent reports completion', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    void client.elicit(elicitation());
+    const item = store.pendingElicitationsForSession('agent-1', 'session-1')[0];
+    store.updateField(item.id, 'selection', 'prod');
+    await store.handleAction(item.id, 'accept');
+
+    client.notify('querymt/elicitation/completed', {
+      session_id: 'session-1',
+      elicitation_id: 'elicit-session-1',
+      outcome: 'accept'
+    });
+    client.notify('querymt/elicitation/validationFailed', {
+      session_id: 'session-1',
+      elicitation_id: 'elicit-session-1',
+      message: 'late'
+    });
+
+    expect(store.pendingElicitationsForSession('agent-1', 'session-1')).toHaveLength(0);
+    expect(store.items.find((candidate) => candidate.id === item.id)?.status).toBe('resolved');
   });
 
   it('retires unkeyed questions on disconnect without answering them', async () => {
