@@ -178,6 +178,9 @@ export class InboxStore {
             ...item,
             status: 'pending',
             resolution: null,
+            // No resolver is bound until the agent re-delivers the question;
+            // keep controls disabled until rebindOfflineElicitation clears this.
+            offline: true,
             error: message ? `The agent rejected this answer: ${message}` : 'The agent rejected this answer.',
             actions: ELICITATION_FORM_ACTIONS.map((action) => ({ ...action }))
           }

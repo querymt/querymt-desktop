@@ -280,11 +280,16 @@ describe('InboxStore elicitations', () => {
     expect(restored[0].id).toBe(item.id);
     expect(restored[0].error).toContain('bad content');
     expect(restored[0].formFields?.[0].customValue).toBe('my own answer');
+    // Controls stay disabled until the re-delivered question installs a resolver.
+    expect(restored[0].offline).toBe(true);
+    await store.handleAction(item.id, 'accept');
+    expect(store.items.find((candidate) => candidate.id === item.id)?.status).toBe('pending');
 
     const redelivered = client.elicit(elicitation());
     const rebound = store.pendingElicitationsForSession('agent-1', 'session-1');
     expect(rebound).toHaveLength(1);
     expect(rebound[0].id).toBe(item.id);
+    expect(rebound[0].offline).toBe(false);
     expect(rebound[0].error).toContain('bad content');
     expect(sendDesktopNotification).toHaveBeenCalledTimes(1);
 
