@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { getContext } from 'svelte';
+  import { getContext, onDestroy, untrack } from 'svelte';
+  import { SessionSearchClient } from '$lib/domain/session-search-client';
+  import type { SessionSearchMatch } from '$lib/domain/session-search';
   import { Accordion, Popover, RadioGroup } from 'bits-ui';
   import { AlertTriangle, Archive, Bot, Check, ChevronDown, Clock3, Folder, FolderOpen, FolderSync, GitFork, Info, LoaderCircle, MessageSquarePlus, Network, PlugZap, Pin, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, X } from '@lucide/svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
@@ -91,6 +93,16 @@
   let pendingDeleteSession = $state<DesktopSessionSummary | null>(null);
   let deletingSessionKey = $state<string | null>(null);
   let deleteError = $state<string | null>(null);
+  let draftQuery = $state(browserState.query);
+  let appliedQuery = $state('');
+  let composing = $state(false);
+  let searchPending = $state(false);
+  let searchMatches = $state.raw<SessionSearchMatch[] | null>(null);
+  let searchVisibleLimits = $state<Record<string, number>>({});
+  let indexRevision = $state(0);
+  let lastRequestedQuery = '';
+  const searchClient = new SessionSearchClient();
+  onDestroy(() => searchClient.dispose());
 
   const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
@@ -136,7 +148,9 @@
   }
   const initialLoading = $derived(loading && sourceWorkspaceGroups.length === 0);
   const refreshing = $derived(loading && sourceWorkspaceGroups.length > 0);
-  const searching = $derived(browserState.query.trim().length > 0);
+  const normalizedQuery = $derived(draftQuery.trim().toLowerCase());
+  const searching = $derived(normalizedQuery.length > 0);
+  const showingSearch = $derived(appliedQuery.length > 0);
   const loadingStatus = $derived(`${searching ? 'Searching remaining history…' : initialLoading ? 'Loading sessions…' : catalogComplete ? 'Loading remaining sessions…' : 'Refreshing sessions…'}${loadedSessionCount > 0 ? ` ${loadedSessionCount} loaded` : ''}`);
   const searchPlaceholder = $derived(loading && loadingVisible && !error ? loadingStatus : 'Search sessions, workspaces, agents…');
   const hasActiveFilters = $derived(searching || browserState.runtime !== 'all' || browserState.location !== 'all');
@@ -169,47 +183,75 @@
     return () => clearTimeout(timer);
   });
 
-  function workspaceMatchesGroup(group: WorkspaceSessionGroup, normalizedQuery: string): boolean {
-    return (
-      !normalizedQuery ||
-      (!group.kind && (group.name.toLowerCase().includes(normalizedQuery) ||
-        group.path.toLowerCase().includes(normalizedQuery)))
-    );
-  }
-
+  // Eligibility changes with catalog/filter data, never with individual keystrokes.
+  const eligibleWorkspaceGroups = $derived(sourceWorkspaceGroups.map((group) => ({
+    ...group,
+    sessions: group.sessions.filter((session) => sessionMatchesFilter(session, browserState.runtime) &&
+      sessionMatchesLifecycle(session.lifecycle, browserState) &&
+      (browserState.location === 'all' || (browserState.location === 'remote' ? session.location === 'remote' : session.location !== 'remote')))
+  })));
+  const eligibleByKey = $derived(new Map(eligibleWorkspaceGroups.map((group) => [group.key, group])));
+  const sessionsByKey = $derived(new Map(eligibleWorkspaceGroups.flatMap((group) => group.sessions.map((session) => [getSessionKey(session), session] as const))));
+  const browseGroups = $derived(eligibleWorkspaceGroups.filter((group) => group.sessions.length ||
+    (!catalogComplete && browserState.runtime === 'all' && browserState.location === 'all')));
+  const matchingGroups = $derived(searchMatches ?? browseGroups);
   const filteredWorkspaceGroups = $derived.by(() => {
-    const normalizedQuery = browserState.query.trim().toLowerCase();
-    return sourceWorkspaceGroups
-      .map((group) => {
-        const workspaceMatches = workspaceMatchesGroup(group, normalizedQuery);
-        const filteredSessions = group.sessions.filter((session) => {
-          const matchesFilter = sessionMatchesFilter(session, browserState.runtime) &&
-            sessionMatchesLifecycle(session.lifecycle, browserState) &&
-            (browserState.location === 'all' || (browserState.location === 'remote' ? session.location === 'remote' : session.location !== 'remote'));
-          const matchesQuery =
-            workspaceMatches ||
-            session.title.toLowerCase().includes(normalizedQuery) ||
-            session.agentName.toLowerCase().includes(normalizedQuery) ||
-            session.sessionId.toLowerCase().includes(normalizedQuery) ||
-            (!!group.kind && (session.cwd.toLowerCase().includes(normalizedQuery) ||
-              getSessionWorkspaceName(session.cwd).toLowerCase().includes(normalizedQuery)));
-          return matchesFilter && matchesQuery;
-        });
-        const limit = browserState.visibleLimits[group.key] ?? 10;
-        return {
-          ...group,
-          sessions: catalogComplete || !!group.kind ? filteredSessions.slice(0, limit) : filteredSessions,
-          totalMatching: filteredSessions.length,
-          hasMore: catalogComplete || !!group.kind ? filteredSessions.length > limit : group.hasMore,
-          location: filteredSessions.length ? getWorkspaceLocation(filteredSessions) : group.location,
-          remoteMachines: filteredSessions.length ? getWorkspaceRemoteMachines(filteredSessions) : group.remoteMachines
-        };
-      })
-      .filter((group) => group.sessions.length > 0 || (!catalogComplete && !hasActiveFilters && workspaceMatchesGroup(group, normalizedQuery)));
+    return matchingGroups.flatMap((match) => {
+      const group = eligibleByKey.get(match.key);
+      if (!group) return [];
+      const members = new Set(group.sessions.map(getSessionKey));
+      const filteredSessions = 'sessionKeys' in match
+        ? match.sessionKeys.flatMap((key) => { const session = sessionsByKey.get(key); return session && members.has(key) ? [session] : []; }) : group.sessions;
+      const limit = (showingSearch ? searchVisibleLimits : browserState.visibleLimits)[group.key] ?? 10;
+      return [{
+        ...group, sessions: catalogComplete || group.kind ? filteredSessions.slice(0, limit) : filteredSessions,
+        totalMatching: filteredSessions.length,
+        hasMore: catalogComplete || !!group.kind ? filteredSessions.length > limit : group.hasMore,
+        location: filteredSessions.length ? getWorkspaceLocation(filteredSessions) : group.location,
+        remoteMachines: filteredSessions.length ? getWorkspaceRemoteMachines(filteredSessions) : group.remoteMachines
+      }];
+    });
   });
 
   $effect(() => {
-    if (searching) {
+    const query = browserState.query;
+    untrack(() => { if (draftQuery !== query) draftQuery = query; });
+  });
+  $effect(() => {
+    const groups = eligibleWorkspaceGroups;
+    if (untrack(() => searchClient.update(groups))) untrack(() => indexRevision++);
+  });
+  $effect(() => {
+    const query = normalizedQuery;
+    void indexRevision;
+    searchClient.cancel();
+    if (composing) return;
+    let cancelled = false;
+    const delay = query && query !== lastRequestedQuery ? 80 : 0;
+    lastRequestedQuery = query;
+    searchPending = true;
+    const timer = setTimeout(async () => {
+      const matches = query ? await searchClient.search(query) : null;
+      if (cancelled || (query && matches === null)) return;
+      untrack(() => {
+        if (query !== appliedQuery) {
+          searchVisibleLimits = {};
+        }
+      });
+      searchMatches = matches;
+      appliedQuery = query;
+      searchPending = false;
+    }, delay);
+    return () => { cancelled = true; clearTimeout(timer); searchClient.cancel(); };
+  });
+
+  function updateQuery(event: Event) {
+    draftQuery = (event.currentTarget as HTMLInputElement).value;
+    browserState.query = draftQuery;
+  }
+
+  $effect(() => {
+    if (showingSearch) {
       searchOpenGroups = filteredWorkspaceGroups.map((group) => group.key);
     } else {
       if (!browserState.groupsInitialized && filteredWorkspaceGroups.length) {
@@ -228,16 +270,16 @@
   });
 
   function getOpenGroups(): string[] {
-    return searching ? searchOpenGroups : browserState.openGroups;
+    return showingSearch ? searchOpenGroups : browserState.openGroups;
   }
 
   function setOpenGroups(groups: string[]) {
-    if (searching) searchOpenGroups = groups;
+    if (showingSearch) searchOpenGroups = groups;
     else browserState.openGroups = groups;
   }
 
   $effect(() => {
-    for (const group of sourceWorkspaceGroups) {
+    for (const group of filteredWorkspaceGroups) {
       if (
         getOpenGroups().includes(group.key) &&
         !group.initialized &&
@@ -278,6 +320,7 @@
   }
 
   function clearFilters() {
+    draftQuery = '';
     browserState.query = '';
     browserState.runtime = 'all';
     browserState.location = 'all';
@@ -291,8 +334,12 @@
   }
 
   function loadMore(group: WorkspaceSessionGroup) {
-    if (catalogComplete || !!group.kind) browserState.visibleLimits[group.key] = (browserState.visibleLimits[group.key] ?? 10) + 10;
-    else void onLoadMoreWorkspace?.(group.cwd);
+    if (catalogComplete || !!group.kind) {
+      const limits = showingSearch ? searchVisibleLimits : browserState.visibleLimits;
+      const limit = (limits[group.key] ?? 10) + 10;
+      if (showingSearch) searchVisibleLimits[group.key] = limit;
+      else browserState = { ...browserState, visibleLimits: { ...limits, [group.key]: limit } };
+    } else void onLoadMoreWorkspace?.(group.cwd);
   }
 
   function getStatusLabel(status: SessionStatus): string {
@@ -392,7 +439,9 @@
       {:else}
         <Search size={15} />
       {/if}
-      <input bind:value={browserState.query} aria-label="Search sessions" placeholder={searchPlaceholder} />
+      <input value={draftQuery} oninput={updateQuery} oncompositionstart={() => composing = true}
+        oncompositionend={(event) => { composing = false; updateQuery(event); }}
+        aria-label="Search sessions" placeholder={searchPlaceholder} />
     </label>
     <div class="session-browser-actions">
       <Popover.Root bind:open={filtersOpen}>
@@ -456,7 +505,8 @@
     </div>
   </div>
 
-  <div class="session-browser-body" aria-busy={loading}>
+  <div class="session-browser-body" aria-busy={loading || searchPending}>
+    {#if searchPending && (searching || showingSearch)}<span class="sr-only" role="status">Updating search results</span>{/if}
     {#if error && (sourceWorkspaceGroups.length > 0 || loading)}
       <div class="state-inline-error" role="alert">
         <AlertTriangle size={15} />
@@ -497,7 +547,9 @@
         <div class="session-empty-actions"><button class="action-btn" type="button" onclick={() => setView('all')}>View all sessions</button></div>
       </div>
     {:else if filteredWorkspaceGroups.length === 0}
-      {#if catalogComplete && (loading || error)}
+      {#if searchPending && (searching || showingSearch)}
+        <div class="session-browser-pending" aria-label="Updating search results"></div>
+      {:else if catalogComplete && (loading || error)}
         <div class="state-panel session-empty-state">
           <span class="state-panel-icon"><SearchX size={17} /></span>
           <div class="state-panel-copy"><strong>No matches in loaded sessions</strong><p>{loading ? 'More sessions are still loading.' : 'Retry to search the remaining history.'}</p></div>
@@ -526,7 +578,7 @@
       {/if}
     {:else}
       <Accordion.Root type="multiple" bind:value={getOpenGroups, setOpenGroups} class="session-workspace-accordion">
-        {#each filteredWorkspaceGroups as group}
+        {#each filteredWorkspaceGroups as group (group.key)}
           <Accordion.Item value={group.key} class="session-workspace-item">
              <div class="session-workspace-heading">
                <Accordion.Header level={3} class="session-workspace-header">
@@ -567,7 +619,8 @@
                        {@const waitingCount = countWorkspaceSessions(group, 'needs-input')}
                        {#if activeCount > 0}<span class="session-workspace-signal session-workspace-signal-active">{activeCount} running</span>{/if}
                        {#if waitingCount > 0}<span class="session-workspace-signal session-workspace-signal-waiting">{waitingCount} waiting</span>{/if}
-                       <span class="session-workspace-count" aria-label={`${group.sessions.length} loaded session${group.sessions.length === 1 ? '' : 's'}${group.hasMore ? ', more available' : ''}`}>{group.sessions.length}{group.hasMore ? '+' : ''}</span>
+                        {@const hasUncountedSessions = !catalogComplete && !group.kind && group.hasMore}
+                        <span class="session-workspace-count" aria-label={`${group.totalMatching} loaded session${group.totalMatching === 1 ? '' : 's'}${hasUncountedSessions ? ', more available' : ''}`}>{group.totalMatching}{hasUncountedSessions ? '+' : ''}</span>
                      {:else}
                        <span class="session-workspace-count session-workspace-count-pending" aria-label="Sessions not loaded" title="Sessions load when opened">—</span>
                      {/if}
@@ -595,11 +648,12 @@
                 {/if}
              </div>
             <Accordion.Content class="session-workspace-content">
+              {#if getOpenGroups().includes(group.key)}
               {#if group.loading && group.sessions.length === 0}
                 <div class="session-workspace-loading"><LoaderCircle size={15} class="animate-spin" /> Loading workspace sessions...</div>
               {:else}
                 <div class="model-picker-list session-workspace-session-list">
-                  {#each group.sessions as session}
+                  {#each group.sessions as session (getSessionKey(session))}
                    {@const sessionKey = `${session.agentId}:${session.sessionId}`}
                    {@const canDelete = canDeleteSession?.(session) ?? false}
                    <div class="model-picker-row session-row">
@@ -700,6 +754,7 @@
                     </button>
                   </div>
                 {/if}
+              {/if}
               {/if}
             </Accordion.Content>
           </Accordion.Item>

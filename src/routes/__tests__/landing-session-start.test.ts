@@ -247,6 +247,28 @@ describe('Landing page session start', () => {
     expect(agentsStore.startSessionWithPrompt).toHaveBeenCalledWith('agent-2');
   });
 
+  it('closes the delete dialog after confirmation without waiting for a catalog refresh', async () => {
+    agentsStore.sessionBrowser = { ...agentsStore.sessionBrowser, query: '', groupsInitialized: true, openGroups: ['/tmp/work'] };
+    agentsStore.sessionCatalog = [{
+      agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'task', title: 'Task to delete',
+      cwd: '/tmp/work', updatedAt: '2026-07-18T01:23:00Z', runtimeId: 'agent-1',
+      runtimeName: 'QMTCODE', source: 'acp', location: 'local', status: 'idle'
+    }];
+    agentsStore.sessionCatalogLoading = true;
+    agentsStore.refreshSessionCatalog.mockImplementation(() => new Promise(() => {}));
+    let confirm!: () => void;
+    agentsStore.deleteSession.mockImplementationOnce(() => new Promise<void>((resolve) => { confirm = resolve; }));
+    render(SessionsPage);
+    await fireEvent.click(await screen.findByLabelText('Session actions for Task to delete'));
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete session Task to delete' }));
+    await fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    confirm();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(agentsStore.deleteSession).toHaveBeenCalledWith('agent-1', 'task');
+    expect(agentsStore.refreshSessionCatalog).not.toHaveBeenCalled();
+  });
+
   it('resets the target to local for a mixed workspace after selecting a remote host', async () => {
     const localSession: DesktopSessionSummary = {
       agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'local-1', title: 'Local task',

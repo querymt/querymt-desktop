@@ -5,6 +5,8 @@ import { tick } from 'svelte';
 import { createSessionBrowserState, getSessionKey, RECENT_SESSION_GROUP_KEY } from '$lib/domain/sessions';
 import type { DesktopSessionSummary } from '$lib/domain/types';
 import DesktopSessionList from './DesktopSessionList.svelte';
+import { SessionSearchClient } from '$lib/domain/session-search-client';
+import type { SessionSearchMatch } from '$lib/domain/session-search';
 
 const sessions: DesktopSessionSummary[] = [
   {
@@ -35,10 +37,16 @@ const sessions: DesktopSessionSummary[] = [
   }
 ];
 
+async function searchFor(value: string) {
+  await fireEvent.input(screen.getByRole('textbox', { name: 'Search sessions' }), { target: { value } });
+  await waitFor(() => expect(screen.queryByText('Updating search results')).not.toBeInTheDocument());
+}
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('DesktopSessionList pinned sessions', () => {
@@ -66,7 +74,7 @@ describe('DesktopSessionList pinned sessions', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Archived' }));
     expect(screen.getByText('Pinned sessions')).toBeInTheDocument();
     expect(screen.getAllByText('Pinned task 0').length).toBeGreaterThan(0);
-    await fireEvent.input(screen.getByRole('textbox', { name: 'Search sessions' }), { target: { value: 'nonexistent' } });
+    await searchFor('nonexistent');
     expect(screen.queryByText('Pinned sessions')).not.toBeInTheDocument();
   });
 });
@@ -120,10 +128,10 @@ describe('DesktopSessionList recent sessions', () => {
     await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Runtime' })).getByRole('radio', { name: 'Running' }));
     await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Location' })).getByRole('radio', { name: 'Remote' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Close filters' }));
-    await fireEvent.input(screen.getByRole('textbox', { name: 'Search sessions' }), { target: { value: 'remote-project' } });
+    await searchFor('remote-project');
     expect(recent().getByText('Recent sessions')).toBeInTheDocument();
     expect(recent().getByText('Remote result')).toBeInTheDocument();
-    await fireEvent.input(screen.getByRole('textbox', { name: 'Search sessions' }), { target: { value: 'missing' } });
+    await searchFor('missing');
     expect(screen.queryByText('Recent sessions')).not.toBeInTheDocument();
   });
 
@@ -285,11 +293,11 @@ describe('DesktopSessionList', () => {
   it('keeps search recovery separate from an empty lifecycle category', async () => {
     render(DesktopSessionList, { sessions: [], catalogComplete: true, hasAnySessions: true });
     await fireEvent.click(screen.getByRole('button', { name: 'Archived' }));
-    await fireEvent.input(screen.getByRole('textbox', { name: 'Search sessions' }), { target: { value: 'missing' } });
+    await searchFor('missing');
     expect(screen.getByText('No matching sessions')).toBeInTheDocument();
     expect(screen.queryByText('No archived sessions')).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
-    expect(screen.getByText('No archived sessions')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('No archived sessions')).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Archived' })).toHaveAttribute('aria-pressed', 'true');
   });
 
@@ -372,7 +380,7 @@ describe('DesktopSessionList', () => {
   it('clears a search that has no matching sessions', async () => {
     render(DesktopSessionList, { sessions });
     const search = screen.getByPlaceholderText('Search sessions, workspaces, agents…');
-    await fireEvent.input(search, { target: { value: 'missing session' } });
+    await searchFor('missing session');
 
     expect(screen.getByText('No matching sessions')).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
@@ -382,9 +390,7 @@ describe('DesktopSessionList', () => {
 
   it('finds a session by its full session id without matching siblings', async () => {
     render(DesktopSessionList, { sessions });
-    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), {
-      target: { value: '8f2a91bc-1234-5678-9012-abcdefabcdef' }
-    });
+    await searchFor('8f2a91bc-1234-5678-9012-abcdefabcdef');
 
     expect(await screen.findByText('Inspect workspace')).toBeInTheDocument();
     expect(screen.queryByText('Fix tests')).not.toBeInTheDocument();
@@ -392,9 +398,7 @@ describe('DesktopSessionList', () => {
 
   it('finds a session by the displayed 13-character session id prefix', async () => {
     render(DesktopSessionList, { sessions });
-    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), {
-      target: { value: '8f2a91bc-1234' }
-    });
+    await searchFor('8f2a91bc-1234');
 
     expect(await screen.findByText('Inspect workspace')).toBeInTheDocument();
     expect(screen.queryByText('Fix tests')).not.toBeInTheDocument();
@@ -402,9 +406,7 @@ describe('DesktopSessionList', () => {
 
   it('shows the empty state when no session id matches the query', async () => {
     render(DesktopSessionList, { sessions });
-    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), {
-      target: { value: 'ffffffff-ffff-ffff-ffff-ffffffffffff' }
-    });
+    await searchFor('ffffffff-ffff-ffff-ffff-ffffffffffff');
 
     expect(screen.getByText('No matching sessions')).toBeInTheDocument();
   });
@@ -429,7 +431,7 @@ describe('DesktopSessionList', () => {
 
   it('does not report a complete no-match result while remaining history is loading', async () => {
     const { rerender } = render(DesktopSessionList, { sessions, loading: true, catalogComplete: true });
-    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), { target: { value: 'not loaded yet' } });
+    await searchFor('not loaded yet');
     expect(await screen.findByRole('status')).toHaveTextContent('Searching remaining history');
     expect(screen.queryByText('No matching sessions')).not.toBeInTheDocument();
     expect(screen.getByText('No matches in loaded sessions')).toBeInTheDocument();
@@ -441,7 +443,7 @@ describe('DesktopSessionList', () => {
   it('keeps partial-load errors visible even when none of the loaded rows match', async () => {
     const onRefresh = vi.fn();
     render(DesktopSessionList, { sessions, catalogComplete: true, error: 'Later page timed out.', onRefresh });
-    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), { target: { value: 'not loaded yet' } });
+    await searchFor('not loaded yet');
     expect(screen.getByRole('alert')).toHaveTextContent('Session results may be incomplete.');
     expect(screen.getByRole('alert')).toHaveTextContent('Later page timed out.');
     expect(screen.queryByText('No matching sessions')).not.toBeInTheDocument();
@@ -568,7 +570,7 @@ describe('DesktopSessionList', () => {
     expect(screen.getByText('8f2a91bc-1234')).toBeInTheDocument();
   });
 
-  it('labels only remote sessions inside mixed workspaces', () => {
+  it('labels only remote sessions inside mixed workspaces', async () => {
     const { container } = render(DesktopSessionList, {
       sessions: [
         { ...sessions[0], sessionId: 'remote-only', title: 'Remote only', cwd: '/remote', location: 'remote' },
@@ -578,6 +580,9 @@ describe('DesktopSessionList', () => {
       ]
     });
 
+    for (const trigger of container.querySelectorAll<HTMLElement>('.session-workspace-trigger')) {
+      if (trigger.getAttribute('aria-expanded') !== 'true') await fireEvent.click(trigger);
+    }
     const remotePills = container.querySelectorAll('.session-relationship-badge-remote');
     expect(remotePills).toHaveLength(1);
     expect(remotePills[0]).toHaveTextContent('Remote');
@@ -671,11 +676,11 @@ describe('DesktopSessionList', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
     await fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Location' })).getByRole('radio', { name: 'Remote' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Close filters' }));
-    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), { target: { value: 'missing' } });
+    await searchFor('missing');
     await fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     expect(screen.getByRole('button', { name: 'Open' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByPlaceholderText('Search sessions, workspaces, agents…')).toHaveValue('');
-    expect(screen.getByText('Inspect workspace')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Inspect workspace')).toBeInTheDocument());
   });
 
   it('hides the location refinement when remote browsing is disabled', async () => {
@@ -756,13 +761,13 @@ describe('DesktopSessionList', () => {
     const first = render(DesktopSessionList, { sessions: catalog, catalogComplete: true });
     expect(screen.queryByText('Task 24')).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
-    await fireEvent.input(screen.getByPlaceholderText('Search sessions, workspaces, agents…'), { target: { value: 'Task 24' } });
+    await searchFor('Task 24');
     expect(screen.getByText('Task 24')).toBeInTheDocument();
     first.unmount();
     const browserState = { ...createSessionBrowserState(), query: 'Task 24', openGroups: ['/projects/querymt'], groupsInitialized: true, visibleLimits: { '/projects/querymt': 20 } };
     render(DesktopSessionList, { sessions: catalog, catalogComplete: true, browserState });
     expect(screen.getByPlaceholderText('Search sessions, workspaces, agents…')).toHaveValue('Task 24');
-    expect(screen.getByText('Task 24')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Task 24')).toBeInTheDocument());
   });
 
   it('temporarily expands matching workspaces and restores their saved expansion after search', async () => {
@@ -905,6 +910,84 @@ describe('DesktopSessionList', () => {
     expect(screen.getByLabelText('10 loaded sessions')).toHaveTextContent('10');
   });
 
+  it('shows the existing full matching count without mounting more rows or searching again', async () => {
+    const search = vi.spyOn(SessionSearchClient.prototype, 'search');
+    const onLoadMoreWorkspace = vi.fn();
+    const catalog = Array.from({ length: 25 }, (_, index) => ({ ...sessions[0], sessionId: `count-${index}`, title: `Count ${index}` }));
+    const { container } = render(DesktopSessionList, { sessions: catalog, catalogComplete: true, onLoadMoreWorkspace });
+    expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(10);
+    expect(search).not.toHaveBeenCalled();
+    expect(onLoadMoreWorkspace).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(20);
+    expect(search).not.toHaveBeenCalled();
+    expect(onLoadMoreWorkspace).not.toHaveBeenCalled();
+    await searchFor('Count 1');
+    expect(screen.getByLabelText('11 loaded sessions')).toHaveTextContent(/^11$/);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(10);
+  });
+
+  it('counts all eligible sessions before limiting the workspace preview', () => {
+    const catalog = Array.from({ length: 25 }, (_, index) => ({ ...sessions[0], sessionId: `eligible-${index}`,
+      lifecycle: { ...sessions[0].lifecycle!, resolved: index >= 17 } }));
+    const { container } = render(DesktopSessionList, { sessions: catalog, catalogComplete: true });
+    expect(screen.getByLabelText('17 loaded sessions')).toHaveTextContent(/^17$/);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(10);
+  });
+
+  it('does not add plus for catalog loading, errors, or rows hidden by the preview limit', async () => {
+    const catalog = Array.from({ length: 25 }, (_, index) => ({ ...sessions[0], sessionId: `loading-${index}` }));
+    const { rerender, container } = render(DesktopSessionList, { sessions: catalog, catalogComplete: true, loading: true });
+    expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
+    await rerender({ sessions: catalog, catalogComplete: true, loading: false, error: 'Later page failed' });
+    expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
+    await rerender({ sessions: catalog, catalogComplete: true, loading: false, error: null });
+    expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(10);
+  });
+
+  it.each([
+    { loading: false, error: null },
+    { loading: true, error: null },
+    { loading: false, error: 'Another page failed' },
+    { loading: true, error: 'Another page failed' }
+  ])('adds plus only for known uncounted sessions, not loading=$loading or error=$error', ({ loading, error }) => {
+    const fourSessions = Array.from({ length: 4 }, (_, index) => ({ ...sessions[0], sessionId: `exact-${index}` }));
+    render(DesktopSessionList, {
+      loading, error,
+      workspaceGroups: [
+        createWorkspaceGroup({ key: '/done', cwd: '/done', name: 'done', sessions: fourSessions, initialized: true, loading, error }),
+        createWorkspaceGroup({ key: '/more', cwd: '/more', name: 'more', sessions, initialized: true, hasMore: true, loading, error })
+      ]
+    });
+    expect(screen.getByLabelText('4 loaded sessions')).toHaveTextContent(/^4$/);
+    expect(screen.getByLabelText('2 loaded sessions, more available')).toHaveTextContent(/^2\+$/);
+  });
+
+  it('removes plus once the remaining workspace sessions have been counted', async () => {
+    const page = Array.from({ length: 4 }, (_, index) => ({ ...sessions[0], sessionId: `page-${index}` }));
+    const { rerender } = render(DesktopSessionList, {
+      workspaceGroups: [createWorkspaceGroup({ sessions: page, initialized: true, hasMore: true })]
+    });
+    expect(screen.getByLabelText('4 loaded sessions, more available')).toHaveTextContent(/^4\+$/);
+    await rerender({ workspaceGroups: [createWorkspaceGroup({ sessions: page, initialized: true, hasMore: false })] });
+    expect(screen.getByLabelText('4 loaded sessions')).toHaveTextContent(/^4$/);
+  });
+
+  it('shows full recent and pinned counts even when only ten rows are displayed', () => {
+    const catalog = Array.from({ length: 25 }, (_, index) => ({ ...sessions[0], sessionId: `special-${index}`,
+      pin: { session_id: `special-${index}`, pinned: index < 12, pinned_at: index < 12 ? '2026-10-21T10:00:00Z' : null } }));
+    const { container } = render(DesktopSessionList, { sessions: catalog, pinnedSessions: catalog.slice(0, 12),
+      recentSessionKeys: catalog.map(getSessionKey), catalogComplete: true });
+    const groups = container.querySelectorAll('.session-workspace-item');
+    expect(within(groups[0] as HTMLElement).getByLabelText('12 loaded sessions')).toHaveTextContent(/^12$/);
+    expect(groups[0].querySelectorAll('.session-row')).toHaveLength(10);
+    expect(within(groups[1] as HTMLElement).getByLabelText('13 loaded sessions')).toHaveTextContent(/^13$/);
+    expect(groups[1].querySelectorAll('.session-row')).toHaveLength(10);
+  });
+
   it('opens only the latest workspace by default and creates a session in its context', async () => {
     const onOpenWorkspace = vi.fn(async () => {});
     const onCreateWorkspaceSession = vi.fn(async () => {});
@@ -969,6 +1052,151 @@ describe('DesktopSessionList', () => {
 
     expect(onLoadMoreWorkspace).toHaveBeenCalledWith('/projects/querymt');
     expect(screen.getByLabelText('Sessions not loaded')).toBeInTheDocument();
+  });
+});
+
+describe('DesktopSessionList asynchronous search', () => {
+  it('updates input immediately, coalesces keystrokes, and ignores obsolete or cleared results', async () => {
+    vi.useFakeTimers();
+    const responses: Array<(matches: SessionSearchMatch[]) => void> = [];
+    const search = vi.spyOn(SessionSearchClient.prototype, 'search').mockImplementation(() => new Promise((resolve) => responses.push(resolve)));
+    const { container } = render(DesktopSessionList, { sessions, catalogComplete: true });
+    const input = screen.getByRole('textbox', { name: 'Search sessions' });
+    input.focus();
+    for (const value of ['F', 'Fi', 'Fix']) await fireEvent.input(input, { target: { value } });
+    expect(input).toHaveValue('Fix');
+    expect(screen.getByText('Inspect workspace')).toBeInTheDocument();
+    expect(search).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(80);
+    expect(search).toHaveBeenCalledExactlyOnceWith('fix');
+    await fireEvent.input(input, { target: { value: 'Inspect' } });
+    responses[0]([{ key: '/projects/querymt', sessionKeys: [getSessionKey(sessions[1])] }]);
+    await tick();
+    expect(input).toHaveValue('Inspect');
+    expect(screen.getByText('Inspect workspace')).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(80);
+    expect(search).toHaveBeenCalledTimes(2);
+    responses[1]([{ key: '/projects/querymt', sessionKeys: [getSessionKey(sessions[0])] }]);
+    await vi.advanceTimersByTimeAsync(0);
+    await tick();
+    expect(screen.queryByText('Fix tests')).not.toBeInTheDocument();
+    expect(container.querySelector('.session-browser-body')).toHaveAttribute('aria-busy', 'false');
+    expect(input).toHaveFocus();
+    await fireEvent.input(input, { target: { value: 'obsolete after clear' } });
+    await vi.advanceTimersByTimeAsync(80);
+    await fireEvent.input(input, { target: { value: '' } });
+    expect(input).toHaveValue('');
+    await vi.advanceTimersByTimeAsync(0);
+    await tick();
+    expect(screen.getByText('Fix tests')).toBeInTheDocument();
+    responses[2]([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getByText('Fix tests')).toBeInTheDocument();
+    expect(input).toHaveFocus();
+  });
+
+  it('does not search during IME composition and searches the committed value afterwards', async () => {
+    vi.useFakeTimers();
+    const search = vi.spyOn(SessionSearchClient.prototype, 'search').mockResolvedValue([]);
+    render(DesktopSessionList, { sessions, catalogComplete: true });
+    const input = screen.getByRole('textbox', { name: 'Search sessions' });
+    await fireEvent.compositionStart(input);
+    await fireEvent.input(input, { target: { value: 'composing' } });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(input).toHaveValue('composing');
+    expect(search).not.toHaveBeenCalled();
+    await fireEvent.compositionEnd(input, { target: { value: 'committed' } });
+    await vi.advanceTimersByTimeAsync(80);
+    expect(search).toHaveBeenCalledExactlyOnceWith('committed');
+    expect(input).toHaveValue('committed');
+  });
+
+  it('keeps all 70 workspace headers in continuous browse and search results with 7000 roots', async () => {
+    const catalog = Array.from({ length: 7000 }, (_, index) => ({ ...sessions[0], sessionId: `root-${index}`, title: `Task ${index}`, cwd: `/projects/workspace-${index % 70}` }));
+    const { container } = render(DesktopSessionList, { sessions: catalog, catalogComplete: true });
+    expect(container.querySelectorAll('.session-workspace-item')).toHaveLength(70);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(10);
+    expect(screen.queryByRole('navigation', { name: 'Workspace pages' })).not.toBeInTheDocument();
+    await searchFor('Task 6999');
+    expect(screen.getByText('Task 6999')).toBeInTheDocument();
+    expect(container.querySelectorAll('.session-row')).toHaveLength(1);
+    await searchFor('Task');
+    expect(container.querySelectorAll('.session-workspace-item')).toHaveLength(70);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(700);
+    expect(screen.queryByRole('button', { name: 'Next workspaces' })).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Search sessions' })).toHaveValue('Task');
+  }, 15_000);
+
+  it('mounts only open workspace rows and restores saved expansion after clearing a search', async () => {
+    const catalog = Array.from({ length: 12 }, (_, index) => ({ ...sessions[0], sessionId: `task-${index}`, title: `Task ${index}`, cwd: `/projects/workspace-${index}` }));
+    const browserState = { ...createSessionBrowserState(), groupsInitialized: true, openGroups: ['/projects/workspace-11'] };
+    const { container } = render(DesktopSessionList, { sessions: catalog, catalogComplete: true, browserState });
+    expect(container.querySelectorAll('.session-workspace-item')).toHaveLength(12);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(1);
+    expect(screen.getByText('Task 11')).toBeInTheDocument();
+    const input = screen.getByRole('textbox', { name: 'Search sessions' });
+    input.focus();
+    await searchFor('Task 0');
+    expect(screen.getByText('Task 0')).toBeInTheDocument();
+    await searchFor('');
+    expect(container.querySelectorAll('.session-workspace-item')).toHaveLength(12);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(1);
+    expect(screen.getByText('Task 11')).toBeInTheDocument();
+    expect(input).toHaveFocus();
+  });
+
+  it('appends all rows with the existing load-more action instead of replacing 30-row pages', async () => {
+    const catalog = Array.from({ length: 65 }, (_, index) => ({ ...sessions[0], sessionId: `task-${index}`, title: `Task ${index}` }));
+    const { container } = render(DesktopSessionList, { sessions: catalog, catalogComplete: true });
+    for (let count = 20; count <= 60; count += 10) {
+      await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+      expect(container.querySelectorAll('.session-row')).toHaveLength(count);
+      expect(screen.getByText('Task 0')).toBeInTheDocument();
+    }
+    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    expect(container.querySelectorAll('.session-row')).toHaveLength(65);
+    expect(screen.getByText('Task 64')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Next 30|Previous 30|Load 10 more/ })).not.toBeInTheDocument();
+    await searchFor('Task');
+    expect(container.querySelectorAll('.session-row')).toHaveLength(10);
+    for (let count = 20; count <= 60; count += 10) {
+      await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+      expect(container.querySelectorAll('.session-row')).toHaveLength(count);
+    }
+    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    expect(container.querySelectorAll('.session-row')).toHaveLength(65);
+    await searchFor('');
+    expect(container.querySelectorAll('.session-row')).toHaveLength(65);
+  });
+
+  it('reindexes streamed catalog updates, removals, and lifecycle eligibility while searching', async () => {
+    const { rerender } = render(DesktopSessionList, { sessions, catalogComplete: true });
+    await searchFor('Later');
+    expect(screen.getByText('No matching sessions')).toBeInTheDocument();
+    const added = { ...sessions[0], sessionId: 'later', title: 'Later result' };
+    await rerender({ sessions: [...sessions, added], catalogComplete: true });
+    expect(await screen.findByText('Later result')).toBeInTheDocument();
+    await rerender({ sessions: [...sessions, { ...added, lifecycle: { ...added.lifecycle!, resolved: true } }], catalogComplete: true });
+    await waitFor(() => expect(screen.queryByText('Later result')).not.toBeInTheDocument());
+    await fireEvent.click(screen.getByRole('button', { name: 'Resolved' }));
+    expect(await screen.findByText('Later result')).toBeInTheDocument();
+    await rerender({ sessions, catalogComplete: true });
+    await waitFor(() => expect(screen.queryByText('Later result')).not.toBeInTheDocument());
+  });
+
+  it('drops pending results after unmount', async () => {
+    vi.useFakeTimers();
+    let respond!: (matches: SessionSearchMatch[]) => void;
+    vi.spyOn(SessionSearchClient.prototype, 'search').mockImplementation(() => new Promise((resolve) => respond = resolve));
+    const dispose = vi.spyOn(SessionSearchClient.prototype, 'dispose');
+    const { unmount, container } = render(DesktopSessionList, { sessions });
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Search sessions' }), { target: { value: 'pending' } });
+    await vi.advanceTimersByTimeAsync(80);
+    unmount();
+    respond([{ key: '/projects/querymt', sessionKeys: [getSessionKey(sessions[0])] }]);
+    await tick();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(container.querySelector('.session-row')).toBeNull();
   });
 });
 
