@@ -906,8 +906,58 @@ describe('DesktopSessionList', () => {
 
     expect(screen.getByLabelText('Loading sessions')).toBeInTheDocument();
     expect(screen.getByLabelText('0 loaded sessions')).toHaveTextContent('0');
-    expect(screen.getByLabelText('10 loaded sessions, more available')).toHaveTextContent('10+');
+    expect(screen.getByLabelText('10 loaded sessions, total may be incomplete')).toHaveTextContent('10+');
     expect(screen.getByLabelText('10 loaded sessions')).toHaveTextContent('10');
+  });
+
+  it('shows the existing full matching count without mounting more rows or searching again', async () => {
+    const search = vi.spyOn(SessionSearchClient.prototype, 'search');
+    const onLoadMoreWorkspace = vi.fn();
+    const catalog = Array.from({ length: 25 }, (_, index) => ({ ...sessions[0], sessionId: `count-${index}`, title: `Count ${index}` }));
+    const { container } = render(DesktopSessionList, { sessions: catalog, catalogComplete: true, onLoadMoreWorkspace });
+    expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(10);
+    expect(search).not.toHaveBeenCalled();
+    expect(onLoadMoreWorkspace).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(20);
+    expect(search).not.toHaveBeenCalled();
+    expect(onLoadMoreWorkspace).not.toHaveBeenCalled();
+    await searchFor('Count 1');
+    expect(screen.getByLabelText('11 loaded sessions')).toHaveTextContent(/^11$/);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(10);
+  });
+
+  it('counts all eligible sessions before limiting the workspace preview', () => {
+    const catalog = Array.from({ length: 25 }, (_, index) => ({ ...sessions[0], sessionId: `eligible-${index}`,
+      lifecycle: { ...sessions[0].lifecycle!, resolved: index >= 17 } }));
+    const { container } = render(DesktopSessionList, { sessions: catalog, catalogComplete: true });
+    expect(screen.getByLabelText('17 loaded sessions')).toHaveTextContent(/^17$/);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(10);
+  });
+
+  it('marks full-catalog counts as lower bounds while loading or after a partial-load failure', async () => {
+    const catalog = Array.from({ length: 25 }, (_, index) => ({ ...sessions[0], sessionId: `loading-${index}` }));
+    const { rerender, container } = render(DesktopSessionList, { sessions: catalog, catalogComplete: true, loading: true });
+    expect(screen.getByLabelText('25 loaded sessions, total may be incomplete')).toHaveTextContent(/^25\+$/);
+    await rerender({ sessions: catalog, catalogComplete: true, loading: false, error: 'Later page failed' });
+    expect(screen.getByLabelText('25 loaded sessions, total may be incomplete')).toHaveTextContent(/^25\+$/);
+    await rerender({ sessions: catalog, catalogComplete: true, loading: false, error: null });
+    expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
+    expect(container.querySelectorAll('.session-row')).toHaveLength(10);
+  });
+
+  it('shows full recent and pinned counts even when only ten rows are displayed', () => {
+    const catalog = Array.from({ length: 25 }, (_, index) => ({ ...sessions[0], sessionId: `special-${index}`,
+      pin: { session_id: `special-${index}`, pinned: index < 12, pinned_at: index < 12 ? '2026-10-21T10:00:00Z' : null } }));
+    const { container } = render(DesktopSessionList, { sessions: catalog, pinnedSessions: catalog.slice(0, 12),
+      recentSessionKeys: catalog.map(getSessionKey), catalogComplete: true });
+    const groups = container.querySelectorAll('.session-workspace-item');
+    expect(within(groups[0] as HTMLElement).getByLabelText('12 loaded sessions')).toHaveTextContent(/^12$/);
+    expect(groups[0].querySelectorAll('.session-row')).toHaveLength(10);
+    expect(within(groups[1] as HTMLElement).getByLabelText('13 loaded sessions')).toHaveTextContent(/^13$/);
+    expect(groups[1].querySelectorAll('.session-row')).toHaveLength(10);
   });
 
   it('opens only the latest workspace by default and creates a session in its context', async () => {

@@ -619,7 +619,8 @@
                        {@const waitingCount = countWorkspaceSessions(group, 'needs-input')}
                        {#if activeCount > 0}<span class="session-workspace-signal session-workspace-signal-active">{activeCount} running</span>{/if}
                        {#if waitingCount > 0}<span class="session-workspace-signal session-workspace-signal-waiting">{waitingCount} waiting</span>{/if}
-                        <span class="session-workspace-count" aria-label={`${group.sessions.length} loaded session${group.sessions.length === 1 ? '' : 's'}${group.hasMore ? ', more available' : ''}`}>{group.sessions.length}{group.hasMore ? '+' : ''}</span>
+                        {@const countIncomplete = !group.kind && (catalogComplete ? loading || !!error : group.hasMore || group.loading || !!group.error)}
+                        <span class="session-workspace-count" aria-label={`${group.totalMatching} loaded session${group.totalMatching === 1 ? '' : 's'}${countIncomplete ? ', total may be incomplete' : ''}`}>{group.totalMatching}{countIncomplete ? '+' : ''}</span>
                      {:else}
                        <span class="session-workspace-count session-workspace-count-pending" aria-label="Sessions not loaded" title="Sessions load when opened">—</span>
                      {/if}
