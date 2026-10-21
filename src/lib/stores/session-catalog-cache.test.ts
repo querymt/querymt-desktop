@@ -131,6 +131,21 @@ describe('SessionCatalogCache', () => {
     expect(localStorage.getItem(SESSION_CATALOG_STORAGE_KEY)).toBe(raw);
   });
 
+  it('patches scoped entries without changing their completeness or freshness deadline', () => {
+    const cache = new SessionCatalogCache();
+    const scope = { agentIds: ['agent'], remoteNodeIds: [], lifecycle: filter };
+    const original = entry({ checkedAt: Date.now() - 60_000, scope });
+    cache.set(original);
+    cache.set(entry({ key: 'unrelated', sessions: [], scope: { ...scope, agentIds: ['other'] } }));
+    const unrelated = cache.get('unrelated');
+    cache.update((entry) => entry.scope?.agentIds.includes('agent')
+      ? { ...entry, sessions: entry.sessions.map((session) => ({ ...session, title: 'Confirmed rename' })) } : entry);
+    expect(cache.get('scope')).toMatchObject({ checkedAt: original.checkedAt, complete: true, scope });
+    expect(cache.get('unrelated')).toBe(unrelated);
+    cache.flush();
+    expect(new SessionCatalogCache().get('scope')).toMatchObject({ checkedAt: original.checkedAt, complete: true, scope, sessions: [{ title: 'Confirmed rename' }] });
+  });
+
   it('batches page writes and cancels pending persistence when invalidated', async () => {
     vi.useFakeTimers();
     const cache = new SessionCatalogCache();

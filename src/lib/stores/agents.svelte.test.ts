@@ -214,6 +214,9 @@ const mockClient = vi.hoisted(() => {
     onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
     setSessionConfigOption: vi.fn(async (_request: SetSessionConfigOptionRequest): Promise<SessionConfigOption[]> => []),
     listRemoteSessions: vi.fn(async (request: { node_id: string }) => ({ node_id: request.node_id, sessions: [], total_count: 0 })),
+    createRemoteSession: vi.fn(async (request: { node_id: string; cwd?: string; attach?: boolean }): Promise<RemoteSessionAttachInfo> => ({
+      session_id: 'new-remote', node_id: request.node_id, attached: true, config_options: [], snapshot: { audit: { events: [] } }
+    })),
     listMeshStatus: vi.fn(async (): Promise<MeshStatusInfo> => ({
       enabled: true,
       peer_id: '12D3KooWQmtLocalAgentPeer00000000000000',
@@ -1417,7 +1420,7 @@ describe('AgentsStore session lifecycle', () => {
     expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['new']);
   });
 
-  it('invalidates snapshots after confirmed lifecycle writes but not after rejected writes', async () => {
+  it('patches snapshots after confirmed lifecycle writes but not after rejected writes', async () => {
     const store = await lifecycleStore();
     mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('task')] });
     await store.ensureSessionCatalog();
@@ -1427,8 +1430,137 @@ describe('AgentsStore session lifecycle', () => {
     expect(mockClient.listSessions).toHaveBeenCalledOnce();
     await store.setSessionLifecycle('agent-1', 'task', { resolved: true });
     await store.ensureSessionCatalog();
-    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    expect(mockClient.listSessions).toHaveBeenCalledOnce();
     expect(store.sessionCatalog).toEqual([]);
+  });
+
+  it('patches every cached lifecycle view without extending freshness or reloading on navigation', async () => {
+    const store = await lifecycleStore();
+    const filters = [
+      { resolution: 'open', archive: 'excluded' },
+      { resolution: 'resolved', archive: 'excluded' },
+      { resolution: 'any', archive: 'only' },
+      { resolution: 'any', archive: 'any' }
+    ] as const;
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('task'), listed('untouched')] });
+    await store.ensureSessionCatalog(filters[0]);
+    mockClient.listSessions.mockResolvedValue({ sessions: [] });
+    await store.ensureSessionCatalog(filters[1]);
+    await store.ensureSessionCatalog(filters[2]);
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('task'), listed('untouched')] });
+    await store.ensureSessionCatalog(filters[3]);
+    const before = JSON.parse(localStorage.getItem(SESSION_CATALOG_STORAGE_KEY)!).entries;
+    const calls = mockClient.listSessions.mock.calls.length;
+    await store.setSessionLifecycle('agent-1', 'task', { resolved: true });
+    for (const filter of filters) {
+      await store.ensureSessionCatalog(filter);
+      expect(store.sessionCatalog.some((session) => session.sessionId === 'task')).toBe(filter.archive !== 'only' && filter.resolution !== 'open');
+    }
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(calls);
+    store.dispose();
+    const after = JSON.parse(localStorage.getItem(SESSION_CATALOG_STORAGE_KEY)!).entries;
+    expect(after.map((entry: { checkedAt: number }) => entry.checkedAt).sort()).toEqual(before.map((entry: { checkedAt: number }) => entry.checkedAt).sort());
+    expect(after.every((entry: { complete: boolean }) => entry.complete)).toBe(true);
+  });
+
+  it('does not traverse a 7000-root catalog again after creation and deletion', async () => {
+    const store = await lifecycleStore();
+    mockClient.connect.mockResolvedValueOnce({ protocolVersion: 1, agentCapabilities: { sessionCapabilities: { delete: {} } }, authMethods: [] });
+    await store.connectAgent('agent-1', true);
+    const rows = Array.from({ length: 7000 }, (_, index) => listed(`root-${index}`));
+    mockClient.listSessions.mockClear().mockImplementation(async (request) => {
+      const offset = Number(request?.cursor ?? 0);
+      return { sessions: rows.slice(offset, offset + 100), nextCursor: offset + 100 < rows.length ? String(offset + 100) : undefined };
+    });
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog).toHaveLength(7000);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(70);
+    await store.createBackgroundSession('agent-1', '/tmp/work');
+    const afterCreate = mockClient.listSessions.mock.calls.length;
+    expect(afterCreate).toBe(71);
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(afterCreate);
+    expect(store.sessionCatalog).toHaveLength(7001);
+    expect(store.sessionCatalog.some((session) => session.sessionId === 'session-1')).toBe(true);
+    await store.deleteSession('agent-1', 'session-1');
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog).toHaveLength(7000);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(afterCreate);
+  }, 15_000);
+
+  it.each(['create', 'delete', 'lifecycle', 'pin'] as const)('keeps a confirmed %s across delayed catalog pages without restarting the traversal', async (mutation) => {
+    const store = await lifecycleStore();
+    mockClient.connect.mockResolvedValueOnce({ protocolVersion: 1, agentCapabilities: { sessionCapabilities: { delete: {} } }, authMethods: [] });
+    await store.connectAgent('agent-1', true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('task')] });
+    await store.ensureSessionCatalog();
+    let release!: (page: { sessions: SessionInfo[] }) => void;
+    mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const refresh = store.refreshSessionCatalog();
+    if (mutation === 'create') await store.createBackgroundSession('agent-1', '/tmp/work');
+    if (mutation === 'delete') await store.deleteSession('agent-1', 'task');
+    if (mutation === 'lifecycle') await store.setSessionLifecycle('agent-1', 'task', { resolved: true });
+    if (mutation === 'pin') {
+      mockClient.supportsSessionPins.mockReturnValue(true);
+      mockClient.listSessions.mockResolvedValue({ sessions: [{ ...listed('task'), _meta: { querymt: {
+        lifecycle: summary('task').lifecycle, pin: { pinned: true, pinned_at: '2026-10-20T10:00:00Z' }
+      } } }] });
+      await store.setSessionPinned(store.sessionsByAgent['agent-1'][0], true);
+    }
+    release({ sessions: [listed('task')] });
+    await refresh;
+    const calls = mockClient.listSessions.mock.calls.length;
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(calls);
+    expect(store.sessionCatalogLoading).toBe(false);
+    if (mutation === 'create') expect(store.sessionCatalog.some((session) => session.sessionId === 'session-1')).toBe(true);
+    if (mutation === 'delete' || mutation === 'lifecycle') expect(store.sessionCatalog.some((session) => session.sessionId === 'task')).toBe(false);
+    if (mutation === 'pin') expect(store.sessionCatalog[0].pin?.pinned).toBe(true);
+  });
+
+  it('patches a newly created remote root only into scopes including its owner', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('local')] });
+    await store.ensureSessionCatalog();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    await store.ensureSessionCatalog();
+    const before = mockClient.listSessions.mock.calls.length;
+    await store.createRemoteSession('agent-1', 'node-1', '/remote/work');
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog.find((session) => session.sessionId === 'new-remote')).toMatchObject({
+      location: 'remote', remoteNodeId: 'node-1', cwd: '/remote/work', relationshipKnown: true
+    });
+    chatPreferencesStore.setShowRemoteSessions(false);
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['local']);
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(before);
+  });
+
+  it('retains the head-page metadata for a new root in the reusable catalog', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('existing')] });
+    await store.ensureSessionCatalog();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{ ...listed('session-1'), title: 'Owner title' }] });
+    await store.createBackgroundSession('agent-1', '/tmp/work');
+    await store.ensureSessionCatalog();
+    expect(store.sessionCatalog.find((session) => session.sessionId === 'session-1')?.title).toBe('Owner title');
+  });
+
+  it('keeps the completed catalog after a rejected create or delete', async () => {
+    const store = await lifecycleStore();
+    mockClient.connect.mockResolvedValueOnce({ protocolVersion: 1, agentCapabilities: { sessionCapabilities: { delete: {} } }, authMethods: [] });
+    await store.connectAgent('agent-1', true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('task')] });
+    await store.ensureSessionCatalog();
+    mockClient.createSession.mockRejectedValueOnce(new Error('Create denied'));
+    await expect(store.createBackgroundSession('agent-1', '/tmp/work')).rejects.toThrow('Create denied');
+    mockClient.deleteSession.mockRejectedValueOnce(new Error('Delete denied'));
+    await expect(store.deleteSession('agent-1', 'task')).rejects.toThrow('Delete denied');
+    const calls = mockClient.listSessions.mock.calls.length;
+    await store.ensureSessionCatalog();
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(calls);
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['task']);
   });
 
   it('isolates remote peer selections even when the selected lifecycle view is unchanged', async () => {
@@ -8236,6 +8368,60 @@ describe('session header freshness and context usage', () => {
     await store.refreshSessionsForAgent('agent-1');
 
     expect(store.sessionsByAgent['agent-1'].find((entry) => entry.sessionId === 'session-1')!.updatedAt).toBe(liveStamp);
+  });
+
+  it('coalesces a burst into two summary passes while preserving every transcript delta', async () => {
+    vi.useFakeTimers();
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.sessionsByAgent = { 'agent-1': Array.from({ length: 7000 }, (_, index) => ({ ...summary('2026-01-01T00:00:00Z'), sessionId: `session-${index}` })) };
+    store.sessionCatalog = store.sessionsByAgent['agent-1'].slice();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    const summaries = vi.spyOn(store as unknown as { upsertWorkspaceSessions(agentId: string, sessions: DesktopSessionSummary[]): void }, 'upsertWorkspaceSessions');
+    for (let index = 0; index < 100; index++) {
+      mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+        sessionUpdate: index % 2 ? 'agent_thought_chunk' : 'agent_message_chunk',
+        messageId: `chunk-${index}`, content: { type: 'text', text: `delta-${index}` }
+      } });
+    }
+    expect(summaries).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(summaries).toHaveBeenCalledTimes(2);
+    expect(store.activeSession.transcript).toHaveLength(100);
+    expect(store.sessionCatalog.find((session) => session.sessionId === 'session-1')?.status).toBe('thinking');
+    expect(store.sessionCatalog.find((session) => session.sessionId === 'session-2')?.status).toBe('idle');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    summaries.mockRestore();
+  });
+
+  it('flushes queued chunks before metadata updates and drops batches owned by replaced clients', async () => {
+    vi.useFakeTimers();
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.sessionsByAgent = { 'agent-1': [summary('2026-01-01T00:00:00Z'), { ...summary(null), sessionId: 'other' }] };
+    for (const sessionId of ['session-1', 'other', 'session-1']) {
+      mockClient.emitSessionUpdate({ sessionId, update: { sessionUpdate: 'agent_message_chunk', messageId: sessionId, content: { type: 'text', text: sessionId } } });
+    }
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: { sessionUpdate: 'session_info_update', title: 'After chunks' } });
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'other')?.status).toBe('thinking');
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'session-1')).toMatchObject({ status: 'thinking', title: 'After chunks' });
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: { sessionUpdate: 'agent_message_chunk', messageId: 'old', content: { type: 'text', text: 'old' } } });
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: { sessionUpdate: 'agent_message_chunk', messageId: 'queued-old', content: { type: 'text', text: 'queued-old' } } });
+    await store.connectAgent('agent-1', true);
+    store.sessionsByAgent = { 'agent-1': [summary(null)] };
+    await vi.advanceTimersByTimeAsync(20);
+    expect(store.sessionsByAgent['agent-1'][0].status).toBe('idle');
+    expect(store.sessionsByAgent['agent-1'][0].updatedAt).toBeNull();
+  });
+
+  it('preserves the title on timestamp-only session info updates', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.sessionsByAgent = { 'agent-1': [summary('2026-01-01T00:00:00Z')] };
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: { sessionUpdate: 'session_info_update', updatedAt: '2026-02-01T00:00:00Z' } });
+    expect(store.sessionsByAgent['agent-1'][0]).toMatchObject({ title: 'Live', updatedAt: '2026-02-01T00:00:00Z' });
   });
 
   it('keeps a title-only session info update from erasing the activity stamp', async () => {

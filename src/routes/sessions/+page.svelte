@@ -65,7 +65,6 @@
 
   async function deleteSession(session: DesktopSessionSummary) {
     await agentsStore.deleteSession(session.agentId, session.sessionId);
-    await agentsStore.refreshSessionCatalog();
   }
 </script>
 

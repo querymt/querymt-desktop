@@ -13,6 +13,12 @@ export interface CachedSessionCatalog {
   complete: boolean;
   checkedAt: number;
   hasSessions: boolean | null;
+  scope?: {
+    agentIds: string[];
+    remoteNodeIds: string[];
+    lifecycle: SessionLifecycleFilter;
+    pinned?: boolean;
+  };
 }
 
 export function sessionCatalogKey(configs: AgentConfig[], remoteNodeIds: string[], lifecycle: SessionLifecycleFilter): string {
@@ -57,6 +63,14 @@ export class SessionCatalogCache {
       this.entries.delete(oldest); this.dirty.delete(oldest);
     }
     if (persist && this.storage && this.persistTimer === null) this.persistTimer = setTimeout(() => this.flush(), 750);
+  }
+
+  update(update: (entry: CachedSessionCatalog) => CachedSessionCatalog) {
+    this.initialize();
+    for (const entry of [...this.entries.values()]) {
+      const next = update(entry);
+      if (next !== entry) this.set(next);
+    }
   }
 
   clear(persist = true) {
@@ -135,7 +149,13 @@ function readCatalogEntries(raw: string | null): Map<string, CachedSessionCatalo
         (entry.hasSessions !== null && typeof entry.hasSessions !== 'boolean')) continue;
       const sessions = entry.sessions.map(readSummary);
       if (sessions.some((session: DesktopSessionSummary | null) => session === null)) continue;
-      entries.set(entry.key, { key: entry.key, sessions, complete: entry.complete, checkedAt: entry.checkedAt, hasSessions: entry.hasSessions });
+      const scope = entry.scope;
+      const validScope = scope && Array.isArray(scope.agentIds) && scope.agentIds.every((id: unknown) => typeof id === 'string') &&
+        Array.isArray(scope.remoteNodeIds) && scope.remoteNodeIds.every((id: unknown) => typeof id === 'string') &&
+        ['open', 'resolved', 'any'].includes(scope.lifecycle?.resolution) && ['excluded', 'only', 'any'].includes(scope.lifecycle?.archive) &&
+        (scope.pinned === undefined || typeof scope.pinned === 'boolean');
+      entries.set(entry.key, { key: entry.key, sessions, complete: entry.complete, checkedAt: entry.checkedAt, hasSessions: entry.hasSessions,
+        ...(validScope ? { scope } : {}) });
     }
   } catch { /* A corrupt warm cache must not prevent the next successful write. */ }
   return entries;
