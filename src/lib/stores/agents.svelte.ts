@@ -2,6 +2,7 @@ import { RequestError } from '@agentclientprotocol/sdk';
 import type {
   InitializeResponse,
   ListSessionsResponse,
+  ListSessionsRequest,
   LoadSessionResponse,
   NewSessionResponse,
   PromptResponse,
@@ -157,6 +158,7 @@ import {
 } from '$native';
 import { inboxStore } from '$lib/stores/inbox.svelte';
 import { SessionCatalogCache, isCatalogFresh, sessionCatalogKey } from '$lib/stores/session-catalog-cache';
+import { SessionListCoordinator, SupersededSessionListError } from '$lib/stores/session-list-coordination';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import {
   loadSessionModePreferences,
@@ -181,6 +183,8 @@ const RECENT_MODELS_LIMIT = 5;
 const RECENT_WORKSPACES_LIMIT = 8;
 const WEBSOCKET_RECONNECT_MAX_DELAY_MS = 8_000;
 const WORKSPACE_SESSION_PAGE_SIZE = 10;
+export const SESSION_SUMMARY_POLL_MS = 30_000;
+export const SESSION_RUNTIME_POLL_MS = 2_000;
 const MAX_AGENT_LOG_ENTRIES = 200;
 const PROMPT_ACTIVE_RUN_STATES = new Set<SessionRunState>(['thinking', 'streaming', 'tool-running']);
 
@@ -269,9 +273,15 @@ export class AgentsStore {
   // negligible next to the retained connectGenerations entry.
   private meshRefreshGenerations = new Map<string, number>();
   private sessionRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private sessionPollingStarted = false;
+  private pollingDisposed = false;
+  private pollingVisible = true;
+  private runtimePollingEnabled = false;
+  private unlistenPollingVisibility: (() => void) | null = null;
+  private routineSessionRefreshes = new Map<string, Promise<void>>();
   private sessionRuntimeRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private sessionRuntimeRefreshGenerations = new Map<string, number>();
-  private sessionRuntimeRefreshPromises = new Map<string, Promise<SessionRuntimeStatus | null>>();
+  private sessionRuntimeRefreshPromises = new Map<string, { record: AgentClientRecord; selection: number; promise: Promise<SessionRuntimeStatus | null> }>();
   private inputSubmissionsBySession = new Map<string, number>();
   private inputNotificationsDuringSubmit = new Map<string, SessionInputStateNotification>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -373,6 +383,11 @@ export class AgentsStore {
   private pinFlights = new Map<string, { version: number; promise: Promise<void> }>();
   private sessionCatalogGeneration = 0;
   private sessionCatalogSignature = '';
+  private sessionListSharing: SessionListCoordinator | null = null;
+  private sharedListSources = new Map<string, string>();
+  private sharedListVersions = new Map<string, number>();
+  private supersededListRetries = new Map<string, { agentId: string; record: AgentClientRecord; timer: ReturnType<typeof setTimeout> | null; run: () => Promise<unknown> }>();
+  private retryingSessionLists = new Set<string>();
   private sessionCatalogCache = new SessionCatalogCache();
   private sessionCatalogFlight: { key: string; promise: Promise<void> } | null = null;
   private lifecycleWriteVersions = new Map<string, number>();
@@ -734,7 +749,179 @@ export class AgentsStore {
     this.attentionSessionKeys = this.attentionSessionKeys.filter((candidate) => candidate !== key);
   }
 
+  private sessionListCoordinator(): SessionListCoordinator | null {
+    if (!isEmbedded || this.pollingDisposed) return null;
+    return this.sessionListSharing ??= new SessionListCoordinator({ onInvalidate: (source) => {
+      for (const [agentId, current] of this.sharedListSources) if (current === source) {
+        this.sharedListVersions.set(agentId, (this.sharedListVersions.get(agentId) ?? 0) + 1);
+        this.pinVersions.set(agentId, (this.pinVersions.get(agentId) ?? 0) + 1);
+        this.pinFlights.delete(agentId);
+        delete this.pinnedSessionsLoading[agentId];
+        this.invalidateSessionCatalogCache(false);
+        this.sessionCatalogLoading = false;
+        this.scheduleSessionRefresh(agentId);
+      }
+    } });
+  }
+
+  private sessionListSource(config: AgentConfig, record: AgentClientRecord): string {
+    return JSON.stringify({ version: 1, origin: window.location.origin, agent: config.id,
+      transport: config.transport, endpoint: config.websocketUrl, secure: config.websocketSecure ?? false,
+      profile: this.composerProfileId, protocol: record.initializeResponse?.protocolVersion,
+      agentInfo: record.initializeResponse?.agentInfo, agentCapabilities: record.initializeResponse?.agentCapabilities,
+      capabilities: record.client.getControlCapabilities() });
+  }
+
+  private listSessionPage(config: AgentConfig, record: AgentClientRecord, request: ListSessionsRequest, fresh = false, maxAge = SESSION_SUMMARY_POLL_MS, onShared?: () => void): Promise<ListSessionsResponse> {
+    const sharing = this.sessionListCoordinator();
+    if (!sharing?.available) return record.client.listSessions(request);
+    const source = this.sessionListSource(config, record);
+    const previous = this.sharedListSources.get(config.id);
+    if (previous && previous !== source) sharing.drop(previous);
+    this.sharedListSources.set(config.id, source);
+    const version = this.sharedListVersions.get(config.id) ?? 0;
+    const isCurrent = () => !this.pollingDisposed && this.clients.get(config.id) === record &&
+      this.sharedListSources.get(config.id) === source && this.sessionListSource(config, record) === source &&
+      (this.sharedListVersions.get(config.id) ?? 0) === version;
+    return sharing.read(source, JSON.stringify(request), () => record.client.listSessions(request), { fresh, maxAge, allowHidden: !this.pollingIsVisible() }).then((page) => {
+      if (!isCurrent()) throw new SupersededSessionListError();
+      if (sharing.isShared(page)) onShared?.();
+      return page;
+    }, (error) => {
+      if (!isCurrent()) throw new SupersededSessionListError();
+      throw error;
+    });
+  }
+
+  private retrySupersededList(key: string, agentId: string, record: AgentClientRecord, run: () => Promise<unknown>) {
+    if (this.pollingDisposed || this.clients.get(agentId) !== record || this.retryingSessionLists.has(key) ||
+      this.supersededListRetries.has(key) || this.supersededListRetries.size >= 16 ||
+      !this.configs.some((config) => config.id === agentId && config.enabled)) return;
+    this.supersededListRetries.set(key, { agentId, record, run, timer: null });
+    this.resumeSupersededListRetries();
+  }
+
+  private resumeSupersededListRetries() {
+    if (!this.pollingIsVisible()) return;
+    for (const [key, retry] of this.supersededListRetries) {
+      if (retry.timer !== null) continue;
+      retry.timer = setTimeout(() => {
+        this.supersededListRetries.delete(key);
+        if (!this.pollingIsVisible() || this.clients.get(retry.agentId) !== retry.record ||
+          !this.configs.some((config) => config.id === retry.agentId && config.enabled)) return;
+        // A retry canceled again waits for the next external action or routine fallback.
+        this.retryingSessionLists.add(key);
+        void retry.run().catch(() => null).finally(() => this.retryingSessionLists.delete(key));
+      }, 150);
+    }
+  }
+
+  private invalidateSharedSessionLists(agentId?: string) {
+    if (!this.sessionListSharing) return;
+    for (const [id, source] of this.sharedListSources) if (!agentId || id === agentId) {
+      this.sharedListVersions.set(id, (this.sharedListVersions.get(id) ?? 0) + 1);
+      this.sessionListSharing.invalidate(source);
+    }
+  }
+
+  private pollingIsVisible(): boolean {
+    return !this.pollingDisposed && (typeof document === 'undefined' || !document.hidden);
+  }
+
+  private sessionPollingAgents(): AgentConfig[] {
+    // A list RPC error can mark an otherwise live initialized client as failed.
+    return this.configs.filter((config) => config.enabled && this.statuses[config.id]?.state === 'running' &&
+      this.initializedClientRecord(config.id));
+  }
+
+  startSessionPolling() {
+    if (this.sessionPollingStarted || typeof document === 'undefined') return;
+    this.pollingDisposed = false;
+    this.sessionPollingStarted = true;
+    this.pollingVisible = !document.hidden;
+    const onVisibility = () => {
+      const visible = this.pollingIsVisible();
+      if (visible === this.pollingVisible) return;
+      this.pollingVisible = visible;
+      this.sessionListSharing?.visibilityChanged();
+      if (!visible) {
+        for (const retry of this.supersededListRetries.values()) {
+          if (retry.timer !== null) clearTimeout(retry.timer);
+          retry.timer = null;
+        }
+        for (const agentId of this.sessionRefreshTimers.keys()) this.clearScheduledSessionRefresh(agentId);
+        for (const key of this.sessionRuntimeRefreshTimers.keys()) this.cancelSessionRuntimeRefresh(key);
+        return;
+      }
+      this.resumeSupersededListRetries();
+      for (const config of this.sessionPollingAgents()) void this.refreshRoutineSessions(config.id);
+      this.resumeSelectedRuntime();
+      void this.ensurePinnedSessions();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    this.unlistenPollingVisibility = () => document.removeEventListener('visibilitychange', onVisibility);
+    for (const config of this.sessionPollingAgents()) this.scheduleSessionRefresh(config.id);
+  }
+
+  setRuntimePollingEnabled(enabled: boolean) {
+    if (this.runtimePollingEnabled === enabled) return;
+    this.runtimePollingEnabled = enabled;
+    if (!enabled) {
+      for (const key of this.sessionRuntimeRefreshTimers.keys()) this.cancelSessionRuntimeRefresh(key);
+    } else this.resumeSelectedRuntime();
+  }
+
+  private selectedRuntimeNeeded(): boolean {
+    if (!this.activeAgentId || !this.activeSessionId) return false;
+    const runtime = this.sessionRuntimeBySession[buildSessionKey(this.activeAgentId, this.activeSessionId)];
+    return (runtime != null && runtime.phase !== 'idle') || PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) ||
+      this.activeSession.runState === 'submitting' || this.activePendingInputs.length > 0;
+  }
+
+  private resumeSelectedRuntime() {
+    if (!this.runtimePollingEnabled || !this.pollingIsVisible() || !this.selectedRuntimeNeeded()) return;
+    const agentId = this.activeAgentId!;
+    const record = this.initializedClientRecord(agentId);
+    if (record) void this.refreshSessionRuntime(agentId, this.activeSessionId, record.client).catch(() => null);
+  }
+
+  private async refreshRoutineSessions(agentId: string) {
+    const existing = this.routineSessionRefreshes.get(agentId);
+    if (existing) return existing;
+    const record = this.initializedClientRecord(agentId);
+    if (!this.sessionPollingStarted || !this.pollingIsVisible() || !record) return;
+    // Join explicit/discovery work rather than queueing another list behind it.
+    const promise = this.sessionListRefreshChain.get(agentId) ?? this.enqueueSessionListRefresh(agentId, async () => {
+      if (this.sessionPollingStarted && this.pollingIsVisible() && this.clients.get(agentId) === record) {
+        await this.refreshSessionsForAgentRequest(agentId, false, true);
+      }
+    });
+    this.routineSessionRefreshes.set(agentId, promise);
+    try { await promise; } catch {
+      // List refresh paths expose their error state; routine catch-up must not reject globally.
+    } finally {
+      if (this.routineSessionRefreshes.get(agentId) === promise) {
+        this.routineSessionRefreshes.delete(agentId);
+        if (this.clients.get(agentId) === record) this.scheduleSessionRefresh(agentId);
+      }
+    }
+  }
+
   dispose() {
+    this.pollingDisposed = true;
+    this.sessionListSharing?.dispose();
+    this.sessionListSharing = null;
+    for (const retry of this.supersededListRetries.values()) if (retry.timer !== null) clearTimeout(retry.timer);
+    this.supersededListRetries.clear();
+    this.retryingSessionLists.clear();
+    this.sharedListSources.clear();
+    this.sharedListVersions.clear();
+    this.sessionPollingStarted = false;
+    this.runtimePollingEnabled = false;
+    this.unlistenPollingVisibility?.();
+    this.unlistenPollingVisibility = null;
+    this.routineSessionRefreshes.clear();
+    this.sessionRuntimeRefreshPromises.clear();
     this.openSessionPages = {};
     this.sessionCatalogGeneration += 1;
     this.sessionCatalogFlight = null;
@@ -755,6 +942,7 @@ export class AgentsStore {
   }
 
   async initialize() {
+    this.startSessionPolling();
     if (isEmbedded && typeof window !== 'undefined') {
       this.configs = [createEmbeddedAgentConfig(window.location)];
     }
@@ -775,7 +963,7 @@ export class AgentsStore {
       );
       await Promise.allSettled([
         this.refreshManagedProfiles(),
-        ...undiscoveredAgents.map((config) => this.refreshSessionsForAgent(config.id, true)),
+        ...undiscoveredAgents.filter(() => this.pollingIsVisible()).map((config) => this.refreshSessionsForAgent(config.id, true, false)),
         this.preloadModelsForRunningAgents()
       ]);
     } catch (error) {
@@ -1278,7 +1466,7 @@ export class AgentsStore {
       }
       if (this.connectGeneration(agentId) !== generation) return;
       await Promise.allSettled([
-        this.refreshSessionsForAgent(config.id, true),
+        this.pollingIsVisible() || !this.loading ? this.refreshSessionsForAgent(config.id, true, !this.loading) : Promise.resolve(),
         this.refreshAuthProviders(config.id)
       ]);
       if (config.transport === 'stdio') {
@@ -1348,7 +1536,7 @@ export class AgentsStore {
       }
       if (this.connectGeneration(agentId) !== generation) return;
       await Promise.allSettled([
-        this.refreshSessionsForAgent(config.id, true),
+        this.pollingIsVisible() || !this.loading ? this.refreshSessionsForAgent(config.id, true, !this.loading) : Promise.resolve(),
         this.refreshAuthProviders(config.id)
       ]);
       if (config.transport === 'stdio') {
@@ -1471,12 +1659,13 @@ export class AgentsStore {
         ...this.agentErrors,
         [config.id]: null
       };
+      this.scheduleSessionRefresh(config.id);
       void this.refreshMeshAvailability(config.id);
       void this.loadInitialModelsForAgent(config.id, 6);
       if (this.activeAgentId === config.id && this.activeSessionId) {
         void this.refreshDelegateAssignments(config.id, this.activeSessionId);
-        if (record.client.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE)) {
-          void this.refreshSessionRuntime(config.id, this.activeSessionId, record.client);
+        if (this.runtimePollingEnabled && this.pollingIsVisible() && record.client.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE)) {
+          void this.refreshSessionRuntime(config.id, this.activeSessionId, record.client).catch(() => null);
         }
       }
       void this.recoverPendingElicitations(config, record);
@@ -1638,6 +1827,7 @@ export class AgentsStore {
     const isCurrent = () => this.clients.get(agentId) === record && this.pinWrites.get(key) === write;
     this.sessionPinPending = { ...this.sessionPinPending, [key]: true };
     this.sessionPinErrors = { ...this.sessionPinErrors, [key]: null };
+    this.invalidateSharedSessionLists(agentId);
     this.pinVersions.set(agentId, (this.pinVersions.get(agentId) ?? 0) + 1);
     try {
       const response = await record.client.setSessionPinned(sessionId, pinned);
@@ -1645,6 +1835,7 @@ export class AgentsStore {
       const pin = response?.session_id === sessionId ? readSessionPin({ pin: response }, sessionId) : null;
       if (!pin || pin.pinned !== pinned) throw new Error('Agent returned invalid session pin state.');
       this.sessionCatalogCache.clear();
+      this.invalidateSharedSessionLists(agentId);
       this.applySessionPin(agentId, pin);
       if (pinned) this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent,
         [agentId]: mergeSessions(this.pinnedSessionsByAgent[agentId] ?? [], [{ ...session, pin }]) };
@@ -1662,6 +1853,7 @@ export class AgentsStore {
   }
 
   async ensurePinnedSessions(force = false, agentId?: string) {
+    if (this.pollingDisposed || (!force && !this.pollingIsVisible())) return;
     await Promise.all(this.connectedAgents.filter((config) => (!agentId || config.id === agentId) && this.clients.get(config.id)?.client.supportsSessionPins())
       .map((config) => this.readPinnedSessions(config, force)));
   }
@@ -1675,7 +1867,7 @@ export class AgentsStore {
     const existing = this.pinFlights.get(agentId);
     if (existing?.version === version) return existing.promise;
     const source = sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' });
-    const cacheKey = `pins:${source}`;
+    const cacheKey = `pins:${source}${isEmbedded ? this.sessionListSource(config, record) : ''}`;
     const cached = force ? undefined : this.sessionCatalogCache.get(cacheKey);
     if (cached) {
       this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: cached.sessions };
@@ -1693,11 +1885,12 @@ export class AgentsStore {
       this.pinnedSessionsErrors = { ...this.pinnedSessionsErrors, [agentId]: null };
       try {
         let sessions: DesktopSessionSummary[] = [];
+        let shared = false;
         let cursor: string | undefined;
         const seen = new Set<string>();
         do {
           // Pin queries intentionally never include mesh peers or browser lifecycle filters.
-          const page = await record.client.listSessions(buildListSessionsRequest({ cursor, pinned: true }));
+          const page = await this.listSessionPage(config, record, buildListSessionsRequest({ cursor, pinned: true }), force, 5 * 60_000, () => { shared = true; });
           if (!isCurrent()) return;
           const listed = mapAcpSessionsToDesktopSessions(page.sessions, { agentId, agentName: config.name })
             .map((session) => this.withKnownSessionParent(session));
@@ -1713,9 +1906,13 @@ export class AgentsStore {
         if (!isCurrent()) return;
         sessions = this.preserveNewerLifecycleWrites(sessions, lifecycleRevision);
         this.reconcileSessionPins(agentId, sessions);
-        this.sessionCatalogCache.set({ key: cacheKey, sessions, complete: true, checkedAt: Date.now(), hasSessions: sessions.length > 0 });
+        this.sessionCatalogCache.set({ key: cacheKey, sessions, complete: true, checkedAt: Date.now(), hasSessions: sessions.length > 0 }, !shared);
         this.sessionCatalogCache.flush();
       } catch (error) {
+        if (error instanceof SupersededSessionListError) {
+          this.retrySupersededList(`pins:${agentId}`, agentId, record, () => this.pinFlights.get(agentId)?.promise ?? this.ensurePinnedSessions(true, agentId));
+          return;
+        }
         if (isCurrent()) this.pinnedSessionsErrors = { ...this.pinnedSessionsErrors, [agentId]: `${config.name}: ${acpErrorMessage(error, 'Pinned sessions could not be loaded.')}` };
       } finally {
         if (isCurrent()) this.pinnedSessionsLoading = { ...this.pinnedSessionsLoading, [agentId]: false };
@@ -1777,6 +1974,7 @@ export class AgentsStore {
     if (!this.canSetSessionLifecycle(agentId)) throw new Error('Session lifecycle is unavailable for this agent.');
     this.sessionLifecyclePending = { ...this.sessionLifecyclePending, [key]: true };
     this.sessionLifecycleErrors = { ...this.sessionLifecycleErrors, [key]: null };
+    this.invalidateSharedSessionLists(agentId);
     try {
       const lifecycle = await this.clients.get(agentId)!.client.setSessionLifecycle(sessionId, patch);
       this.sessionLifecycleRevision += 1;
@@ -1809,7 +2007,8 @@ export class AgentsStore {
     const remoteNodeIds = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers.slice() : [];
     const signature = JSON.stringify([
       sessionCatalogKey(configs, remoteNodeIds, lifecycle),
-      configs.map((config) => [config.id, this.clients.get(config.id)?.client.supportsSessionLifecycle() ?? false]).sort()
+      configs.map((config) => [config.id, this.clients.get(config.id)?.client.supportsSessionLifecycle() ?? false]).sort(),
+      ...(isEmbedded ? [configs.map((config) => this.sessionListSource(config, this.clients.get(config.id)!))] : [])
     ]);
     const filtered = lifecycle.resolution !== 'any' || lifecycle.archive !== 'any';
     const excludedAgents = configs.filter((config) => filtered && !this.clients.get(config.id)?.client.supportsSessionLifecycle())
@@ -1838,11 +2037,13 @@ export class AgentsStore {
     this.sessionCatalogLoadedCount = 0;
   }
 
-  private invalidateSessionCatalogCache() {
+  private invalidateSessionCatalogCache(broadcast = true) {
+    if (broadcast) this.invalidateSharedSessionLists();
     this.openSessionPages = {};
     this.sessionCatalogGeneration += 1;
     this.sessionCatalogFlight = null;
-    this.sessionCatalogCache.clear();
+    this.sessionCatalogLoading = false;
+    this.sessionCatalogCache.clear(broadcast);
   }
 
   async ensureSessionCatalog(filter: SessionLifecycleFilter = this.sessionBrowser) {
@@ -1852,15 +2053,15 @@ export class AgentsStore {
     if (this.sessionCatalogFlight?.key === signature) return this.sessionCatalogFlight.promise;
     const cached = this.sessionCatalogCache.get(signature);
     if (cached && isCatalogFresh(cached)) return;
-    return this.refreshSessionCatalog(filter);
+    return this.refreshSessionCatalog(filter, false);
   }
 
   /** Explicit refresh reconciles the selected scope; ordinary navigation reuses fresh snapshots. */
-  async refreshSessionCatalog(filter: SessionLifecycleFilter = this.sessionBrowser) {
+  async refreshSessionCatalog(filter: SessionLifecycleFilter = this.sessionBrowser, fresh = true) {
     const context = this.sessionCatalogContext(filter);
     this.selectSessionCatalog(context);
     if (this.sessionCatalogFlight?.key === context.signature) return this.sessionCatalogFlight.promise;
-    const promise = this.readSessionCatalog(context);
+    const promise = this.readSessionCatalog(context, fresh);
     const flight = { key: context.signature, promise };
     this.sessionCatalogFlight = flight;
     try {
@@ -1871,14 +2072,20 @@ export class AgentsStore {
   }
 
   /** Keep catalog membership separate from runtime, Inbox and scheduling caches. */
-  private async readSessionCatalog({ lifecycle, configs: allConfigs, supportedConfigs: configs, remoteNodeIds, signature }: ReturnType<AgentsStore['sessionCatalogContext']>) {
+  private async readSessionCatalog({ lifecycle, configs: allConfigs, supportedConfigs: configs, remoteNodeIds, signature }: ReturnType<AgentsStore['sessionCatalogContext']>, fresh: boolean) {
     const generation = ++this.sessionCatalogGeneration;
+    let shared = false;
+    let superseded = false;
+    const retry = (config: AgentConfig, record: AgentClientRecord | undefined) => {
+      superseded = true;
+      if (record) this.retrySupersededList('catalog', config.id, record, () => this.refreshSessionCatalog());
+    };
     const remember = (complete: boolean) => {
       if (generation !== this.sessionCatalogGeneration || !allConfigs.length) return;
       this.sessionCatalogCache.set({
         key: signature, sessions: this.sessionCatalog, complete,
         checkedAt: complete ? Date.now() : 0, hasSessions: this.sessionCatalogHasSessions
-      });
+      }, !this.sessionListSharing?.available || (complete && !shared));
     };
     this.sessionCatalogLoading = true;
     this.sessionCatalogLoadedCount = 0;
@@ -1887,6 +2094,7 @@ export class AgentsStore {
       .some((session) => !session.parentSessionId && this.sessionVisibleInCatalog(session))) ? true : null;
     const filtered = lifecycle.resolution !== 'any' || lifecycle.archive !== 'any';
     const errors = new Map<string, string>();
+    const records = new Map(configs.map((config) => [config.id, this.initializedClientRecord(config.id)]));
     await Promise.all(configs.map(async (config) => {
       try {
         const record = this.initializedClientRecord(config.id);
@@ -1895,9 +2103,9 @@ export class AgentsStore {
         const seen = new Set<string>();
         let cursor: string | undefined;
         do {
-          const page = await record.client.listSessions(buildListSessionsRequest({
+          const page = await this.listSessionPage(config, record, buildListSessionsRequest({
             cursor, remoteNodeIds, lifecycle: filtered ? lifecycle : undefined
-          }));
+          }), fresh, 5 * 60_000, () => { shared = true; });
           if (generation !== this.sessionCatalogGeneration) return;
           const incoming = this.mapSessionSummaries(page.sessions, { agentId: config.id, agentName: config.name });
           const previousCount = sessions.length;
@@ -1915,13 +2123,14 @@ export class AgentsStore {
         this.sessionCatalog = mergeSessions(this.sessionCatalog.filter((session) => session.agentId !== config.id), sessions);
         remember(false);
       } catch (error) {
+        if (error instanceof SupersededSessionListError) { retry(config, records.get(config.id) ?? undefined); return; }
         if (generation !== this.sessionCatalogGeneration) return;
         errors.set(config.id, `${config.name}: ${acpErrorMessage(error, 'Sessions could not be loaded.')}`);
         this.sessionCatalogError = [...errors.values()].join(' ');
       }
     }));
     if (generation !== this.sessionCatalogGeneration) return;
-    if (!errors.size && configs.length) {
+    if (!errors.size && !superseded && configs.length) {
       if (!filtered) {
         this.sessionCatalogHasSessions = this.sessionCatalog.length > 0;
       } else if (this.sessionCatalogHasSessions === null) {
@@ -1933,7 +2142,7 @@ export class AgentsStore {
             const seen = new Set<string>();
             let cursor: string | undefined;
             do {
-              const page = await record.client.listSessions(buildListSessionsRequest({ cursor, remoteNodeIds }));
+              const page = await this.listSessionPage(config, record, buildListSessionsRequest({ cursor, remoteNodeIds }), fresh, 5 * 60_000, () => { shared = true; });
               if (generation !== this.sessionCatalogGeneration) return null;
               if (page.sessions.length) return true;
               cursor = page.nextCursor ?? undefined;
@@ -1941,7 +2150,8 @@ export class AgentsStore {
               if (cursor) seen.add(cursor);
             } while (cursor);
             return false;
-          } catch {
+          } catch (error) {
+            if (error instanceof SupersededSessionListError) retry(config, records.get(config.id) ?? undefined);
             return null;
           }
         }));
@@ -1950,7 +2160,7 @@ export class AgentsStore {
       }
     }
     this.sessionCatalogLoading = false;
-    remember(!errors.size);
+    remember(!errors.size && !superseded);
     this.sessionCatalogCache.flush();
   }
 
@@ -1965,7 +2175,7 @@ export class AgentsStore {
     });
   }
 
-  async refreshSessionsForAgent(agentId: string, discoverAll = false) {
+  async refreshSessionsForAgent(agentId: string, discoverAll = false, fresh = true) {
     if (discoverAll) {
       const config = this.configs.find((candidate) => candidate.id === agentId);
       if (!config) return;
@@ -1978,7 +2188,7 @@ export class AgentsStore {
 
       const discovery = this.enqueueSessionListRefresh(agentId, async () => {
         if (this.openSessionListScope(config).key !== scopeKey) return;
-        await this.refreshSessionsForAgentRequest(agentId, true);
+        await this.refreshSessionsForAgentRequest(agentId, true, !fresh);
       }).finally(() => {
         if (this.workspaceDiscoveryPromises.get(agentId)?.promise === discovery) {
           this.workspaceDiscoveryPromises.delete(agentId);
@@ -1990,10 +2200,10 @@ export class AgentsStore {
     }
 
     // The queue already waits for prior discoveries; the map may point to one queued after us.
-    return this.enqueueSessionListRefresh(agentId, () => this.refreshSessionsForAgentRequest(agentId, false));
+    return this.enqueueSessionListRefresh(agentId, () => this.refreshSessionsForAgentRequest(agentId, false, !fresh));
   }
 
-  private async refreshSessionsForAgentRequest(agentId: string, discoverAll: boolean) {
+  private async refreshSessionsForAgentRequest(agentId: string, discoverAll: boolean, cooperative = false) {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) {
       return;
@@ -2011,13 +2221,13 @@ export class AgentsStore {
     record.connectionState = 'loading-sessions';
     record.error = null;
     const scope = this.openSessionListScope(config);
-    const isCurrent = () => this.clients.get(agentId) === record && this.openSessionListScope(config).key === scope.key;
+    const isCurrent = () => !this.pollingDisposed && this.clients.get(agentId) === record && this.openSessionListScope(config).key === scope.key;
 
     try {
       const lifecycleRevision = this.sessionLifecycleRevision;
-      const firstPage = await record.client.listSessions(buildListSessionsRequest({ remoteNodeIds: scope.remoteNodeIds }));
+      const firstPage = await this.listSessionPage(config, record, buildListSessionsRequest({ remoteNodeIds: scope.remoteNodeIds }), !cooperative);
       if (!isCurrent()) return;
-      const pages = discoverAll ? await this.collectSessionPages(record.client, firstPage, scope.remoteNodeIds, isCurrent) : [firstPage];
+      const pages = discoverAll ? await this.collectSessionPages(config, record, firstPage, scope.remoteNodeIds, isCurrent, !cooperative) : [firstPage];
       if (!isCurrent()) return;
       const listedSessions = pages.flatMap((page) => page.sessions);
       const previousSessions = this.sessionsByAgent[agentId] ?? [];
@@ -2042,11 +2252,7 @@ export class AgentsStore {
       }
       this.updateWorkspaceDiscovery(config, nextSessions, discoverAll);
       if (discoverAll) this.completedWorkspaceDiscoveries.add(agentId);
-      if (nextSessions.some((session) => isActiveSessionStatus(session.status))) {
-        this.scheduleSessionRefresh(agentId, 2500);
-      } else {
-        this.clearScheduledSessionRefresh(agentId);
-      }
+      this.scheduleSessionRefresh(agentId);
       const models = await record.client.listModels().catch(() => this.modelsByAgent[agentId] ?? []);
       if (!isCurrent()) return;
       if (models.length > 0) {
@@ -2066,6 +2272,14 @@ export class AgentsStore {
         [config.id]: null
       };
     } catch (error) {
+      if (error instanceof SupersededSessionListError) {
+        if (isCurrent()) {
+          record.connectionState = 'initialized';
+          this.connectionStates = { ...this.connectionStates, [agentId]: 'initialized' };
+          this.retrySupersededList(`summary:${agentId}`, agentId, record, () => this.sessionListRefreshChain.get(agentId) ?? this.refreshSessionsForAgent(agentId, discoverAll));
+        }
+        return;
+      }
       if (!isCurrent()) return;
       if (discoverAll) this.completedWorkspaceDiscoveries.delete(agentId);
       record.error = error instanceof Error ? error.message : `Failed to load sessions for ${config.name}.`;
@@ -2097,7 +2311,8 @@ export class AgentsStore {
         group!.sessions.length >= target &&
         sources.every((source) => source.initialized);
       if (initializedEnough) return;
-      await Promise.all(candidates.map((source) => this.loadWorkspaceSourcePage(source)));
+      const loaded = await Promise.all(candidates.map((source) => this.loadWorkspaceSourcePage(source)));
+      if (loaded.includes(false)) return;
     }
   }
 
@@ -2132,6 +2347,7 @@ export class AgentsStore {
 
   /** Continue the existing root list only as the sidebar exhausts its loaded rows. */
   async loadMoreOpenSessions() {
+    if (!this.pollingIsVisible()) return;
     await Promise.all(this.connectedAgents.map(async (config) => {
       if (!this.canSetSessionLifecycle(config.id)) return;
       const record = this.initializedClientRecord(config.id);
@@ -2149,7 +2365,7 @@ export class AgentsStore {
       const revision = this.sessionLifecycleRevision;
       const cursor = page.nextCursor;
       try {
-        const response = await record.client.listSessions(buildListSessionsRequest({ cursor, remoteNodeIds: scope.remoteNodeIds }));
+        const response = await this.listSessionPage(config, record, buildListSessionsRequest({ cursor, remoteNodeIds: scope.remoteNodeIds }));
         if (this.openSessionPages[config.id] !== page || this.clients.get(config.id) !== record ||
           this.openSessionListScope(config).key !== scope.key) return;
         const nextCursor = response.nextCursor ?? null;
@@ -2164,6 +2380,10 @@ export class AgentsStore {
         page.nextCursor = nextCursor;
         if (nextCursor) page.seenCursors.push(nextCursor);
       } catch (error) {
+        if (error instanceof SupersededSessionListError) {
+          this.retrySupersededList(`open:${config.id}`, config.id, record, () => this.loadMoreOpenSessions());
+          return;
+        }
         if (this.openSessionPages[config.id] === page) page.error = acpErrorMessage(error, 'Could not load more sessions.');
       } finally {
         page.loading = false;
@@ -2236,7 +2456,7 @@ export class AgentsStore {
     let cursor: string | null = null;
     do {
       if (!isCurrentLoad()) return null;
-      const page = await client.listSessions(this.buildSessionListRequest({ cursor }));
+      const page = await this.listSessionPage(config, this.clients.get(agentId)!, this.buildSessionListRequest({ cursor }));
       if (!isCurrentLoad()) return null;
       const match = page.sessions.find((session) => session.sessionId === sessionId &&
         session._meta?.location === 'remote' && typeof session._meta.nodeId === 'string' &&
@@ -2323,7 +2543,7 @@ export class AgentsStore {
   }
 
   private async collectSessionPages(
-    client: DesktopAcpClient, firstPage: ListSessionsResponse, remoteNodeIds: string[], isCurrent: () => boolean
+    config: AgentConfig, record: AgentClientRecord, firstPage: ListSessionsResponse, remoteNodeIds: string[], isCurrent: () => boolean, fresh: boolean
   ): Promise<ListSessionsResponse[]> {
     const pages = [firstPage];
     const seenCursors = new Set<string>();
@@ -2337,7 +2557,7 @@ export class AgentsStore {
     // crates/agent session list before relying on them across creates.
     while (nextCursor && !seenCursors.has(nextCursor) && isCurrent()) {
       seenCursors.add(nextCursor);
-      const page = await client.listSessions(buildListSessionsRequest({ cursor: nextCursor, remoteNodeIds }));
+      const page = await this.listSessionPage(config, record, buildListSessionsRequest({ cursor: nextCursor, remoteNodeIds }), fresh);
       pages.push(page);
       nextCursor = page.nextCursor ?? null;
     }
@@ -2433,16 +2653,18 @@ export class AgentsStore {
     const sourceKey = buildWorkspaceSourceKey(source.agentId, source.cwd);
     const seenCursors = this.seenWorkspaceCursors.get(sourceKey) ?? new Set<string>();
     this.seenWorkspaceCursors.set(sourceKey, seenCursors);
+    let requestCursor: string | null | undefined;
+    let record: AgentClientRecord | undefined;
     try {
       const config = this.configs.find((candidate) => candidate.id === source.agentId);
       if (!config) throw new Error(`Unable to locate ${source.agentName} for workspace sessions.`);
-      const record = await this.connectInitializedRecord(source.agentId);
+      record = await this.connectInitializedRecord(source.agentId);
       if (!record) {
         throw new Error(`Unable to connect ${source.agentName} for workspace sessions.`);
       }
       current = this.workspaceSessionSources[source.agentId]?.[source.cwd];
 
-      const requestCursor = current?.initialized ? current.nextCursor : null;
+      requestCursor = current?.initialized ? current.nextCursor : null;
       // TODO(backend): these cwd cursors are QueryMT integer offsets. A create
       // that lands at the top of the workspace list makes "load more" skip or
       // duplicate until session/list uses a stable keyset cursor.
@@ -2451,7 +2673,7 @@ export class AgentsStore {
       }
       if (requestCursor) seenCursors.add(requestCursor);
       const lifecycleRevision = this.sessionLifecycleRevision;
-      const response = await record.client.listSessions(
+      const response = await this.listSessionPage(config, record,
         this.buildSessionListRequest({
           cwd: source.cwd,
           cursor: requestCursor
@@ -2480,6 +2702,11 @@ export class AgentsStore {
         };
       }
     } catch (error) {
+      if (error instanceof SupersededSessionListError) {
+        if (requestCursor) seenCursors.delete(requestCursor);
+        if (record) this.retrySupersededList(`workspace:${sourceKey}`, source.agentId, record, () => this.loadWorkspaceSourcePage(source));
+        return false;
+      }
       if ((this.workspaceSourceVersions.get(source.agentId) ?? 0) === sourceVersion) {
         const message = error instanceof Error ? error.message : `Failed to load sessions for ${source.agentName}.`;
         this.updateWorkspaceSource(source.agentId, source.cwd, { error: message });
@@ -2530,6 +2757,7 @@ export class AgentsStore {
       throw new Error(`${config.name} does not support deleting sessions.`);
     }
 
+    this.invalidateSharedSessionLists(agentId);
     await record.client.deleteSession(sessionId);
     this.forgetRecentSessions(agentId, sessionId);
     this.pinVersions.set(agentId, (this.pinVersions.get(agentId) ?? 0) + 1);
@@ -2553,6 +2781,8 @@ export class AgentsStore {
     this.acknowledgeSession(agentId, sessionId);
     const key = buildSessionKey(agentId, sessionId);
     this.lifecycleReads.delete(key);
+    this.cancelSessionRuntimeRefresh(key);
+    this.sessionRuntimeRefreshPromises.delete(key);
     this.removeSessionModePreferences(agentId, sessionId);
     delete this.delegateAssignmentsBySession[key];
     delete this.delegateAssignmentsLoadingBySession[key];
@@ -2710,6 +2940,10 @@ export class AgentsStore {
 
     const agentId = this.activeAgentId;
     const sessionId = this.activeSessionId;
+    const selection = this.sessionSelectionGeneration;
+    let owner: AgentClientRecord | undefined;
+    const ownsAction = () => !this.pollingDisposed && selection === this.sessionSelectionGeneration &&
+      this.isSelectedSession(agentId, sessionId) && (!owner || this.clients.get(agentId) === owner);
     const imageMode = chatPreferencesStore.imageSendMode;
     const clientPromptId = retryFailure?.clientPromptId ?? createClientPromptId();
     let turnEventIndex = retryFailure?.turnEventIndex;
@@ -2717,13 +2951,14 @@ export class AgentsStore {
     try {
       const record = await this.connectInitializedRecord(agentId);
       if (!record) throw new Error('Failed to connect to the agent.');
-      if (!this.isSelectedSession(agentId, sessionId)) return;
+      owner = record;
+      if (!ownsAction()) return;
 
       const canControlRun = this.canControlSessionInput(record.client);
       const runtime = canControlRun
-        ? await this.refreshSessionRuntime(agentId, sessionId, record.client)
+        ? await this.refreshSessionRuntime(agentId, sessionId, record.client, true)
         : null;
-      if (!this.isSelectedSession(agentId, sessionId)) return;
+      if (!ownsAction() || (canControlRun && !runtime)) return;
       if (runtime && runtime.phase !== 'idle') {
         const delivery = this.inputDeliveryForSession(agentId, sessionId, runtime, prompt);
         await this.submitInputToActiveSession(
@@ -2772,7 +3007,7 @@ export class AgentsStore {
         imageMode,
         clientPromptId
       });
-      this.scheduleSessionRuntimeRefresh(agentId, sessionId, record.client, 100);
+      this.scheduleSessionRuntimeRefresh(agentId, sessionId, record.client);
       const response = await promptResponse;
       if (!this.isSelectedSession(agentId, sessionId)) {
         await this.refreshSessionsForAgent(agentId);
@@ -2797,7 +3032,7 @@ export class AgentsStore {
       await this.refreshSessionsForAgent(agentId);
       if (canControlRun) void this.refreshSessionRuntime(agentId, sessionId, record.client);
     } catch (error) {
-      if (!this.isSelectedSession(agentId, sessionId)) return;
+      if (!ownsAction()) return;
       endSessionWork(this.activeSession);
       const normalizedError = normalizePromptError(error);
       if (turnEventIndex === undefined) {
@@ -3015,37 +3250,48 @@ export class AgentsStore {
   async refreshSessionRuntime(
     agentId = this.activeAgentId,
     sessionId = this.activeSessionId,
-    client?: DesktopAcpClient
+    client?: DesktopAcpClient,
+    fresh = false
   ): Promise<SessionRuntimeStatus | null> {
-    if (!agentId || !sessionId) return null;
-    const record = client ? null : await this.connectInitializedRecord(agentId);
-    const resolvedClient = client ?? record?.client;
-    if (!resolvedClient?.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE)) return null;
+    if (!agentId || !sessionId || this.pollingDisposed) return null;
+    const record = client ? this.clients.get(agentId) : await this.connectInitializedRecord(agentId);
+    if (!record || (client && record.client !== client)) return null;
+    const resolvedClient = record.client;
+    if (!resolvedClient.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE)) return null;
     const key = buildSessionKey(agentId, sessionId);
+    const selection = this.sessionSelectionGeneration;
+    const selected = this.isSelectedSession(agentId, sessionId);
+    const existing = this.sessionRuntimeRefreshPromises.get(key);
+    if (existing?.record === record) {
+      if (!fresh && existing.selection === selection) return existing.promise;
+      // Actions require a read started after any earlier polling request has settled.
+      await existing.promise.catch(() => null);
+      if (this.pollingDisposed || this.clients.get(agentId) !== record || selection !== this.sessionSelectionGeneration ||
+        (selected && !this.isSelectedSession(agentId, sessionId))) return null;
+      return this.refreshSessionRuntime(agentId, sessionId, resolvedClient, true);
+    }
+    this.cancelSessionRuntimeRefresh(key);
     const generation = (this.sessionRuntimeRefreshGenerations.get(key) ?? 0) + 1;
     this.sessionRuntimeRefreshGenerations.set(key, generation);
-    const refresh = resolvedClient.getSessionRuntimeStatus(sessionId).then((runtime) => {
-      if (this.sessionRuntimeRefreshGenerations.get(key) !== generation) {
-        return this.sessionRuntimeRefreshPromises.get(key) ?? this.sessionRuntimeBySession[key] ?? null;
-      }
-      this.sessionRuntimeBySession = {
-        ...this.sessionRuntimeBySession,
-        [key]: runtime
-      };
-      if (runtime.phase !== 'idle') {
-        this.scheduleSessionRuntimeRefresh(agentId, sessionId, resolvedClient);
-      } else {
-        this.cancelSessionRuntimeRefresh(key);
-      }
+    const isCurrent = () => !this.pollingDisposed && this.clients.get(agentId) === record &&
+      selection === this.sessionSelectionGeneration && (!selected || this.isSelectedSession(agentId, sessionId)) &&
+      this.sessionRuntimeRefreshGenerations.get(key) === generation;
+    const promise = resolvedClient.getSessionRuntimeStatus(sessionId).then((runtime) => {
+      if (!isCurrent()) return null;
+      this.sessionRuntimeBySession = { ...this.sessionRuntimeBySession, [key]: runtime };
+      if (runtime.phase !== 'idle') this.scheduleSessionRuntimeRefresh(agentId, sessionId, resolvedClient);
+      else this.cancelSessionRuntimeRefresh(key);
       return runtime;
-    }).then((runtime) => runtime);
-    this.sessionRuntimeRefreshPromises.set(key, refresh);
+    }).catch((error) => {
+      if (isCurrent() && this.selectedRuntimeNeeded()) this.scheduleSessionRuntimeRefresh(agentId, sessionId, resolvedClient);
+      throw error;
+    });
+    const flight = { record, selection, promise };
+    this.sessionRuntimeRefreshPromises.set(key, flight);
     try {
-      return await refresh;
+      return await promise;
     } finally {
-      if (this.sessionRuntimeRefreshPromises.get(key) === refresh) {
-        this.sessionRuntimeRefreshPromises.delete(key);
-      }
+      if (this.sessionRuntimeRefreshPromises.get(key) === flight) this.sessionRuntimeRefreshPromises.delete(key);
     }
   }
 
@@ -3087,7 +3333,7 @@ export class AgentsStore {
     ) {
       this.removePendingSessionInput(agentId, notification.session_id, notification.input_id);
       if (this.isSelectedSession(agentId, notification.session_id)) {
-        void this.refreshSessionRuntime(agentId, notification.session_id).catch(() => null);
+        this.scheduleSessionRuntimeRefresh(agentId, notification.session_id, this.clients.get(agentId)!.client);
       }
       return;
     }
@@ -3098,7 +3344,7 @@ export class AgentsStore {
       pendingInputUpdatesFromNotification(notification)
     );
     if (this.isSelectedSession(agentId, notification.session_id)) {
-      void this.refreshSessionRuntime(agentId, notification.session_id).catch(() => null);
+      this.scheduleSessionRuntimeRefresh(agentId, notification.session_id, this.clients.get(agentId)!.client);
     }
   }
 
@@ -3466,6 +3712,14 @@ export class AgentsStore {
     } catch (error) {
       if (!isCurrentLoad()) {
         telemetryStatus = 'cancelled';
+        return;
+      }
+      if (error instanceof SupersededSessionListError) {
+        telemetryStatus = 'cancelled';
+        endSessionWork(this.activeSession);
+        this.retrySupersededList(`load:${sessionKey}`, agentId, record, async () => {
+          if (isCurrentLoad()) await this.loadSession(agentId, sessionId, pendingOperation);
+        });
         return;
       }
       telemetryStatus = 'error';
@@ -3897,6 +4151,22 @@ export class AgentsStore {
   }
 
   private disposeClient(agentId: string) {
+    for (const [key, retry] of this.supersededListRetries) if (retry.agentId === agentId) {
+      if (retry.timer !== null) clearTimeout(retry.timer);
+      this.supersededListRetries.delete(key);
+    }
+    const sharedSource = this.sharedListSources.get(agentId);
+    if (sharedSource) this.sessionListSharing?.drop(sharedSource);
+    this.sharedListSources.delete(agentId);
+    this.sharedListVersions.set(agentId, (this.sharedListVersions.get(agentId) ?? 0) + 1);
+    this.clearScheduledSessionRefresh(agentId);
+    this.routineSessionRefreshes.delete(agentId);
+    for (const key of new Set([...this.sessionRuntimeRefreshTimers.keys(), ...this.sessionRuntimeRefreshPromises.keys()])) {
+      if (key.startsWith(`${agentId}:`)) {
+        this.cancelSessionRuntimeRefresh(key);
+        this.sessionRuntimeRefreshPromises.delete(key);
+      }
+    }
     for (const key of this.lifecycleReads.keys()) {
       if (key.startsWith(`${agentId}:`)) this.lifecycleReads.delete(key);
     }
@@ -3942,6 +4212,8 @@ export class AgentsStore {
         }
         if (notification.method === QMT_NOTIFICATION_SESSION_PINS_CHANGED) {
           this.sessionCatalogCache.clear();
+          this.invalidateSharedSessionLists(agentId);
+          if (!this.pollingIsVisible()) return;
           if (!Object.entries(this.sessionPinPending).some(([key, pending]) => key.startsWith(`${agentId}:`) && pending)) {
             void this.ensurePinnedSessions(true, agentId);
           }
@@ -3984,7 +4256,7 @@ export class AgentsStore {
           void this.refreshMeshAvailability(agentId);
           chatPreferencesStore.initialize();
           if (chatPreferencesStore.showRemoteSessions && chatPreferencesStore.remoteSessionPeers.length > 0) {
-            void this.refreshSessionsForAgent(agentId, true);
+            if (this.pollingIsVisible()) void this.refreshSessionsForAgent(agentId, true);
           }
         }
         if (notification.method.startsWith('querymt/auth/')) {
@@ -4994,6 +5266,7 @@ export class AgentsStore {
   /** Reset the view, invalidating prior loads unless this operation already owns a generation. */
   private resetActiveSession(agentId: string, sessionId: string, preserveSelectionGeneration = false) {
     if (!preserveSelectionGeneration) this.sessionSelectionGeneration += 1;
+    for (const key of this.sessionRuntimeRefreshTimers.keys()) this.cancelSessionRuntimeRefresh(key);
     this.activeAgentId = agentId;
     this.activeSessionId = sessionId;
     this.activeSession = createEmptyActiveSession();
@@ -5197,7 +5470,12 @@ export class AgentsStore {
       [agentId]: nextSessions
     };
     const updated = nextSessions.find((session) => session.sessionId === notification.sessionId);
-    if (updated) this.upsertWorkspaceSessions(agentId, [updated]);
+    if (updated) {
+      this.upsertWorkspaceSessions(agentId, [updated]);
+      const updateKnown = (session: DesktopSessionSummary) => session.agentId === agentId && session.sessionId === updated.sessionId ? { ...session, title: updated.title, updatedAt: updated.updatedAt, status: updated.status } : session;
+      this.sessionCatalog = this.sessionCatalog.map(updateKnown);
+      this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: (this.pinnedSessionsByAgent[agentId] ?? []).map(updateKnown) };
+    }
   }
 
   private handleSessionNotification(
@@ -5254,10 +5532,9 @@ export class AgentsStore {
     notification: SessionNotification,
     record: AgentClientRecord
   ) {
+    if (this.pollingDisposed || this.clients.get(agentId) !== record) return;
     this.applySessionSummaryUpdate(agentId, notification);
-    if (inferSessionStatusFromNotification(notification.update)) {
-      this.scheduleSessionRefresh(agentId);
-    }
+    if (notification.update.sessionUpdate === 'session_info_update') this.scheduleSessionRefresh(agentId);
 
     if (this.activeAgentId !== agentId || (this.activeSessionId && notification.sessionId !== this.activeSessionId)) {
       console.debug('querymt session/update dropped', {
@@ -5341,7 +5618,7 @@ export class AgentsStore {
         notification.update.sessionUpdate
       )
     ) {
-      this.scheduleSessionRuntimeRefresh(agentId, notification.sessionId, record.client, 100);
+      this.scheduleSessionRuntimeRefresh(agentId, notification.sessionId, record.client);
     }
   }
 
@@ -5388,7 +5665,7 @@ export class AgentsStore {
     const record = this.clients.get(agentId);
     if (record?.connectionState === 'initialized') {
       await Promise.allSettled([
-        this.refreshSessionsForAgent(agentId, true),
+        this.pollingIsVisible() ? this.refreshSessionsForAgent(agentId, true) : Promise.resolve(),
         this.refreshAuthProviders(agentId)
       ]);
       if (this.activeAgentId === agentId && this.activeSessionId) {
@@ -5410,13 +5687,18 @@ export class AgentsStore {
     agentId: string,
     sessionId: string,
     client: DesktopAcpClient,
-    delayMs = 500
+    delayMs = SESSION_RUNTIME_POLL_MS
   ) {
     const key = buildSessionKey(agentId, sessionId);
-    this.cancelSessionRuntimeRefresh(key);
+    if (!this.runtimePollingEnabled || !this.pollingIsVisible() || !this.isSelectedSession(agentId, sessionId) ||
+      this.clients.get(agentId)?.client !== client || this.sessionRuntimeRefreshTimers.has(key)) return;
+    const selection = this.sessionSelectionGeneration;
     const timer = setTimeout(() => {
       this.sessionRuntimeRefreshTimers.delete(key);
-      void this.refreshSessionRuntime(agentId, sessionId, client).catch(() => null);
+      if (this.runtimePollingEnabled && this.pollingIsVisible() && this.isSelectedSession(agentId, sessionId) &&
+        selection === this.sessionSelectionGeneration && this.initializedClientRecord(agentId)?.client === client) {
+        void this.refreshSessionRuntime(agentId, sessionId, client).catch(() => null);
+      }
     }, delayMs);
     this.sessionRuntimeRefreshTimers.set(key, timer);
   }
@@ -5427,12 +5709,12 @@ export class AgentsStore {
     this.sessionRuntimeRefreshTimers.delete(key);
   }
 
-  private scheduleSessionRefresh(agentId: string, delayMs = 800) {
-    this.clearScheduledSessionRefresh(agentId);
-
+  private scheduleSessionRefresh(agentId: string, delayMs = SESSION_SUMMARY_POLL_MS) {
+    if (!this.sessionPollingStarted || !this.pollingIsVisible() || !this.initializedClientRecord(agentId) ||
+      this.sessionRefreshTimers.has(agentId) || !this.configs.some((config) => config.id === agentId && config.enabled)) return;
     const timer = setTimeout(() => {
       this.sessionRefreshTimers.delete(agentId);
-      void this.refreshSessionsForAgent(agentId);
+      void this.refreshRoutineSessions(agentId);
     }, delayMs);
     this.sessionRefreshTimers.set(agentId, timer);
   }

@@ -38,6 +38,7 @@ export class SessionCatalogCache {
   private initialized = false;
   private storage: Storage | null = null;
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private dirty = new Set<string>();
 
   constructor(private getStorage: () => Storage | null = () => typeof window === 'undefined' ? null : window.localStorage) {}
 
@@ -46,28 +47,42 @@ export class SessionCatalogCache {
     return this.entries.get(key);
   }
 
-  set(entry: CachedSessionCatalog) {
+  set(entry: CachedSessionCatalog, persist = true) {
     this.initialize();
     this.entries.delete(entry.key);
     this.entries.set(entry.key, { ...entry, sessions: entry.sessions.slice() });
-    while (this.entries.size > MAX_ENTRIES) this.entries.delete(this.entries.keys().next().value!);
-    if (this.storage && this.persistTimer === null) this.persistTimer = setTimeout(() => this.flush(), 750);
+    if (persist) this.dirty.add(entry.key); else this.dirty.delete(entry.key);
+    while (this.entries.size > MAX_ENTRIES) {
+      const oldest = this.entries.keys().next().value!;
+      this.entries.delete(oldest); this.dirty.delete(oldest);
+    }
+    if (persist && this.storage && this.persistTimer === null) this.persistTimer = setTimeout(() => this.flush(), 750);
   }
 
-  clear() {
+  clear(persist = true) {
     this.initialize();
     this.entries.clear();
+    this.dirty.clear();
     if (this.persistTimer !== null) clearTimeout(this.persistTimer);
     this.persistTimer = null;
-    try { this.storage?.removeItem(SESSION_CATALOG_STORAGE_KEY); } catch { this.storage = null; }
+    try { if (persist) this.storage?.removeItem(SESSION_CATALOG_STORAGE_KEY); } catch { this.storage = null; }
   }
 
   flush() {
     if (this.persistTimer !== null) clearTimeout(this.persistTimer);
     this.persistTimer = null;
-    if (!this.storage) return;
+    if (!this.storage || !this.dirty.size) return;
     try {
-      const entries = [...this.entries.values()].map((entry) => ({
+      // Merge only locally fetched scopes into the latest document. This is a warm
+      // cache, not an atomic cross-window lease or a mutation authority.
+      const merged = readCatalogEntries(this.storage.getItem(SESSION_CATALOG_STORAGE_KEY));
+      for (const key of this.dirty) {
+        const entry = this.entries.get(key);
+        if (!entry || (merged.get(key)?.checkedAt ?? -1) > entry.checkedAt) continue;
+        merged.delete(key); merged.set(key, entry);
+      }
+      this.dirty.clear();
+      const entries = [...merged.values()].slice(-MAX_ENTRIES).map((entry) => ({
         ...entry,
         sessions: entry.sessions.slice(0, MAX_STORED_ROWS).map(persistedSummary),
         complete: entry.complete && entry.sessions.length <= MAX_STORED_ROWS
@@ -101,22 +116,29 @@ export class SessionCatalogCache {
       storage.removeItem(probe);
       if (!writable) return;
       this.storage = storage;
-      const raw = storage.getItem(SESSION_CATALOG_STORAGE_KEY);
-      if (!raw || raw.length > MAX_STORED_CHARACTERS) return;
-      const document = JSON.parse(raw);
-      if (document?.version !== 1 || !Array.isArray(document.entries)) return;
-      for (const entry of document.entries.slice(-MAX_ENTRIES)) {
-        if (typeof entry?.key !== 'string' || !Array.isArray(entry.sessions) || entry.sessions.length > MAX_STORED_ROWS ||
-          typeof entry.complete !== 'boolean' || !Number.isFinite(entry.checkedAt) ||
-          (entry.hasSessions !== null && typeof entry.hasSessions !== 'boolean')) continue;
-        const sessions = entry.sessions.map(readSummary);
-        if (sessions.some((session: DesktopSessionSummary | null) => session === null)) continue;
-        this.entries.set(entry.key, { key: entry.key, sessions, complete: entry.complete, checkedAt: entry.checkedAt, hasSessions: entry.hasSessions });
-      }
+      this.entries = readCatalogEntries(storage.getItem(SESSION_CATALOG_STORAGE_KEY));
     } catch {
       // Unavailable storage and malformed cache documents are both disposable.
     }
   }
+}
+
+function readCatalogEntries(raw: string | null): Map<string, CachedSessionCatalog> {
+  const entries = new Map<string, CachedSessionCatalog>();
+  if (!raw || raw.length > MAX_STORED_CHARACTERS) return entries;
+  try {
+    const document = JSON.parse(raw);
+    if (document?.version !== 1 || !Array.isArray(document.entries)) return entries;
+    for (const entry of document.entries.slice(-MAX_ENTRIES)) {
+      if (typeof entry?.key !== 'string' || !Array.isArray(entry.sessions) || entry.sessions.length > MAX_STORED_ROWS ||
+        typeof entry.complete !== 'boolean' || !Number.isFinite(entry.checkedAt) ||
+        (entry.hasSessions !== null && typeof entry.hasSessions !== 'boolean')) continue;
+      const sessions = entry.sessions.map(readSummary);
+      if (sessions.some((session: DesktopSessionSummary | null) => session === null)) continue;
+      entries.set(entry.key, { key: entry.key, sessions, complete: entry.complete, checkedAt: entry.checkedAt, hasSessions: entry.hasSessions });
+    }
+  } catch { /* A corrupt warm cache must not prevent the next successful write. */ }
+  return entries;
 }
 
 function persistedSummary(session: DesktopSessionSummary): DesktopSessionSummary {

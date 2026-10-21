@@ -109,6 +109,28 @@ describe('SessionCatalogCache', () => {
     expect(cache.get('scope')?.sessions).toHaveLength(2500);
   });
 
+  it('merges only locally owned writes so stale tab views do not erase another scope', () => {
+    const a = new SessionCatalogCache(), b = new SessionCatalogCache();
+    a.get('a'); b.get('b');
+    a.set(entry({ key: 'a' })); a.flush();
+    b.set(entry({ key: 'b' })); b.flush();
+    expect(new SessionCatalogCache().get('a')?.sessions).toHaveLength(1);
+    expect(new SessionCatalogCache().get('b')?.sessions).toHaveLength(1);
+  });
+
+  it('does not persist received snapshots or clear disk on peer invalidations', async () => {
+    vi.useFakeTimers();
+    const a = new SessionCatalogCache(); a.set(entry()); a.flush();
+    const raw = localStorage.getItem(SESSION_CATALOG_STORAGE_KEY);
+    const follower = new SessionCatalogCache();
+    follower.set(entry({ key: 'peer', sessions: [] }), false);
+    await vi.advanceTimersByTimeAsync(1_000); follower.flush();
+    expect(follower.get('peer')?.sessions).toEqual([]);
+    expect(localStorage.getItem(SESSION_CATALOG_STORAGE_KEY)).toBe(raw);
+    follower.clear(false);
+    expect(localStorage.getItem(SESSION_CATALOG_STORAGE_KEY)).toBe(raw);
+  });
+
   it('batches page writes and cancels pending persistence when invalidated', async () => {
     vi.useFakeTimers();
     const cache = new SessionCatalogCache();
