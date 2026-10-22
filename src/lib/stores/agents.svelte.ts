@@ -1741,12 +1741,15 @@ export class AgentsStore {
       if (!record.client.supportsElicitationRecovery()) {
         return;
       }
+      // Permission and question cards raised while the recovery RPCs are in
+      // flight are newer than the agent's snapshot and must not be reconciled away.
+      const boundary = inboxStore.snapshotInteractionItemIds(config.id);
       const snapshots = await record.client.recoverPendingElicitations();
       if (this.clients.get(config.id) !== record) {
         return;
       }
       for (const snapshot of snapshots) {
-        inboxStore.reconcileReboundElicitations(config.id, snapshot.sessionId, snapshot.elicitationIds);
+        inboxStore.reconcileReboundElicitations(config.id, snapshot.sessionId, snapshot.elicitationIds, boundary);
       }
     } catch {
       // Best-effort recovery: offline cards stay pending for the next reconnect.

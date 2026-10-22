@@ -66,10 +66,16 @@ function elicitation(sessionId = 'session-1', options: { keyed?: boolean } = {})
   };
 }
 
-function permission(sessionId = 'session-1'): RequestPermissionRequest {
+function permission(
+  sessionId = 'session-1',
+  options: { interactionId?: string; toolCallId?: string } = {}
+): RequestPermissionRequest {
   return {
     sessionId,
-    toolCall: { toolCallId: 'tool-1', title: 'Run tests', kind: 'execute' },
+    ...(options.interactionId
+      ? { _meta: { querymt: { interaction_id: options.interactionId } } }
+      : {}),
+    toolCall: { toolCallId: options.toolCallId ?? 'tool-1', title: 'Run tests', kind: 'execute' },
     options: [
       { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
       { optionId: 'reject', name: 'Reject', kind: 'reject_once' }
@@ -369,6 +375,34 @@ describe('InboxStore elicitations', () => {
     expect(fresh[0].id).not.toBe(item.id);
   });
 
+  it('keeps question cards raised after the recovery snapshot boundary pending', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    const withId = (id: string): CreateElicitationRequest => ({
+      ...elicitation('session-1'),
+      _meta: { querymt: { elicitation_id: id, source: 'builtin:question' } }
+    });
+    void client.elicit(withId('elicit-old'));
+    const boundary = store.snapshotInteractionItemIds('agent-1');
+    const newer = client.elicit(withId('elicit-new'));
+    let newerSettled: CreateElicitationResponse | null = null;
+    void newer.then((value) => {
+      newerSettled = value;
+    });
+
+    store.reconcileReboundElicitations('agent-1', 'session-1', [], boundary);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const cards = store.items.filter((candidate) => candidate.type === 'elicitation');
+    const resolved = cards.filter((card) => card.status === 'resolved');
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0].resolution).toBe('No longer pending');
+    expect(cards.filter((card) => card.status === 'pending')).toHaveLength(1);
+    expect(newerSettled).toBeNull();
+  });
+
   it('treats reconciliation in a refreshed UI with no retained cards as a no-op', () => {
     const store = new InboxStore();
     store.reconcileReboundElicitations('agent-1', 'session-1', ['elicit-session-1']);
@@ -377,22 +411,277 @@ describe('InboxStore elicitations', () => {
 });
 
 describe('InboxStore permission requests', () => {
-  it('settles permission requests as cancelled on disconnect instead of leaving them offline', async () => {
+  it('keeps permission cards offline on disconnect without sending any outcome', async () => {
     const store = new InboxStore();
     const client = createClient();
     store.bindClient(client as never, 'agent-1', 'QMTCODE');
     const response = client.permission(permission());
+    let settled: RequestPermissionResponse | null = null;
+    void response.then((value) => {
+      settled = value;
+    });
     const item = store.actionableItems[0];
     expect(item).toBeDefined();
 
     store.disconnectAgent('agent-1');
+    await Promise.resolve();
+    await Promise.resolve();
 
-    await expect(response).resolves.toEqual({ outcome: { outcome: 'cancelled' } });
-    const resolved = store.items.find((candidate) => candidate.id === item!.id);
-    expect(resolved?.status).toBe('resolved');
-    expect(resolved?.resolution).toBe('Cancelled');
-    expect(resolved?.offline).toBeUndefined();
+    const retained = store.items.find((candidate) => candidate.id === item!.id);
+    expect(retained?.status).toBe('pending');
+    expect(retained?.offline).toBe(true);
+    expect(retained?.resolution ?? null).toBeNull();
+    expect(settled).toBeNull();
+    expect(store.liveRequestCount).toBe(0);
+  });
+
+  it('rejects answers to an offline permission card', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    const response = client.permission(permission());
+    let settled: RequestPermissionResponse | null = null;
+    void response.then((value) => {
+      settled = value;
+    });
+    const item = store.actionableItems[0]!;
+    store.disconnectAgent('agent-1');
+
+    await store.handleAction(item.id, 'allow');
+    await Promise.resolve();
+
+    expect(settled).toBeNull();
+    expect(store.items.find((candidate) => candidate.id === item.id)?.status).toBe('pending');
+  });
+
+  it('rebinds a re-delivered permission request to its offline card and answers the new request', async () => {
+    sendDesktopNotification.mockClear();
+    const store = new InboxStore();
+    const firstClient = createClient();
+    store.bindClient(firstClient as never, 'agent-1', 'QMTCODE');
+    const firstDelivery = firstClient.permission(permission());
+    let firstSettled: RequestPermissionResponse | null = null;
+    void firstDelivery.then((value) => {
+      firstSettled = value;
+    });
+    const item = store.actionableItems[0]!;
+    store.disconnectAgent('agent-1');
+
+    const reconnectedClient = createClient();
+    store.bindClient(reconnectedClient as never, 'agent-1', 'QMTCODE');
+    const redelivered = reconnectedClient.permission(permission());
+
+    const cards = store.items.filter((candidate) => candidate.type === 'permission');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].id).toBe(item.id);
+    expect(cards[0].offline).toBe(false);
+    expect(cards[0].actions?.map((action) => action.id)).toEqual(['allow', 'reject']);
+    expect(sendDesktopNotification).toHaveBeenCalledTimes(1);
+
+    await store.handleAction(item.id, 'allow');
+    await expect(redelivered).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'allow' } });
+    await Promise.resolve();
+    expect(firstSettled).toBeNull();
+
+    // One answer only: a second action cannot re-resolve the card.
+    const resolution = store.items.find((candidate) => candidate.id === item.id)?.resolution;
+    expect(resolution).toBeTruthy();
+    await store.handleAction(item.id, 'reject');
+    expect(store.items.find((candidate) => candidate.id === item.id)?.resolution).toBe(resolution);
     expect(store.pendingCount).toBe(0);
+  });
+
+  it('does not rebind permission requests across sessions or agents', () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    void client.permission(permission('session-1'));
+    store.disconnectAgent('agent-1');
+
+    const reconnected = createClient();
+    store.bindClient(reconnected as never, 'agent-1', 'QMTCODE');
+    void reconnected.permission(permission('session-2'));
+    const other = createClient();
+    store.bindClient(other as never, 'agent-2', 'OTHER');
+    void other.permission(permission('session-1'));
+
+    expect(store.items.filter((candidate) => candidate.type === 'permission')).toHaveLength(3);
+  });
+
+  it('dismisses a superseded live delivery when the same request is re-delivered', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    const first = client.permission(permission());
+    const second = client.permission(permission());
+
+    await expect(first).resolves.toEqual({ outcome: { outcome: 'cancelled' } });
+    const cards = store.actionableItems.filter((candidate) => candidate.type === 'permission');
+    expect(cards).toHaveLength(1);
+
+    await store.handleAction(cards[0].id, 'reject');
+    await expect(second).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'reject' } });
+  });
+
+  it('retires permission requests without a tool-call id locally on disconnect', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    const request = permission();
+    const response = client.permission({ ...request, toolCall: { ...request.toolCall, toolCallId: '' } });
+    let settled: RequestPermissionResponse | null = null;
+    void response.then((value) => {
+      settled = value;
+    });
+
+    store.disconnectAgent('agent-1');
+    await Promise.resolve();
+
+    expect(settled).toBeNull();
+    expect(store.pendingCount).toBe(0);
+  });
+
+  it('keys cards by interaction id: same tool call with different ids stays separate', () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    void client.permission(permission('session-1', { interactionId: 'perm-a' }));
+    void client.permission(permission('session-1', { interactionId: 'perm-b' }));
+
+    expect(store.items.filter((candidate) => candidate.type === 'permission')).toHaveLength(2);
+  });
+
+  it('rebinds by interaction id after a reconnect and falls back to the tool call without one', async () => {
+    const store = new InboxStore();
+    const first = createClient();
+    store.bindClient(first as never, 'agent-1', 'QMTCODE');
+    void first.permission(permission('session-1', { interactionId: 'perm-a' }));
+    void first.permission(permission('session-1', { toolCallId: 'legacy-call' }));
+    store.disconnectAgent('agent-1');
+
+    const second = createClient();
+    store.bindClient(second as never, 'agent-1', 'QMTCODE');
+    void second.permission(permission('session-1', { interactionId: 'perm-a' }));
+    void second.permission(permission('session-1', { toolCallId: 'legacy-call' }));
+
+    const cards = store.items.filter((candidate) => candidate.type === 'permission');
+    expect(cards).toHaveLength(2);
+    expect(cards.every((card) => card.offline === false)).toBe(true);
+  });
+
+  it('rebinds a re-delivery to a card whose answer the agent kept pending', async () => {
+    sendDesktopNotification.mockClear();
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    const first = client.permission(permission('session-1', { interactionId: 'perm-a' }));
+    const item = store.actionableItems[0]!;
+    await store.handleAction(item.id, 'allow');
+    await expect(first).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'allow' } });
+    expect(store.items.find((candidate) => candidate.id === item.id)?.status).toBe('resolved');
+
+    const redelivered = client.permission(permission('session-1', { interactionId: 'perm-a' }));
+
+    const cards = store.items.filter((candidate) => candidate.type === 'permission');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].id).toBe(item.id);
+    expect(cards[0].status).toBe('pending');
+    expect(cards[0].offline).toBe(false);
+    expect(cards[0].error).toBe('The agent rejected this answer.');
+    expect(sendDesktopNotification).toHaveBeenCalledTimes(1);
+
+    await store.handleAction(item.id, 'reject');
+    await expect(redelivered).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'reject' } });
+  });
+
+  it('retires permission cards the agent no longer reports, without sending an outcome', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    const gone = client.permission(permission('session-1', { interactionId: 'perm-gone' }));
+    void client.permission(permission('session-1', { interactionId: 'perm-kept' }));
+    const otherSession = client.permission(permission('session-2', { interactionId: 'perm-other' }));
+    let settled: RequestPermissionResponse | null = null;
+    void gone.then((value) => {
+      settled = value;
+    });
+    let otherSettled: RequestPermissionResponse | null = null;
+    void otherSession.then((value) => {
+      otherSettled = value;
+    });
+    store.disconnectAgent('agent-1');
+
+    store.reconcileReboundElicitations('agent-1', 'session-1', ['perm-kept']);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const cards = store.items.filter((candidate) => candidate.type === 'permission');
+    const byId = (id: string) => cards.find((card) => card.sessionId === id && card.status === 'pending');
+    expect(cards.filter((card) => card.status === 'resolved')).toHaveLength(1);
+    expect(cards.find((card) => card.status === 'resolved')?.resolution).toBe('No longer pending');
+    expect(byId('session-1')?.offline).toBe(true);
+    expect(byId('session-2')?.offline).toBe(true);
+    expect(settled).toBeNull();
+    expect(otherSettled).toBeNull();
+  });
+
+  it('does not guess at permission cards keyed only by a tool call when reconciling', () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    void client.permission(permission('session-1'));
+    store.disconnectAgent('agent-1');
+
+    store.reconcileReboundElicitations('agent-1', 'session-1', []);
+
+    expect(store.items.find((candidate) => candidate.type === 'permission')?.status).toBe('pending');
+  });
+
+  it('retires a live permission card that the agent no longer lists', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    const response = client.permission(permission('session-1', { interactionId: 'perm-gone' }));
+    let settled: RequestPermissionResponse | null = null;
+    void response.then((value) => {
+      settled = value;
+    });
+
+    store.reconcileReboundElicitations('agent-1', 'session-1', []);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(store.pendingCount).toBe(0);
+    expect(settled).toBeNull();
+  });
+
+  it('keeps permission cards raised after the recovery snapshot boundary pending', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    void client.permission(permission('session-1', { interactionId: 'perm-old' }));
+    const boundary = store.snapshotInteractionItemIds('agent-1');
+    const newer = client.permission(permission('session-1', { interactionId: 'perm-new' }));
+    let newerSettled: RequestPermissionResponse | null = null;
+    void newer.then((value) => {
+      newerSettled = value;
+    });
+
+    store.reconcileReboundElicitations('agent-1', 'session-1', [], boundary);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const cards = store.items.filter((candidate) => candidate.type === 'permission');
+    const resolved = cards.filter((card) => card.status === 'resolved');
+    const pending = cards.filter((card) => card.status === 'pending');
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0].resolution).toBe('No longer pending');
+    expect(pending).toHaveLength(1);
+    expect(newerSettled).toBeNull();
+
+    const item = store.actionableItems[0]!;
+    await store.handleAction(item.id, 'allow');
+    await expect(newer).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'allow' } });
   });
 
   it('still resolves a chosen option on the live transport', async () => {
