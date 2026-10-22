@@ -111,6 +111,7 @@ import { createTauriAcpStream, createWebSocketAcpStream } from '$lib/querymt/tra
 import type { Stream } from '@agentclientprotocol/sdk';
 import { isEmbedded } from '$lib/platform/runtime';
 import { acpWebSocketUrl } from '$lib/querymt/websocket-url';
+import { mapRemoteUpgradeRequired } from '$lib/domain/remote-errors';
 import { version } from '../../../package.json';
 
 const PROTOCOL_VERSION = 1;
@@ -606,7 +607,9 @@ export class DesktopAcpClient {
       };
     } catch (error) {
       this.browserClient.abortSessionReplay(capture);
-      throw error;
+      // The store's missing-session fallback inspects the raw RequestError, so
+      // only the upgrade-required category is rewritten here.
+      throw mapRemoteUpgradeRequired(error);
     }
   }
 
@@ -809,7 +812,11 @@ export class DesktopAcpClient {
       await this.connect();
     }
     this.assertQuerymtMethod(QMT_METHOD_REMOTE_CREATE_SESSION);
-    return this.querymtExtensions!.createRemoteSession(request);
+    try {
+      return await this.querymtExtensions!.createRemoteSession(request);
+    } catch (error) {
+      throw mapRemoteUpgradeRequired(error);
+    }
   }
 
   async attachRemoteSession(request: AttachRemoteSessionRequest): Promise<RemoteSessionAttachInfo> {
@@ -817,7 +824,11 @@ export class DesktopAcpClient {
       await this.connect();
     }
     this.assertQuerymtMethod(QMT_METHOD_REMOTE_ATTACH_SESSION);
-    return this.querymtExtensions!.attachRemoteSession(request);
+    try {
+      return await this.querymtExtensions!.attachRemoteSession(request);
+    } catch (error) {
+      throw mapRemoteUpgradeRequired(error);
+    }
   }
 
   async dismissRemoteSession(session_id: string): Promise<RemoteSessionDismissInfo> {
@@ -977,13 +988,17 @@ export class DesktopAcpClient {
       await this.connect();
     }
     const content = this.buildPromptContent(prompt, attachments, options.imageMode ?? 'image');
-    return this.connection!.prompt({
-      sessionId,
-      prompt: content,
-      _meta: options.clientPromptId
-        ? { querymt: { client_prompt_id: options.clientPromptId } }
-        : undefined
-    });
+    try {
+      return await this.connection!.prompt({
+        sessionId,
+        prompt: content,
+        _meta: options.clientPromptId
+          ? { querymt: { client_prompt_id: options.clientPromptId } }
+          : undefined
+      });
+    } catch (error) {
+      throw mapRemoteUpgradeRequired(error);
+    }
   }
 
   async steerSession(

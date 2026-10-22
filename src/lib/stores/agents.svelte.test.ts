@@ -6,6 +6,7 @@ import { RequestError, type InitializeResponse, type ListSessionsRequest, type P
 import type { AgentConfig, DesktopSessionSummary, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { findModeConfigOption, findReasoningConfigOption, getModelSelectionKey } from '$lib/querymt/config-options';
 import { QMT_METHOD_MESH_NODES, QMT_METHOD_MESH_STATUS } from '$lib/querymt/querymt-extensions';
+import { RemoteNodeUpgradeRequiredError } from '$lib/domain/remote-errors';
 import {
   DelegateAssignmentSource,
   DelegateReasoningEffort,
@@ -281,6 +282,7 @@ function createDistinctMockClient() {
   let connectionLossHandler: ((reason: string) => void) | null = null;
   const extensionNotificationHandlers: Array<(notification: { method: string; params: unknown }) => void> = [];
   let elicitationHandler: ((request: unknown) => Promise<unknown>) | null = null;
+  let permissionHandler: ((request: unknown) => Promise<unknown>) | null = null;
 
   return {
     connect: vi.fn(async (): Promise<InitializeResponse> => ({
@@ -327,14 +329,20 @@ function createDistinctMockClient() {
     emitExtensionNotification: (notification: { method: string; params: unknown }) => {
       for (const handler of [...extensionNotificationHandlers]) handler(notification);
     },
-    onPermissionRequest: vi.fn(() => vi.fn()),
+    onPermissionRequest: vi.fn((handler: (request: unknown) => Promise<unknown>) => {
+      permissionHandler = handler;
+      return () => {
+        permissionHandler = null;
+      };
+    }),
     onElicitationRequest: vi.fn((handler: (request: unknown) => Promise<unknown>) => {
       elicitationHandler = handler;
       return () => {
         elicitationHandler = null;
       };
     }),
-    elicit: (request: unknown) => elicitationHandler!(request) as Promise<unknown>
+    elicit: (request: unknown) => elicitationHandler!(request) as Promise<unknown>,
+    permission: (request: unknown) => permissionHandler!(request) as Promise<unknown>
   };
 }
 
@@ -773,6 +781,17 @@ describe('AgentsStore recent sessions', () => {
     mockClient.emitSessionUpdate({ sessionId: 'child', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Background work' } } });
     await tick();
     expect(store.recentSessionKeys).toEqual(['agent-1:root']);
+  });
+
+  it('shows the upgrade message when opening a session on an outdated remote node', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockRejectedValueOnce(new RemoteNodeUpgradeRequiredError('nas'));
+    await store.loadSession('agent-1', 'remote-session');
+
+    expect(store.error).toContain('Remote node "nas" must be upgraded');
+    expect(store.activeSession.lastError).toContain('Remote node "nas" must be upgraded');
+    expect(store.activeSession.runState).toBe('failed');
+    expect(store.recentSessionKeys).toEqual([]);
   });
 
   it('remembers foreground creation but not background session creation', async () => {
@@ -1720,6 +1739,25 @@ describe('AgentsStore session lifecycle', () => {
     expect(store.lastRemoteAttachByAgent['agent-1']).toBeUndefined();
     expect(store.error).toBeNull();
     expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
+  it('reports an outdated remote node on create without leaving a half-created session', async () => {
+    const store = await lifecycleStore();
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('existing')] });
+    await store.ensureSessionCatalog();
+    store.composerTargetId = 'node-1';
+    mockClient.createRemoteSession.mockRejectedValueOnce(
+      new RemoteNodeUpgradeRequiredError('nas')
+    );
+
+    await expect(store.createSession('agent-1')).resolves.toBeNull();
+
+    expect(store.error).toContain('Remote node "nas" must be upgraded');
+    expect(store.activeSessionId).toBeNull();
+    expect(store.lastRemoteAttachByAgent['agent-1']).toBeUndefined();
+    expect(store.sessionCatalog.map((session) => session.sessionId)).toEqual(['existing']);
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+    expect(mockClient.createRemoteSession).toHaveBeenCalledOnce();
   });
 
   it.each(['local', 'node-1'])('does not select or configure a session from a replaced endpoint when composer target is %s', async (target) => {
@@ -6314,6 +6352,33 @@ describe('AgentsStore prompt session start', () => {
     expect(store.activeSession.activityLabel).toBe('Usage limit reached');
   });
 
+  it('reports a remote node upgrade-required prompt failure as a non-retryable upgrade message', async () => {
+    mockClient.sendPrompt.mockRejectedValueOnce(
+      new RequestError(-32603, "remote node 'nas' must be upgraded: it does not support session interactions", {
+        category: 'remote_upgrade_required',
+        node: 'nas',
+        message: "remote node 'nas' must be upgraded: it does not support session interactions"
+      })
+    );
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+
+    await store.sendPromptToActiveSession();
+
+    expect(store.promptFailure).toEqual(
+      expect.objectContaining({
+        kind: 'remote_upgrade_required',
+        title: 'Remote node must be upgraded',
+        retryable: false,
+        provider: null
+      })
+    );
+    expect(store.promptFailure?.message).toContain('Remote node "nas" must be upgraded');
+    expect(store.promptFailure?.details).toContain('remote_upgrade_required');
+    expect(store.activeSession.activityLabel).toBe('Remote node must be upgraded');
+  });
+
   it('retries transient prompt failures with the original prompt', async () => {
     mockClient.sendPrompt
       .mockRejectedValueOnce(
@@ -8358,6 +8423,126 @@ describe('AgentsStore prompt session start', () => {
         inboxStore.updateField(cards[0].id, 'selection', 'prod');
         await inboxStore.handleAction(cards[0].id, 'accept');
         await expect(redelivered).resolves.toEqual({ action: 'accept', content: { selection: 'prod' } });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    function recoveryPermission(sessionId: string, interactionId: string) {
+      return {
+        sessionId,
+        _meta: { querymt: { interaction_id: interactionId } },
+        toolCall: { toolCallId: `call-${interactionId}`, title: 'Run shell', kind: 'execute' as const },
+        options: [
+          { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' as const },
+          { optionId: 'reject_once', name: 'Reject once', kind: 'reject_once' as const }
+        ]
+      };
+    }
+
+    async function seedOfflinePermissions(sessionId: string, interactionIds: string[]) {
+      const firstClient = createDistinctMockClient();
+      vi.mocked(DesktopAcpClient).mockImplementationOnce(function () {
+        return firstClient as never;
+      });
+      const store = websocketStore();
+      await store.connectAgent('agent-1');
+      const settled = interactionIds.map(() => ({ resolved: false }));
+      interactionIds.forEach((interactionId, index) => {
+        void (firstClient.permission(recoveryPermission(sessionId, interactionId)) as Promise<unknown>).then(() => {
+          settled[index].resolved = true;
+        });
+      });
+      return { store, firstClient, settled };
+    }
+
+    it('keeps a still-pending permission and retires one answered elsewhere after reconnect', async () => {
+      vi.useFakeTimers();
+      try {
+        const sessionId = 'perm-session-1';
+        const { store, firstClient, settled } = await seedOfflinePermissions(sessionId, ['perm-keep', 'perm-gone']);
+        firstClient.emitConnectionLoss('WebSocket closed (code 1006).');
+        expect(
+          inboxStore.items.filter((item) => item.type === 'permission' && item.offline === true)
+        ).toHaveLength(2);
+
+        const reconnected = createDistinctMockClient();
+        reconnected.supportsElicitationRecovery = vi.fn(() => true);
+        reconnected.recoverPendingElicitations = vi.fn(async () => [
+          { sessionId, elicitationIds: ['perm-keep'] }
+        ]);
+        vi.mocked(DesktopAcpClient).mockImplementationOnce(function () {
+          return reconnected as never;
+        });
+        await store.connectAgent('agent-1');
+
+        const permissions = inboxStore.items.filter((item) => item.type === 'permission');
+        expect(permissions.filter((item) => item.status === 'resolved')).toHaveLength(1);
+        expect(permissions.find((item) => item.status === 'resolved')?.resolution).toBe('No longer pending');
+
+        const redelivered = reconnected.permission(recoveryPermission(sessionId, 'perm-keep'));
+        const kept = inboxStore.items.filter((item) => item.type === 'permission' && item.status === 'pending');
+        expect(kept).toHaveLength(1);
+        expect(kept[0].offline).toBe(false);
+        await inboxStore.handleAction(kept[0].id, 'allow_once');
+        await expect(redelivered).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'allow_once' } });
+        await Promise.resolve();
+        expect(settled.every((delivery) => !delivery.resolved)).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('retires an offline permission when the agent reports an empty pending set (run cancelled)', async () => {
+      vi.useFakeTimers();
+      try {
+        const sessionId = 'perm-session-2';
+        const { store, firstClient, settled } = await seedOfflinePermissions(sessionId, ['perm-cancelled']);
+        firstClient.emitConnectionLoss('WebSocket closed (code 1006).');
+
+        const reconnected = createDistinctMockClient();
+        reconnected.supportsElicitationRecovery = vi.fn(() => true);
+        reconnected.recoverPendingElicitations = vi.fn(async () => [{ sessionId, elicitationIds: [] }]);
+        vi.mocked(DesktopAcpClient).mockImplementationOnce(function () {
+          return reconnected as never;
+        });
+        await store.connectAgent('agent-1');
+
+        const card = inboxStore.items.find((item) => item.sessionId === sessionId);
+        expect(card?.status).toBe('resolved');
+        expect(card?.actions).toEqual([]);
+        expect(settled.every((delivery) => !delivery.resolved)).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('shows a remote-hosted, permission-only pending request after a UI refresh', async () => {
+      vi.useFakeTimers();
+      try {
+        const sessionId = 'remote-perm-session';
+        // A refreshed UI has an empty inbox; the agent keeps the permission pending
+        // and reports it through the same recovery flow as for a local session.
+        const store = websocketStore();
+        const reconnected = createDistinctMockClient();
+        reconnected.supportsElicitationRecovery = vi.fn(() => true);
+        reconnected.recoverPendingElicitations = vi.fn(async () => [
+          { sessionId, elicitationIds: ['perm-remote'] }
+        ]);
+        vi.mocked(DesktopAcpClient).mockImplementationOnce(function () {
+          return reconnected as never;
+        });
+        await store.connectAgent('agent-1');
+        expect(reconnected.recoverPendingElicitations).toHaveBeenCalledTimes(1);
+
+        const response = reconnected.permission(recoveryPermission(sessionId, 'perm-remote'));
+        const cards = inboxStore.items.filter((item) => item.type === 'permission' && item.status === 'pending');
+        expect(cards).toHaveLength(1);
+        expect(cards[0].sessionId).toBe(sessionId);
+        expect(cards[0].actions?.map((action) => action.id)).toEqual(['allow_once', 'reject_once']);
+
+        await inboxStore.handleAction(cards[0].id, 'reject_once');
+        await expect(response).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'reject_once' } });
       } finally {
         vi.useRealTimers();
       }

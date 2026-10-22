@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { RequestError } from '@agentclientprotocol/sdk';
 import { DesktopAcpClient, clearElicitationResumeAuthorities, clearElicitationResumeAuthoritiesForAgent } from './acp-client';
+import { RemoteNodeUpgradeRequiredError } from '$lib/domain/remote-errors';
 import type { QuerymtExtensionNotification } from './querymt-extensions';
 
 const beginSessionReplay = vi.fn(() => ({ sessionId: 'session-1', notifications: [] }));
@@ -60,6 +62,25 @@ vi.mock('@agentclientprotocol/sdk', async (importOriginal) => {
 });
 
 describe('DesktopAcpClient session metadata', () => {
+  it('maps an upgrade-required failure on session load and keeps other errors raw', async () => {
+    const client = new DesktopAcpClient({ id: 'agent-1', name: 'Agent', transport: 'stdio', commandLine: 'agent', enabled: true, autoStart: true });
+    const upgrade = new RequestError(-32603, 'remote node must be upgraded', {
+      category: 'remote_upgrade_required',
+      node: 'nas'
+    });
+    const missing = new RequestError(-32602, 'Invalid params', { message: 'session not found' });
+    const loadSession = vi.fn().mockRejectedValueOnce(upgrade).mockRejectedValueOnce(missing);
+    (client as unknown as { connection: { loadSession: typeof loadSession } }).connection = { loadSession };
+
+    await expect(client.loadSession('session-1', '/tmp/work')).rejects.toMatchObject({
+      name: 'RemoteNodeUpgradeRequiredError',
+      node: 'nas'
+    });
+    // The store's missing-session fallback depends on the raw RequestError.
+    await expect(client.loadSession('session-1', '/tmp/work')).rejects.toBe(missing);
+    expect(abortSessionReplay).toHaveBeenCalledTimes(2);
+  });
+
   it('includes the desktop session-load operation id in ACP metadata', async () => {
     const client = new DesktopAcpClient({ id: 'agent-1', name: 'Agent', transport: 'stdio', commandLine: 'agent', enabled: true, autoStart: true });
     const loadSession = vi.fn(async () => ({ configOptions: [] }));
@@ -130,6 +151,40 @@ describe('DesktopAcpClient session lifecycle', () => {
     expect(client.supportsSessionLifecycle()).toBe(true);
     await client.setSessionLifecycle('session-1', { archived: true });
     expect(setSessionLifecycle).toHaveBeenCalledWith('session-1', { archived: true });
+  });
+});
+
+describe('DesktopAcpClient remote upgrade-required errors', () => {
+  const upgradeError = () => new RequestError(-32603, "remote node 'nas' must be upgraded", {
+    category: 'remote_upgrade_required',
+    node: 'nas'
+  });
+
+  it('maps upgrade-required failures from prompt, remote create and remote attach to a typed error', async () => {
+    const { client, prompt } = promptClient({});
+    prompt.mockRejectedValueOnce(upgradeError());
+    await expect(client.sendPrompt('session-1', 'Hello')).rejects.toBeInstanceOf(RemoteNodeUpgradeRequiredError);
+
+    const internal = client as unknown as { controlCapabilities: unknown; querymtExtensions: unknown };
+    internal.controlCapabilities = { methods: ['querymt/remote/createSession', 'querymt/remote/attachSession'] };
+    internal.querymtExtensions = {
+      createRemoteSession: vi.fn(async () => { throw upgradeError(); }),
+      attachRemoteSession: vi.fn(async () => { throw upgradeError(); })
+    };
+    await expect(client.createRemoteSession({ node_id: 'nas', cwd: '/w', attach: true })).rejects.toMatchObject({
+      name: 'RemoteNodeUpgradeRequiredError',
+      node: 'nas'
+    });
+    await expect(client.attachRemoteSession({ node_id: 'nas', session_id: 's' })).rejects.toBeInstanceOf(
+      RemoteNodeUpgradeRequiredError
+    );
+  });
+
+  it('passes other prompt errors through unchanged', async () => {
+    const { client, prompt } = promptClient({});
+    const other = new RequestError(-32603, 'boom', { category: 'remote_transport' });
+    prompt.mockRejectedValueOnce(other);
+    await expect(client.sendPrompt('session-1', 'Hello')).rejects.toBe(other);
   });
 });
 

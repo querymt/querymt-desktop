@@ -1,5 +1,6 @@
 import { RequestError } from '@agentclientprotocol/sdk';
 import type { PromptAttachment } from '$lib/domain/types';
+import { toRemoteNodeUpgradeRequired } from '$lib/domain/remote-errors';
 
 export type PromptErrorKind =
   | 'quota_exceeded'
@@ -8,6 +9,7 @@ export type PromptErrorKind =
   | 'context_window_exceeded'
   | 'invalid_request'
   | 'provider'
+  | 'remote_upgrade_required'
   | 'unknown';
 
 export interface PromptError {
@@ -45,10 +47,25 @@ const PROMPT_ERROR_TITLES: Record<PromptErrorKind, string> = {
   context_window_exceeded: 'Context window exceeded',
   invalid_request: 'Provider rejected the request',
   provider: 'Provider request failed',
+  remote_upgrade_required: 'Remote node must be upgraded',
   unknown: 'Prompt failed'
 };
 
 export function normalizePromptError(error: unknown): PromptError {
+  const upgrade = toRemoteNodeUpgradeRequired(error);
+  if (upgrade) {
+    const cause = upgrade.cause ?? error;
+    return {
+      kind: 'remote_upgrade_required',
+      title: PROMPT_ERROR_TITLES.remote_upgrade_required,
+      message: upgrade.message,
+      provider: null,
+      model: null,
+      retryable: false,
+      details: cause instanceof RequestError ? formatRequestErrorDetails(cause) : cause instanceof Error ? cause.message : upgrade.message
+    };
+  }
+
   if (error instanceof RequestError && isProviderErrorData(error.data)) {
     const kind = normalizePromptErrorKind(error.data.kind);
     const provider = stringValue(error.data.provider);

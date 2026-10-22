@@ -23,6 +23,7 @@ import {
 interface PendingPermissionRequest {
   itemId: string;
   agentId: string;
+  requestKey: string | null;
   request: RequestPermissionRequest;
   resolve: (response: RequestPermissionResponse) => void;
 }
@@ -46,6 +47,23 @@ export class InboxStore {
   private pendingPermissionRequests = new Map<string, PendingPermissionRequest>();
   private pendingElicitationRequests = new Map<string, PendingElicitationRequest>();
   private pendingElicitationKeys = new Map<string, string>();
+  /**
+   * Live permission cards, keyed by the agent's interaction ID (or, for an agent
+   * that omits it, a tool-call fallback key).
+   */
+  private pendingPermissionKeys = new Map<string, string>();
+  /**
+   * Permission cards whose resolver was retired by a transport loss, keyed like
+   * `pendingPermissionKeys`. A re-delivered request rebinds to them.
+   */
+  private offlinePermissionKeys = new Map<string, string>();
+  /**
+   * Permission cards answered by the user whose outcome the agent has not
+   * visibly applied. A permission has no completion notification, so a
+   * re-delivery of the same identity means the agent kept it pending (it
+   * rejected the answer, or the answer was lost) and rebinds to the card.
+   */
+  private submittedPermissionKeys = new Map<string, string>();
   /** Cards whose resolver was retired offline, keyed by stable elicitation identity. */
   private offlineElicitationKeys = new Map<string, string>();
   /**
@@ -115,6 +133,49 @@ export class InboxStore {
         }
       }
       this.markResolved(itemId, 'No longer pending');
+    }
+
+    this.reconcilePermissions(agentId, sessionId, authoritative);
+  }
+
+  /**
+   * Retire permission cards the agent no longer reports as pending.
+   *
+   * Only cards keyed by the agent's interaction ID take part: a fallback
+   * tool-call key cannot be compared with the agent's pending IDs, so such a
+   * card is left alone rather than guessed at. No outcome is ever sent.
+   */
+  private reconcilePermissions(agentId: string, sessionId: string, authoritative: Set<string>) {
+    const stale = new Set<string>();
+    const collect = (entries: Iterable<[string, string]>) => {
+      for (const [key, itemId] of entries) {
+        if (!isInteractionKey(key, agentId) || authoritative.has(key)) continue;
+        const item = this.items.find((candidate) => candidate.id === itemId);
+        if (item && item.status !== 'resolved' && item.sessionId === sessionId) {
+          stale.add(itemId);
+        }
+      }
+    };
+    collect(this.pendingPermissionKeys.entries());
+    collect(this.offlinePermissionKeys.entries());
+
+    for (const itemId of stale) {
+      const live = this.pendingPermissionRequests.get(itemId);
+      if (live) {
+        // Drop the resolver without answering; the request no longer exists.
+        this.removePendingPermission(live);
+      }
+      for (const [key, candidate] of [...this.offlinePermissionKeys.entries()]) {
+        if (candidate === itemId) this.offlinePermissionKeys.delete(key);
+      }
+      this.markResolved(itemId, 'No longer pending');
+    }
+
+    // A submitted answer for an interaction the agent no longer lists was applied.
+    for (const [key, itemId] of [...this.submittedPermissionKeys.entries()]) {
+      if (!isInteractionKey(key, agentId) || authoritative.has(key)) continue;
+      const item = this.items.find((candidate) => candidate.id === itemId);
+      if (item?.sessionId === sessionId) this.submittedPermissionKeys.delete(key);
     }
   }
 
@@ -258,8 +319,9 @@ export class InboxStore {
       return;
     }
 
-    this.pendingPermissionRequests.delete(itemId);
+    this.removePendingPermission(pending);
     this.markResolved(itemId, describePermissionResolution(option));
+    if (pending.requestKey) this.submittedPermissionKeys.set(pending.requestKey, itemId);
     pending.resolve({
       outcome: {
         outcome: 'selected',
@@ -307,19 +369,94 @@ export class InboxStore {
     agentId: string,
     agentName: string
   ): Promise<RequestPermissionResponse> {
+    const requestKey = getPermissionRequestKey(request, agentId);
+
+    // The agent re-delivers a still-pending request after a reconnect (or to a
+    // newer delivery on the same transport). Rebind it to the existing card so
+    // one question stays one card with one answer.
+    const existingItemId = requestKey
+      ? (this.offlinePermissionKeys.get(requestKey) ?? this.pendingPermissionKeys.get(requestKey))
+      : null;
+    if (existingItemId && requestKey) {
+      return this.rebindPermissionRequest(existingItemId, requestKey, request, agentId);
+    }
+
+    // A re-delivery of a request we already answered means the agent kept it
+    // pending (it rejected the answer). Reuse the same card, restored to pending.
+    const submittedItemId = requestKey ? this.submittedPermissionKeys.get(requestKey) : null;
+    if (submittedItemId && requestKey) {
+      this.submittedPermissionKeys.delete(requestKey);
+      return this.rebindPermissionRequest(submittedItemId, requestKey, request, agentId, true);
+    }
+
     const itemId = `live-permission-${this.nextLiveItemId++}`;
     const item = mapPermissionRequestToInboxItem(request, itemId, agentId, agentName);
     this.items = [item, ...this.items];
+    if (requestKey) this.pendingPermissionKeys.set(requestKey, itemId);
     void sendDesktopNotification(item.title, item.detail);
 
     return new Promise<RequestPermissionResponse>((resolve) => {
       this.pendingPermissionRequests.set(itemId, {
         itemId,
         agentId,
+        requestKey,
         request,
         resolve
       });
     });
+  }
+
+  /**
+   * Install the resolver of a re-delivered permission request on its card.
+   *
+   * An offline card becomes actionable again without a new card or desktop
+   * notification. A still-live resolver for the same request belongs to a
+   * superseded delivery; it is dismissed with `cancelled`, which the agent
+   * treats as "not a decision" for that delivery only.
+   */
+  private rebindPermissionRequest(
+    itemId: string,
+    requestKey: string,
+    request: RequestPermissionRequest,
+    agentId: string,
+    restoreAnswered = false
+  ): Promise<RequestPermissionResponse> {
+    const superseded = this.pendingPermissionRequests.get(itemId);
+    if (superseded) {
+      this.pendingPermissionRequests.delete(itemId);
+      superseded.resolve({ outcome: { outcome: 'cancelled' } });
+    }
+    this.offlinePermissionKeys.delete(requestKey);
+    this.pendingPermissionKeys.set(requestKey, itemId);
+    this.items = this.items.map((item) => {
+      if (item.id !== itemId) return item;
+      if (item.status === 'resolved' && !restoreAnswered) return item;
+      return {
+        ...item,
+        status: 'pending',
+        resolution: null,
+        offline: false,
+        error: restoreAnswered ? 'The agent rejected this answer.' : null,
+        actions: mapPermissionRequestToInboxItem(request, itemId).actions
+      };
+    });
+
+    return new Promise<RequestPermissionResponse>((resolve) => {
+      this.pendingPermissionRequests.set(itemId, {
+        itemId,
+        agentId,
+        requestKey,
+        request,
+        resolve
+      });
+    });
+  }
+
+  private removePendingPermission(pending: PendingPermissionRequest) {
+    this.pendingPermissionRequests.delete(pending.itemId);
+    if (pending.requestKey && this.pendingPermissionKeys.get(pending.requestKey) === pending.itemId) {
+      this.pendingPermissionKeys.delete(pending.requestKey);
+    }
   }
 
   private enqueueElicitationRequest(
@@ -374,20 +511,22 @@ export class InboxStore {
   /**
    * Retire resolvers tied to a disconnected transport.
    *
-   * Permission requests keep their bounded, connection-scoped behavior: the
-   * request belonged to the dead transport, so it settles as cancelled.
-   * Keyed question cards and drafts stay pending but are marked offline, so a
-   * reconnection can rebind re-delivered questions to the same card instead of
-   * answering `cancel` on a transport that no longer exists. Questions without
-   * a stable identity can never rebind and are retired locally without any
-   * fabricated user action.
+   * A dropped transport is not a decision: no outcome (not even `cancelled`)
+   * is sent for any card. Keyed permission and question cards (and drafts)
+   * stay pending but are marked offline, so a reconnection can rebind the
+   * re-delivered request to the same card. Requests without a stable identity
+   * can never rebind and are retired locally without any fabricated answer.
    */
   private retirePendingRequestsForAgent(agentId: string) {
-    for (const [itemId, pending] of this.pendingPermissionRequests) {
+    for (const pending of [...this.pendingPermissionRequests.values()]) {
       if (pending.agentId !== agentId) continue;
-      this.pendingPermissionRequests.delete(itemId);
-      this.markResolved(itemId, 'Cancelled');
-      pending.resolve({ outcome: { outcome: 'cancelled' } });
+      this.removePendingPermission(pending);
+      if (pending.requestKey) {
+        this.offlinePermissionKeys.set(pending.requestKey, pending.itemId);
+        this.markItemOffline(pending.itemId);
+      } else {
+        this.markResolved(pending.itemId, 'No longer pending');
+      }
     }
 
     for (const pending of [...this.pendingElicitationRequests.values()]) {
@@ -463,6 +602,30 @@ export class InboxStore {
         : item
     );
   }
+}
+
+/** Fallback keys carry this marker so they never collide with interaction IDs. */
+const TOOL_CALL_KEY_MARKER = 'tc:';
+
+/**
+ * Stable identity of a permission request. Prefers the agent's interaction ID
+ * (`_meta.querymt.interaction_id`), which matches the IDs the agent lists for
+ * recovery; falls back to session + tool call for an agent that omits it.
+ */
+function getPermissionRequestKey(request: RequestPermissionRequest, agentId: string): string | null {
+  const querymtMeta = request._meta?.querymt;
+  if (querymtMeta && typeof querymtMeta === 'object') {
+    const interactionId = (querymtMeta as Record<string, unknown>).interaction_id;
+    if (typeof interactionId === 'string' && interactionId) return `${agentId}:${interactionId}`;
+  }
+  const toolCallId = request.toolCall?.toolCallId;
+  return typeof toolCallId === 'string' && toolCallId
+    ? `${agentId}:${TOOL_CALL_KEY_MARKER}${request.sessionId}:${toolCallId}`
+    : null;
+}
+
+function isInteractionKey(key: string, agentId: string): boolean {
+  return key.startsWith(`${agentId}:`) && !key.startsWith(`${agentId}:${TOOL_CALL_KEY_MARKER}`);
 }
 
 function getElicitationRequestKey(request: CreateElicitationRequest, agentId: string): string | null {

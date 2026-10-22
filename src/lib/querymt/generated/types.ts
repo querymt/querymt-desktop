@@ -227,10 +227,32 @@ export type AgentEventKind =
 }}
 	| { type: "compaction_start", data: {
 	token_estimate: number;
+	/**
+	 * Opaque lifecycle identity for this compaction, unique per session.
+	 * Legacy persisted records omit it; consumers derive a deterministic
+	 * identity from the record itself in that case.
+	 */
+	compaction_id?: string;
 }}
 	| { type: "compaction_end", data: {
 	summary: string;
 	summary_len: number;
+	/** Opaque lifecycle identity matching the originating compaction start. */
+	compaction_id?: string;
+	/** Authoritative post-compaction context-token count, once recalculated. */
+	context_tokens?: number;
+}}
+	/** One user-displayable summary fragment appended to an in-progress compaction. */
+	| { type: "compaction_summary_chunk", data: {
+	compaction_id: string;
+	content: string;
+}}
+	/** Terminal unsuccessful outcome for a previously started compaction. */
+	| { type: "compaction_failed", data: {
+	compaction_id: string;
+	reason: string;
+	/** `true` when the compaction was cancelled rather than failed. */
+	cancelled?: boolean;
 }}
 	| { type: "middleware_injected", data: {
 	message: string;
@@ -313,10 +335,23 @@ export type AgentEventKind =
 	options: string[];
 }}
 	| { type: "permission_requested", data: {
+	/** Interaction ID of the pending permission request. */
 	permission_id: string;
 	task_id?: string;
 	tool_name: string;
 	reason: string;
+	/**
+	 * Tool call awaiting the decision. Empty for events journaled before
+	 * permission became a pending interaction.
+	 */
+	tool_call_id?: string;
+	/**
+	 * Full ACP `session/request_permission` payload (tool-call update and
+	 * options) so any attached client can render and answer it, local or
+	 * remote. Absent for events journaled before permission became a
+	 * pending interaction.
+	 */
+	request?: any;
 }}
 	| { type: "permission_granted", data: {
 	permission_id: string;
@@ -369,6 +404,27 @@ export type AgentEventKind =
 	/** Emitted when a session's mode changes (per-session mode in actor model) */
 	| { type: "session_mode_changed", data: {
 	mode: string;
+}}
+	/**
+	 * Emitted after a session-control transition commits successfully, carrying
+	 * the authoritative post-commit configuration snapshot values. Consumers
+	 * derive the complete configuration-option set from these values.
+	 */
+	| { type: "session_config_changed", data: {
+	mode: string;
+	/** Current reasoning effort as its wire string; `None` means auto. */
+	reasoning_effort?: string;
+}}
+	/**
+	 * Emitted after mutable session metadata (title / last-activity) persists
+	 * successfully. Fields follow patch semantics: an absent field is
+	 * unchanged, a present title is the new value, and `None` inside
+	 * `Some` is an explicit clear.
+	 */
+	| { type: "session_metadata_updated", data: {
+	title?: string;
+	/** RFC 3339 last-activity timestamp as persisted. */
+	updated_at?: string;
 }}
 	/**
 	 * LLM request was rate limited, execution is paused and waiting.
@@ -494,7 +550,16 @@ export type AgentEventKind =
  * Typeshare-annotated: generated for TypeScript and Swift.
  */
 export interface AgentEvent {
+	/**
+	 * Journal `stream_seq` of the producing node (0 for ephemeral events).
+	 * For relayed events this is the host cursor used for dedup and backfill.
+	 */
 	seq: number;
+	/**
+	 * Producer-assigned per-session sequence (see [`DurableEvent::session_seq`]).
+	 * `0` when unknown (payloads from older nodes).
+	 */
+	session_seq?: number;
 	timestamp: number;
 	session_id: string;
 	origin?: string;
@@ -721,6 +786,8 @@ export interface ControlFeatureInfo {
 	mesh: boolean;
 	mesh_invites: boolean;
 	remote_sessions: boolean;
+	session_lifecycle?: boolean;
+	session_pins?: boolean;
 	schedules: boolean;
 	remote_schedules: boolean;
 	profiles: boolean;
@@ -891,6 +958,13 @@ export interface DuplicateWarning {
 export interface DurableEvent {
 	event_id: string;
 	stream_seq: number;
+	/**
+	 * Per-session sequence assigned at production time. Strictly increasing
+	 * in production order within a session and shared with ephemeral events;
+	 * relayed events keep the host's value. `0` means unsequenced (legacy
+	 * payloads and events produced outside a session sequencer).
+	 */
+	session_seq?: number;
 	session_id: string;
 	timestamp: number;
 	origin: string;
@@ -922,11 +996,16 @@ export interface ElicitationRecoveryErrorData {
 }
 
 /**
- * An ephemeral event — live delivery only, no persistence, no sequence.
+ * An ephemeral event — live delivery only, no persistence.
  * Typeshare-annotated: generated for TypeScript and Swift.
  */
 export interface EphemeralEvent {
 	session_id: string;
+	/**
+	 * Per-session sequence shared with durable events (see
+	 * [`DurableEvent::session_seq`]); `0` when unsequenced.
+	 */
+	session_seq?: number;
 	timestamp: number;
 	origin: string;
 	source_node?: string;
@@ -967,6 +1046,37 @@ export interface FunctionTool {
 export interface GetScheduleControlRequest {
 	node_id?: string;
 	schedule_public_id: string;
+}
+
+export interface IrohLookupServiceDiagnostics {
+	service: string;
+	results: string;
+	errors: string;
+}
+
+/** Cumulative counters are decimal strings to preserve u64 precision in JS clients. */
+export interface IrohMetricsDiagnostics {
+	relay_connections: string;
+	relay_connection_failures: string;
+	relay_connections_closed: string;
+	relay_connections_rate_limited: string;
+	lookups: string;
+	lookups_failed: string;
+	lookup_services: IrohLookupServiceDiagnostics[];
+}
+
+export interface IrohRelayDiagnostics {
+	url: string;
+	connected: boolean;
+	last_error?: string;
+	auth_denied_reason?: string;
+}
+
+export interface IrohTransportDiagnostics {
+	closed: boolean;
+	relays: IrohRelayDiagnostics[];
+	/** None means the querymt-remote iroh-metrics feature is not enabled. */
+	metrics?: IrohMetricsDiagnostics;
 }
 
 /**
@@ -1095,6 +1205,7 @@ export interface MeshStatusInfo {
 	has_invite_store: boolean;
 	has_mesh_state_store: boolean;
 	scopes: MeshScopeInfo[];
+	iroh?: IrohTransportDiagnostics;
 }
 
 /** Cached model list entry with canonical identity. */
@@ -1175,8 +1286,8 @@ export interface RemoteSessionInfo {
 	title?: string;
 	cwd?: string;
 	updated_at?: string;
-	profile_id?: string | null;
-	profile_label?: string | null;
+	profile_id?: string;
+	profile_label?: string;
 	model_id?: string;
 }
 
