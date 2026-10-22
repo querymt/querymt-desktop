@@ -375,6 +375,34 @@ describe('InboxStore elicitations', () => {
     expect(fresh[0].id).not.toBe(item.id);
   });
 
+  it('keeps question cards raised after the recovery snapshot boundary pending', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    const withId = (id: string): CreateElicitationRequest => ({
+      ...elicitation('session-1'),
+      _meta: { querymt: { elicitation_id: id, source: 'builtin:question' } }
+    });
+    void client.elicit(withId('elicit-old'));
+    const boundary = store.snapshotInteractionItemIds('agent-1');
+    const newer = client.elicit(withId('elicit-new'));
+    let newerSettled: CreateElicitationResponse | null = null;
+    void newer.then((value) => {
+      newerSettled = value;
+    });
+
+    store.reconcileReboundElicitations('agent-1', 'session-1', [], boundary);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const cards = store.items.filter((candidate) => candidate.type === 'elicitation');
+    const resolved = cards.filter((card) => card.status === 'resolved');
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0].resolution).toBe('No longer pending');
+    expect(cards.filter((card) => card.status === 'pending')).toHaveLength(1);
+    expect(newerSettled).toBeNull();
+  });
+
   it('treats reconciliation in a refreshed UI with no retained cards as a no-op', () => {
     const store = new InboxStore();
     store.reconcileReboundElicitations('agent-1', 'session-1', ['elicit-session-1']);
@@ -625,6 +653,35 @@ describe('InboxStore permission requests', () => {
 
     expect(store.pendingCount).toBe(0);
     expect(settled).toBeNull();
+  });
+
+  it('keeps permission cards raised after the recovery snapshot boundary pending', async () => {
+    const store = new InboxStore();
+    const client = createClient();
+    store.bindClient(client as never, 'agent-1', 'QMTCODE');
+    void client.permission(permission('session-1', { interactionId: 'perm-old' }));
+    const boundary = store.snapshotInteractionItemIds('agent-1');
+    const newer = client.permission(permission('session-1', { interactionId: 'perm-new' }));
+    let newerSettled: RequestPermissionResponse | null = null;
+    void newer.then((value) => {
+      newerSettled = value;
+    });
+
+    store.reconcileReboundElicitations('agent-1', 'session-1', [], boundary);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const cards = store.items.filter((candidate) => candidate.type === 'permission');
+    const resolved = cards.filter((card) => card.status === 'resolved');
+    const pending = cards.filter((card) => card.status === 'pending');
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0].resolution).toBe('No longer pending');
+    expect(pending).toHaveLength(1);
+    expect(newerSettled).toBeNull();
+
+    const item = store.actionableItems[0]!;
+    await store.handleAction(item.id, 'allow');
+    await expect(newer).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'allow' } });
   });
 
   it('still resolves a chosen option on the live transport', async () => {

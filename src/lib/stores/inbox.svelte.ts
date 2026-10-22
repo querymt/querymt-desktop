@@ -107,12 +107,19 @@ export class InboxStore {
    * actionability without sending any fabricated user action; re-delivered
    * identities keep their cards for rebinding.
    */
-  reconcileReboundElicitations(agentId: string, sessionId: string, authoritativeIds: string[]) {
+  reconcileReboundElicitations(
+    agentId: string,
+    sessionId: string,
+    authoritativeIds: string[],
+    boundary?: ReadonlySet<string>
+  ) {
     const authoritative = new Set(authoritativeIds.map((id) => `${agentId}:${id}`));
     const stale = new Set<string>();
     const collect = (entries: Iterable<[string, string]>) => {
       for (const [key, itemId] of entries) {
         if (!key.startsWith(`${agentId}:`) || authoritative.has(key)) continue;
+        // A card created after the recovery snapshot began is newer than the agent's answer.
+        if (boundary && !boundary.has(itemId)) continue;
         const item = this.items.find((candidate) => candidate.id === itemId);
         if (item && item.status !== 'resolved' && item.sessionId === sessionId) {
           stale.add(itemId);
@@ -135,7 +142,28 @@ export class InboxStore {
       this.markResolved(itemId, 'No longer pending');
     }
 
-    this.reconcilePermissions(agentId, sessionId, authoritative);
+    this.reconcilePermissions(agentId, sessionId, authoritative, boundary);
+  }
+
+  /**
+   * Item IDs of the agent's permission and question cards that exist right now.
+   *
+   * Taken before recovery RPCs start so reconciliation can tell cards that
+   * predate the agent's snapshot from live requests raised while it was in flight.
+   */
+  snapshotInteractionItemIds(agentId: string): Set<string> {
+    const ids = new Set<string>();
+    for (const map of [
+      this.pendingPermissionKeys,
+      this.offlinePermissionKeys,
+      this.pendingElicitationKeys,
+      this.offlineElicitationKeys
+    ]) {
+      for (const [key, itemId] of map) {
+        if (key.startsWith(`${agentId}:`)) ids.add(itemId);
+      }
+    }
+    return ids;
   }
 
   /**
@@ -145,11 +173,18 @@ export class InboxStore {
    * tool-call key cannot be compared with the agent's pending IDs, so such a
    * card is left alone rather than guessed at. No outcome is ever sent.
    */
-  private reconcilePermissions(agentId: string, sessionId: string, authoritative: Set<string>) {
+  private reconcilePermissions(
+    agentId: string,
+    sessionId: string,
+    authoritative: Set<string>,
+    boundary?: ReadonlySet<string>
+  ) {
     const stale = new Set<string>();
     const collect = (entries: Iterable<[string, string]>) => {
       for (const [key, itemId] of entries) {
         if (!isInteractionKey(key, agentId) || authoritative.has(key)) continue;
+        // A card created after the recovery snapshot began is newer than the agent's answer.
+        if (boundary && !boundary.has(itemId)) continue;
         const item = this.items.find((candidate) => candidate.id === itemId);
         if (item && item.status !== 'resolved' && item.sessionId === sessionId) {
           stale.add(itemId);

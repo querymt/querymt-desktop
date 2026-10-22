@@ -28,4 +28,3 @@ None. `reconnectable-acp-elicitations` is unchanged; remote-hosted recovery is s
 - **Agent (`querymt` repository)**: `crates/agent/src/acp/websocket.rs`, `acp/stdio.rs`, `acp/shared.rs`, `elicitation.rs`, `control/elicitation_recovery.rs` and their tests; regenerated typeshare output.
 - **Cross-repo**: builds on the `unify-session-interactions` agent change in the sibling `querymt` checkout and amends it; final verification is a two-node run (desktop plus NAS).
 - **Ship gate**: the desktop's offline permission cards (group 1) must not be released without the reconciliation (group 3) and the agent fixes (group 2), because without them an offline card has nothing to clear it.
-` checkout; final verification is a two-node run (desktop plus NAS).
