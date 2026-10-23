@@ -1,7 +1,9 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PromptAttachment } from '$lib/domain/types';
+import type { ModelEntry, PromptAttachment } from '$lib/domain/types';
+import { fromStore, writable } from 'svelte/store';
+import { getModelSelectionKey } from '$lib/querymt/config-options';
 import LandingPage from '../+page.svelte';
 import SessionsPage from '../sessions/+page.svelte';
 import { groupSessionsByWorkspace } from '$lib/domain/sessions';
@@ -39,6 +41,7 @@ function createAgentsStore() {
       }
     ],
     meshNodesByAgent: {} as Record<string, { nodes: Array<{ id: string; label: string; active_sessions: number }> }>,
+    meshStatusByAgent: {} as Record<string, { peer_id?: string; hostname?: string }>,
     activeSessionId: null as string | null,
     activeAgentId: null as string | null,
     activeSession: { runState: 'idle' },
@@ -85,7 +88,7 @@ function createAgentsStore() {
           label: 'Claude Sonnet 4'
         }
       ]
-    },
+    } as Record<string, ModelEntry[]>,
     modelInfoByAgent: { 'agent-1': {} },
     modelLoadingByAgent: { 'agent-1': false },
     setComposerCwd: vi.fn((value: string) => {
@@ -119,7 +122,7 @@ function createAgentsStore() {
     deleteSession: vi.fn(),
     createSession: vi.fn(async () => 'session-1'),
     startSessionWithPrompt: vi.fn(async () => 'session-1'),
-    getRecentModels: vi.fn(() => []),
+    getRecentModels: vi.fn((): ModelEntry[] => []),
     getRecentWorkspaces: vi.fn(() => []),
     getProfileOptions: vi.fn(() => []),
     getTargetOptions: vi.fn((agentId: string | null) => [
@@ -174,6 +177,53 @@ describe('Landing page session start', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Claude Sonnet 4/i }));
     expect(screen.getByRole('button', { name: 'Reasoning effort' })).toHaveTextContent('Auto');
     expect(screen.getByText('How deeply the agent should think')).toBeInTheDocument();
+  });
+
+  it.each([false, true])('updates picker locality when the launch target changes without selecting another model (recent=%s)', async (recent) => {
+    const local = agentsStore.modelsByAgent['agent-1'][0];
+    const flkr = { ...local, node_id: 'B', node_label: 'flkr' };
+    const other = { ...local, node_id: 'C', node_label: 'eulr' };
+    agentsStore.modelsByAgent['agent-1'] = [local, flkr, other];
+    agentsStore.meshStatusByAgent['agent-1'] = { peer_id: 'A', hostname: 'lstr' };
+    agentsStore.meshNodesByAgent['agent-1'] = { nodes: [{ id: 'B', label: 'flkr', active_sessions: 0 }] };
+    agentsStore.launchModelIds['agent-1'] = getModelSelectionKey(flkr);
+    agentsStore.getRecentModels.mockReturnValue(recent ? [local, flkr, other] : []);
+    // The real store uses $state; make this mock's target reactive as well.
+    const target = fromStore(writable('local'));
+    const original = Object.getOwnPropertyDescriptor(agentsStore, 'composerTargetId')!;
+    Object.defineProperty(agentsStore, 'composerTargetId', {
+      configurable: true, get: () => target.current, set: (value) => { target.current = value; }
+    });
+    try {
+      render(LandingPage);
+      await fireEvent.click(screen.getByRole('button', { name: /^Claude Sonnet 4 from anthropic on flkr/ }));
+      expect(screen.getByLabelText('Mesh node flkr')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Mesh node lstr')).not.toBeInTheDocument();
+      await fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+      agentsStore.setComposerTarget('B');
+      const trigger = await screen.findByRole('button', { name: /^Claude Sonnet 4 from anthropic;/ });
+      expect(trigger.querySelector('.composer-model-pill-node')).toBeNull();
+      await fireEvent.click(trigger);
+      const dialog = screen.getByRole('dialog', { name: 'Switch model' });
+      expect(within(dialog).queryByLabelText('Mesh node flkr')).not.toBeInTheDocument();
+      expect(within(dialog).getByLabelText('Mesh node lstr')).toBeInTheDocument();
+      expect(within(dialog).getByLabelText('Mesh node eulr')).toBeInTheDocument();
+      const selected = within(dialog).getAllByRole('button').find((button) => button.getAttribute('aria-pressed') === 'true')!;
+      expect(within(selected).queryByLabelText(/Mesh node/)).not.toBeInTheDocument();
+      if (!recent) expect(within(dialog).getByText('anthropic · lstr')).toBeInTheDocument();
+      await fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+      agentsStore.setComposerTarget('local');
+      expect(await screen.findByRole('button', { name: /^Claude Sonnet 4 from anthropic on flkr/ })).toBeInTheDocument();
+      expect(agentsStore.getLaunchModelId('agent-1')).toBe(getModelSelectionKey(flkr));
+      expect(agentsStore.setLaunchModel).not.toHaveBeenCalled();
+      expect(agentsStore.createSession).not.toHaveBeenCalled();
+      expect(agentsStore.startSessionWithPrompt).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      Object.defineProperty(agentsStore, 'composerTargetId', original);
+    }
   });
 
   it('uses only launch preferences when an existing session is still active in the store', async () => {

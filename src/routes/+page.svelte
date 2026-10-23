@@ -12,6 +12,15 @@
     agentsStore.configs.find((config) => config.enabled && config.id === agentsStore.composerAgentId)?.id ??
     onlineAgents[0]?.id ?? agentsStore.configs.find((config) => config.enabled)?.id ?? null
   );
+  const modelLocation = $derived.by(() => {
+    if (!primaryAgentId) return undefined;
+    const status = agentsStore.meshStatusByAgent[primaryAgentId];
+    return {
+      servingNodeId: status?.peer_id,
+      servingNodeLabel: status?.hostname,
+      ownerNodeId: agentsStore.composerTargetId === 'local' ? status?.peer_id : agentsStore.composerTargetId
+    };
+  });
   const showAgentBadges = $derived(onlineAgents.length > 1);
   const workspaceName = $derived.by(() => {
     const normalized = agentsStore.composerCwd.replace(/[\\/]+$/, '');
@@ -82,6 +91,7 @@
       modelOptions={primaryAgentId ? (agentsStore.modelsByAgent[primaryAgentId] ?? []) : []}
       selectedModelId={primaryAgentId ? agentsStore.getLaunchModelId(primaryAgentId) : ''}
       modelInfo={primaryAgentId ? (agentsStore.modelInfoByAgent[primaryAgentId] ?? {}) : {}}
+      {modelLocation}
       recentModels={primaryAgentId ? agentsStore.getRecentModels(primaryAgentId) : []}
       modelLoading={primaryAgentId ? !!agentsStore.modelLoadingByAgent[primaryAgentId] : false}
       agentLabel={showAgentBadges && primaryAgentId ? (agentsStore.configs.find((config) => config.id === primaryAgentId)?.name ?? primaryAgentId) : null}
