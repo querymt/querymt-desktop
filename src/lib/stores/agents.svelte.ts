@@ -5199,7 +5199,7 @@ export class AgentsStore {
     return {
       servingNodeId,
       ownerNodeId: session?.remoteNodeId ?? servingNodeId,
-      servingNodeLabel: this.configs.find((config) => config.id === agentId)?.name
+      servingNodeLabel: this.meshStatusByAgent[agentId]?.hostname
     };
   }
 

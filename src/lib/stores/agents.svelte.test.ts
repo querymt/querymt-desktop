@@ -220,6 +220,7 @@ const mockClient = vi.hoisted(() => {
     listMeshStatus: vi.fn(async (): Promise<MeshStatusInfo> => ({
       enabled: true,
       peer_id: '12D3KooWQmtLocalAgentPeer00000000000000',
+      hostname: 'lstr',
       transport: 'quic',
       known_peer_count: 0,
       has_invite_store: true,
@@ -390,6 +391,7 @@ beforeEach(() => {
   mockClient.listMeshStatus.mockResolvedValue({
     enabled: true,
     peer_id: '12D3KooWQmtLocalAgentPeer00000000000000',
+    hostname: 'lstr',
     transport: 'quic',
     known_peer_count: 0,
     has_invite_store: true,
@@ -3505,6 +3507,7 @@ describe('AgentsStore connections', () => {
 
   it('uses owner model identity on remote reload and live changes, independently of reasoning patches', async () => {
     const store = createStore();
+    store.configs = store.configs.map((config) => ({ ...config, name: 'qmtcode' }));
     const local = { id: 'codex/test', provider: 'codex', model: 'test', label: 'Test' };
     const remote = { ...local, node_id: 'B', node_label: 'Machine B' };
     const servingNode = '12D3KooWQmtLocalAgentPeer00000000000000';
@@ -3527,6 +3530,9 @@ describe('AgentsStore connections', () => {
     }));
     await store.loadSession('agent-1', 'session-1');
     expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(remote));
+    expect(store.getSessionModelLocation('agent-1', 'session-1')).toEqual({
+      servingNodeId: servingNode, ownerNodeId: 'B', servingNodeLabel: 'lstr'
+    });
     expect(store.activeSession.configOptions).toContainEqual(reasoning);
     node = servingNode;
     mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
@@ -3563,6 +3569,7 @@ describe('AgentsStore connections', () => {
     expect(store.getSessionModelId('agent-1', 'session-1')).not.toBe(local.id);
     finishStatus({ enabled: true, peer_id: 'A', known_peer_count: 0, has_invite_store: true, has_mesh_state_store: true, scopes: [] });
     await vi.waitFor(() => expect(store.getSessionModelId('agent-1', 'session-1')).toBe(local.id));
+    expect(store.getSessionModelLocation('agent-1', 'session-1').servingNodeLabel).toBeUndefined();
     expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
   });
 

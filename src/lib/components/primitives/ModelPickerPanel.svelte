@@ -73,7 +73,7 @@
     return models
       .map((model) => ({
         model,
-        score: scoreModelSearch(model, needle, [model.family, ...knownInputModalities(model, modelInfo)])
+        score: scoreModelSearch(model, needle, [modelNodeLabel(model, modelLocation), model.family, ...knownInputModalities(model, modelInfo)])
       }))
       .filter(({ score }) => score > Number.NEGATIVE_INFINITY)
       .sort((a, b) => b.score - a.score);
@@ -249,6 +249,7 @@
             {@const info = modelInfo[selectionKey]}
             {@const knownModalities = knownInputModalities(model, modelInfo)}
             {@const selected = selectedModelId === selectionKey}
+            {@const nodeLabel = modelNodeLabel(model, modelLocation)}
             <button
               class="delegate-model-choice"
               class:delegate-model-choice-highlighted={highlightedIndex === item.index}
@@ -269,9 +270,9 @@
                 <small>{model.id}</small>
               </span>
               <span class="delegate-model-choice-meta">
-                {#if model.node_label}
-                  <small aria-label={`Mesh node ${model.node_label}`}>
-                    <Network size={11} />{model.node_label}
+                {#if nodeLabel}
+                  <small aria-label={`Mesh node ${nodeLabel}`}>
+                    <Network size={11} />{nodeLabel}
                   </small>
                 {/if}
               </span>

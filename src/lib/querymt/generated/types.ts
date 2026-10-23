@@ -1090,6 +1090,7 @@ export interface MeshScopeInfo {
 export interface MeshStatusInfo {
 	enabled: boolean;
 	peer_id?: string;
+	hostname?: string;
 	transport?: string;
 	known_peer_count: number;
 	has_invite_store: boolean;
