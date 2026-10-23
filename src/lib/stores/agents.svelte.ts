@@ -433,6 +433,9 @@ export class AgentsStore {
   inputSubmitPending = $state(false);
   private inputSubmitOwner: string | null = null;
   managedProfileOptions = $state<ComposerOption[]>([]);
+  remoteProfileOptions = $state<Record<string, ComposerOption[]>>({});
+  remoteProfileErrors = $state<Record<string, string | null>>({});
+  private remoteProfileVersions = new Map<string, number>();
   promptFocusToken = $state(0);
   loading = $state(false);
   error = $state<string | null>(null);
@@ -738,12 +741,11 @@ export class AgentsStore {
     if (this.activeAgentId !== agentId) return false;
     const client = this.clients.get(agentId)?.client;
     const assignments = this.activeDelegateAssignments;
-    const isRemoteSession = getSessionById(this.sessionsByAgent[agentId] ?? [], this.activeSessionId ?? '')?.location === 'remote';
     return Boolean(
       client?.supportsQuerymtMethod(QMT_METHOD_SESSION_DELEGATE_MODELS) &&
         client.supportsQuerymtMethod(QMT_METHOD_SESSION_SET_DELEGATE_MODEL) &&
         (
-          (!isRemoteSession && this.activeDelegateAssignmentsError !== null) ||
+          this.activeDelegateAssignmentsError !== null ||
           (assignments &&
             (assignments.assignments.length > 0 || assignments.orphaned_overrides.length > 0))
         )
@@ -1048,6 +1050,10 @@ export class AgentsStore {
   }
 
   setComposerTarget(targetId: string) {
+    if (this.composerTargetId !== targetId) {
+      // A profile ID is scoped to its owner, even when two owners use the same name.
+      this.composerProfileId = targetId === 'local' ? 'default' : 'querymt:owner-default';
+    }
     this.composerTargetId = targetId;
   }
 
@@ -1098,7 +1104,44 @@ export class AgentsStore {
     }));
   }
 
-  getProfileOptions(): ComposerOption[] {
+  private clearRemoteProfilesForAgent(agentId: string) {
+    this.remoteProfileOptions = Object.fromEntries(Object.entries(this.remoteProfileOptions).filter(([key]) => !key.startsWith(`${agentId}:`)));
+    this.remoteProfileErrors = Object.fromEntries(Object.entries(this.remoteProfileErrors).filter(([key]) => !key.startsWith(`${agentId}:`)));
+  }
+
+  async refreshRemoteProfiles(agentId: string, nodeId: string) {
+    if (nodeId === 'local') return;
+    const isCurrentSource = this.sessionMutationScope(agentId);
+    const key = buildSessionKey(agentId, nodeId);
+    const version = (this.remoteProfileVersions.get(key) ?? 0) + 1;
+    this.remoteProfileVersions.set(key, version);
+    try {
+      const record = await this.connectInitializedRecord(agentId);
+      if (!record) throw new Error('Failed to connect to the agent.');
+      const response = await record.client.listProfiles(nodeId);
+      if (response.node_id !== nodeId) throw new Error('Agent did not confirm the requested profile owner. Update both agents.');
+      if (!isCurrentSource() || this.remoteProfileVersions.get(key) !== version) return;
+      this.remoteProfileOptions = { ...this.remoteProfileOptions, [key]: response.profiles.map((profile) => ({
+        id: profile.id, label: profile.name, description: profile.description ?? null
+      })) };
+      this.remoteProfileErrors = { ...this.remoteProfileErrors, [key]: null };
+    } catch (error) {
+      if (!isCurrentSource() || this.remoteProfileVersions.get(key) !== version) return;
+      this.remoteProfileOptions = { ...this.remoteProfileOptions, [key]: [] };
+      this.remoteProfileErrors = { ...this.remoteProfileErrors, [key]: acpErrorMessage(error, 'Failed to load owner profiles.') };
+    }
+  }
+
+  getLaunchProfileError(agentId: string | null): string | null {
+    return agentId && this.composerTargetId !== 'local'
+      ? this.remoteProfileErrors[buildSessionKey(agentId, this.composerTargetId)] ?? null : null;
+  }
+
+  getProfileOptions(agentId: string | null = this.composerAgentId ?? this.activeAgentId): ComposerOption[] {
+    if (this.composerTargetId !== 'local') {
+      return [{ id: 'querymt:owner-default', label: 'Owner default', description: 'Use the selected owner\'s active profile.' },
+        ...(agentId ? this.remoteProfileOptions[buildSessionKey(agentId, this.composerTargetId)] ?? [] : [])];
+    }
     const options = [
       { id: 'default', label: 'Default profile', description: 'Use the agent default.' },
       ...this.managedProfileOptions,
@@ -1355,6 +1398,7 @@ export class AgentsStore {
         (normalizedUpdates.websocketSecure !== undefined && normalizedUpdates.websocketSecure !== (current.websocketSecure ?? false)));
     if (endpointChanged || normalizedUpdates.enabled === false) this.clearSessionPins(agentId);
     if (endpointChanged) {
+      this.clearRemoteProfilesForAgent(agentId);
       this.sessionMutationScopes.delete(agentId);
       this.forgetRecentSessions(agentId);
       this.knownSessionParents = Object.fromEntries(Object.entries(this.knownSessionParents)
@@ -1381,6 +1425,7 @@ export class AgentsStore {
 
   async deleteConfig(agentId: string) {
     if (isEmbedded && agentId === EMBEDDED_AGENT_ID) return;
+    this.clearRemoteProfilesForAgent(agentId);
     this.sessionMutationScopes.delete(agentId);
     this.invalidateSessionCatalogCache();
     this.invalidateConnectGeneration(agentId);
@@ -2992,7 +3037,17 @@ export class AgentsStore {
     };
     try {
       if (launch.targetId !== 'local') {
-        const sessionId = await this.createAttachedRemoteSession(agentId, launch.targetId, cwd);
+        const profileId = launch.profileId === 'querymt:owner-default' ? undefined : launch.profileId;
+        if (profileId) {
+          await this.refreshRemoteProfiles(agentId, launch.targetId);
+          if (!isCurrentSource()) return null;
+          const key = buildSessionKey(agentId, launch.targetId);
+          if (this.remoteProfileErrors[key]) throw new Error(this.remoteProfileErrors[key]!);
+          if (!this.remoteProfileOptions[key]?.some((profile) => profile.id === profileId)) {
+            throw new Error('Selected profile is not available on the session owner. Choose an owner profile.');
+          }
+        }
+        const sessionId = await this.createAttachedRemoteSession(agentId, launch.targetId, cwd, profileId);
         if (!isCurrentSource() || !this.isSelectedSession(agentId, sessionId)) return sessionId;
         await this.applyComposerLaunchConfig(agentId, sessionId, launch);
         await this.applySelectedModelToSession(agentId, sessionId, launch.modelId);
@@ -4745,10 +4800,10 @@ export class AgentsStore {
     return result;
   }
 
-  private async createAttachedRemoteSession(agentId: string, node_id: string, cwd: string): Promise<string> {
+  private async createAttachedRemoteSession(agentId: string, node_id: string, cwd: string, profileId?: string): Promise<string> {
     const isCurrentSource = this.sessionMutationScope(agentId);
     const record = await this.connectInitializedRecord(agentId);
-    const result = await this.createRemoteSessionAttach(agentId, node_id, cwd);
+    const result = await this.createRemoteSessionAttach(agentId, node_id, cwd, profileId);
     if (!isCurrentSource() || this.clients.get(agentId) !== record) return result.session_id;
     return this.hydrateRemoteAttach(agentId, node_id, result, {
       id: result.session_id,
@@ -4758,14 +4813,14 @@ export class AgentsStore {
     });
   }
 
-  private async createRemoteSessionAttach(agentId: string, node_id: string, cwd?: string) {
+  private async createRemoteSessionAttach(agentId: string, node_id: string, cwd?: string, profileId?: string) {
     const isCurrentSource = this.sessionMutationScope(agentId);
     const record = await this.connectInitializedRecord(agentId);
     if (!record) {
       throw new Error('Failed to connect to the agent.');
     }
     if (!isCurrentSource()) throw new Error('Agent endpoint changed before creating the session.');
-    const result = await record.client.createRemoteSession({ node_id, cwd, attach: true });
+    const result = await record.client.createRemoteSession({ node_id, cwd, attach: true, ...(profileId ? { profile_id: profileId } : {}) });
     if (!this.canPublishCreatedSession(agentId, record, isCurrentSource)) return result;
     const config = this.configs.find((candidate) => candidate.id === agentId)!;
     if (cwd) {

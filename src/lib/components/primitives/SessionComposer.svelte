@@ -68,6 +68,7 @@
     sessionConfigPending = {},
     delegateModelCount = 0,
     delegateModelsLoading = false,
+    delegateModelsError = null,
     onCwdInput = null,
     onPromptInput,
     onModelChange = null,
@@ -128,6 +129,7 @@
     sessionConfigPending?: Record<string, boolean>;
     delegateModelCount?: number;
     delegateModelsLoading?: boolean;
+    delegateModelsError?: string | null;
     onCwdInput?: ((value: string) => void) | null;
     onPromptInput: (value: string) => void;
     onModelChange?: ((value: string) => void | Promise<void>) | null;
@@ -740,7 +742,7 @@
                 {/if}
                 {#if sessionOnly && onOpenDelegateModels}
                   <div class="composer-option-row composer-option-row-action">
-                    <div class="composer-option-copy"><Waypoints size={15} /><span><strong>Delegate routing</strong><small>Choose models for the profile's delegate roles</small></span></div>
+                    <div class="composer-option-copy"><Waypoints size={15} /><span><strong>Delegate routing</strong><small>{delegateModelsError ? 'Owner routing unavailable; open to retry' : "Choose models for the profile's delegate roles"}</small></span></div>
                     <button
                       class="action-btn composer-option-action"
                       type="button"
@@ -748,7 +750,7 @@
                       onclick={onOpenDelegateModels}
                     >
                       {#if delegateModelsLoading}<RefreshCw size={13} class="animate-spin" />{:else}<Waypoints size={13} />{/if}
-                      Configure{delegateModelCount > 0 ? ` · ${delegateModelCount}` : ''}
+                      {delegateModelsError ? 'Retry' : `Configure${delegateModelCount > 0 ? ` · ${delegateModelCount}` : ''}`}
                     </button>
                   </div>
                 {/if}

@@ -103,6 +103,8 @@ function createAgentsStore() {
       if (agentId) agentsStore.launchModelIds[agentId] = value;
     }),
     refreshModelsForAgent: vi.fn(async () => undefined),
+    refreshRemoteProfiles: vi.fn(async () => undefined),
+    getLaunchProfileError: vi.fn((): string | null => null),
     addPromptAttachments: vi.fn(),
     removePromptAttachment: vi.fn(),
     setComposerProfile: vi.fn(),

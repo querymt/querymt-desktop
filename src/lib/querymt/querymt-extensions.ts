@@ -192,6 +192,7 @@ export interface QuerymtElicitationCompletedNotification {
 }
 
 export interface QuerymtProfilesResponse {
+  node_id?: string;
   profiles: QuerymtProfileInfo[];
   active_profile_id?: string | null;
 }
@@ -512,8 +513,11 @@ export class QuerymtExtensions {
     return normalizeQuerymtModelInfoResponse(response);
   }
 
-  async profiles(): Promise<QuerymtProfilesResponse> {
-    const response = await this.call<QuerymtProfilesResponse>(QMT_METHOD_PROFILES);
+  async profiles(node_id?: string): Promise<QuerymtProfilesResponse> {
+    const response = await this.call<QuerymtProfilesResponse>(QMT_METHOD_PROFILES, node_id ? { node_id } : undefined);
+    if (node_id && response.node_id !== node_id) {
+      throw new Error('Agent cannot provide the selected owner\'s profiles. Update both agents.');
+    }
     return { ...response, profiles: response.profiles ?? [] };
   }
 

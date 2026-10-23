@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { untrack } from 'svelte';
   import { FolderOpen } from '@lucide/svelte';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import { agentsStore, LAUNCH_MODE_OPTIONS, LAUNCH_REASONING_OPTIONS } from '$lib/stores/agents.svelte';
@@ -39,6 +40,14 @@
     }, 0);
 
     return localActive + remoteActive;
+  });
+
+  $effect(() => {
+    const agentId = primaryAgentId;
+    const target = agentsStore.composerTargetId;
+    if (agentId && target !== 'local') {
+      untrack(() => { void agentsStore.refreshRemoteProfiles(agentId, target); });
+    }
   });
 
   async function startSessionFromLauncher() {
@@ -85,7 +94,7 @@
       cwd={agentsStore.composerCwd}
       prompt={agentsStore.composerPrompt}
       loading={agentsStore.loading}
-      error={agentsStore.error}
+      error={agentsStore.error ?? agentsStore.getLaunchProfileError(primaryAgentId)}
       activeSessionId={null}
       promptFocusToken={agentsStore.promptFocusToken}
       modelOptions={primaryAgentId ? (agentsStore.modelsByAgent[primaryAgentId] ?? []) : []}
@@ -97,7 +106,7 @@
       agentLabel={showAgentBadges && primaryAgentId ? (agentsStore.configs.find((config) => config.id === primaryAgentId)?.name ?? primaryAgentId) : null}
       recentWorkspaces={agentsStore.getRecentWorkspaces()}
       attachments={agentsStore.promptAttachments}
-      profileOptions={agentsStore.getProfileOptions()}
+      profileOptions={agentsStore.getProfileOptions(primaryAgentId)}
       selectedProfileId={agentsStore.composerProfileId}
       launchModeOptions={LAUNCH_MODE_OPTIONS}
       selectedLaunchModeId={agentsStore.composerModeId}

@@ -58,6 +58,17 @@ function extensionClient() {
   return { extensions, extMethod };
 }
 
+describe('QuerymtExtensions owner profiles', () => {
+  it('requires an owner-confirmed catalog instead of accepting an older proxy local list', async () => {
+    const { extensions, extMethod } = extensionClient();
+    extMethod.mockResolvedValueOnce({ profiles: [{ id: 'cdr', name: 'A coder' }] });
+    await expect(extensions.profiles('B')).rejects.toThrow('Update both agents');
+    extMethod.mockResolvedValueOnce({ node_id: 'B', profiles: [{ id: 'cdr', name: 'B coder' }] });
+    expect((await extensions.profiles('B')).profiles[0].name).toBe('B coder');
+    expect(extMethod).toHaveBeenLastCalledWith('_querymt/profiles', { node_id: 'B' });
+  });
+});
+
 describe('QuerymtExtensions elicitation recovery contract', () => {
   it('lists pending sessions with the versioned v1 wire method', async () => {
     const { extensions, extMethod } = extensionClient();

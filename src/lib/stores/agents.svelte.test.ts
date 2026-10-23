@@ -214,7 +214,8 @@ const mockClient = vi.hoisted(() => {
     onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
     setSessionConfigOption: vi.fn(async (_request: SetSessionConfigOptionRequest): Promise<SessionConfigOption[]> => []),
     listRemoteSessions: vi.fn(async (request: { node_id: string }) => ({ node_id: request.node_id, sessions: [], total_count: 0 })),
-    createRemoteSession: vi.fn(async (request: { node_id: string; cwd?: string; attach?: boolean }): Promise<RemoteSessionAttachInfo> => ({
+    listProfiles: vi.fn(async (nodeId?: string) => ({ node_id: nodeId, profiles: [{ id: 'cdr', name: 'Owner coder', description: null }, { id: 'default', name: 'Owner default profile', description: null }], active_profile_id: 'default' })),
+    createRemoteSession: vi.fn(async (request: { node_id: string; cwd?: string; attach?: boolean; profile_id?: string }): Promise<RemoteSessionAttachInfo> => ({
       session_id: 'new-remote', node_id: request.node_id, attached: true, config_options: [], snapshot: { audit: { events: [] } }
     })),
     listMeshStatus: vi.fn(async (): Promise<MeshStatusInfo> => ({
@@ -1520,6 +1521,59 @@ describe('AgentsStore session lifecycle', () => {
     if (mutation === 'pin') expect(store.sessionCatalog[0].pin?.pinned).toBe(true);
   });
 
+  it('uses the selected owner catalog and sends the selected profile during remote creation', async () => {
+    const store = await lifecycleStore();
+    store.managedProfileOptions = [{ id: 'a-only', label: 'A only' }];
+    store.setComposerTarget('node-1');
+    await store.refreshRemoteProfiles('agent-1', 'node-1');
+    expect(store.getProfileOptions('agent-1').map((profile) => profile.id)).toEqual(['querymt:owner-default', 'cdr', 'default']);
+    expect(mockClient.listProfiles).toHaveBeenCalledWith('node-1');
+    store.setComposerCwd('/owner/work');
+    store.setComposerProfile('cdr');
+    expect(await store.createSession('agent-1')).toBe('new-remote');
+    expect(mockClient.createRemoteSession).toHaveBeenCalledWith({ node_id: 'node-1', cwd: '/owner/work', profile_id: 'cdr', attach: true });
+    expect(mockClient.createSession).not.toHaveBeenCalled();
+    store.setComposerTarget('node-2');
+    expect(store.composerProfileId).toBe('querymt:owner-default');
+    expect(store.getProfileOptions('agent-1').map((profile) => profile.id)).toEqual(['querymt:owner-default']);
+  });
+
+  it('keeps an explicit embedded-default profile distinct from the owner active default', async () => {
+    const store = await lifecycleStore();
+    store.setComposerTarget('node-1');
+    store.setComposerCwd('/owner/work');
+    store.setComposerProfile('default');
+    await store.createSession('agent-1');
+    expect(mockClient.createRemoteSession).toHaveBeenCalledWith(expect.objectContaining({ profile_id: 'default' }));
+  });
+
+  it('blocks an explicit remote profile when owner discovery fails rather than creating a default session', async () => {
+    const store = await lifecycleStore();
+    store.setComposerTarget('node-1');
+    store.setComposerCwd('/owner/work');
+    store.setComposerProfile('cdr');
+    mockClient.listProfiles.mockRejectedValueOnce(new Error('Owner unavailable'));
+    expect(await store.createSession('agent-1')).toBeNull();
+    expect(store.error).toBe('Owner unavailable');
+    expect(store.composerProfileId).toBe('cdr');
+    expect(mockClient.createRemoteSession).not.toHaveBeenCalled();
+  });
+
+  it('does not offer an old endpoint catalog after a delayed owner profile response', async () => {
+    const store = await lifecycleStore();
+    store.setComposerTarget('node-1');
+    let release!: () => void;
+    mockClient.listProfiles.mockImplementationOnce(() => new Promise((resolve) => {
+      release = () => resolve({ node_id: 'node-1', profiles: [{ id: 'old', name: 'Old owner', description: null }], active_profile_id: 'old' });
+    }));
+    const read = store.refreshRemoteProfiles('agent-1', 'node-1');
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    store.updateConfig('agent-1', { commandLine: 'other-agent' });
+    release();
+    await read;
+    expect(store.getProfileOptions('agent-1').map((profile) => profile.id)).toEqual(['querymt:owner-default']);
+  });
+
   it('patches a newly created remote root only into scopes including its owner', async () => {
     const store = await lifecycleStore();
     mockClient.listSessions.mockResolvedValue({ sessions: [listed('local')] });
@@ -1704,7 +1758,7 @@ describe('AgentsStore session lifecycle', () => {
 
   it('returns the created remote session ID after reconnect without hydrating an old attachment over a newer selection', async () => {
     const store = await lifecycleStore();
-    store.composerTargetId = 'node-1';
+    store.setComposerTarget('node-1');
     let confirm!: () => void;
     mockClient.createRemoteSession.mockImplementationOnce(() => new Promise((resolve) => {
       confirm = () => resolve({ session_id: 'created-remote', node_id: 'node-1', attached: true, config_options: [], snapshot: { audit: { events: [] } } });
@@ -1726,7 +1780,7 @@ describe('AgentsStore session lifecycle', () => {
 
   it.each(['local', 'node-1'])('does not select or configure a session from a replaced endpoint when composer target is %s', async (target) => {
     const store = await lifecycleStore();
-    store.composerTargetId = target;
+    store.setComposerTarget(target);
     let confirm!: () => void;
     if (target === 'local') mockClient.createSession.mockImplementationOnce(() => new Promise((resolve) => {
       confirm = () => resolve({ sessionId: 'old-created', configOptions: [] });
@@ -4668,7 +4722,7 @@ describe('AgentsStore delegate model assignments', () => {
     expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
   });
 
-  it('does not offer delegate routing for a remote session when the local assignment read fails', async () => {
+  it('offers a retry instead of hiding delegate routing when the remote owner read fails', async () => {
     const store = createStore();
     store.sessionsByAgent = { 'agent-1': [{
       agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Remote task',
@@ -4683,7 +4737,7 @@ describe('AgentsStore delegate model assignments', () => {
     await store.loadSession('agent-1', 'session-1');
     await vi.waitFor(() => expect(store.activeDelegateAssignmentsError).toBe('session is not bound to an available profile'));
     expect(mockClient.getDelegateModels).toHaveBeenCalledWith({ session_id: 'session-1' });
-    expect(store.canConfigureDelegateModels('agent-1')).toBe(false);
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
   });
 
   it('keeps routing available for confirmed remote roles or saved routes despite a refresh error', async () => {
@@ -4696,7 +4750,7 @@ describe('AgentsStore delegate model assignments', () => {
     }] };
     mockClient.getDelegateModels.mockRejectedValueOnce(new Error('Transient failure'));
     await store.connectAgent('agent-1');
-    expect(store.canConfigureDelegateModels('agent-1')).toBe(false);
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
 
     store.delegateAssignmentsBySession = { 'agent-1:session-1': assignmentState };
     expect(store.canConfigureDelegateModels('agent-1')).toBe(true);

@@ -659,6 +659,7 @@
         sessionConfigPending={agentsStore.sessionConfigPending}
         delegateModelCount={agentsStore.activeDelegateAssignments?.assignments.length ?? 0}
         delegateModelsLoading={agentsStore.activeDelegateAssignmentsLoading}
+        delegateModelsError={agentsStore.activeDelegateAssignmentsError}
         onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
         onOpenDelegateModels={agentsStore.canConfigureDelegateModels(agentId)
           ? () => {
