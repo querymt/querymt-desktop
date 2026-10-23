@@ -5208,9 +5208,12 @@ export class AgentsStore {
     const snapshot = getSnapshotProviderChange(response);
     const identity = configuredModelIdentity(configOptions) ??
       (!configuredId || configuredId === `${snapshot?.provider}/${snapshot?.model}` ? snapshot : undefined);
+    // Legacy confirmations identify the model but not its node. Do not turn an
+    // unchanged remote selection into the same-named local catalog entry.
+    const previous = findModelBySelectionKey(this.modelsByAgent[agentId] ?? [], this.getSessionModelId(agentId, sessionId));
     const modelId = identity
       ? resolveSessionModelKey(this.modelsByAgent[agentId] ?? [], identity, this.getSessionModelLocation(agentId, sessionId))
-      : configuredId ?? '';
+      : previous && previous.id === configuredId ? getModelSelectionKey(previous) : configuredId ?? '';
     this.sessionModelIds = { ...this.sessionModelIds, [buildSessionKey(agentId, sessionId)]: modelId };
   }
 

@@ -3573,6 +3573,35 @@ describe('AgentsStore connections', () => {
     expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
   });
 
+  it('keeps a remote selection scoped when a legacy model patch omits identity metadata', async () => {
+    const store = createStore();
+    const local: ModelEntry = { id: 'codex/test', provider: 'codex', model: 'test', label: 'Test' };
+    const remote: ModelEntry = { ...local, node_id: 'B', node_label: 'flkr' };
+    const different: ModelEntry = { id: 'codex/other', provider: 'codex', model: 'other' };
+    store.modelsByAgent = { 'agent-1': [local, remote, different] };
+    const modelOption: SessionConfigOption = {
+      id: 'model', name: 'Model', type: 'select', currentValue: local.id,
+      options: [local, different].map((model) => ({ value: model.id, name: model.model })),
+      _meta: { querymt: { modelEntry: remote } }
+    };
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [modelOption] }, replay: [] });
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(remote));
+    const { _meta, ...legacy } = modelOption;
+    for (const patch of [legacy, { ...legacy, description: 'legacy confirmation' }]) {
+      mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+        sessionUpdate: 'config_option_update', configOptions: [patch]
+      } });
+      expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(remote));
+    }
+    // A different model must not inherit the previous provider node or stale metadata.
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'config_option_update', configOptions: [{ ...legacy, currentValue: different.id }]
+    } });
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(different.id);
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
   it('sends the exact selected mesh entry while keeping the ACP model value canonical', async () => {
     const store = createStore();
     const localModel = {
