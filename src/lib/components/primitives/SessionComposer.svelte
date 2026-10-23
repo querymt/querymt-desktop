@@ -13,7 +13,8 @@
   import {
     findModeConfigOption,
     findReasoningConfigOption,
-    getConfigOptionChoices
+    getConfigOptionChoices,
+    type ModelLocationContext
   } from '$lib/querymt/config-options';
   import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment, SessionContentBlock, SessionInputDeliveryMode } from '$lib/domain/types';
   import type { SendShortcut } from '$lib/stores/chat-preferences.svelte';
@@ -48,6 +49,7 @@
     modelOptions = [],
     selectedModelId = '',
     modelInfo = {},
+    modelLocation = undefined,
     recentModels = [],
     modelLoading = false,
     agentLabel = null,
@@ -106,6 +108,7 @@
     modelOptions?: ModelEntry[];
     selectedModelId?: string;
     modelInfo?: Record<string, ModelInfo | null>;
+    modelLocation?: ModelLocationContext;
     recentModels?: ModelEntry[];
     modelLoading?: boolean;
     agentLabel?: string | null;
@@ -638,6 +641,7 @@
         recentModels={recentModels}
         selectedModelId={selectedModelId}
         modelInfo={modelInfo}
+        {modelLocation}
         loading={modelLoading || (sessionOnly && Object.values(sessionConfigPending).some(Boolean))}
         emptyLabel={sessionOnly ? 'Model unknown' : 'Select model'}
         disabled={sessionOnly && (modelLoading || Object.values(sessionConfigPending).some(Boolean))}

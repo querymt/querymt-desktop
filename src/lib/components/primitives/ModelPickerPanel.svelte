@@ -15,7 +15,7 @@
   } from '$lib/domain/model-capabilities';
   import { scoreModelSearch } from '$lib/domain/model-search';
   import type { ModelEntry } from '$lib/domain/types';
-  import { getModelSelectionKey } from '$lib/querymt/config-options';
+  import { getModelSelectionKey, modelNodeLabel, type ModelLocationContext } from '$lib/querymt/config-options';
 
   export type ModelPickerReasoningControl = {
     title: string;
@@ -32,6 +32,7 @@
     models = [],
     recentModels = [],
     modelInfo = {},
+    modelLocation = undefined,
     selectedModelId = '',
     query = $bindable(''),
     placeholder = 'Search models, providers, nodes…',
@@ -48,6 +49,7 @@
     models?: ModelEntry[];
     recentModels?: ModelEntry[];
     modelInfo?: ModelInfoMap;
+    modelLocation?: ModelLocationContext;
     selectedModelId?: string;
     query?: string;
     placeholder?: string;
@@ -96,7 +98,8 @@
     const grouped = new Map<string, ModelEntry[]>();
     for (const { model } of rankedModels) {
       if (recentKeys.has(getModelSelectionKey(model))) continue;
-      const label = model.node_label ? `${model.provider} · ${model.node_label}` : model.provider;
+      const nodeLabel = modelNodeLabel(model, modelLocation);
+      const label = nodeLabel ? `${model.provider} · ${nodeLabel}` : model.provider;
       const items = grouped.get(label) ?? [];
       items.push(model);
       grouped.set(label, items);

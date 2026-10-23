@@ -3503,6 +3503,69 @@ describe('AgentsStore connections', () => {
     expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
   });
 
+  it('uses owner model identity on remote reload and live changes, independently of reasoning patches', async () => {
+    const store = createStore();
+    const local = { id: 'codex/test', provider: 'codex', model: 'test', label: 'Test' };
+    const remote = { ...local, node_id: 'B', node_label: 'Machine B' };
+    const servingNode = '12D3KooWQmtLocalAgentPeer00000000000000';
+    store.modelsByAgent = { 'agent-1': [local, remote] };
+    const modelOption = (node: string | null): SessionConfigOption => ({
+      id: 'model', name: 'Model', type: 'select', currentValue: local.id,
+      options: [{ value: local.id, name: local.label }],
+      _meta: { querymt: { modelEntry: { ...local, node_id: node } } }
+    });
+    const reasoning: SessionConfigOption = {
+      id: 'reasoning_effort', name: 'Reasoning Effort', type: 'select', currentValue: 'max',
+      options: [{ value: 'max', name: 'Max' }]
+    };
+    let node: string | null = null;
+    mockClient.loadSession.mockImplementation(async () => ({
+      response: {
+        configOptions: [modelOption(node), reasoning],
+        _meta: { location: 'remote', nodeId: 'B', nodeLabel: 'Machine B' }
+      }, replay: []
+    }));
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(remote));
+    expect(store.activeSession.configOptions).toContainEqual(reasoning);
+    node = servingNode;
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'config_option_update', configOptions: [modelOption(node)]
+    } });
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(local.id);
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'config_option_update', configOptions: [{ ...reasoning, currentValue: 'auto' }]
+    } });
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(local.id);
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(local.id);
+    mockClient.attachRemoteSession.mockResolvedValueOnce({
+      session_id: 'attached-remote', node_id: 'B', attached: true,
+      config_options: [modelOption(null), reasoning], snapshot: { audit: { events: [] } }
+    });
+    await store.attachRemoteSession('agent-1', 'B', 'attached-remote');
+    expect(store.getSessionModelId('agent-1', 'attached-remote')).toBe(getModelSelectionKey(remote));
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
+  it('re-resolves confirmed identity when serving-node metadata arrives after session load', async () => {
+    const store = createStore();
+    const local = { id: 'codex/test', provider: 'codex', model: 'test', label: 'Test' };
+    store.modelsByAgent = { 'agent-1': [local] };
+    let finishStatus!: (value: MeshStatusInfo) => void;
+    mockClient.listMeshStatus.mockImplementationOnce(() => new Promise((resolve) => { finishStatus = resolve; }));
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [{
+      id: 'model', name: 'Model', type: 'select', currentValue: local.id,
+      options: [{ value: local.id, name: local.label }],
+      _meta: { querymt: { modelEntry: { ...local, node_id: 'A' } } }
+    }] }, replay: [] });
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.getSessionModelId('agent-1', 'session-1')).not.toBe(local.id);
+    finishStatus({ enabled: true, peer_id: 'A', known_peer_count: 0, has_invite_store: true, has_mesh_state_store: true, scopes: [] });
+    await vi.waitFor(() => expect(store.getSessionModelId('agent-1', 'session-1')).toBe(local.id));
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
   it('sends the exact selected mesh entry while keeping the ACP model value canonical', async () => {
     const store = createStore();
     const localModel = {

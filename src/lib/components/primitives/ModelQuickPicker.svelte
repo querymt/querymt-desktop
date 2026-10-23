@@ -6,7 +6,7 @@
   import ModelPickerPanel, { type ModelPickerReasoningControl } from '$lib/components/primitives/ModelPickerPanel.svelte';
   import { ensureProviderSprite, modelSelectionTooltip, providerIconHref, providerIconId } from '$lib/domain/provider-icons';
   import type { ModelEntry, ModelInfo } from '$lib/domain/types';
-  import { getModelSelectionKey } from '$lib/querymt/config-options';
+  import { getModelSelectionKey, modelNodeLabel, type ModelLocationContext } from '$lib/querymt/config-options';
 
   let {
     modelOptions = [],
@@ -14,6 +14,7 @@
     selectedModelId = '',
     emptyLabel = 'Select model',
     modelInfo = {},
+    modelLocation = undefined,
     loading = false,
     disabled = false,
     agentLabel = null,
@@ -29,6 +30,7 @@
     selectedModelId?: string;
     emptyLabel?: string;
     modelInfo?: Record<string, ModelInfo | null>;
+    modelLocation?: ModelLocationContext;
     loading?: boolean;
     disabled?: boolean;
     agentLabel?: string | null;
@@ -57,8 +59,9 @@
       null
   );
   const selectedIconId = $derived(selectedModel ? providerIconId(selectedModel.provider) : null);
+  const selectedNodeLabel = $derived(selectedModel ? modelNodeLabel(selectedModel, modelLocation) : null);
   const selectionTooltip = $derived.by(() => {
-    if (selectedModel) return modelSelectionTooltip(selectedModel, agentLabel);
+    if (selectedModel) return modelSelectionTooltip({ ...selectedModel, node_label: selectedNodeLabel }, agentLabel);
     if (selectedModelId) return `${selectedModelId}${loading ? '' : ' (unavailable)'}`;
     return null;
   });
@@ -226,7 +229,7 @@
             <span class="composer-model-pill-label">
               {#if selectedModel}
                 {selectedModel.label ?? selectedModel.model}
-                {#if selectedModel.node_label}
+                {#if selectedNodeLabel}
                   <span class="muted composer-model-pill-node" aria-hidden="true">
                     <Network size={12} />
                   </span>
@@ -284,6 +287,7 @@
             models={modelOptions}
             {recentModels}
             {modelInfo}
+            {modelLocation}
             {selectedModelId}
             {loading}
             {reasoning}
