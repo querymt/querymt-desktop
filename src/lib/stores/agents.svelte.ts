@@ -2591,17 +2591,18 @@ export class AgentsStore {
       }
     }
 
-    if (this.completedWorkspaceDiscoveries.has(agentId)) return null;
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) return null;
 
-    // Search only until the requested remote ID is found; a full catalog
-    // refresh also fetches every page and models before returning.
+    // Root-only catalog discovery cannot rule out a delegate or fork. Search
+    // all session kinds only for this missing ID, stopping at its first match.
     const seenCursors = new Set<string>();
     let cursor: string | null = null;
     do {
       if (!isCurrentLoad()) return null;
-      const page = await this.listSessionPage(config, this.clients.get(agentId)!, this.buildSessionListRequest({ cursor }));
+      const request = this.buildSessionListRequest({ cursor });
+      request._meta = { ...request._meta, session_scope: 'all' };
+      const page = await this.listSessionPage(config, this.clients.get(agentId)!, request);
       if (!isCurrentLoad()) return null;
       const match = page.sessions.find((session) => session.sessionId === sessionId &&
         session._meta?.location === 'remote' && typeof session._meta.nodeId === 'string' &&

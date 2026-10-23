@@ -3187,12 +3187,69 @@ describe('AgentsStore connections', () => {
     mockClient.listModels.mockClear();
     await store.loadSession('agent-1', 'remote-session-1');
     expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { _meta: { session_scope: 'root', remoteNodeIds: ['node-1'] }, cursor: 'next' });
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { _meta: { session_scope: 'all', remoteNodeIds: ['node-1'] }, cursor: 'next' });
     expect(mockClient.attachRemoteSession).toHaveBeenCalledWith({ node_id: 'node-1', session_id: 'remote-session-1' });
     expect(mockClient.listModels).not.toHaveBeenCalled();
     expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
       expect.objectContaining({ sessionId: 'remote-session-1', location: 'remote', remoteNodeId: 'node-1', cwd: '/remote' })
     ]));
+  });
+
+  it.each(['deep link', 'live parent', 'historical parent'])('loads an undiscovered remote delegate from a %s through the existing attach path', async (source) => {
+    const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    if (source !== 'deep link') {
+      mockClient.listSessions.mockResolvedValueOnce({ sessions: [{
+        sessionId: 'root', title: 'Parent task', cwd: '/remote',
+        _meta: { location: 'remote', nodeId: 'node-1' }
+      }] });
+      await store.refreshSessionsForAgent('agent-1', true);
+      expect(mockClient.listSessions).toHaveBeenCalledWith({
+        _meta: { session_scope: 'root', remoteNodeIds: ['node-1'] }
+      });
+      mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+        location: 'remote', nodeId: 'node-1',
+        ...(source === 'historical parent' ? { 'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+          { seq: 1, kind: { type: 'tool_call_start', data: { tool_call_id: 'delegate-1', tool_name: 'delegate', arguments: '{}' } } },
+          { seq: 2, kind: { type: 'session_forked', data: { parent_session_id: 'root', child_session_id: 'remote-session-1', tool_call_id: 'delegate-1', origin: 'delegation' } } }
+        ] } } } : {})
+      } }, replay: [] });
+      await store.loadSession('agent-1', 'root');
+      if (source === 'live parent') mockClient.emitExtensionNotification({
+        method: 'querymt/session/delegationUpdate',
+        params: { sessionId: 'root', childSessionId: 'remote-session-1', toolCallId: 'delegate-1' }
+      });
+    }
+    mockClient.listSessions.mockClear();
+    mockClient.loadSession.mockClear();
+    mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32602, 'Invalid params', {
+      message: 'Session has no profile binding'
+    }));
+    mockClient.listSessions.mockImplementationOnce(async (request) => ({ sessions: request?._meta?.session_scope === 'all' ? [{
+      sessionId: 'remote-session-1', title: 'Delegate task', cwd: '/remote',
+      _meta: { location: 'remote', nodeId: 'node-1', parentSessionId: 'root', forkOrigin: 'delegation' }
+    }, {
+      sessionId: 'unrelated-child', cwd: '/remote',
+      _meta: { location: 'remote', nodeId: 'node-1', parentSessionId: 'other-root', forkOrigin: 'delegation' }
+    }] : [] }));
+
+    await store.loadSession('agent-1', 'remote-session-1');
+
+    expect(mockClient.listSessions).toHaveBeenCalledExactlyOnceWith({
+      _meta: { session_scope: 'all', remoteNodeIds: ['node-1'] }
+    });
+    expect(mockClient.attachRemoteSession).toHaveBeenCalledExactlyOnceWith({ node_id: 'node-1', session_id: 'remote-session-1' });
+    expect(mockClient.loadSession).toHaveBeenCalledTimes(1);
+    expect(store.activeSessionId).toBe('remote-session-1');
+    expect(store.activeSession.lastError).toBeNull();
+    expect(store.activeSession.transcript).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'user_message_chunk', text: 'Review deployment' })
+    ]));
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'remote-session-1'))
+      .toMatchObject({ location: 'remote', remoteNodeId: 'node-1', parentSessionId: 'root', forkOrigin: 'delegation' });
+    expect(store.sessionsByAgent['agent-1'].some((session) => session.sessionId === 'unrelated-child')).toBe(false);
+    expect(store.sessions.filter(isRootSession).map((session) => session.sessionId)).toEqual(source === 'deep link' ? [] : ['root']);
   });
 
   it('uses a cached remote listing before making another catalog request', async () => {
