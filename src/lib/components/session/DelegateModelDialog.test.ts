@@ -7,6 +7,10 @@ import {
   type DelegateAssignmentsInfo
 } from '$lib/querymt/generated/types';
 import DelegateModelDialog from './DelegateModelDialog.svelte';
+import ModelQuickPicker from '$lib/components/primitives/ModelQuickPicker.svelte';
+import type { ModelEntry } from '$lib/domain/types';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const models = [
   { id: 'codex/gpt-5.6-sol', provider: 'codex', model: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
@@ -40,6 +44,98 @@ const assignments: DelegateAssignmentsInfo = {
 afterEach(cleanup);
 
 describe('DelegateModelDialog', () => {
+  it.each([false, true])('uses session-relative locality for routes, headings and rows without changing identity (recent=%s)', async (recent) => {
+    const a: ModelEntry = { id: 'codex/shared', provider: 'codex', model: 'shared', label: 'A model' };
+    const b: ModelEntry = { ...a, label: 'B model', node_id: 'B', node_label: 'flkr' };
+    const c: ModelEntry = { ...a, label: 'C model', node_id: 'C', node_label: 'third-host' };
+    const catalog = [a, b, c];
+    const ownerAssignments: DelegateAssignmentsInfo = {
+      ...assignments,
+      assignments: [
+        { ...assignments.assignments[0], model: { model_id: b.id, node_id: 'B' }, source: DelegateAssignmentSource.Override },
+        { ...assignments.assignments[0], agent_id: 'reviewer', name: 'Reviewer', model: { model_id: a.id }, source: DelegateAssignmentSource.Override },
+        { ...assignments.assignments[0], agent_id: 'auditor', name: 'Auditor', model: { model_id: c.id, node_id: 'C' }, source: DelegateAssignmentSource.Override }
+      ],
+      orphaned_overrides: []
+    };
+    const onAssign = vi.fn(async () => true);
+    const props = {
+      open: true, assignments: ownerAssignments, models: catalog,
+      modelLocation: { servingNodeId: 'A', servingNodeLabel: 'lstr', ownerNodeId: 'B' },
+      recentModelsByDelegate: { coder: recent ? catalog : [] },
+      onAssign, onRefresh: vi.fn()
+    };
+    const { rerender } = render(DelegateModelDialog, { props });
+    const coder = screen.getByRole('button', { name: /Coder coder/ });
+    expect(coder.querySelector('.lucide-network')).toBeNull();
+    expect(screen.getByRole('button', { name: /Reviewer reviewer/ })).toHaveTextContent('lstr');
+    expect(screen.getByRole('button', { name: /Auditor auditor/ })).toHaveTextContent('third-host');
+    await fireEvent.click(coder);
+    const ownerRow = screen.getByRole('button', { name: /B model/ });
+    const viewerRow = screen.getByRole('button', { name: /A model/ });
+    expect(ownerRow).toHaveAttribute('aria-pressed', 'true');
+    expect(within(ownerRow).queryByLabelText(/Mesh node/)).toBeNull();
+    expect(within(viewerRow).getByLabelText('Mesh node lstr')).toBeInTheDocument();
+    expect(within(screen.getByRole('button', { name: /C model/ })).getByLabelText('Mesh node third-host')).toBeInTheDocument();
+    if (recent) {
+      expect(within(screen.getByText('Recent').closest('section')!).getAllByRole('button')).toHaveLength(3);
+    } else {
+      expect(screen.getByText('codex', { selector: '.delegate-model-picker-group-title > span' })).toBeInTheDocument();
+      expect(screen.getByText('codex · lstr')).toBeInTheDocument();
+      expect(screen.queryByText('codex · flkr')).toBeNull();
+    }
+    await fireEvent.click(ownerRow);
+    expect(onAssign).toHaveBeenLastCalledWith('coder', { model_id: b.id, node_id: 'B' });
+    await fireEvent.click(viewerRow);
+    expect(onAssign).toHaveBeenLastCalledWith('coder', { model_id: a.id, node_id: undefined });
+    const search = screen.getByLabelText('Search delegate models');
+    await fireEvent.input(search, { target: { value: 'lstr' } });
+    expect(screen.getByRole('button', { name: /A model/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /B model/ })).toBeNull();
+    await fireEvent.input(search, { target: { value: '' } });
+    await rerender({ ...props, modelLocation: { ...props.modelLocation, ownerNodeId: 'A' } });
+    expect(within(screen.getByRole('button', { name: /A model/ })).queryByLabelText(/Mesh node/)).toBeNull();
+    expect(within(screen.getByRole('button', { name: /B model/ })).getByLabelText('Mesh node flkr')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /B model/ })).toHaveAttribute('aria-pressed', 'true');
+    await fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(screen.getByRole('button', { name: /Coder coder/ })).toHaveTextContent('flkr');
+    expect(screen.getByRole('button', { name: /Reviewer reviewer/ }).querySelector('.lucide-network')).toBeNull();
+    expect(b.node_id).toBe('B');
+    expect(a.node_id).toBeUndefined();
+  });
+
+  it('uses the normal model picker shell and spacing while retaining the routing overview layout', async () => {
+    const normal = render(ModelQuickPicker, { modelOptions: models, selectedModelId: models[0].id, onSelect: vi.fn() });
+    await fireEvent.click(screen.getByRole('button', { name: /GPT-5.6 Sol from codex/ }));
+    const regular = screen.getByRole('dialog', { name: 'Switch model' });
+    const shellClasses = ['app-picker', 'app-picker-model'];
+    expect(regular).toHaveClass(...shellClasses);
+    const headerClasses = regular.querySelector('header')!.className;
+    const bodyClasses = regular.querySelector('.app-picker-body')!.className;
+    const footerClasses = regular.querySelector('footer')!.className;
+    normal.unmount();
+    render(DelegateModelDialog, { props: { open: true, assignments, models, onAssign: vi.fn(), onRefresh: vi.fn() } });
+    expect(screen.getByRole('dialog', { name: 'Delegate routing' })).toHaveClass('app-dialog-wide', 'delegate-model-dialog');
+    await fireEvent.click(screen.getByRole('button', { name: /Coder coder/ }));
+    const delegate = screen.getByRole('dialog', { name: 'Route Coder' });
+    expect(delegate).toHaveClass(...shellClasses);
+    for (const legacyClass of ['app-dialog', 'app-dialog-wide', 'delegate-model-dialog']) {
+      expect(delegate).not.toHaveClass(legacyClass);
+    }
+    expect(delegate.querySelector('header')).toHaveClass(headerClasses);
+    expect(delegate.querySelector('.app-picker-body')).toHaveClass(bodyClasses);
+    expect(delegate.querySelector('footer')).toHaveClass(footerClasses);
+    await fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(screen.getByRole('dialog', { name: 'Delegate routing' })).toHaveClass('app-dialog-wide', 'delegate-model-dialog');
+  });
+
+  it('wires the same session location into the root and delegate model pickers', () => {
+    const page = readFileSync(resolve(process.cwd(), 'src/routes/sessions/[agentId]/[sessionId]/+page.svelte'), 'utf8');
+    const context = 'modelLocation={agentsStore.getSessionModelLocation(agentId, sessionId)}';
+    expect(page.match(/<SessionComposer[\s\S]*?\/>/)?.[0]).toContain(context);
+    expect(page.match(/<DelegateModelDialog[\s\S]*?\/>/)?.[0]).toContain(context);
+  });
+
   it('shows durable routes and sends the selected local or mesh identity', async () => {
     const onAssign = vi.fn(async () => true);
     render(DelegateModelDialog, {

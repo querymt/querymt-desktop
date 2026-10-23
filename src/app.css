@@ -5037,7 +5037,7 @@ summary:focus-visible {
     padding-inline: 1.15rem;
   }
 
-  .delegate-model-picker .app-dialog-footer {
+  .delegate-model-picker .app-picker-footer {
     flex-wrap: wrap;
   }
 

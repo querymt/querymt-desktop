@@ -683,6 +683,7 @@
     recentModelsByDelegate={agentsStore.activeRecentDelegateModels}
     models={agentsStore.modelsByAgent[agentId] ?? []}
     modelInfo={agentsStore.modelInfoByAgent[agentId] ?? {}}
+    modelLocation={agentsStore.getSessionModelLocation(agentId, sessionId)}
     {inheritedReasoningLabel}
     loading={agentsStore.activeDelegateAssignmentsLoading}
     modelLoading={!!agentsStore.modelLoadingByAgent[agentId]}
