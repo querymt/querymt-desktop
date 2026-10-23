@@ -102,7 +102,9 @@ import type {
 import {
   CONFIG_MODE,
   findModeConfigOption,
-  findModelByIdentity,
+  configuredModelIdentity,
+  resolveSessionModelKey,
+  type ModelLocationContext,
   findModelBySelectionKey,
   findModelConfigOption,
   findReasoningConfigOption,
@@ -4652,6 +4654,9 @@ export class AgentsStore {
       ...this.meshInvitesByAgent,
       [agentId]: meshInvites
     };
+    if (this.activeAgentId === agentId && this.activeSessionId && configuredModelIdentity(this.activeSession.configOptions)) {
+      this.restoreSessionModel(agentId, this.activeSessionId, this.activeSession.configOptions);
+    }
     return { meshStatus, meshNodes, meshInvites };
   }
 
@@ -4853,12 +4858,6 @@ export class AgentsStore {
       _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
     });
     this.applySessionConfigOptionsSnapshot(agentId, sessionId, configOptions);
-    this.restoreSessionModel(agentId, sessionId, configOptions, {
-      _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
-    });
-    // Remote attach is a load: seed the active mode from agent-reported state.
-    this.seedSessionModePreferenceFromLoad(agentId, sessionId);
-
     const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
     const summary: DesktopSessionSummary = {
       ...current,
@@ -4885,6 +4884,11 @@ export class AgentsStore {
       ...this.sessionsByAgent,
       [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [summary])
     };
+    // Resolve owner-local model identities only after publishing the owner node.
+    this.restoreSessionModel(agentId, sessionId, configOptions, {
+      _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
+    });
+    this.seedSessionModePreferenceFromLoad(agentId, sessionId);
     this.updateWorkspaceDiscovery(config, [summary], false);
     this.hydratedRemoteSessionKeys.add(buildSessionKey(agentId, sessionId));
     this.rememberRecentSession(agentId, sessionId);
@@ -4969,6 +4973,9 @@ export class AgentsStore {
       };
       await this.hydrateModelInfo(agentId, models, options.refreshModelInfo);
       this.selectLaunchModelForAgent(agentId, models);
+      if (this.activeAgentId === agentId && this.activeSessionId && configuredModelIdentity(this.activeSession.configOptions)) {
+        this.restoreSessionModel(agentId, this.activeSessionId, this.activeSession.configOptions);
+      }
       return models.length;
     } catch (error) {
       this.error = error instanceof Error ? error.message : errorMessage;
@@ -5189,20 +5196,27 @@ export class AgentsStore {
     this.persistConfirmedSessionPreference(agentId, sessionId);
   }
 
+  getSessionModelLocation(agentId: string, sessionId: string): ModelLocationContext {
+    const servingNodeId = this.meshStatusByAgent[agentId]?.peer_id;
+    const session = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    return {
+      servingNodeId,
+      ownerNodeId: session?.remoteNodeId ?? servingNodeId,
+      servingNodeLabel: this.meshStatusByAgent[agentId]?.hostname
+    };
+  }
+
   private restoreSessionModel(agentId: string, sessionId: string, configOptions: SessionConfigOption[], response?: unknown) {
-    const models = this.modelsByAgent[agentId] ?? [];
     const configuredId = getCurrentModelId(configOptions);
     const snapshot = getSnapshotProviderChange(response);
-    const snapshotModels = snapshot ? models.filter((model) => (model.node_id ?? null) === snapshot.providerNodeId) : [];
-    const snapshotModel = snapshot ? findModelByIdentity(snapshotModels, snapshot) : undefined;
-    const snapshotId = snapshot
-      ? getModelSelectionKey(snapshotModel ?? { id: `${snapshot.provider}/${snapshot.model}`, node_id: snapshot.providerNodeId })
-      : '';
-    // ACP may omit the model option. Use the session's snapshot, never the launch preference.
-    const modelId = configuredId
-      ? (snapshotModel?.id === configuredId || (snapshot && `${snapshot.provider}/${snapshot.model}` === configuredId)
-        ? snapshotId : configuredId)
-      : snapshotId;
+    const identity = configuredModelIdentity(configOptions) ??
+      (!configuredId || configuredId === `${snapshot?.provider}/${snapshot?.model}` ? snapshot : undefined);
+    // Legacy confirmations identify the model but not its node. Do not turn an
+    // unchanged remote selection into the same-named local catalog entry.
+    const previous = findModelBySelectionKey(this.modelsByAgent[agentId] ?? [], this.getSessionModelId(agentId, sessionId));
+    const modelId = identity
+      ? resolveSessionModelKey(this.modelsByAgent[agentId] ?? [], identity, this.getSessionModelLocation(agentId, sessionId))
+      : previous && previous.id === configuredId ? getModelSelectionKey(previous) : configuredId ?? '';
     this.sessionModelIds = { ...this.sessionModelIds, [buildSessionKey(agentId, sessionId)]: modelId };
   }
 
@@ -5278,15 +5292,14 @@ export class AgentsStore {
       // change may omit it, in which case the last known selection is kept.
       let confirmedModelKey: string | undefined;
       if (confirmedId) {
-        const previousModel = (this.modelsByAgent[agentId] ?? []).find(
-          (model) => getModelSelectionKey(model) === this.getSessionModelId(agentId, sessionId)
-        );
-        const selectedModel = options.model ?? previousModel;
-        confirmedModelKey = selectedModel?.id === confirmedId ? getModelSelectionKey(selectedModel) : confirmedId;
-        this.sessionModelIds = {
-          ...this.sessionModelIds,
-          [key]: confirmedModelKey
-        };
+        if (configuredModelIdentity(response)) {
+          this.restoreSessionModel(agentId, sessionId, response);
+          confirmedModelKey = this.getSessionModelId(agentId, sessionId);
+        } else {
+          const selectedModel = options.model ?? findModelBySelectionKey(this.modelsByAgent[agentId] ?? [], this.getSessionModelId(agentId, sessionId));
+          confirmedModelKey = selectedModel?.id === confirmedId ? getModelSelectionKey(selectedModel) : confirmedId;
+          this.sessionModelIds = { ...this.sessionModelIds, [key]: confirmedModelKey };
+        }
       } else if (options.model) {
         // Older servers acknowledge the write without returning a model config option.
         this.sessionModelIds = { ...this.sessionModelIds, [key]: getModelSelectionKey(options.model) };
@@ -5739,16 +5752,10 @@ export class AgentsStore {
       const patch = notification.update.configOptions ?? [];
       const configOptions = this.mergeSessionConfigOptions(agentId, notification.sessionId, patch);
       const modelId = getCurrentModelId(patch);
-      const currentModel = (this.modelsByAgent[agentId] ?? []).find(
-        (model) => getModelSelectionKey(model) === this.getSessionModelId(agentId, notification.sessionId)
-      );
       // Selection changes only when the update carries model metadata; a mode
       // change may omit it, in which case the last known selection is kept.
       if (modelId) {
-        this.sessionModelIds = {
-          ...this.sessionModelIds,
-          [key]: currentModel?.id === modelId ? getModelSelectionKey(currentModel) : modelId
-        };
+        this.restoreSessionModel(agentId, notification.sessionId, patch);
       }
       // During a desktop-initiated transition, intermediate mode defaults and
       // racing notifications refresh confirmed UI state but never overwrite

@@ -647,6 +647,7 @@
         modelOptions={agentsStore.modelsByAgent[agentId] ?? []}
         selectedModelId={agentsStore.getSessionModelId(agentId, sessionId)}
         modelInfo={agentsStore.modelInfoByAgent[agentId] ?? {}}
+        modelLocation={agentsStore.getSessionModelLocation(agentId, sessionId)}
         recentModels={agentsStore.getRecentModels(agentId)}
         modelLoading={agentsStore.sessionHistoryLoading || !!agentsStore.modelLoadingByAgent[agentId]}
         agentLabel={showAgentBadges ? selectedSession.agentName : null}

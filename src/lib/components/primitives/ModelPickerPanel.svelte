@@ -15,7 +15,7 @@
   } from '$lib/domain/model-capabilities';
   import { scoreModelSearch } from '$lib/domain/model-search';
   import type { ModelEntry } from '$lib/domain/types';
-  import { getModelSelectionKey } from '$lib/querymt/config-options';
+  import { getModelSelectionKey, modelNodeLabel, type ModelLocationContext } from '$lib/querymt/config-options';
 
   export type ModelPickerReasoningControl = {
     title: string;
@@ -32,6 +32,7 @@
     models = [],
     recentModels = [],
     modelInfo = {},
+    modelLocation = undefined,
     selectedModelId = '',
     query = $bindable(''),
     placeholder = 'Search models, providers, nodes…',
@@ -48,6 +49,7 @@
     models?: ModelEntry[];
     recentModels?: ModelEntry[];
     modelInfo?: ModelInfoMap;
+    modelLocation?: ModelLocationContext;
     selectedModelId?: string;
     query?: string;
     placeholder?: string;
@@ -71,7 +73,7 @@
     return models
       .map((model) => ({
         model,
-        score: scoreModelSearch(model, needle, [model.family, ...knownInputModalities(model, modelInfo)])
+        score: scoreModelSearch(model, needle, [modelNodeLabel(model, modelLocation), model.family, ...knownInputModalities(model, modelInfo)])
       }))
       .filter(({ score }) => score > Number.NEGATIVE_INFINITY)
       .sort((a, b) => b.score - a.score);
@@ -96,7 +98,8 @@
     const grouped = new Map<string, ModelEntry[]>();
     for (const { model } of rankedModels) {
       if (recentKeys.has(getModelSelectionKey(model))) continue;
-      const label = model.node_label ? `${model.provider} · ${model.node_label}` : model.provider;
+      const nodeLabel = modelNodeLabel(model, modelLocation);
+      const label = nodeLabel ? `${model.provider} · ${nodeLabel}` : model.provider;
       const items = grouped.get(label) ?? [];
       items.push(model);
       grouped.set(label, items);
@@ -246,6 +249,7 @@
             {@const info = modelInfo[selectionKey]}
             {@const knownModalities = knownInputModalities(model, modelInfo)}
             {@const selected = selectedModelId === selectionKey}
+            {@const nodeLabel = modelNodeLabel(model, modelLocation)}
             <button
               class="delegate-model-choice"
               class:delegate-model-choice-highlighted={highlightedIndex === item.index}
@@ -266,9 +270,9 @@
                 <small>{model.id}</small>
               </span>
               <span class="delegate-model-choice-meta">
-                {#if model.node_label}
-                  <small aria-label={`Mesh node ${model.node_label}`}>
-                    <Network size={11} />{model.node_label}
+                {#if nodeLabel}
+                  <small aria-label={`Mesh node ${nodeLabel}`}>
+                    <Network size={11} />{nodeLabel}
                   </small>
                 {/if}
               </span>
