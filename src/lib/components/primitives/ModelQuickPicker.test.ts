@@ -114,6 +114,82 @@ describe('ModelPickerPanel provider headings', () => {
   });
 });
 
+describe('model catalog availability', () => {
+  const hint = 'Provider temporarily unavailable. Refresh or check the provider.';
+
+  it.each([false, true])('retains unavailable rows and selection but blocks clicks and Enter, then recovers (recent=%s)', async (recent) => {
+    const offline: ModelEntry = { ...remote, availability: 'unavailable' };
+    const local: ModelEntry = { ...remote, node_id: undefined, node_label: undefined };
+    const other: ModelEntry = { ...remote, node_id: 'node-2', node_label: 'Other server', availability: 'unknown' };
+    const props = { models: [offline, local, other], recentModels: recent ? [offline] : [],
+      selectedModelId: getModelSelectionKey(offline), onSelect: vi.fn(), onRefresh: vi.fn(), searchLabel: 'Models' };
+    const { rerender } = render(ModelPickerPanel, props);
+    const rows = document.querySelectorAll<HTMLButtonElement>('.delegate-model-choice');
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toHaveAttribute('aria-disabled', 'true');
+    expect(rows[0]).toHaveAttribute('aria-pressed', 'true');
+    const warning = within(rows[0]).getByLabelText('Provider temporarily unavailable');
+    expect(warning).toHaveClass('model-availability-warning');
+    expect(warning.parentElement).toHaveAttribute('title', hint);
+    expect(rows[0]).not.toHaveTextContent('Unavailable');
+    await fireEvent.click(rows[0]);
+    const search = screen.getByLabelText('Models');
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(props.onSelect).not.toHaveBeenCalled();
+    await fireEvent.keyDown(search, { key: 'ArrowDown' });
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(props.onSelect).toHaveBeenLastCalledWith(local);
+    await fireEvent.keyDown(search, { key: 'ArrowDown' });
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(props.onSelect).toHaveBeenLastCalledWith(other);
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh models' }));
+    expect(props.onRefresh).toHaveBeenCalledOnce();
+    if (!recent) {
+      await fireEvent.pointerEnter(screen.getByRole('button', { name: hint }));
+      expect(await screen.findByText(hint, { selector: '.app-tooltip-content' })).toBeInTheDocument();
+    }
+    const recovered: ModelEntry = { ...offline, availability: 'available' };
+    await rerender({ ...props, models: [recovered, local, other] });
+    const restored = document.querySelector<HTMLButtonElement>('.delegate-model-choice')!;
+    expect(restored).toHaveAttribute('aria-disabled', 'false');
+    expect(restored).toHaveAttribute('aria-pressed', 'true');
+    expect(within(restored).queryByLabelText('Provider temporarily unavailable')).toBeNull();
+    await fireEvent.click(restored);
+    expect(props.onSelect).toHaveBeenLastCalledWith(recovered);
+  });
+
+  it('skips an unavailable row between healthy choices in both keyboard directions', async () => {
+    const onSelect = vi.fn();
+    render(ModelPickerPanel, { models: [anthropic, { ...remote, availability: 'unavailable' }, custom], onSelect, searchLabel: 'Models' });
+    const search = screen.getByLabelText('Models');
+    await fireEvent.keyDown(search, { key: 'ArrowDown' });
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(onSelect).toHaveBeenLastCalledWith(custom);
+    await fireEvent.keyDown(search, { key: 'ArrowUp' });
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(onSelect).toHaveBeenLastCalledWith(anthropic);
+  });
+
+  it('keeps an unavailable selected model visible in the trigger and allows opening to refresh', async () => {
+    const offline: ModelEntry = { ...remote, availability: 'unavailable' };
+    const props = { modelOptions: [offline], selectedModelId: getModelSelectionKey(offline), onSelect: vi.fn() };
+    const { rerender } = renderPicker(props);
+    const trigger = screen.getByRole('button', { name: `${remote.label}. ${hint}` });
+    expect(trigger).toHaveTextContent(remote.label!);
+    expect(trigger.querySelector('.model-availability-warning')).not.toBeNull();
+    expect(trigger).not.toBeDisabled();
+    await fireEvent.pointerEnter(trigger);
+    expect(await screen.findByText(`${remote.label}. ${hint}`, { selector: '.app-tooltip-content' })).toBeInTheDocument();
+    await fireEvent.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Switch model' });
+    await fireEvent.click(within(dialog).getByRole('button', { name: /grok-4.7/ }));
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(dialog).toBeInTheDocument();
+    await rerender({ ...props, modelOptions: [{ ...offline, availability: 'available' }] });
+    expect(screen.getByRole('button', { name: 'grok-4.7 from xai on Build server' }).querySelector('.model-availability-warning')).toBeNull();
+  });
+});
+
 describe('ModelQuickPicker recent models', () => {
   it('shows Recent first with a history icon, preserves recency, and avoids duplicate provider rows', async () => {
     renderPicker({ recentModels: [remote, anthropic] });

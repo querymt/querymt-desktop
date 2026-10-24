@@ -4587,6 +4587,25 @@ describe('AgentsStore model info cache', () => {
     capabilities: { modalities: { input: ['text', 'image'], output: ['text'] } }
   };
 
+  it('updates availability from model notifications and refresh without replacing an unavailable selection', async () => {
+    const store = createStore();
+    mockClient.listModels.mockResolvedValue([localModel, remoteModel]);
+    await store.loadInitialModelsForAgent('agent-1');
+    store.setLaunchModel('agent-1', getModelSelectionKey(remoteModel));
+    store.recentModelsByAgent = { 'agent-1': [getModelSelectionKey(remoteModel)] };
+    mockClient.listModels.mockResolvedValue([localModel, { ...remoteModel, availability: 'unavailable' }]);
+    mockClient.emitExtensionNotification({ method: 'querymt/models/changed', params: { version: 2 } });
+    await vi.waitFor(() => expect(store.modelsByAgent['agent-1'][1].availability).toBe('unavailable'));
+    expect(store.getLaunchModelId('agent-1')).toBe(getModelSelectionKey(remoteModel));
+    expect(store.getRecentModels('agent-1')[0].availability).toBe('unavailable');
+    expect(store.modelsByAgent['agent-1'][0]).not.toHaveProperty('availability');
+    mockClient.refreshAndListModels.mockResolvedValue([localModel, { ...remoteModel, availability: 'available' }]);
+    await store.refreshModelsForAgent('agent-1');
+    expect(store.getRecentModels('agent-1')[0].availability).toBe('available');
+    expect(store.getLaunchModelId('agent-1')).toBe(getModelSelectionKey(remoteModel));
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
   it('batches unique model identities once and reuses them for mesh copies', async () => {
     const store = createStore();
     mockClient.listModels.mockResolvedValue([localModel, remoteModel]);

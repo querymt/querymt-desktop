@@ -104,6 +104,24 @@ describe('DelegateModelDialog', () => {
     expect(a.node_id).toBeUndefined();
   });
 
+  it('uses shared availability blocking and recovers without rewriting the delegate override', async () => {
+    const offline: ModelEntry = { ...models[1], availability: 'unavailable' };
+    const onAssign = vi.fn(async () => true);
+    const props = { open: true, assignments, models: [models[0], offline], onAssign, onRefresh: vi.fn() };
+    const { rerender } = render(DelegateModelDialog, { props });
+    await fireEvent.click(screen.getByRole('button', { name: /Coder coder/ }));
+    const row = screen.getByRole('button', { name: /Grok 4.6/ });
+    expect(row).toHaveAttribute('aria-disabled', 'true');
+    expect(within(row).getByLabelText('Provider temporarily unavailable')).toBeInTheDocument();
+    await fireEvent.click(row);
+    await fireEvent.input(screen.getByLabelText('Search delegate models'), { target: { value: 'grok' } });
+    await fireEvent.keyDown(screen.getByLabelText('Search delegate models'), { key: 'Enter' });
+    expect(onAssign).not.toHaveBeenCalled();
+    await rerender({ ...props, models: [models[0], { ...offline, availability: 'available' }] });
+    await fireEvent.click(screen.getByRole('button', { name: /Grok 4.6/ }));
+    expect(onAssign).toHaveBeenCalledWith('coder', { model_id: offline.id, node_id: offline.node_id });
+  });
+
   it('uses the normal model picker shell and spacing while retaining the routing overview layout', async () => {
     const normal = render(ModelQuickPicker, { modelOptions: models, selectedModelId: models[0].id, onSelect: vi.fn() });
     await fireEvent.click(screen.getByRole('button', { name: /GPT-5.6 Sol from codex/ }));

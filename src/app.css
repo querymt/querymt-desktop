@@ -4711,6 +4711,17 @@ summary:focus-visible {
   border-top: 0;
 }
 
+.delegate-model-choice-unavailable,
+.delegate-model-choice-unavailable:hover:enabled {
+  background: var(--bg-card);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.model-availability-warning {
+  color: var(--amber);
+}
+
 .delegate-model-choice strong,
 .delegate-model-default-choice strong,
 .delegate-model-orphan-detail strong {

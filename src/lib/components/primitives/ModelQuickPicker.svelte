@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot, Network, RefreshCw, X } from '@lucide/svelte';
+  import { Bot, Network, RefreshCw, TriangleAlert, X } from '@lucide/svelte';
   import { getContext, tick } from 'svelte';
   import { Dialog, Tooltip } from 'bits-ui';
   import providerSprite from '$lib/assets/providers.svg?raw';
@@ -60,13 +60,15 @@
   );
   const selectedIconId = $derived(selectedModel ? providerIconId(selectedModel.provider) : null);
   const selectedNodeLabel = $derived(selectedModel ? modelNodeLabel(selectedModel, modelLocation) : null);
+  const selectedUnavailable = $derived(selectedModel?.availability === 'unavailable');
   const selectionTooltip = $derived.by(() => {
+    if (selectedUnavailable && selectedModel) return `${selectedModel.label ?? selectedModel.model}. Provider temporarily unavailable. Refresh or check the provider.`;
     if (selectedModel) return modelSelectionTooltip({ ...selectedModel, node_label: selectedNodeLabel }, agentLabel);
     if (selectedModelId) return `${selectedModelId}${loading ? '' : ' (unavailable)'}`;
     return null;
   });
 
-  const showFallbackTooltip = $derived(!!selectionTooltip && !selectedIconId && !loading);
+  const showFallbackTooltip = $derived(!!selectionTooltip && (selectedUnavailable || !selectedIconId) && !loading);
   const reasoningBadge = $derived(
     selectedModel ? reasoning?.options.find((option) => option.value === reasoning.value && option.label.trim()) ?? null : null
   );
@@ -229,7 +231,11 @@
             <span class="composer-model-pill-label">
               {#if selectedModel}
                 {selectedModel.label ?? selectedModel.model}
-                {#if selectedNodeLabel}
+                {#if selectedUnavailable}
+                  <span class="composer-model-pill-node model-availability-warning" aria-hidden="true">
+                    <TriangleAlert size={12} />
+                  </span>
+                {:else if selectedNodeLabel}
                   <span class="muted composer-model-pill-node" aria-hidden="true">
                     <Network size={12} />
                   </span>

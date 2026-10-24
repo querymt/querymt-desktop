@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelEntry } from '$lib/domain/types';
-import { findModelByIdentity, findModelBySelectionKey, getModelSelectionKey, resolveSessionModelKey, modelNodeLabel } from './config-options';
+import { findModelByIdentity, findModelBySelectionKey, getModelSelectionKey, resolveSessionModelKey, modelNodeLabel, setModelConfigOptionRequest } from './config-options';
 
 const localModel: ModelEntry = {
   id: 'anthropic/claude-sonnet-4',
@@ -36,6 +36,14 @@ describe('model selection identity', () => {
     expect(getModelSelectionKey(localModel)).toBe(localModel.id);
     expect(getModelSelectionKey(remoteModel)).not.toBe(remoteModel.id);
     expect(getModelSelectionKey(remoteModel)).toContain('node-1');
+  });
+
+  it('never sends transient availability as model identity', () => {
+    for (const availability of ['available', 'unavailable', 'unknown'] as const) {
+      const annotated = { ...remoteModel, availability };
+      expect(getModelSelectionKey(annotated)).toBe(getModelSelectionKey(remoteModel));
+      expect(setModelConfigOptionRequest('session', annotated)).toEqual(setModelConfigOptionRequest('session', remoteModel));
+    }
   });
 
   it('resolves legacy raw ids to the local model when local and mesh entries collide', () => {

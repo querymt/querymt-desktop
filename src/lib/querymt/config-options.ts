@@ -213,9 +213,10 @@ export function setModelConfigOptionRequest(
   model: ModelEntry,
   configId: string = CONFIG_MODEL
 ): SetSessionConfigOptionRequest {
+  const { availability: _availability, ...identity } = model;
   return setSessionConfigOptionRequest(sessionId, configId, model.id, {
     querymt: {
-      modelEntry: model
+      modelEntry: identity
     }
   });
 }
