@@ -312,6 +312,26 @@ describe('QuerymtExtensions control methods', () => {
     expect((await extensions.models()).models).toEqual(models);
   });
 
+  it.each(['models', 'refreshModels'] as const)('merges both metadata levels and node maps for %s', async (method) => {
+    const { extensions, extMethod } = extensionClient();
+    const model = { id: 'codex/shared', provider: 'codex', model: 'shared' };
+    extMethod.mockResolvedValueOnce({
+      meta: { stale: true, refresh_in_progress: true, remote_node_availability: { A: 'unavailable', B: 'unavailable' } },
+      data: {
+        models: ['A', 'B', 'C'].map((node_id) => ({ ...model, node_id })),
+        meta: { stale: false, remote_node_count: 3, remote_node_availability: { B: 'available', C: 'unknown' } }
+      }
+    });
+    await expect(extensions[method]()).resolves.toEqual({
+      models: ['unavailable', 'available', 'unknown'].map((availability, index) => ({ ...model, node_id: ['A', 'B', 'C'][index], availability })),
+      meta: { stale: false, refresh_in_progress: true, remote_node_count: 3,
+        remote_node_availability: { A: 'unavailable', B: 'available', C: 'unknown' } }
+    });
+    extMethod.mockResolvedValueOnce({ data: { models: [{ ...model, node_id: 'A' }], meta: {} },
+      meta: { remote_node_availability: { A: 'unavailable' } } });
+    expect((await extensions[method]()).models[0].availability).toBe('unavailable');
+  });
+
   it('fetches model info and folds flat wire fields into capabilities', async () => {
     const { extensions, extMethod } = extensionClient();
     extMethod.mockResolvedValueOnce({

@@ -62,8 +62,10 @@
   const selectedNodeLabel = $derived(selectedModel ? modelNodeLabel(selectedModel, modelLocation) : null);
   const selectedUnavailable = $derived(selectedModel?.availability === 'unavailable');
   const selectionTooltip = $derived.by(() => {
-    if (selectedUnavailable && selectedModel) return `${selectedModel.label ?? selectedModel.model}. Provider temporarily unavailable. Refresh or check the provider.`;
-    if (selectedModel) return modelSelectionTooltip({ ...selectedModel, node_label: selectedNodeLabel }, agentLabel);
+    if (selectedModel) {
+      const identity = modelSelectionTooltip({ ...selectedModel, node_label: selectedNodeLabel }, agentLabel);
+      return selectedUnavailable ? `${identity}. Provider temporarily unavailable. Refresh or check the provider.` : identity;
+    }
     if (selectedModelId) return `${selectedModelId}${loading ? '' : ' (unavailable)'}`;
     return null;
   });

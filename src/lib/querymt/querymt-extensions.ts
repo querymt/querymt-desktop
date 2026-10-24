@@ -221,7 +221,14 @@ type QuerymtModelsWireResponse =
 
 export function normalizeQuerymtModelsResponse(response: QuerymtModelsWireResponse): QuerymtModelsResponse {
   const payload = 'data' in response && response.data?.models ? response.data : response as QuerymtModelsResponse;
-  const meta = payload.meta ?? response.meta;
+  const outerMeta = response.meta;
+  const innerMeta = payload.meta;
+  const availability = outerMeta?.remote_node_availability || innerMeta?.remote_node_availability
+    ? { ...outerMeta?.remote_node_availability, ...innerMeta?.remote_node_availability } : undefined;
+  const meta = outerMeta || innerMeta ? {
+    ...outerMeta, ...innerMeta,
+    ...(availability ? { remote_node_availability: availability } : {})
+  } : undefined;
   return {
     models: (payload.models ?? []).map((model) => {
       const availability = model.node_id ? meta?.remote_node_availability?.[model.node_id] : undefined;

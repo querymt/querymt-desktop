@@ -212,13 +212,14 @@ describe('model catalog availability', () => {
     const offline: ModelEntry = { ...remote, availability: 'unavailable' };
     const props = { modelOptions: [offline], selectedModelId: getModelSelectionKey(offline), onSelect: vi.fn() };
     const { rerender } = renderPicker(props);
-    const trigger = screen.getByRole('button', { name: `${remote.label}. ${hint}` });
+    const warningTooltip = `grok-4.7 from xai on Build server. ${hint}`;
+    const trigger = screen.getByRole('button', { name: warningTooltip });
     expect(trigger).toHaveTextContent(remote.label!);
     expect(trigger.querySelector('.lucide-network')).toHaveClass('model-availability-warning');
     expect(trigger.querySelector('.lucide-triangle-alert')).toBeNull();
     expect(trigger).not.toBeDisabled();
     await fireEvent.pointerEnter(trigger);
-    expect(await screen.findByText(`${remote.label}. ${hint}`, { selector: '.app-tooltip-content' })).toBeInTheDocument();
+    expect(await screen.findByText(warningTooltip, { selector: '.app-tooltip-content' })).toBeInTheDocument();
     await fireEvent.click(trigger);
     const dialog = screen.getByRole('dialog', { name: 'Switch model' });
     await fireEvent.click(within(dialog).getByRole('button', { name: /grok-4.7/ }));
