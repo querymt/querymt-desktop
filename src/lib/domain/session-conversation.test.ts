@@ -203,6 +203,21 @@ describe('turn durations', () => {
 });
 
 describe('buildSessionConversation', () => {
+  it.each(['type: callback', 'key: [broken'])('hides user front matter in rendered HTML without altering original text or assistant Markdown: %s', (yaml) => {
+    const session = baseSession();
+    const prefix = `---\n${yaml}\n---\n`;
+    session.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: `${prefix}**Visible body**`, messageId: 'm-user', eventIndex: 0 },
+      { id: 'a1', kind: 'agent_message_chunk', text: `${prefix}Assistant body`, messageId: 'm-assistant', eventIndex: 1 }
+    ];
+    const [turn] = buildSessionConversation(session);
+    expect(turn.user?.text).toBe(`${prefix}**Visible body**`);
+    expect(turn.user?.html).toBe('<p><strong>Visible body</strong></p>\n');
+    expect(turn.user?.blocks).toEqual([{ type: 'text', text: `${prefix}**Visible body**` }]);
+    expect(turn.content[0]).toMatchObject({ type: 'assistant', text: `${prefix}Assistant body` });
+    expect('html' in turn.content[0] && turn.content[0].html).toContain(yaml);
+  });
+
   it('interleaves reasoning, tools, and assistant output by event order', () => {
     const session = baseSession();
     session.transcript = [

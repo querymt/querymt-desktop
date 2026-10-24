@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { ArrowUpRight, Check, Copy, Diff, GitFork, LoaderCircle, Redo2, Undo2 } from '@lucide/svelte';
+  import { ArrowUpRight, Braces, Check, Copy, Diff, GitFork, LoaderCircle, Redo2, Undo2 } from '@lucide/svelte';
   import SessionPromptError from '$lib/components/session/SessionPromptError.svelte';
   import SessionAttachmentPreview from '$lib/components/session/SessionAttachmentPreview.svelte';
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
+  import SessionMessageMetadata from '$lib/components/session/SessionMessageMetadata.svelte';
+  import { extractMessageFrontMatter } from '$lib/domain/message-frontmatter';
+  import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
   import { preloadSessionToolPatchDiff } from './session-tool-patch-diff';
   import { buildTurnPresentation, formatTurnDuration, getTurnChangedFileCount, getTurnChangeStats, type SessionConversationTurn } from '$lib/domain/session-conversation';
@@ -60,6 +63,26 @@
 
   let copiedResponse = $state(false);
   let copiedUserId = $state<string | null>(null);
+  let metadataOpenKey = $state<string | null>(null);
+  const metadataPanelId = $props.id();
+  const userPresentation = $derived.by(() => {
+    const segments = contentSegments(turn.user?.blocks, turn.user?.text ?? '');
+    const firstTextIndex = segments.findIndex((segment) => segment.type === 'text');
+    const first = segments[firstTextIndex];
+    if (first?.type !== 'text') return { segments, frontMatter: null };
+    const { body, frontMatter } = extractMessageFrontMatter(first.block.text);
+    if (frontMatter) {
+      if (body.trim()) segments[firstTextIndex] = { type: 'text', block: { type: 'text', text: body } };
+      else segments.splice(firstTextIndex, 1);
+    }
+    return { segments, frontMatter };
+  });
+  const metadataKey = $derived(userPresentation.frontMatter ? `${turn.user?.id}\u0000${userPresentation.frontMatter.source}` : null);
+  const metadataOpen = $derived(chatPreferencesStore.developerMode && metadataKey !== null && metadataOpenKey === metadataKey);
+
+  $effect(() => {
+    if (!chatPreferencesStore.developerMode || metadataOpenKey !== metadataKey) metadataOpenKey = null;
+  });
   const presentation = $derived(turn.presentation ?? buildTurnPresentation(turn.content, turn.settled ?? true));
   const lastPresentationId = $derived(presentation.at(-1)?.id ?? null);
   const changeStats = $derived(getTurnChangeStats(turn));
@@ -146,9 +169,12 @@
   {#if turn.user}
     <section class="session-user-message-shell">
       <div class="session-message session-message-user">
-        {#each contentSegments(turn.user.blocks, turn.user.text) as segment}
+        {#if userPresentation.frontMatter && userPresentation.segments.length === 0}
+          <p class="muted">No message body</p>
+        {/if}
+        {#each userPresentation.segments as segment}
           {#if segment.type === 'text'}
-            {@const parts = markdownParts(turn.user.html, segment.block.text, false, turn.user.text)}
+            {@const parts = markdownParts(userPresentation.frontMatter ? undefined : turn.user.html, segment.block.text, false, turn.user.text)}
             <div class="session-message-body markdown-body" use:enhanceCodeBlocks>
               {#if parts.frozenHtml}<div class="session-message-body-frozen">{@html parts.frozenHtml}</div>{/if}
               {#if parts.tailText}<div class="session-message-body-tail">{parts.tailText}</div>{/if}
@@ -173,7 +199,25 @@
             <Copy size={15} />
           {/if}
         </button>{/if}
+        {#if chatPreferencesStore.developerMode && userPresentation.frontMatter}
+          <button
+            class="session-message-action-btn"
+            type="button"
+            aria-label={metadataOpen ? 'Hide metadata' : 'Show metadata'}
+            title={metadataOpen ? 'Hide metadata' : 'Show metadata'}
+            aria-expanded={metadataOpen}
+            aria-controls={metadataPanelId}
+            onclick={(event) => {
+              const expanded = !metadataOpen;
+              metadataOpenKey = expanded ? metadataKey : null;
+              onDisclosureChange?.(event.currentTarget, expanded);
+            }}
+          ><Braces size={15} aria-hidden="true" /></button>
+        {/if}
       </div>
+      {#if metadataOpen && userPresentation.frontMatter}
+        <SessionMessageMetadata frontMatter={userPresentation.frontMatter} id={metadataPanelId} />
+      {/if}
     </section>
   {/if}
 

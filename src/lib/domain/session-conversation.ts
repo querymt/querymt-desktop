@@ -1,4 +1,5 @@
 import { renderMarkdownToHtml } from '$lib/domain/markdown';
+import { extractMessageFrontMatter } from '$lib/domain/message-frontmatter';
 import { asObjectArray, parseObject, replacementPair, toolFilePath } from '$lib/domain/session-tool-args';
 import { getSessionToolChangeStats, type SessionToolChangeStats } from '$lib/domain/session-tool-presentation';
 import { getTranscriptBlocks, mapTranscriptRole } from '$lib/domain/session-updates';
@@ -190,7 +191,7 @@ function materializeConversation(
             html:
               previous?.user && previous.user.text === draft.user.text
                 ? previous.user.html
-                : renderMarkdownToHtml(draft.user.text)
+                : renderMarkdownToHtml(extractMessageFrontMatter(draft.user.text).body)
           }
         : undefined,
       content,
