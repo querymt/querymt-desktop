@@ -31,6 +31,18 @@
       ?? actions.find((action) => action.kind.startsWith('allow'))?.id
       ?? null;
   });
+
+  function handleCustomAnswerKeydown(event: KeyboardEvent) {
+    if (
+      event.key !== 'Enter' || event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
+      event.repeat || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey
+    ) return;
+    if (offline || item.status === 'resolved' || item.type !== 'elicitation' || !primaryActionId) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    void onAction?.(item.id, primaryActionId);
+  }
 </script>
 
 <article class={`surface-muted ${compact ? 'p-3' : 'p-4'}`}>
@@ -118,6 +130,7 @@
                 placeholder="Custom answer…"
                 value={field.customValue ?? ''}
                 disabled={offline}
+                onkeydown={handleCustomAnswerKeydown}
                 oninput={(event) => {
                   if (!offline)
                     onCustomFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value);
@@ -167,6 +180,7 @@
                 placeholder="Custom answer…"
                 value={field.customValue ?? ''}
                 disabled={offline}
+                onkeydown={handleCustomAnswerKeydown}
                 oninput={(event) => {
                   if (!offline)
                     onCustomFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value);

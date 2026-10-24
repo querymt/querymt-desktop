@@ -35,6 +35,98 @@ const item: InboxItem = {
 afterEach(cleanup);
 
 describe('InboxRequestCard', () => {
+  function customAnswerItem(kind: 'string' | 'array'): InboxItem {
+    return {
+      ...item,
+      actions: [
+        { id: 'decline', label: 'Decline', kind: 'decline' },
+        { id: 'submit-answer', label: 'Submit', kind: 'accept' },
+        { id: 'cancel', label: 'Cancel', kind: 'cancel' }
+      ],
+      formFields: [{
+        ...item.formFields![0],
+        kind,
+        value: kind === 'array' ? [] : '',
+        allowCustom: true,
+        customActive: true,
+        customValue: ''
+      }]
+    };
+  }
+
+  it.each(['string', 'array'] as const)('submits a %s custom answer with Enter using the same action as Submit', async (kind) => {
+    const customItem = customAnswerItem(kind);
+    const onAction = vi.fn();
+    const onCustomFieldChange = vi.fn();
+    render(InboxRequestCard, { item: customItem, onAction, onCustomFieldChange });
+    const input = screen.getByRole('textbox', { name: 'Environments custom response' });
+    const parentKeydown = vi.fn();
+    window.addEventListener('keydown', parentKeydown);
+
+    await fireEvent.input(input, { target: { value: 'Use the latest main revision' } });
+    const defaultAllowed = await fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', cancelable: true });
+    window.removeEventListener('keydown', parentKeydown);
+
+    expect(onCustomFieldChange).toHaveBeenCalledWith(item.id, 'selection', 'Use the latest main revision');
+    expect(onCustomFieldChange.mock.invocationCallOrder[0]).toBeLessThan(onAction.mock.invocationCallOrder[0]);
+    expect(onAction).toHaveBeenCalledExactlyOnceWith(item.id, 'submit-answer');
+    expect(defaultAllowed).toBe(false);
+    expect(parentKeydown).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+    expect(onAction).toHaveBeenNthCalledWith(2, item.id, 'submit-answer');
+  });
+
+  it.each([
+    { key: 'Enter', isComposing: true },
+    { key: 'Enter', keyCode: 229 },
+    { key: 'Enter', repeat: true },
+    { key: 'Enter', shiftKey: true },
+    { key: 'Enter', ctrlKey: true },
+    { key: 'Enter', metaKey: true },
+    { key: 'Enter', altKey: true },
+    { key: 'Escape' },
+    { key: 'a' }
+  ])('does not submit custom answers for composing, repeated, modified, or unrelated keys: %j', async (event) => {
+    const onAction = vi.fn();
+    render(InboxRequestCard, { item: customAnswerItem('string'), onAction });
+    await fireEvent.keyDown(screen.getByRole('textbox', { name: 'Environments custom response' }), event);
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it.each(['string', 'array'] as const)('blocks Enter for an offline %s custom answer and allows it after recovery', async (kind) => {
+    const customItem = customAnswerItem(kind);
+    const onAction = vi.fn();
+    const { rerender } = render(InboxRequestCard, { item: { ...customItem, offline: true }, onAction });
+    const input = screen.getByRole('textbox', { name: 'Environments custom response' });
+    expect(input).toBeDisabled();
+    await fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onAction).not.toHaveBeenCalled();
+
+    await rerender({ item: { ...customItem, offline: false } });
+    expect(input).toBeEnabled();
+    await fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onAction).toHaveBeenCalledExactlyOnceWith(item.id, 'submit-answer');
+  });
+
+  it('does not submit when a request has no accept action', async () => {
+    const onAction = vi.fn();
+    const customItem = customAnswerItem('string');
+    render(InboxRequestCard, { item: { ...customItem, actions: customItem.actions!.filter((action) => action.kind !== 'accept') }, onAction });
+    await fireEvent.keyDown(screen.getByRole('textbox', { name: 'Environments custom response' }), { key: 'Enter' });
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it('does not turn Enter in a permission card into implicit authorization', async () => {
+    const onAction = vi.fn();
+    render(InboxRequestCard, {
+      item: { ...customAnswerItem('string'), type: 'permission', actions: [{ id: 'allow', label: 'Allow', kind: 'allow_once' }] },
+      onAction
+    });
+    await fireEvent.keyDown(screen.getByRole('textbox', { name: 'Environments custom response' }), { key: 'Enter' });
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
   it('renders multi-select fields as vertical non-pill checkboxes and forwards changes', async () => {
     const onFieldChange = vi.fn();
     const onAction = vi.fn();
