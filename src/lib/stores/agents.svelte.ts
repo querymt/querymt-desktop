@@ -5337,7 +5337,7 @@ export class AgentsStore {
       const response = await record.client.setSessionConfigOption(payload);
       // ACP may answer with only the options relevant to the write; merge the
       // patch by option id so unrelated confirmed options survive.
-      const configOptions = this.mergeSessionConfigOptions(agentId, sessionId, response);
+      let configOptions = this.mergeSessionConfigOptions(agentId, sessionId, response);
       // Model confirmation is read from the raw response: an empty patch
       // carries no model metadata and must not resurrect stale options.
       const confirmedId = getCurrentModelId(response);
@@ -5354,7 +5354,17 @@ export class AgentsStore {
           this.sessionModelIds = { ...this.sessionModelIds, [key]: confirmedModelKey };
         }
       } else if (options.model) {
-        // Older servers acknowledge the write without returning a model config option.
+        // An acknowledgement without model metadata must retire the old identity,
+        // or a later catalog/mesh refresh will restore the previous selection.
+        const modelOption = findModelConfigOption(configOptions);
+        if (modelOption) {
+          const querymt = { ...(modelOption._meta?.querymt as Record<string, unknown> | undefined) };
+          delete querymt.modelEntry;
+          configOptions = this.mergeSessionConfigOptions(agentId, sessionId, [{
+            ...modelOption, currentValue: options.model.id,
+            _meta: { ...modelOption._meta, querymt }
+          }]);
+        }
         this.sessionModelIds = { ...this.sessionModelIds, [key]: getModelSelectionKey(options.model) };
       }
       if (isModeConfigOptionId(configId)) {

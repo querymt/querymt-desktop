@@ -3684,6 +3684,52 @@ describe('AgentsStore connections', () => {
     expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
   });
 
+  it.each(['catalog', 'mesh'])('keeps acknowledged legacy model writes across %s refreshes', async (refresh) => {
+    const store = createStore();
+    const local: ModelEntry = { id: 'codex/test', provider: 'codex', model: 'test', label: 'Test' };
+    const remote: ModelEntry = { ...local, node_id: 'B', node_label: 'flkr' };
+    const different: ModelEntry = { id: 'codex/other', provider: 'codex', model: 'other' };
+    const models = [local, remote, different];
+    store.modelsByAgent = { 'agent-1': models };
+    const mode: SessionConfigOption = {
+      id: 'mode', name: 'Mode', type: 'select', currentValue: 'build', options: [{ value: 'build', name: 'Build' }]
+    };
+    for (const [previous, selected] of [[remote, local], [local, remote], [remote, different]]) {
+      for (const response of [[], [mode]]) {
+        mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [{
+          id: 'model', name: 'Model', type: 'select', currentValue: previous.id,
+          options: [local, different].map((model) => ({ value: model.id, name: model.model })),
+          _meta: { other: 'preserved', querymt: { modelEntry: previous, other: 'preserved' } }
+        }, mode] }, replay: [] });
+        await store.loadSession('agent-1', 'session-1');
+        await store.refreshMeshForAgent('agent-1');
+        expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(previous));
+        mockClient.setSessionConfigOption.mockResolvedValueOnce(response);
+        await store.setSessionModel('agent-1', 'session-1', getModelSelectionKey(selected));
+        expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(selected));
+        expect(store.activeSession.configOptions.find((option) => option.id === 'model')).toMatchObject({
+          currentValue: selected.id, _meta: { other: 'preserved', querymt: { other: 'preserved' } }
+        });
+        if (refresh === 'catalog') {
+          mockClient.refreshAndListModels.mockResolvedValueOnce(models);
+          await store.refreshModelsForAgent('agent-1');
+        } else {
+          await store.refreshMeshForAgent('agent-1');
+        }
+        expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(selected));
+        expect(store.activeSession.configOptions).toContainEqual(mode);
+        mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+          sessionUpdate: 'config_option_update', configOptions: [{
+            id: 'model', name: 'Model', type: 'select', currentValue: previous.id,
+            options: [{ value: previous.id, name: previous.model }],
+            _meta: { querymt: { modelEntry: previous } }
+          }]
+        } });
+        expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(previous));
+      }
+    }
+  });
+
   it('keeps a remote selection scoped when a legacy model patch omits identity metadata', async () => {
     const store = createStore();
     const local: ModelEntry = { id: 'codex/test', provider: 'codex', model: 'test', label: 'Test' };
