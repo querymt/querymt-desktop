@@ -1559,6 +1559,37 @@ describe('AgentsStore session lifecycle', () => {
     expect(mockClient.createRemoteSession).not.toHaveBeenCalled();
   });
 
+  it('dismisses only the selected owner profile error without changing catalogs or validation', async () => {
+    const store = await lifecycleStore();
+    store.remoteProfileErrors = {
+      'agent-1:node-1': 'Owner unavailable', 'agent-1:node-2': 'Other owner unavailable',
+      'other-agent:node-1': 'Other agent unavailable'
+    };
+    store.remoteProfileOptions = { 'agent-1:node-1': [{ id: 'cdr', label: 'Coder' }] };
+    store.setComposerTarget('node-1');
+    store.setComposerProfile('cdr');
+    expect(store.getLaunchProfileError('agent-1')).toBe('Owner unavailable');
+    store.clearLaunchProfileError(null);
+    expect(store.getLaunchProfileError('agent-1')).toBe('Owner unavailable');
+    store.clearLaunchProfileError('agent-1');
+    expect(store.getLaunchProfileError('agent-1')).toBeNull();
+    expect(store.remoteProfileErrors).toEqual({
+      'agent-1:node-1': null, 'agent-1:node-2': 'Other owner unavailable',
+      'other-agent:node-1': 'Other agent unavailable'
+    });
+    expect(store.remoteProfileOptions['agent-1:node-1']).toEqual([{ id: 'cdr', label: 'Coder' }]);
+    store.setComposerTarget('local');
+    store.clearLaunchProfileError('agent-1');
+    expect(store.remoteProfileErrors['agent-1:local']).toBeUndefined();
+    store.setComposerTarget('node-1');
+    store.setComposerProfile('cdr');
+    store.setComposerCwd('/owner/work');
+    mockClient.listProfiles.mockRejectedValueOnce(new Error('Owner still unavailable'));
+    expect(await store.createSession('agent-1')).toBeNull();
+    expect(store.getLaunchProfileError('agent-1')).toBe('Owner still unavailable');
+    expect(mockClient.createRemoteSession).not.toHaveBeenCalled();
+  });
+
   it('does not offer an old endpoint catalog after a delayed owner profile response', async () => {
     const store = await lifecycleStore();
     store.setComposerTarget('node-1');

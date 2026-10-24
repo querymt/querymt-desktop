@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelEntry, PromptAttachment } from '$lib/domain/types';
 import { fromStore, writable } from 'svelte/store';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
+import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
 import LandingPage from '../+page.svelte';
 import SessionsPage from '../sessions/+page.svelte';
 import { groupSessionsByWorkspace } from '$lib/domain/sessions';
@@ -105,6 +106,8 @@ function createAgentsStore() {
     refreshModelsForAgent: vi.fn(async () => undefined),
     refreshRemoteProfiles: vi.fn(async () => undefined),
     getLaunchProfileError: vi.fn((): string | null => null),
+    clearLaunchProfileError: vi.fn(),
+    clearError: vi.fn(),
     addPromptAttachments: vi.fn(),
     removePromptAttachment: vi.fn(),
     setComposerProfile: vi.fn(),
@@ -122,7 +125,7 @@ function createAgentsStore() {
     loadMoreWorkspaceSessions: vi.fn(),
     canDeleteSession: vi.fn(() => true),
     deleteSession: vi.fn(),
-    createSession: vi.fn(async () => 'session-1'),
+    createSession: vi.fn(async (): Promise<string | null> => 'session-1'),
     startSessionWithPrompt: vi.fn(async () => 'session-1'),
     getRecentModels: vi.fn((): ModelEntry[] => []),
     getRecentWorkspaces: vi.fn(() => []),
@@ -137,6 +140,7 @@ function createAgentsStore() {
 const goto = vi.hoisted(() => vi.fn(async () => undefined));
 const agentsStore = vi.hoisted(() => createAgentsStore());
 
+vi.mock('$lib/components/primitives/SessionComposer.svelte', { spy: true });
 vi.mock('$app/navigation', () => ({ goto }));
 vi.mock('$lib/stores/agents.svelte', () => ({
   agentsStore,
@@ -258,6 +262,35 @@ describe('Landing page session start', () => {
     await waitFor(() => {
       expect(goto).toHaveBeenCalledWith('/sessions/agent-1/session-1');
     });
+  });
+
+  it('dismisses the selected owner profile error as well as the general error', async () => {
+    agentsStore.composerTargetId = 'peer-1';
+    const profileError = fromStore(writable<string | null>('Owner profiles unavailable'));
+    agentsStore.getLaunchProfileError.mockImplementation(() => profileError.current);
+    agentsStore.clearLaunchProfileError.mockImplementation(() => { profileError.current = null; });
+    render(LandingPage);
+    expect(screen.getByText('Owner profiles unavailable')).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Dismiss error' }));
+
+    expect(agentsStore.clearLaunchProfileError).toHaveBeenCalledWith('agent-1');
+    expect(agentsStore.clearError).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByText('Owner profiles unavailable')).not.toBeInTheDocument());
+  });
+
+  it.each([null, 'new-session'])('uses only a successful blank-session callback result for navigation (%s)', async (created) => {
+    agentsStore.activeAgentId = 'previous-agent';
+    agentsStore.activeSessionId = 'previous-session';
+    agentsStore.createSession.mockResolvedValueOnce(created);
+    render(LandingPage);
+    // Launch mode hides this secondary action; exercise the supplied callback directly.
+    const onCreateSession = vi.mocked(SessionComposer).mock.calls.at(-1)![1].onCreateSession!;
+    await onCreateSession();
+
+    expect(agentsStore.createSession).toHaveBeenCalledWith('agent-1');
+    if (created) expect(goto).toHaveBeenCalledExactlyOnceWith('/sessions/agent-1/new-session');
+    else expect(goto).not.toHaveBeenCalled();
   });
 
   it('starts an attachment-only landing session without clearing wiring prematurely', async () => {

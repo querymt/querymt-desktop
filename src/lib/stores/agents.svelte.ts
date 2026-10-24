@@ -1137,6 +1137,11 @@ export class AgentsStore {
       ? this.remoteProfileErrors[buildSessionKey(agentId, this.composerTargetId)] ?? null : null;
   }
 
+  clearLaunchProfileError(agentId: string | null) {
+    if (!agentId || this.composerTargetId === 'local') return;
+    this.remoteProfileErrors = { ...this.remoteProfileErrors, [buildSessionKey(agentId, this.composerTargetId)]: null };
+  }
+
   getProfileOptions(agentId: string | null = this.composerAgentId ?? this.activeAgentId): ComposerOption[] {
     if (this.composerTargetId !== 'local') {
       return [{ id: 'querymt:owner-default', label: 'Owner default', description: 'Use the selected owner\'s active profile.' },

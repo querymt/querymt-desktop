@@ -66,11 +66,10 @@
       return;
     }
 
-    await agentsStore.createSession(primaryAgentId);
-    if (agentsStore.activeAgentId && agentsStore.activeSessionId) {
-      await goto(
-        `/sessions/${encodeURIComponent(agentsStore.activeAgentId)}/${encodeURIComponent(agentsStore.activeSessionId)}`
-      );
+    const agentId = primaryAgentId;
+    const sessionId = await agentsStore.createSession(agentId);
+    if (sessionId) {
+      await goto(`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}`);
     }
   }
 </script>
@@ -127,7 +126,10 @@
       onLaunchReasoningChange={(reasoningId) => agentsStore.setComposerReasoning(reasoningId)}
       onTargetChange={(targetId) => agentsStore.setComposerTarget(targetId)}
       onCreateSession={() => startBlankSessionFromLauncher()}
-      onDismissError={() => agentsStore.clearError()}
+      onDismissError={() => {
+        agentsStore.clearError();
+        agentsStore.clearLaunchProfileError(primaryAgentId);
+      }}
       onSendPrompt={() => startSessionFromLauncher()}
     />
 
