@@ -4718,8 +4718,21 @@ summary:focus-visible {
   cursor: not-allowed;
 }
 
+.model-availability-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
 .model-availability-warning {
-  color: var(--amber);
+  color: var(--status-running);
 }
 
 .delegate-model-choice strong,

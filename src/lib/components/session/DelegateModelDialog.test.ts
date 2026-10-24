@@ -112,7 +112,11 @@ describe('DelegateModelDialog', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Coder coder/ }));
     const row = screen.getByRole('button', { name: /Grok 4.6/ });
     expect(row).toHaveAttribute('aria-disabled', 'true');
-    expect(within(row).getByLabelText('Provider temporarily unavailable')).toBeInTheDocument();
+    expect(within(row).getByLabelText('Mesh node Build server').querySelector('.lucide-network')).toHaveClass('model-availability-warning');
+    expect(row.querySelector('.lucide-triangle-alert')).toBeNull();
+    const warning = screen.getByRole('img', { name: 'Provider temporarily unavailable. Refresh or check the provider.' });
+    expect(warning.closest('.delegate-model-picker-group-title')).not.toBeNull();
+    expect(warning.closest('button')).toBeNull();
     await fireEvent.click(row);
     await fireEvent.input(screen.getByLabelText('Search delegate models'), { target: { value: 'grok' } });
     await fireEvent.keyDown(screen.getByLabelText('Search delegate models'), { key: 'Enter' });

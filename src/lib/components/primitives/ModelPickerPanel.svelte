@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Bot, Brain, Check, Gauge, History, LoaderCircle, Network, RefreshCw, Search, TriangleAlert } from '@lucide/svelte';
   import { tick } from 'svelte';
+  import { Tooltip } from 'bits-ui';
   import providerSprite from '$lib/assets/providers.svg?raw';
   import { ensureProviderSprite, providerIconHref, providerIconId } from '$lib/domain/provider-icons';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
@@ -248,7 +249,21 @@
             {/if}
             <span>{group.label}</span>
             {#if !group.recent && group.items.every(({ model }) => model.availability === 'unavailable')}
-              <IconTooltipButton label={unavailableHint} icon={TriangleAlert} controlSize="compact" size={12} iconClass="model-availability-warning" />
+              <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+                <Tooltip.Root disableHoverableContent>
+                  <Tooltip.Trigger>
+                    {#snippet child({ props })}
+                      {@const { type: _type, disabled: _disabled, ...triggerProps } = props}
+                      <span {...triggerProps} class="model-availability-indicator model-availability-warning" role="img" aria-label={unavailableHint}>
+                        <TriangleAlert size={12} aria-hidden="true" />
+                      </span>
+                    {/snippet}
+                  </Tooltip.Trigger>
+                  <Tooltip.Portal>
+                    <Tooltip.Content class="app-tooltip-content" sideOffset={6}>{unavailableHint}</Tooltip.Content>
+                  </Tooltip.Portal>
+                </Tooltip.Root>
+              </Tooltip.Provider>
             {/if}
           </div>
           {#each group.items as item (getModelSelectionKey(item.model))}
@@ -282,13 +297,9 @@
                 <small>{model.id}</small>
               </span>
               <span class="delegate-model-choice-meta">
-                {#if unavailable}
-                  <small title={unavailableHint}>
-                    <TriangleAlert class="model-availability-warning" size={12} role="img" aria-label="Provider temporarily unavailable" />{nodeLabel ?? ''}
-                  </small>
-                {:else if nodeLabel}
-                  <small aria-label={`Mesh node ${nodeLabel}`}>
-                    <Network size={11} />{nodeLabel}
+                {#if nodeLabel}
+                  <small aria-label={`Mesh node ${nodeLabel}`} title={unavailable ? unavailableHint : undefined}>
+                    <Network class={unavailable ? 'model-availability-warning' : undefined} size={11} />{nodeLabel}
                   </small>
                 {/if}
               </span>

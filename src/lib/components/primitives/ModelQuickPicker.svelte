@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot, Network, RefreshCw, TriangleAlert, X } from '@lucide/svelte';
+  import { Bot, Network, RefreshCw, X } from '@lucide/svelte';
   import { getContext, tick } from 'svelte';
   import { Dialog, Tooltip } from 'bits-ui';
   import providerSprite from '$lib/assets/providers.svg?raw';
@@ -231,13 +231,9 @@
             <span class="composer-model-pill-label">
               {#if selectedModel}
                 {selectedModel.label ?? selectedModel.model}
-                {#if selectedUnavailable}
-                  <span class="composer-model-pill-node model-availability-warning" aria-hidden="true">
-                    <TriangleAlert size={12} />
-                  </span>
-                {:else if selectedNodeLabel}
+                {#if selectedNodeLabel}
                   <span class="muted composer-model-pill-node" aria-hidden="true">
-                    <Network size={12} />
+                    <Network class={selectedUnavailable ? 'model-availability-warning' : undefined} size={12} />
                   </span>
                 {/if}
                 {#if agentLabel}
