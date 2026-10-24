@@ -221,6 +221,7 @@ const mockClient = vi.hoisted(() => {
     listMeshStatus: vi.fn(async (): Promise<MeshStatusInfo> => ({
       enabled: true,
       peer_id: '12D3KooWQmtLocalAgentPeer00000000000000',
+      hostname: 'lstr',
       transport: 'quic',
       known_peer_count: 0,
       has_invite_store: true,
@@ -398,6 +399,7 @@ beforeEach(() => {
   mockClient.listMeshStatus.mockResolvedValue({
     enabled: true,
     peer_id: '12D3KooWQmtLocalAgentPeer00000000000000',
+    hostname: 'lstr',
     transport: 'quic',
     known_peer_count: 0,
     has_invite_store: true,
@@ -3538,6 +3540,103 @@ describe('AgentsStore connections', () => {
     await store.loadSession('agent-1', 'session-1');
 
     expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(remoteModel));
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
+  it('uses owner model identity on remote reload and live changes, independently of reasoning patches', async () => {
+    const store = createStore();
+    store.configs = store.configs.map((config) => ({ ...config, name: 'qmtcode' }));
+    const local = { id: 'codex/test', provider: 'codex', model: 'test', label: 'Test' };
+    const remote = { ...local, node_id: 'B', node_label: 'Machine B' };
+    const servingNode = '12D3KooWQmtLocalAgentPeer00000000000000';
+    store.modelsByAgent = { 'agent-1': [local, remote] };
+    const modelOption = (node: string | null): SessionConfigOption => ({
+      id: 'model', name: 'Model', type: 'select', currentValue: local.id,
+      options: [{ value: local.id, name: local.label }],
+      _meta: { querymt: { modelEntry: { ...local, node_id: node } } }
+    });
+    const reasoning: SessionConfigOption = {
+      id: 'reasoning_effort', name: 'Reasoning Effort', type: 'select', currentValue: 'max',
+      options: [{ value: 'max', name: 'Max' }]
+    };
+    let node: string | null = null;
+    mockClient.loadSession.mockImplementation(async () => ({
+      response: {
+        configOptions: [modelOption(node), reasoning],
+        _meta: { location: 'remote', nodeId: 'B', nodeLabel: 'Machine B' }
+      }, replay: []
+    }));
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(remote));
+    expect(store.getSessionModelLocation('agent-1', 'session-1')).toEqual({
+      servingNodeId: servingNode, ownerNodeId: 'B', servingNodeLabel: 'lstr'
+    });
+    expect(store.activeSession.configOptions).toContainEqual(reasoning);
+    node = servingNode;
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'config_option_update', configOptions: [modelOption(node)]
+    } });
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(local.id);
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'config_option_update', configOptions: [{ ...reasoning, currentValue: 'auto' }]
+    } });
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(local.id);
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(local.id);
+    mockClient.attachRemoteSession.mockResolvedValueOnce({
+      session_id: 'attached-remote', node_id: 'B', attached: true,
+      config_options: [modelOption(null), reasoning], snapshot: { audit: { events: [] } }
+    });
+    await store.attachRemoteSession('agent-1', 'B', 'attached-remote');
+    expect(store.getSessionModelId('agent-1', 'attached-remote')).toBe(getModelSelectionKey(remote));
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
+  it('re-resolves confirmed identity when serving-node metadata arrives after session load', async () => {
+    const store = createStore();
+    const local = { id: 'codex/test', provider: 'codex', model: 'test', label: 'Test' };
+    store.modelsByAgent = { 'agent-1': [local] };
+    let finishStatus!: (value: MeshStatusInfo) => void;
+    mockClient.listMeshStatus.mockImplementationOnce(() => new Promise((resolve) => { finishStatus = resolve; }));
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [{
+      id: 'model', name: 'Model', type: 'select', currentValue: local.id,
+      options: [{ value: local.id, name: local.label }],
+      _meta: { querymt: { modelEntry: { ...local, node_id: 'A' } } }
+    }] }, replay: [] });
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.getSessionModelId('agent-1', 'session-1')).not.toBe(local.id);
+    finishStatus({ enabled: true, peer_id: 'A', known_peer_count: 0, has_invite_store: true, has_mesh_state_store: true, scopes: [] });
+    await vi.waitFor(() => expect(store.getSessionModelId('agent-1', 'session-1')).toBe(local.id));
+    expect(store.getSessionModelLocation('agent-1', 'session-1').servingNodeLabel).toBeUndefined();
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
+  it('keeps a remote selection scoped when a legacy model patch omits identity metadata', async () => {
+    const store = createStore();
+    const local: ModelEntry = { id: 'codex/test', provider: 'codex', model: 'test', label: 'Test' };
+    const remote: ModelEntry = { ...local, node_id: 'B', node_label: 'flkr' };
+    const different: ModelEntry = { id: 'codex/other', provider: 'codex', model: 'other' };
+    store.modelsByAgent = { 'agent-1': [local, remote, different] };
+    const modelOption: SessionConfigOption = {
+      id: 'model', name: 'Model', type: 'select', currentValue: local.id,
+      options: [local, different].map((model) => ({ value: model.id, name: model.model })),
+      _meta: { querymt: { modelEntry: remote } }
+    };
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [modelOption] }, replay: [] });
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(remote));
+    const { _meta, ...legacy } = modelOption;
+    for (const patch of [legacy, { ...legacy, description: 'legacy confirmation' }]) {
+      mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+        sessionUpdate: 'config_option_update', configOptions: [patch]
+      } });
+      expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(remote));
+    }
+    // A different model must not inherit the previous provider node or stale metadata.
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'config_option_update', configOptions: [{ ...legacy, currentValue: different.id }]
+    } });
+    expect(store.getSessionModelId('agent-1', 'session-1')).toBe(different.id);
     expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
   });
 

@@ -44,6 +44,54 @@ function renderPicker(props: Record<string, unknown> = {}) {
 }
 
 describe('ModelPickerPanel provider headings', () => {
+  it.each([false, true])('uses session-relative hostname badges in every row (recent=%s)', async (recent) => {
+    const onSelect = vi.fn();
+    const lstr: ModelEntry = { id: 'codex/gpt-6.1-sol', provider: 'codex', model: 'gpt-6.1-sol' };
+    const flkr: ModelEntry = { ...lstr, node_id: 'B', node_label: 'flkr' };
+    const props = {
+      models: [lstr, flkr], recentModels: recent ? [flkr, lstr] : [],
+      modelLocation: { servingNodeId: 'A', servingNodeLabel: 'lstr', ownerNodeId: 'B' },
+      selectedModelId: getModelSelectionKey(flkr), onSelect
+    };
+    const { rerender } = render(ModelPickerPanel, props);
+    const rows = screen.getAllByRole('button', { name: /gpt-6.1-sol/ });
+    const ownerRow = rows.find((row) => row.getAttribute('aria-pressed') === 'true')!;
+    const viewerRow = rows.find((row) => row.getAttribute('aria-pressed') === 'false')!;
+    expect(within(ownerRow).queryByLabelText(/Mesh node/)).not.toBeInTheDocument();
+    expect(within(viewerRow).getByLabelText('Mesh node lstr')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Mesh node flkr')).not.toBeInTheDocument();
+    if (!recent) {
+      expect(screen.getByText('codex · lstr')).toBeInTheDocument();
+      expect(screen.getByText('codex', { selector: '.delegate-model-picker-group-title > span' })).toBeInTheDocument();
+    }
+    await fireEvent.click(ownerRow);
+    expect(onSelect).toHaveBeenLastCalledWith(flkr);
+    await fireEvent.click(viewerRow);
+    expect(onSelect).toHaveBeenLastCalledWith(lstr);
+    // Viewing an A-owned session reverses locality, not provider identities.
+    await rerender({ ...props, modelLocation: { ...props.modelLocation, ownerNodeId: 'A' } });
+    expect(screen.queryByLabelText('Mesh node lstr')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Mesh node flkr')).toBeInTheDocument();
+    expect(flkr.node_id).toBe('B');
+    expect(lstr.node_id).toBeUndefined();
+  });
+
+  it('searches by the displayed serving hostname without changing the selected provider node', async () => {
+    const lstr: ModelEntry = { ...anthropic };
+    const flkr: ModelEntry = { ...remote, node_id: 'B', node_label: 'flkr' };
+    const onSelect = vi.fn();
+    render(ModelPickerPanel, {
+      models: [lstr, flkr], recentModels: [lstr, flkr], query: 'lstr',
+      modelLocation: { servingNodeId: 'A', servingNodeLabel: 'lstr', ownerNodeId: 'B' }, onSelect
+    });
+    const row = screen.getByRole('button', { name: /Claude Sonnet 4/ });
+    expect(screen.queryByRole('button', { name: /grok-4.7/ })).not.toBeInTheDocument();
+    expect(within(row).getByLabelText('Mesh node lstr')).toBeInTheDocument();
+    await fireEvent.click(row);
+    expect(onSelect).toHaveBeenCalledWith(lstr);
+    expect(lstr.node_id).toBeUndefined();
+  });
+
   it('shows provider marks before labels, including mesh groups, with a custom-provider fallback', () => {
     const codex: ModelEntry = { id: 'codex/gpt-5.5', provider: 'codex', model: 'gpt-5.5' };
     render(ModelPickerPanel, { models: [codex, anthropic, remote, custom], onSelect: () => {} });

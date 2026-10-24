@@ -102,6 +102,44 @@ export function findModelByIdentity(
   return matches.find((entry) => !entry.node_id) ?? matches[0];
 }
 
+export interface ModelLocationContext {
+  servingNodeId?: string | null;
+  ownerNodeId?: string | null;
+  servingNodeLabel?: string | null;
+}
+
+export function resolveSessionModelKey(
+  models: ModelEntry[],
+  identity: { provider: string; model: string; providerNodeId?: string | null },
+  location: ModelLocationContext
+): string {
+  const physicalNode = identity.providerNodeId ?? location.ownerNodeId;
+  const nodeId = physicalNode === location.servingNodeId ? null : physicalNode;
+  const matching = models.find((entry) => entry.provider === identity.provider && entry.model === identity.model &&
+    (entry.node_id ?? null) === (nodeId ?? null));
+  return getModelSelectionKey(matching ?? { id: `${identity.provider}/${identity.model}`, node_id: nodeId });
+}
+
+export function configuredModelIdentity(options: SessionConfigOption[]) {
+  const entry = findModelConfigOption(options)?._meta?.querymt as { modelEntry?: Record<string, unknown> } | undefined;
+  const model = entry?.modelEntry;
+  if (typeof model?.provider !== 'string' || typeof model.model !== 'string') return undefined;
+  return {
+    provider: model.provider,
+    model: model.model,
+    providerNodeId: typeof model.node_id === 'string' ? model.node_id : null
+  };
+}
+
+export function modelNodeLabel(model: ModelEntry, location?: ModelLocationContext): string | null {
+  if (!location?.ownerNodeId) return model.node_label ?? null;
+  const nodeId = model.node_id ?? location.servingNodeId;
+  if (nodeId === location.ownerNodeId) return null;
+  return model.node_id
+    ? model.node_label ?? model.node_id
+    : location.servingNodeLabel ?? nodeId ?? null;
+}
+
 export function findProfileConfigOption(
   options: SessionConfigOption[] | undefined | null
 ): (SessionConfigOption & { type: 'select' }) | undefined {
