@@ -270,12 +270,16 @@ describe('SessionHeader', () => {
   });
 
   it.each([
-    [false, false, []],
-    [true, false, ['Resolved']],
-    [false, true, ['Archived']],
-    [true, true, ['Resolved', 'Archived']]
-  ] as const)('shows independent lifecycle icons in metadata, never beside the title (resolved=%s, archived=%s)', (resolved, archived, labels) => {
-    const summary: DesktopSessionSummary = { agentId: 'agent-1', agentName: 'Agent', sessionId: 'session-1', title: 'A long session title that must stay on its own line', cwd: '/tmp/work', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'Agent', source: 'acp', status: 'idle', lifecycle: { session_id: 'session-1', resolved, archived, resolved_at: null, archived_at: null } };
+    [false, false, false, []],
+    [false, true, false, ['Resolved']],
+    [false, false, true, ['Archived']],
+    [false, true, true, ['Resolved', 'Archived']],
+    [true, false, false, ['Pinned']],
+    [true, true, false, ['Pinned', 'Resolved']],
+    [true, false, true, ['Pinned', 'Archived']],
+    [true, true, true, ['Pinned', 'Resolved', 'Archived']]
+  ] as const)('shows independent status icons in metadata, never beside the title (pinned=%s, resolved=%s, archived=%s)', (pinned, resolved, archived, labels) => {
+    const summary: DesktopSessionSummary = { agentId: 'agent-1', agentName: 'Agent', sessionId: 'session-1', title: 'A long session title that must stay on its own line', cwd: '/tmp/work', updatedAt: null, runtimeId: 'agent-1', runtimeName: 'Agent', source: 'acp', status: 'idle', pin: { session_id: 'session-1', pinned, pinned_at: pinned ? '2026-10-20T10:00:00Z' : null }, lifecycle: { session_id: 'session-1', resolved, archived, resolved_at: null, archived_at: null } };
     const { container } = render(SessionHeader, { session: session(), summary, title: summary.title, workspace: 'work', updatedAt: 'Just now' });
     const heading = screen.getByRole('heading', { name: summary.title });
     expect(heading.parentElement).toHaveClass('session-header-title-line');
@@ -295,7 +299,7 @@ describe('SessionHeader', () => {
           expect(icon.querySelector('.lucide-circle-check-big')).not.toBeNull();
         } else {
           expect(icon).not.toHaveClass('session-header-lifecycle-icon-resolved');
-          expect(icon.querySelector('.lucide-archive')).not.toBeNull();
+          expect(icon.querySelector(label === 'Pinned' ? '.lucide-pin' : '.lucide-archive')).not.toBeNull();
         }
       }
       if (labels.length) {
@@ -304,6 +308,24 @@ describe('SessionHeader', () => {
       } else expect(metadata.querySelector('.session-header-lifecycle')).toBeNull();
     }
     expect(container.querySelector('.session-header-meta .session-header-status-wrap')).toBeNull();
+  });
+
+  it('updates the pinned indicator from confirmed summary changes even when lifecycle is unavailable', async () => {
+    const summary = { sessionId: 'session-1', title: 'Task', lifecycle: null } as DesktopSessionSummary;
+    const { container, rerender } = render(SessionHeader, { session: session(), summary, title: 'Task', workspace: 'work', updatedAt: 'Just now' });
+    expect(screen.queryByRole('img', { name: 'Pinned' })).not.toBeInTheDocument();
+
+    await rerender({ summary: { ...summary, pin: { session_id: 'session-1', pinned: true, pinned_at: '2026-10-20T10:00:00Z' } } });
+    for (const selector of ['.session-header-meta', '.session-header-mobile-meta']) {
+      const metadata = container.querySelector<HTMLElement>(selector)!;
+      expect(within(metadata).getByRole('img', { name: 'Pinned' })).toHaveAttribute('title', 'Pinned');
+    }
+    expect(screen.queryByRole('img', { name: 'Resolved' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Archived' })).not.toBeInTheDocument();
+
+    await rerender({ summary: { ...summary, pin: { session_id: 'session-1', pinned: false, pinned_at: null } } });
+    expect(screen.queryByRole('img', { name: 'Pinned' })).not.toBeInTheDocument();
+    expect(container.querySelector('.session-header-lifecycle')).toBeNull();
   });
 
   it('keeps unknown lifecycle state out of the title and metadata', () => {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Archive, ArrowLeft, Bug, CircleCheckBig, FileCog, Info, Network, RefreshCw } from '@lucide/svelte';
+  import { Archive, ArrowLeft, Bug, CircleCheckBig, FileCog, Info, Network, Pin, RefreshCw } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
@@ -82,12 +82,15 @@
 </script>
 
 {#snippet lifecycleIcons()}
-  {#if summary?.lifecycle?.resolved || summary?.lifecycle?.archived}
+  {#if summary?.pin?.pinned || summary?.lifecycle?.resolved || summary?.lifecycle?.archived}
     <span class="session-header-lifecycle">
-      {#if summary.lifecycle.resolved}
+      {#if summary.pin?.pinned}
+        <span class="session-header-lifecycle-icon" role="img" aria-label="Pinned" title="Pinned"><Pin size={13} aria-hidden="true" /></span>
+      {/if}
+      {#if summary.lifecycle?.resolved}
         <span class="session-header-lifecycle-icon session-header-lifecycle-icon-resolved" role="img" aria-label="Resolved" title="Resolved"><CircleCheckBig size={13} aria-hidden="true" /></span>
       {/if}
-      {#if summary.lifecycle.archived}
+      {#if summary.lifecycle?.archived}
         <span class="session-header-lifecycle-icon" role="img" aria-label="Archived" title="Archived"><Archive size={13} aria-hidden="true" /></span>
       {/if}
     </span>
