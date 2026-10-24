@@ -6,6 +6,7 @@ import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionConversationTurn } from '$lib/domain/session-conversation';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
+import * as frontMatter from '$lib/domain/message-frontmatter';
 import SessionTurn from './SessionTurn.svelte';
 
 const preloadSessionToolPatchDiff = vi.hoisted(() => vi.fn());
@@ -68,10 +69,114 @@ const turn: SessionConversationTurn = {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   chatPreferencesStore.setDeveloperMode(false);
 });
 
 describe('SessionTurn', () => {
+  const metadataMessage = (text: string): SessionConversationTurn => ({
+    id: 'metadata-turn', forkMessageId: null,
+    user: { id: 'metadata-user', messageId: 'metadata-message', text, html: '<h2>Metadata must not leak from cached HTML</h2>' },
+    content: []
+  });
+
+  it.each(['type: callback\nevent: timer.elapsed', 'key: [broken', '- not-a-mapping'])('hides front matter without warnings in normal mode: %s', (yaml) => {
+    const validate = vi.spyOn(frontMatter, 'validateMessageFrontMatter');
+    const { container, getByText, queryByRole } = render(SessionTurn, { turn: metadataMessage(`---\n${yaml}\n---\n**Visible body**`) });
+    expect(getByText('Visible body').tagName).toBe('STRONG');
+    expect(container.querySelector('.session-message-user')).not.toHaveTextContent(yaml);
+    expect(container).not.toHaveTextContent('Metadata must not leak');
+    expect(container).not.toHaveTextContent('YAML validation');
+    expect(queryByRole('button', { name: 'Show metadata' })).not.toBeInTheDocument();
+    expect(queryByRole('region', { name: 'Message metadata' })).not.toBeInTheDocument();
+    expect(validate).not.toHaveBeenCalled();
+  });
+
+  it('keeps metadata collapsed in developer mode and copies the unmodified prompt', async () => {
+    chatPreferencesStore.setDeveloperMode(true);
+    const validate = vi.spyOn(frontMatter, 'validateMessageFrontMatter');
+    const text = '---\n# Keep this comment\ntype: callback\nnested:\n  delay: 60\n---\nVisible body';
+    const writeText = vi.fn(async () => undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const onDisclosureChange = vi.fn();
+    const { getByRole, queryByRole } = render(SessionTurn, { turn: metadataMessage(text), onDisclosureChange });
+    const toggle = getByRole('button', { name: 'Show metadata' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(queryByRole('region', { name: 'Message metadata' })).not.toBeInTheDocument();
+    expect(validate).not.toHaveBeenCalled();
+    await fireEvent.click(getByRole('button', { name: 'Copy prompt' }));
+    expect(writeText).toHaveBeenLastCalledWith(text);
+
+    await fireEvent.click(toggle);
+    const inspector = getByRole('region', { name: 'Message metadata' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(inspector.id).toBe(toggle.getAttribute('aria-controls'));
+    expect(inspector.querySelector('code')).toHaveTextContent('# Keep this comment');
+    expect(inspector.querySelector('code')).toHaveClass('language-yaml');
+    expect(validate).toHaveBeenCalledOnce();
+    expect(onDisclosureChange).toHaveBeenCalledWith(toggle, true);
+    await fireEvent.click(within(inspector).getByRole('button', { name: 'Copy metadata' }));
+    expect(writeText).toHaveBeenLastCalledWith(text.slice(0, text.indexOf('Visible body')));
+    await fireEvent.click(getByRole('button', { name: 'Hide metadata' }));
+    expect(queryByRole('region', { name: 'Message metadata' })).not.toBeInTheDocument();
+  });
+
+  it('shows invalid YAML as escaped source with a developer-only diagnostic', async () => {
+    chatPreferencesStore.setDeveloperMode(true);
+    const text = '---\nkey: [broken\nhtml: <img src=x onerror=alert(1)>\n---\nVisible body';
+    const { container, getByRole } = render(SessionTurn, { turn: metadataMessage(text) });
+    expect(container).not.toHaveTextContent('YAML validation');
+    await fireEvent.click(getByRole('button', { name: 'Show metadata' }));
+    const inspector = getByRole('region', { name: 'Message metadata' });
+    expect(inspector).toHaveTextContent('YAML validation:');
+    expect(inspector.querySelector('code')?.textContent).toContain('key: [broken');
+    expect(inspector.querySelector('img')).toBeNull();
+    expect(container.querySelector('.session-message-user')).toHaveTextContent('Visible body');
+  });
+
+  it('closes metadata on developer-mode changes and when showing a different message', async () => {
+    chatPreferencesStore.setDeveloperMode(true);
+    const original = metadataMessage('---\nkey: value\n---\nBody');
+    const { getByRole, queryByRole, rerender } = render(SessionTurn, { turn: original });
+    await fireEvent.click(getByRole('button', { name: 'Show metadata' }));
+    chatPreferencesStore.setDeveloperMode(false);
+    await tick();
+    expect(queryByRole('region', { name: 'Message metadata' })).not.toBeInTheDocument();
+    expect(queryByRole('button', { name: 'Show metadata' })).not.toBeInTheDocument();
+    chatPreferencesStore.setDeveloperMode(true);
+    await tick();
+    expect(getByRole('button', { name: 'Show metadata' })).toHaveAttribute('aria-expanded', 'false');
+    await fireEvent.click(getByRole('button', { name: 'Show metadata' }));
+    await rerender({ turn: { ...original, user: { ...original.user!, id: 'another-message' } } });
+    expect(queryByRole('region', { name: 'Message metadata' })).not.toBeInTheDocument();
+    expect(getByRole('button', { name: 'Show metadata' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('extracts a split prefix from the first text run while preserving attachments and later Markdown', () => {
+    const text = '---\nkey: secret\n---\nVisible body';
+    const message = metadataMessage(text);
+    message.user!.blocks = [
+      { type: 'image', data: 'aW1n', mimeType: 'image/png', name: 'photo.png' },
+      { type: 'text', text: '---\nkey: sec' },
+      { type: 'text', text: 'ret\n---\nVisible body' },
+      { type: 'resource', uri: 'attachment:///notes.txt', mimeType: 'text/plain', name: 'notes.txt' },
+      { type: 'text', text: '---\nlater: stays visible\n---\nMore body' }
+    ];
+    const { container, getByRole, getByText } = render(SessionTurn, { turn: message });
+    expect(getByRole('button', { name: 'Open photo.png' })).toBeInTheDocument();
+    expect(getByText('notes.txt')).toBeInTheDocument();
+    expect(container.querySelector('.session-message-user')).toHaveTextContent('Visible body');
+    expect(container.querySelector('.session-message-user')).toHaveTextContent('later: stays visible');
+    expect(container.querySelector('.session-message-user')).not.toHaveTextContent('key: secret');
+  });
+
+  it('shows a neutral placeholder for metadata-only messages', () => {
+    const { container, queryByRole, getByText } = render(SessionTurn, { turn: metadataMessage('---\nkey: secret\n---') });
+    expect(getByText('No message body')).toBeInTheDocument();
+    expect(container).not.toHaveTextContent('key: secret');
+    expect(queryByRole('button', { name: 'Show metadata' })).not.toBeInTheDocument();
+  });
+
   it('normalizes lines-first fence meta when copying the response', async () => {
     const writeText = vi.fn(async () => undefined);
     Object.assign(navigator, { clipboard: { writeText } });
