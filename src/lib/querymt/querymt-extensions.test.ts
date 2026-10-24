@@ -58,6 +58,17 @@ function extensionClient() {
   return { extensions, extMethod };
 }
 
+describe('QuerymtExtensions owner profiles', () => {
+  it('requires an owner-confirmed catalog instead of accepting an older proxy local list', async () => {
+    const { extensions, extMethod } = extensionClient();
+    extMethod.mockResolvedValueOnce({ profiles: [{ id: 'cdr', name: 'A coder' }] });
+    await expect(extensions.profiles('B')).rejects.toThrow('Update both agents');
+    extMethod.mockResolvedValueOnce({ node_id: 'B', profiles: [{ id: 'cdr', name: 'B coder' }] });
+    expect((await extensions.profiles('B')).profiles[0].name).toBe('B coder');
+    expect(extMethod).toHaveBeenLastCalledWith('_querymt/profiles', { node_id: 'B' });
+  });
+});
+
 describe('QuerymtExtensions elicitation recovery contract', () => {
   it('lists pending sessions with the versioned v1 wire method', async () => {
     const { extensions, extMethod } = extensionClient();
@@ -279,6 +290,46 @@ describe('QuerymtExtensions control methods', () => {
 
     extMethod.mockResolvedValueOnce({ models: [{ id: 'm2' }] });
     await expect(extensions.models()).resolves.toEqual({ models: [{ id: 'm2' }] });
+  });
+
+  it.each([false, true])('carries per-node availability into models without changing identity (envelope=%s)', async (enveloped) => {
+    const { extensions, extMethod } = extensionClient();
+    const local = { id: 'codex/shared', provider: 'codex', model: 'shared' };
+    const remote = { ...local, node_id: 'B' };
+    const other = { ...local, node_id: 'C' };
+    const models = [local, remote, other];
+    const meta = { remote_node_availability: { B: 'unavailable', C: 'available' } };
+    extMethod.mockResolvedValueOnce(enveloped ? { data: { models }, meta } : { models, meta });
+    await expect(extensions.models()).resolves.toEqual({ models: [local, { ...remote, availability: 'unavailable' }, { ...other, availability: 'available' }], meta });
+    expect(remote).not.toHaveProperty('availability');
+    extMethod.mockResolvedValueOnce({ models, meta: { remote_node_availability: { B: 'available', C: 'unknown' } } });
+    const recovered = await extensions.refreshModels();
+    expect(recovered.models[1]).toEqual({ ...remote, availability: 'available' });
+    expect(recovered.models[2]).toEqual({ ...other, availability: 'unknown' });
+    extMethod.mockResolvedValueOnce({ models });
+    expect((await extensions.models()).models).toEqual(models);
+    extMethod.mockResolvedValueOnce({ models, meta: { remote_node_availability: { B: 'invalid', '': 'unavailable' } } });
+    expect((await extensions.models()).models).toEqual(models);
+  });
+
+  it.each(['models', 'refreshModels'] as const)('merges both metadata levels and node maps for %s', async (method) => {
+    const { extensions, extMethod } = extensionClient();
+    const model = { id: 'codex/shared', provider: 'codex', model: 'shared' };
+    extMethod.mockResolvedValueOnce({
+      meta: { stale: true, refresh_in_progress: true, remote_node_availability: { A: 'unavailable', B: 'unavailable' } },
+      data: {
+        models: ['A', 'B', 'C'].map((node_id) => ({ ...model, node_id })),
+        meta: { stale: false, remote_node_count: 3, remote_node_availability: { B: 'available', C: 'unknown' } }
+      }
+    });
+    await expect(extensions[method]()).resolves.toEqual({
+      models: ['unavailable', 'available', 'unknown'].map((availability, index) => ({ ...model, node_id: ['A', 'B', 'C'][index], availability })),
+      meta: { stale: false, refresh_in_progress: true, remote_node_count: 3,
+        remote_node_availability: { A: 'unavailable', B: 'available', C: 'unknown' } }
+    });
+    extMethod.mockResolvedValueOnce({ data: { models: [{ ...model, node_id: 'A' }], meta: {} },
+      meta: { remote_node_availability: { A: 'unavailable' } } });
+    expect((await extensions[method]()).models[0].availability).toBe('unavailable');
   });
 
   it('fetches model info and folds flat wire fields into capabilities', async () => {

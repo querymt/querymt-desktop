@@ -829,6 +829,7 @@ export interface CreateMeshInviteRequest {
 
 export interface CreateRemoteSessionRequest {
 	node_id: string;
+	profile_id?: string;
 	cwd?: string;
 	attach: boolean;
 }

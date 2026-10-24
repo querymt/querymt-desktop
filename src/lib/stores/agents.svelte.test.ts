@@ -215,7 +215,8 @@ const mockClient = vi.hoisted(() => {
     onElicitationRequest: vi.fn(() => elicitationUnsubscribe),
     setSessionConfigOption: vi.fn(async (_request: SetSessionConfigOptionRequest): Promise<SessionConfigOption[]> => []),
     listRemoteSessions: vi.fn(async (request: { node_id: string }) => ({ node_id: request.node_id, sessions: [], total_count: 0 })),
-    createRemoteSession: vi.fn(async (request: { node_id: string; cwd?: string; attach?: boolean }): Promise<RemoteSessionAttachInfo> => ({
+    listProfiles: vi.fn(async (nodeId?: string) => ({ node_id: nodeId, profiles: [{ id: 'cdr', name: 'Owner coder', description: null }, { id: 'default', name: 'Owner default profile', description: null }], active_profile_id: 'default' })),
+    createRemoteSession: vi.fn(async (request: { node_id: string; cwd?: string; attach?: boolean; profile_id?: string }): Promise<RemoteSessionAttachInfo> => ({
       session_id: 'new-remote', node_id: request.node_id, attached: true, config_options: [], snapshot: { audit: { events: [] } }
     })),
     listMeshStatus: vi.fn(async (): Promise<MeshStatusInfo> => ({
@@ -1539,6 +1540,90 @@ describe('AgentsStore session lifecycle', () => {
     if (mutation === 'pin') expect(store.sessionCatalog[0].pin?.pinned).toBe(true);
   });
 
+  it('uses the selected owner catalog and sends the selected profile during remote creation', async () => {
+    const store = await lifecycleStore();
+    store.managedProfileOptions = [{ id: 'a-only', label: 'A only' }];
+    store.setComposerTarget('node-1');
+    await store.refreshRemoteProfiles('agent-1', 'node-1');
+    expect(store.getProfileOptions('agent-1').map((profile) => profile.id)).toEqual(['querymt:owner-default', 'cdr', 'default']);
+    expect(mockClient.listProfiles).toHaveBeenCalledWith('node-1');
+    store.setComposerCwd('/owner/work');
+    store.setComposerProfile('cdr');
+    expect(await store.createSession('agent-1')).toBe('new-remote');
+    expect(mockClient.createRemoteSession).toHaveBeenCalledWith({ node_id: 'node-1', cwd: '/owner/work', profile_id: 'cdr', attach: true });
+    expect(mockClient.createSession).not.toHaveBeenCalled();
+    store.setComposerTarget('node-2');
+    expect(store.composerProfileId).toBe('querymt:owner-default');
+    expect(store.getProfileOptions('agent-1').map((profile) => profile.id)).toEqual(['querymt:owner-default']);
+  });
+
+  it('keeps an explicit embedded-default profile distinct from the owner active default', async () => {
+    const store = await lifecycleStore();
+    store.setComposerTarget('node-1');
+    store.setComposerCwd('/owner/work');
+    store.setComposerProfile('default');
+    await store.createSession('agent-1');
+    expect(mockClient.createRemoteSession).toHaveBeenCalledWith(expect.objectContaining({ profile_id: 'default' }));
+  });
+
+  it('blocks an explicit remote profile when owner discovery fails rather than creating a default session', async () => {
+    const store = await lifecycleStore();
+    store.setComposerTarget('node-1');
+    store.setComposerCwd('/owner/work');
+    store.setComposerProfile('cdr');
+    mockClient.listProfiles.mockRejectedValueOnce(new Error('Owner unavailable'));
+    expect(await store.createSession('agent-1')).toBeNull();
+    expect(store.error).toBe('Owner unavailable');
+    expect(store.composerProfileId).toBe('cdr');
+    expect(mockClient.createRemoteSession).not.toHaveBeenCalled();
+  });
+
+  it('dismisses only the selected owner profile error without changing catalogs or validation', async () => {
+    const store = await lifecycleStore();
+    store.remoteProfileErrors = {
+      'agent-1:node-1': 'Owner unavailable', 'agent-1:node-2': 'Other owner unavailable',
+      'other-agent:node-1': 'Other agent unavailable'
+    };
+    store.remoteProfileOptions = { 'agent-1:node-1': [{ id: 'cdr', label: 'Coder' }] };
+    store.setComposerTarget('node-1');
+    store.setComposerProfile('cdr');
+    expect(store.getLaunchProfileError('agent-1')).toBe('Owner unavailable');
+    store.clearLaunchProfileError(null);
+    expect(store.getLaunchProfileError('agent-1')).toBe('Owner unavailable');
+    store.clearLaunchProfileError('agent-1');
+    expect(store.getLaunchProfileError('agent-1')).toBeNull();
+    expect(store.remoteProfileErrors).toEqual({
+      'agent-1:node-1': null, 'agent-1:node-2': 'Other owner unavailable',
+      'other-agent:node-1': 'Other agent unavailable'
+    });
+    expect(store.remoteProfileOptions['agent-1:node-1']).toEqual([{ id: 'cdr', label: 'Coder' }]);
+    store.setComposerTarget('local');
+    store.clearLaunchProfileError('agent-1');
+    expect(store.remoteProfileErrors['agent-1:local']).toBeUndefined();
+    store.setComposerTarget('node-1');
+    store.setComposerProfile('cdr');
+    store.setComposerCwd('/owner/work');
+    mockClient.listProfiles.mockRejectedValueOnce(new Error('Owner still unavailable'));
+    expect(await store.createSession('agent-1')).toBeNull();
+    expect(store.getLaunchProfileError('agent-1')).toBe('Owner still unavailable');
+    expect(mockClient.createRemoteSession).not.toHaveBeenCalled();
+  });
+
+  it('does not offer an old endpoint catalog after a delayed owner profile response', async () => {
+    const store = await lifecycleStore();
+    store.setComposerTarget('node-1');
+    let release!: () => void;
+    mockClient.listProfiles.mockImplementationOnce(() => new Promise((resolve) => {
+      release = () => resolve({ node_id: 'node-1', profiles: [{ id: 'old', name: 'Old owner', description: null }], active_profile_id: 'old' });
+    }));
+    const read = store.refreshRemoteProfiles('agent-1', 'node-1');
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    store.updateConfig('agent-1', { commandLine: 'other-agent' });
+    release();
+    await read;
+    expect(store.getProfileOptions('agent-1').map((profile) => profile.id)).toEqual(['querymt:owner-default']);
+  });
+
   it('patches a newly created remote root only into scopes including its owner', async () => {
     const store = await lifecycleStore();
     mockClient.listSessions.mockResolvedValue({ sessions: [listed('local')] });
@@ -1723,7 +1808,7 @@ describe('AgentsStore session lifecycle', () => {
 
   it('returns the created remote session ID after reconnect without hydrating an old attachment over a newer selection', async () => {
     const store = await lifecycleStore();
-    store.composerTargetId = 'node-1';
+    store.setComposerTarget('node-1');
     let confirm!: () => void;
     mockClient.createRemoteSession.mockImplementationOnce(() => new Promise((resolve) => {
       confirm = () => resolve({ session_id: 'created-remote', node_id: 'node-1', attached: true, config_options: [], snapshot: { audit: { events: [] } } });
@@ -1764,7 +1849,7 @@ describe('AgentsStore session lifecycle', () => {
 
   it.each(['local', 'node-1'])('does not select or configure a session from a replaced endpoint when composer target is %s', async (target) => {
     const store = await lifecycleStore();
-    store.composerTargetId = target;
+    store.setComposerTarget(target);
     let confirm!: () => void;
     if (target === 'local') mockClient.createSession.mockImplementationOnce(() => new Promise((resolve) => {
       confirm = () => resolve({ sessionId: 'old-created', configOptions: [] });
@@ -3171,12 +3256,69 @@ describe('AgentsStore connections', () => {
     mockClient.listModels.mockClear();
     await store.loadSession('agent-1', 'remote-session-1');
     expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
-    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { _meta: { session_scope: 'root', remoteNodeIds: ['node-1'] }, cursor: 'next' });
+    expect(mockClient.listSessions).toHaveBeenNthCalledWith(2, { _meta: { session_scope: 'all', remoteNodeIds: ['node-1'] }, cursor: 'next' });
     expect(mockClient.attachRemoteSession).toHaveBeenCalledWith({ node_id: 'node-1', session_id: 'remote-session-1' });
     expect(mockClient.listModels).not.toHaveBeenCalled();
     expect(store.sessionsByAgent['agent-1']).toEqual(expect.arrayContaining([
       expect.objectContaining({ sessionId: 'remote-session-1', location: 'remote', remoteNodeId: 'node-1', cwd: '/remote' })
     ]));
+  });
+
+  it.each(['deep link', 'live parent', 'historical parent'])('loads an undiscovered remote delegate from a %s through the existing attach path', async (source) => {
+    const store = createStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    if (source !== 'deep link') {
+      mockClient.listSessions.mockResolvedValueOnce({ sessions: [{
+        sessionId: 'root', title: 'Parent task', cwd: '/remote',
+        _meta: { location: 'remote', nodeId: 'node-1' }
+      }] });
+      await store.refreshSessionsForAgent('agent-1', true);
+      expect(mockClient.listSessions).toHaveBeenCalledWith({
+        _meta: { session_scope: 'root', remoteNodeIds: ['node-1'] }
+      });
+      mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+        location: 'remote', nodeId: 'node-1',
+        ...(source === 'historical parent' ? { 'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+          { seq: 1, kind: { type: 'tool_call_start', data: { tool_call_id: 'delegate-1', tool_name: 'delegate', arguments: '{}' } } },
+          { seq: 2, kind: { type: 'session_forked', data: { parent_session_id: 'root', child_session_id: 'remote-session-1', tool_call_id: 'delegate-1', origin: 'delegation' } } }
+        ] } } } : {})
+      } }, replay: [] });
+      await store.loadSession('agent-1', 'root');
+      if (source === 'live parent') mockClient.emitExtensionNotification({
+        method: 'querymt/session/delegationUpdate',
+        params: { sessionId: 'root', childSessionId: 'remote-session-1', toolCallId: 'delegate-1' }
+      });
+    }
+    mockClient.listSessions.mockClear();
+    mockClient.loadSession.mockClear();
+    mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32602, 'Invalid params', {
+      message: 'Session has no profile binding'
+    }));
+    mockClient.listSessions.mockImplementationOnce(async (request) => ({ sessions: request?._meta?.session_scope === 'all' ? [{
+      sessionId: 'remote-session-1', title: 'Delegate task', cwd: '/remote',
+      _meta: { location: 'remote', nodeId: 'node-1', parentSessionId: 'root', forkOrigin: 'delegation' }
+    }, {
+      sessionId: 'unrelated-child', cwd: '/remote',
+      _meta: { location: 'remote', nodeId: 'node-1', parentSessionId: 'other-root', forkOrigin: 'delegation' }
+    }] : [] }));
+
+    await store.loadSession('agent-1', 'remote-session-1');
+
+    expect(mockClient.listSessions).toHaveBeenCalledExactlyOnceWith({
+      _meta: { session_scope: 'all', remoteNodeIds: ['node-1'] }
+    });
+    expect(mockClient.attachRemoteSession).toHaveBeenCalledExactlyOnceWith({ node_id: 'node-1', session_id: 'remote-session-1' });
+    expect(mockClient.loadSession).toHaveBeenCalledTimes(1);
+    expect(store.activeSessionId).toBe('remote-session-1');
+    expect(store.activeSession.lastError).toBeNull();
+    expect(store.activeSession.transcript).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'user_message_chunk', text: 'Review deployment' })
+    ]));
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'remote-session-1'))
+      .toMatchObject({ location: 'remote', remoteNodeId: 'node-1', parentSessionId: 'root', forkOrigin: 'delegation' });
+    expect(store.sessionsByAgent['agent-1'].some((session) => session.sessionId === 'unrelated-child')).toBe(false);
+    expect(store.sessions.filter(isRootSession).map((session) => session.sessionId)).toEqual(source === 'deep link' ? [] : ['root']);
   });
 
   it('uses a cached remote listing before making another catalog request', async () => {
@@ -3609,6 +3751,52 @@ describe('AgentsStore connections', () => {
     await vi.waitFor(() => expect(store.getSessionModelId('agent-1', 'session-1')).toBe(local.id));
     expect(store.getSessionModelLocation('agent-1', 'session-1').servingNodeLabel).toBeUndefined();
     expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
+  it.each(['catalog', 'mesh'])('keeps acknowledged legacy model writes across %s refreshes', async (refresh) => {
+    const store = createStore();
+    const local: ModelEntry = { id: 'codex/test', provider: 'codex', model: 'test', label: 'Test' };
+    const remote: ModelEntry = { ...local, node_id: 'B', node_label: 'flkr' };
+    const different: ModelEntry = { id: 'codex/other', provider: 'codex', model: 'other' };
+    const models = [local, remote, different];
+    store.modelsByAgent = { 'agent-1': models };
+    const mode: SessionConfigOption = {
+      id: 'mode', name: 'Mode', type: 'select', currentValue: 'build', options: [{ value: 'build', name: 'Build' }]
+    };
+    for (const [previous, selected] of [[remote, local], [local, remote], [remote, different]]) {
+      for (const response of [[], [mode]]) {
+        mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [{
+          id: 'model', name: 'Model', type: 'select', currentValue: previous.id,
+          options: [local, different].map((model) => ({ value: model.id, name: model.model })),
+          _meta: { other: 'preserved', querymt: { modelEntry: previous, other: 'preserved' } }
+        }, mode] }, replay: [] });
+        await store.loadSession('agent-1', 'session-1');
+        await store.refreshMeshForAgent('agent-1');
+        expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(previous));
+        mockClient.setSessionConfigOption.mockResolvedValueOnce(response);
+        await store.setSessionModel('agent-1', 'session-1', getModelSelectionKey(selected));
+        expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(selected));
+        expect(store.activeSession.configOptions.find((option) => option.id === 'model')).toMatchObject({
+          currentValue: selected.id, _meta: { other: 'preserved', querymt: { other: 'preserved' } }
+        });
+        if (refresh === 'catalog') {
+          mockClient.refreshAndListModels.mockResolvedValueOnce(models);
+          await store.refreshModelsForAgent('agent-1');
+        } else {
+          await store.refreshMeshForAgent('agent-1');
+        }
+        expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(selected));
+        expect(store.activeSession.configOptions).toContainEqual(mode);
+        mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+          sessionUpdate: 'config_option_update', configOptions: [{
+            id: 'model', name: 'Model', type: 'select', currentValue: previous.id,
+            options: [{ value: previous.id, name: previous.model }],
+            _meta: { querymt: { modelEntry: previous } }
+          }]
+        } });
+        expect(store.getSessionModelId('agent-1', 'session-1')).toBe(getModelSelectionKey(previous));
+      }
+    }
   });
 
   it('keeps a remote selection scoped when a legacy model patch omits identity metadata', async () => {
@@ -4437,6 +4625,25 @@ describe('AgentsStore model info cache', () => {
     capabilities: { modalities: { input: ['text', 'image'], output: ['text'] } }
   };
 
+  it('updates availability from model notifications and refresh without replacing an unavailable selection', async () => {
+    const store = createStore();
+    mockClient.listModels.mockResolvedValue([localModel, remoteModel]);
+    await store.loadInitialModelsForAgent('agent-1');
+    store.setLaunchModel('agent-1', getModelSelectionKey(remoteModel));
+    store.recentModelsByAgent = { 'agent-1': [getModelSelectionKey(remoteModel)] };
+    mockClient.listModels.mockResolvedValue([localModel, { ...remoteModel, availability: 'unavailable' }]);
+    mockClient.emitExtensionNotification({ method: 'querymt/models/changed', params: { version: 2 } });
+    await vi.waitFor(() => expect(store.modelsByAgent['agent-1'][1].availability).toBe('unavailable'));
+    expect(store.getLaunchModelId('agent-1')).toBe(getModelSelectionKey(remoteModel));
+    expect(store.getRecentModels('agent-1')[0].availability).toBe('unavailable');
+    expect(store.modelsByAgent['agent-1'][0]).not.toHaveProperty('availability');
+    mockClient.refreshAndListModels.mockResolvedValue([localModel, { ...remoteModel, availability: 'available' }]);
+    await store.refreshModelsForAgent('agent-1');
+    expect(store.getRecentModels('agent-1')[0].availability).toBe('available');
+    expect(store.getLaunchModelId('agent-1')).toBe(getModelSelectionKey(remoteModel));
+    expect(mockClient.setSessionConfigOption).not.toHaveBeenCalled();
+  });
+
   it('batches unique model identities once and reuses them for mesh copies', async () => {
     const store = createStore();
     mockClient.listModels.mockResolvedValue([localModel, remoteModel]);
@@ -4706,7 +4913,7 @@ describe('AgentsStore delegate model assignments', () => {
     expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
   });
 
-  it('does not offer delegate routing for a remote session when the local assignment read fails', async () => {
+  it('offers a retry instead of hiding delegate routing when the remote owner read fails', async () => {
     const store = createStore();
     store.sessionsByAgent = { 'agent-1': [{
       agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'Remote task',
@@ -4721,7 +4928,7 @@ describe('AgentsStore delegate model assignments', () => {
     await store.loadSession('agent-1', 'session-1');
     await vi.waitFor(() => expect(store.activeDelegateAssignmentsError).toBe('session is not bound to an available profile'));
     expect(mockClient.getDelegateModels).toHaveBeenCalledWith({ session_id: 'session-1' });
-    expect(store.canConfigureDelegateModels('agent-1')).toBe(false);
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
   });
 
   it('keeps routing available for confirmed remote roles or saved routes despite a refresh error', async () => {
@@ -4734,7 +4941,7 @@ describe('AgentsStore delegate model assignments', () => {
     }] };
     mockClient.getDelegateModels.mockRejectedValueOnce(new Error('Transient failure'));
     await store.connectAgent('agent-1');
-    expect(store.canConfigureDelegateModels('agent-1')).toBe(false);
+    expect(store.canConfigureDelegateModels('agent-1')).toBe(true);
 
     store.delegateAssignmentsBySession = { 'agent-1:session-1': assignmentState };
     expect(store.canConfigureDelegateModels('agent-1')).toBe(true);

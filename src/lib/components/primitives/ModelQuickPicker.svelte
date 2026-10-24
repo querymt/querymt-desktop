@@ -60,13 +60,17 @@
   );
   const selectedIconId = $derived(selectedModel ? providerIconId(selectedModel.provider) : null);
   const selectedNodeLabel = $derived(selectedModel ? modelNodeLabel(selectedModel, modelLocation) : null);
+  const selectedUnavailable = $derived(selectedModel?.availability === 'unavailable');
   const selectionTooltip = $derived.by(() => {
-    if (selectedModel) return modelSelectionTooltip({ ...selectedModel, node_label: selectedNodeLabel }, agentLabel);
+    if (selectedModel) {
+      const identity = modelSelectionTooltip({ ...selectedModel, node_label: selectedNodeLabel }, agentLabel);
+      return selectedUnavailable ? `${identity}. Provider temporarily unavailable. Refresh or check the provider.` : identity;
+    }
     if (selectedModelId) return `${selectedModelId}${loading ? '' : ' (unavailable)'}`;
     return null;
   });
 
-  const showFallbackTooltip = $derived(!!selectionTooltip && !selectedIconId && !loading);
+  const showFallbackTooltip = $derived(!!selectionTooltip && (selectedUnavailable || !selectedIconId) && !loading);
   const reasoningBadge = $derived(
     selectedModel ? reasoning?.options.find((option) => option.value === reasoning.value && option.label.trim()) ?? null : null
   );
@@ -231,7 +235,7 @@
                 {selectedModel.label ?? selectedModel.model}
                 {#if selectedNodeLabel}
                   <span class="muted composer-model-pill-node" aria-hidden="true">
-                    <Network size={12} />
+                    <Network class={selectedUnavailable ? 'model-availability-warning' : undefined} size={12} />
                   </span>
                 {/if}
                 {#if agentLabel}

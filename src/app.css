@@ -4711,6 +4711,30 @@ summary:focus-visible {
   border-top: 0;
 }
 
+.delegate-model-choice-unavailable,
+.delegate-model-choice-unavailable:hover:enabled {
+  background: var(--bg-card);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.model-availability-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.model-availability-warning {
+  color: var(--status-running);
+}
+
 .delegate-model-choice strong,
 .delegate-model-default-choice strong,
 .delegate-model-orphan-detail strong {
@@ -5037,7 +5061,7 @@ summary:focus-visible {
     padding-inline: 1.15rem;
   }
 
-  .delegate-model-picker .app-dialog-footer {
+  .delegate-model-picker .app-picker-footer {
     flex-wrap: wrap;
   }
 

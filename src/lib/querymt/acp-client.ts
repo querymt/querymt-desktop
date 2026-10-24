@@ -719,12 +719,12 @@ export class DesktopAcpClient {
     return this.querymtExtensions!.setDelegateModel(request);
   }
 
-  async listProfiles(): Promise<QuerymtProfilesResponse> {
+  async listProfiles(nodeId?: string): Promise<QuerymtProfilesResponse> {
     if (!this.querymtExtensions) {
       await this.connect();
     }
     this.assertQuerymtMethod(QMT_METHOD_PROFILES);
-    return this.querymtExtensions!.profiles();
+    return this.querymtExtensions!.profiles(nodeId);
   }
 
   async listModels(): Promise<ModelEntry[]> {

@@ -27,7 +27,7 @@
     open: boolean;
     title: string;
     description?: string;
-    size?: 'compact' | 'standard' | 'workflow' | 'wide';
+    size?: 'compact' | 'standard' | 'workflow' | 'wide' | 'model-picker';
     pending?: boolean;
     showClose?: boolean;
     divided?: boolean;
@@ -44,6 +44,8 @@
     onEscapeKeydown?: (event: KeyboardEvent) => void;
     onInteractOutside?: (event: PointerEvent) => void;
   } = $props();
+
+  const modelPicker = $derived(size === 'model-picker');
 
   function handleOpenChange(nextOpen: boolean) {
     if (!nextOpen && pending) return;
@@ -63,9 +65,9 @@
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
   <Dialog.Portal to={portalTarget}>
-    <Dialog.Overlay class="app-dialog-backdrop" />
+    <Dialog.Overlay class={modelPicker ? 'app-picker-backdrop' : 'app-dialog-backdrop'} />
     <Dialog.Content
-      class={`app-dialog app-dialog-${size} ${contentClass}`}
+      class={`${modelPicker ? 'app-picker app-picker-model' : `app-dialog app-dialog-${size}`} ${contentClass}`}
       data-blocking-overlay="true"
       {onOpenAutoFocus}
       {onCloseAutoFocus}
@@ -78,26 +80,26 @@
         onInteractOutside?.(event);
       }}
     >
-      <header class={`app-dialog-header ${divided ? '' : 'app-dialog-header-undivided'}`}>
-        <div class="app-dialog-heading">
-          <Dialog.Title class="app-dialog-title">{title}</Dialog.Title>
+      <header class={`${modelPicker ? 'app-picker-header' : 'app-dialog-header'} ${divided ? '' : 'app-dialog-header-undivided'}`}>
+        <div class={modelPicker ? 'app-picker-heading' : 'app-dialog-heading'}>
+          <Dialog.Title class={modelPicker ? 'app-picker-title' : 'app-dialog-title'}>{title}</Dialog.Title>
           {#if description}
-            <Dialog.Description class="app-dialog-description">{description}</Dialog.Description>
+            <Dialog.Description class={modelPicker ? 'app-picker-description' : 'app-dialog-description'}>{description}</Dialog.Description>
           {/if}
         </div>
         {#if showClose}
-          <button class="app-dialog-close" type="button" aria-label={closeLabel} disabled={pending} onclick={close}>
+          <button class={modelPicker ? 'app-picker-header-action' : 'app-dialog-close'} type="button" aria-label={closeLabel} disabled={pending} onclick={close}>
             <X size={16} />
           </button>
         {/if}
       </header>
 
-      <div class={`app-dialog-body ${bodyClass}`}>
+      <div class={`${modelPicker ? 'app-picker-body' : 'app-dialog-body'} ${bodyClass}`}>
         {@render children()}
       </div>
 
       {#if footer}
-        <footer class="app-dialog-footer">
+        <footer class={modelPicker ? 'app-picker-footer shrink-0 px-5 pb-5' : 'app-dialog-footer'}>
           {@render footer()}
         </footer>
       {/if}

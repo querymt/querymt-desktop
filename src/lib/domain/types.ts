@@ -157,6 +157,8 @@ export interface ModelEntry {
   source?: string | null;
   family?: string | null;
   quant?: string | null;
+  /** Transient catalog reachability; not part of the model selection identity. */
+  availability?: 'available' | 'unavailable' | 'unknown';
 }
 
 export type ImageSendMode = 'image' | 'resource';

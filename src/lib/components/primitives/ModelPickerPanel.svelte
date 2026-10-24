@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Bot, Brain, Check, Gauge, History, LoaderCircle, Network, RefreshCw, Search } from '@lucide/svelte';
+  import { Bot, Brain, Check, Gauge, History, LoaderCircle, Network, RefreshCw, Search, TriangleAlert } from '@lucide/svelte';
   import { tick } from 'svelte';
+  import { Tooltip } from 'bits-ui';
   import providerSprite from '$lib/assets/providers.svg?raw';
   import { ensureProviderSprite, providerIconHref, providerIconId } from '$lib/domain/provider-icons';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
@@ -67,6 +68,7 @@
   let searchElement = $state<HTMLInputElement | null>(null);
   let highlightedIndex = $state(0);
   let trackedQuery = '';
+  const unavailableHint = 'Provider temporarily unavailable. Refresh or check the provider.';
 
   const rankedModels = $derived.by(() => {
     const needle = query.trim();
@@ -148,28 +150,32 @@
     focusSearchNow();
   }
 
-  function clamp(value: number, min: number, max: number): number {
-    return Math.min(max, Math.max(min, value));
-  }
-
   async function selectHighlighted() {
     const target = filteredModels[highlightedIndex];
-    if (!target || disabled) return;
+    if (!target || disabled || target.availability === 'unavailable') return;
     await onSelect(target);
+  }
+
+  function moveHighlight(direction: 1 | -1) {
+    for (let index = highlightedIndex + direction; index >= 0 && index < filteredModels.length; index += direction) {
+      if (filteredModels[index].availability !== 'unavailable') {
+        highlightedIndex = index;
+        break;
+      }
+    }
+    revealHighlighted();
   }
 
   async function handleSearchKeydown(event: KeyboardEvent) {
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      highlightedIndex = clamp(highlightedIndex + 1, 0, Math.max(filteredModels.length - 1, 0));
-      revealHighlighted();
+      moveHighlight(1);
       return;
     }
 
     if (event.key === 'ArrowUp') {
       event.preventDefault();
-      highlightedIndex = clamp(highlightedIndex - 1, 0, Math.max(filteredModels.length - 1, 0));
-      revealHighlighted();
+      moveHighlight(-1);
       return;
     }
 
@@ -242,6 +248,23 @@
               <Bot size={12} aria-hidden="true" />
             {/if}
             <span>{group.label}</span>
+            {#if !group.recent && group.items.every(({ model }) => model.availability === 'unavailable')}
+              <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+                <Tooltip.Root disableHoverableContent>
+                  <Tooltip.Trigger>
+                    {#snippet child({ props })}
+                      {@const { type: _type, disabled: _disabled, ...triggerProps } = props}
+                      <span {...triggerProps} class="model-availability-indicator model-availability-warning" role="img" aria-label={unavailableHint}>
+                        <TriangleAlert size={12} aria-hidden="true" />
+                      </span>
+                    {/snippet}
+                  </Tooltip.Trigger>
+                  <Tooltip.Portal>
+                    <Tooltip.Content class="app-tooltip-content" sideOffset={6}>{unavailableHint}</Tooltip.Content>
+                  </Tooltip.Portal>
+                </Tooltip.Root>
+              </Tooltip.Provider>
+            {/if}
           </div>
           {#each group.items as item (getModelSelectionKey(item.model))}
             {@const model = item.model}
@@ -250,15 +273,19 @@
             {@const knownModalities = knownInputModalities(model, modelInfo)}
             {@const selected = selectedModelId === selectionKey}
             {@const nodeLabel = modelNodeLabel(model, modelLocation)}
+            {@const unavailable = model.availability === 'unavailable'}
             <button
               class="delegate-model-choice"
-              class:delegate-model-choice-highlighted={highlightedIndex === item.index}
+              class:delegate-model-choice-highlighted={!unavailable && highlightedIndex === item.index}
+              class:delegate-model-choice-unavailable={unavailable}
               type="button"
               data-model-index={item.index}
               aria-pressed={selected}
               disabled={disabled}
-              onclick={() => onSelect(model)}
-              onmousemove={() => (highlightedIndex = item.index)}
+              aria-disabled={disabled || unavailable}
+              tabindex={unavailable ? -1 : undefined}
+              onclick={() => { if (!unavailable && !disabled) void onSelect(model); }}
+              onmousemove={() => { if (!unavailable) highlightedIndex = item.index; }}
             >
               <span>
                 <span class="delegate-model-choice-name">
@@ -271,8 +298,8 @@
               </span>
               <span class="delegate-model-choice-meta">
                 {#if nodeLabel}
-                  <small aria-label={`Mesh node ${nodeLabel}`}>
-                    <Network size={11} />{nodeLabel}
+                  <small aria-label={`Mesh node ${nodeLabel}`} title={unavailable ? unavailableHint : undefined}>
+                    <Network class={unavailable ? 'model-availability-warning' : undefined} size={11} />{nodeLabel}
                   </small>
                 {/if}
               </span>

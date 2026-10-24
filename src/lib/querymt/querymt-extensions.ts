@@ -192,6 +192,7 @@ export interface QuerymtElicitationCompletedNotification {
 }
 
 export interface QuerymtProfilesResponse {
+  node_id?: string;
   profiles: QuerymtProfileInfo[];
   active_profile_id?: string | null;
 }
@@ -203,6 +204,7 @@ export interface QuerymtModelsResponse {
     refresh_in_progress?: boolean;
     remote_timeout_count?: number;
     remote_node_count?: number;
+    remote_node_availability?: Record<string, NonNullable<ModelEntry['availability']>>;
     refresh_trigger?: string;
     started_new_refresh?: boolean;
     wait_for_completion?: boolean;
@@ -218,17 +220,22 @@ type QuerymtModelsWireResponse =
     };
 
 export function normalizeQuerymtModelsResponse(response: QuerymtModelsWireResponse): QuerymtModelsResponse {
-  if ('data' in response && response.data?.models) {
-    return {
-      models: response.data.models.slice(),
-      meta: response.data.meta ?? response.meta
-    };
-  }
-
-  const direct = response as QuerymtModelsResponse;
+  const payload = 'data' in response && response.data?.models ? response.data : response as QuerymtModelsResponse;
+  const outerMeta = response.meta;
+  const innerMeta = payload.meta;
+  const availability = outerMeta?.remote_node_availability || innerMeta?.remote_node_availability
+    ? { ...outerMeta?.remote_node_availability, ...innerMeta?.remote_node_availability } : undefined;
+  const meta = outerMeta || innerMeta ? {
+    ...outerMeta, ...innerMeta,
+    ...(availability ? { remote_node_availability: availability } : {})
+  } : undefined;
   return {
-    models: (direct.models ?? []).slice(),
-    meta: direct.meta
+    models: (payload.models ?? []).map((model) => {
+      const availability = model.node_id ? meta?.remote_node_availability?.[model.node_id] : undefined;
+      return availability === 'available' || availability === 'unavailable' || availability === 'unknown'
+        ? { ...model, availability } : model;
+    }),
+    meta
   };
 }
 
@@ -512,8 +519,11 @@ export class QuerymtExtensions {
     return normalizeQuerymtModelInfoResponse(response);
   }
 
-  async profiles(): Promise<QuerymtProfilesResponse> {
-    const response = await this.call<QuerymtProfilesResponse>(QMT_METHOD_PROFILES);
+  async profiles(node_id?: string): Promise<QuerymtProfilesResponse> {
+    const response = await this.call<QuerymtProfilesResponse>(QMT_METHOD_PROFILES, node_id ? { node_id } : undefined);
+    if (node_id && response.node_id !== node_id) {
+      throw new Error('Agent cannot provide the selected owner\'s profiles. Update both agents.');
+    }
     return { ...response, profiles: response.profiles ?? [] };
   }
 
