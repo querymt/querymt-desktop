@@ -23,7 +23,7 @@
     type DelegateModelOverride,
     type OrphanedDelegateAssignment
   } from '$lib/querymt/generated/types';
-  import { getModelSelectionKey } from '$lib/querymt/config-options';
+  import { getModelSelectionKey, modelNodeLabel, type ModelLocationContext } from '$lib/querymt/config-options';
   import Identicon from '$lib/components/primitives/Identicon.svelte';
 
   type AssignmentTarget =
@@ -36,6 +36,7 @@
     models = [],
     recentModelsByDelegate = {},
     modelInfo = {},
+    modelLocation = undefined,
     inheritedReasoningLabel = null,
     loading = false,
     modelLoading = false,
@@ -52,6 +53,7 @@
     models?: ModelEntry[];
     recentModelsByDelegate?: Record<string, ModelEntry[]>;
     modelInfo?: ModelInfoMap;
+    modelLocation?: ModelLocationContext;
     inheritedReasoningLabel?: string | null;
     loading?: boolean;
     modelLoading?: boolean;
@@ -225,11 +227,11 @@
   bind:open
   title={dialogTitle}
   description={dialogDescription}
-  size="wide"
+  size={selectedTarget ? 'model-picker' : 'wide'}
   pending={anyPending}
   closeLabel={selectedTarget ? 'Back to delegate routing' : 'Close delegate routing'}
   portalTarget={overlayPortalTarget}
-  contentClass={selectedTarget ? 'delegate-model-dialog delegate-model-picker' : 'delegate-model-dialog'}
+  contentClass={selectedTarget ? 'delegate-model-picker' : 'delegate-model-dialog'}
   bodyClass={selectedTarget ? 'delegate-model-picker-body' : 'delegate-model-dialog-body'}
   onClose={handlePickerDismiss}
   onEscapeKeydown={handlePickerDismiss}
@@ -257,6 +259,7 @@
         {models}
         recentModels={recentModelsByDelegate[selectedAgentId] ?? []}
         {modelInfo}
+        {modelLocation}
         selectedModelId={selectedSelectionKey}
         searchLabel="Search delegate models"
         loading={modelLoading}
@@ -330,6 +333,7 @@
       <div class="delegate-model-list" aria-label="Delegate routes">
         {#each assignments.assignments as assignment}
           {@const assignedModel = findModel(assignment.model)}
+          {@const assignedNodeLabel = assignedModel ? modelNodeLabel(assignedModel, modelLocation) : null}
           <button
             class="delegate-model-row"
             class:delegate-model-row-unavailable={assignment.model && !assignedModel}
@@ -359,7 +363,7 @@
                     {/if}
                   </span>
                   {#if reasoningSupported}<small><Brain size={11} />{reasoningLabel(assignment.reasoning_effort)}</small>{/if}
-                  {#if assignedModel?.node_label}<small><Network size={11} />{assignedModel.node_label}</small>{/if}
+                  {#if assignedNodeLabel}<small><Network size={11} />{assignedNodeLabel}</small>{/if}
                 {/if}
               </span>
             </span>

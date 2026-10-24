@@ -659,6 +659,7 @@
         sessionConfigPending={agentsStore.sessionConfigPending}
         delegateModelCount={agentsStore.activeDelegateAssignments?.assignments.length ?? 0}
         delegateModelsLoading={agentsStore.activeDelegateAssignmentsLoading}
+        delegateModelsError={agentsStore.activeDelegateAssignmentsError}
         onSessionConfigChange={(configId, value) => agentsStore.setActiveSessionConfigOption(configId, value)}
         onOpenDelegateModels={agentsStore.canConfigureDelegateModels(agentId)
           ? () => {
@@ -682,6 +683,7 @@
     recentModelsByDelegate={agentsStore.activeRecentDelegateModels}
     models={agentsStore.modelsByAgent[agentId] ?? []}
     modelInfo={agentsStore.modelInfoByAgent[agentId] ?? {}}
+    modelLocation={agentsStore.getSessionModelLocation(agentId, sessionId)}
     {inheritedReasoningLabel}
     loading={agentsStore.activeDelegateAssignmentsLoading}
     modelLoading={!!agentsStore.modelLoadingByAgent[agentId]}

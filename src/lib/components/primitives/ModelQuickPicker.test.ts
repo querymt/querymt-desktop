@@ -5,6 +5,8 @@ import ModelQuickPicker from './ModelQuickPicker.svelte';
 import ModelPickerPanel, { type ModelPickerReasoningControl } from './ModelPickerPanel.svelte';
 import { getModelSelectionKey } from '$lib/querymt/config-options';
 import type { ModelEntry } from '$lib/domain/types';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const anthropic: ModelEntry = {
   id: 'anthropic/claude-sonnet-4',
@@ -111,6 +113,120 @@ describe('ModelPickerPanel provider headings', () => {
     const customHeading = screen.getByText('my-gateway').closest('.delegate-model-picker-group-title');
     expect(customHeading?.firstElementChild).toHaveClass('lucide-bot');
     expect(customHeading?.querySelector('use')).toBeNull();
+  });
+});
+
+describe('model catalog availability', () => {
+  const hint = 'Provider temporarily unavailable. Refresh or check the provider.';
+
+  it.each([false, true])('retains unavailable rows and selection but blocks clicks and Enter, then recovers (recent=%s)', async (recent) => {
+    const offline: ModelEntry = { ...remote, availability: 'unavailable' };
+    const local: ModelEntry = { ...remote, node_id: undefined, node_label: undefined };
+    const other: ModelEntry = { ...remote, node_id: 'node-2', node_label: 'Other server', availability: 'unknown' };
+    const props = { models: [offline, local, other], recentModels: recent ? [offline] : [],
+      selectedModelId: getModelSelectionKey(offline), onSelect: vi.fn(), onRefresh: vi.fn(), searchLabel: 'Models' };
+    const { rerender } = render(ModelPickerPanel, props);
+    const rows = document.querySelectorAll<HTMLButtonElement>('.delegate-model-choice');
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toHaveAttribute('aria-disabled', 'true');
+    expect(rows[0]).toHaveAttribute('aria-pressed', 'true');
+    const meshNode = within(rows[0]).getByLabelText('Mesh node Build server');
+    expect(meshNode.querySelector('.lucide-network')).toHaveClass('model-availability-warning');
+    expect(meshNode.querySelector('svg')).toHaveAttribute('width', '11');
+    expect(meshNode).toHaveAttribute('title', hint);
+    expect(rows[0].querySelector('.lucide-triangle-alert')).toBeNull();
+    expect(within(rows[1]).queryByLabelText(/Mesh node/)).toBeNull();
+    expect(within(rows[2]).getByLabelText('Mesh node Other server').querySelector('.model-availability-warning')).toBeNull();
+    expect(rows[0]).not.toHaveTextContent('Unavailable');
+    await fireEvent.click(rows[0]);
+    const search = screen.getByLabelText('Models');
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(props.onSelect).not.toHaveBeenCalled();
+    await fireEvent.keyDown(search, { key: 'ArrowDown' });
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(props.onSelect).toHaveBeenLastCalledWith(local);
+    await fireEvent.keyDown(search, { key: 'ArrowDown' });
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(props.onSelect).toHaveBeenLastCalledWith(other);
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh models' }));
+    expect(props.onRefresh).toHaveBeenCalledOnce();
+    if (!recent) {
+      const indicator = screen.getByRole('img', { name: hint });
+      expect(indicator.tagName).toBe('SPAN');
+      expect(indicator).toHaveClass('model-availability-indicator', 'model-availability-warning');
+      expect(indicator.closest('button')).toBeNull();
+      expect(indicator).toHaveAttribute('tabindex', '0');
+      const heading = indicator.closest('.delegate-model-picker-group-title')!;
+      expect(heading.querySelectorAll('.lucide-triangle-alert')).toHaveLength(1);
+      expect(heading.querySelector('button')).toBeNull();
+      expect(indicator.firstElementChild).toHaveAttribute('width', '12');
+      expect(indicator.firstElementChild).toHaveAttribute('height', '12');
+      await fireEvent.pointerEnter(indicator);
+      expect(await screen.findByText(hint, { selector: '.app-tooltip-content' })).toBeInTheDocument();
+    }
+    const recovered: ModelEntry = { ...offline, availability: 'available' };
+    await rerender({ ...props, models: [recovered, local, other] });
+    const restored = document.querySelector<HTMLButtonElement>('.delegate-model-choice')!;
+    expect(restored).toHaveAttribute('aria-disabled', 'false');
+    expect(restored).toHaveAttribute('aria-pressed', 'true');
+    expect(within(restored).getByLabelText('Mesh node Build server').querySelector('.lucide-network')).not.toHaveClass('model-availability-warning');
+    expect(screen.queryByRole('img', { name: hint })).toBeNull();
+    await fireEvent.click(restored);
+    expect(props.onSelect).toHaveBeenLastCalledWith(recovered);
+  });
+
+  it('keeps provider headings compact and uses the failed-tool-call color token', () => {
+    const css = readFileSync(resolve('src/app.css'), 'utf8');
+    const rule = (selector: string) => css.slice(css.indexOf(`${selector} {`)).split('}')[0];
+    const failedColor = rule('.session-tool-status-failed').match(/color:\s*([^;]+);/)![1];
+    expect(rule('.model-availability-warning')).toContain(`color: ${failedColor};`);
+    const indicator = rule('.model-availability-indicator');
+    for (const declaration of ['width: 12px;', 'height: 12px;', 'padding: 0;', 'border: 0;', 'background: transparent;']) {
+      expect(indicator).toContain(declaration);
+    }
+    expect(rule('.delegate-model-picker-group-title')).toContain('padding: 0.38rem 0.7rem;');
+  });
+
+  it('does not introduce a mesh or warning glyph on session-local model rows', () => {
+    render(ModelPickerPanel, { models: [{ ...remote, availability: 'unavailable' }],
+      modelLocation: { servingNodeId: 'A', ownerNodeId: 'node-1' }, onSelect: vi.fn() });
+    const row = document.querySelector('.delegate-model-choice')!;
+    expect(row.querySelector('.lucide-network')).toBeNull();
+    expect(row.querySelector('.lucide-triangle-alert')).toBeNull();
+    expect(screen.getByRole('img', { name: hint }).closest('.delegate-model-picker-group-title')).not.toBeNull();
+  });
+
+  it('skips an unavailable row between healthy choices in both keyboard directions', async () => {
+    const onSelect = vi.fn();
+    render(ModelPickerPanel, { models: [anthropic, { ...remote, availability: 'unavailable' }, custom], onSelect, searchLabel: 'Models' });
+    const search = screen.getByLabelText('Models');
+    await fireEvent.keyDown(search, { key: 'ArrowDown' });
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(onSelect).toHaveBeenLastCalledWith(custom);
+    await fireEvent.keyDown(search, { key: 'ArrowUp' });
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(onSelect).toHaveBeenLastCalledWith(anthropic);
+  });
+
+  it('keeps an unavailable selected model visible in the trigger and allows opening to refresh', async () => {
+    const offline: ModelEntry = { ...remote, availability: 'unavailable' };
+    const props = { modelOptions: [offline], selectedModelId: getModelSelectionKey(offline), onSelect: vi.fn() };
+    const { rerender } = renderPicker(props);
+    const warningTooltip = `grok-4.7 from xai on Build server. ${hint}`;
+    const trigger = screen.getByRole('button', { name: warningTooltip });
+    expect(trigger).toHaveTextContent(remote.label!);
+    expect(trigger.querySelector('.lucide-network')).toHaveClass('model-availability-warning');
+    expect(trigger.querySelector('.lucide-triangle-alert')).toBeNull();
+    expect(trigger).not.toBeDisabled();
+    await fireEvent.pointerEnter(trigger);
+    expect(await screen.findByText(warningTooltip, { selector: '.app-tooltip-content' })).toBeInTheDocument();
+    await fireEvent.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Switch model' });
+    await fireEvent.click(within(dialog).getByRole('button', { name: /grok-4.7/ }));
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(dialog).toBeInTheDocument();
+    await rerender({ ...props, modelOptions: [{ ...offline, availability: 'available' }] });
+    expect(screen.getByRole('button', { name: 'grok-4.7 from xai on Build server' }).querySelector('.model-availability-warning')).toBeNull();
   });
 });
 
