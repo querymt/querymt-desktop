@@ -288,6 +288,8 @@ export interface SessionTranscriptItem {
   clientPromptId?: string | null;
   eventIndex?: number;
   timestampMs?: number;
+  /** Placement for saved prompts without an acceptance event; not a replay cursor. */
+  historyAnchor?: { eventIndex: number; side: 'before' | 'after' };
 }
 
 export interface SessionTranscriptGroup {

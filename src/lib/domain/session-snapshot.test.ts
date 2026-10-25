@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ActiveSessionViewModel } from './types';
 import { buildSessionConversation } from './session-conversation';
+import { applySessionNotification } from './session-updates';
 import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession } from './session-snapshot';
 
 describe('getSnapshotProviderChange', () => {
@@ -267,6 +268,86 @@ describe('activeSessionFromLoadResponse', () => {
       { messageId: 'earlier', eventIndex: undefined },
       { messageId: 'later', eventIndex: undefined }
     ]);
+  });
+
+  it('keeps persisted prompt order when unmatched prompt timestamps disagree', () => {
+    const session = activeSessionFromLoadResponse('session-clock-skew', {
+      _meta: { 'querymt/sessionLoadSnapshot.v1': {
+        userPrompts: [
+          { messageId: 'earlier', messageOrder: 0, timestamp: 1000, blocks: [{ type: 'text', text: 'earlier' }] },
+          { messageId: 'later', messageOrder: 1, timestamp: 100, blocks: [{ type: 'text', text: 'later' }] }
+        ],
+        audit: { events: [
+          { seq: 10, timestamp: 200, kind: { type: 'assistant_message_stored', data: { message_id: 'a1', content: 'prior work' } } },
+          { seq: 20, timestamp: 2000, kind: { type: 'assistant_message_stored', data: { message_id: 'a2', content: 'later work' } } }
+        ] }
+      } }
+    });
+    expect(buildSessionConversation(session).filter((turn) => turn.user).map((turn) => turn.user?.messageId))
+      .toEqual(['earlier', 'later']);
+  });
+
+  it('keeps failed prompts in history order across a newer turn, live input and reload', () => {
+    const snapshot = {
+      userPrompts: [
+        { messageId: 'first', messageOrder: 0, timestamp: 100, blocks: [{ type: 'text', text: 'first' }] },
+        { messageId: 'failed', messageOrder: 2, timestamp: 200, blocks: [{ type: 'text', text: 'failed handoff' }] },
+        { messageId: 'newer', messageOrder: 3, timestamp: 200, blocks: [{ type: 'text', text: 'retry' }] }
+      ],
+      audit: { events: [
+        { seq: 100, timestamp: 100, kind: { type: 'prompt_received', data: { message_id: 'first', content: 'first' } } },
+        { seq: 110, timestamp: 150, kind: { type: 'assistant_message_stored', data: { message_id: 'answer', content: 'done' } } },
+        { seq: 120, timestamp: 200, kind: { type: 'prompt_received', data: { message_id: 'newer', content: 'retry' } } },
+        { seq: 130, timestamp: 210, kind: { type: 'assistant_message_stored', data: { message_id: 'new-answer', content: 'new answer' } } }
+      ] }
+    };
+    const response = () => ({ _meta: { 'querymt/sessionLoadSnapshot.v1': snapshot } });
+    const restored = activeSessionFromLoadResponse('session-orphan', response());
+    const ids = (session: ActiveSessionViewModel) => buildSessionConversation(session).map((turn) => turn.user?.messageId);
+    expect(ids(restored)).toEqual(['first', 'failed', 'newer']);
+    expect(restored.transcript.find((item) => item.messageId === 'failed')).toMatchObject({
+      eventIndex: undefined, timestampMs: 200000
+    });
+    const live = applySessionNotification(restored, {
+      sessionId: 'session-orphan',
+      update: { sessionUpdate: 'user_message_chunk', messageId: 'live', content: { type: 'text', text: 'next' } }
+    });
+    expect(ids(live)).toEqual(['first', 'failed', 'newer', 'live']);
+    snapshot.userPrompts.push({ messageId: 'live', messageOrder: 5, timestamp: 300, blocks: [{ type: 'text', text: 'next' }] });
+    snapshot.audit.events.push({ seq: 140, timestamp: 300, kind: { type: 'prompt_received', data: { message_id: 'live', content: 'next' } } });
+    expect(ids(activeSessionFromLoadResponse('session-orphan', response()))).toEqual(['first', 'failed', 'newer', 'live']);
+  });
+
+  it.each([true, false])('anchors a trailing failed prompt before future live input (journal=%s)', (withJournal) => {
+    const session = activeSessionFromLoadResponse('session-tail', {
+      _meta: { 'querymt/sessionLoadSnapshot.v1': {
+        userPrompts: [{ messageId: 'failed', messageOrder: 2, timestamp: 200, blocks: [{ type: 'text', text: 'failed' }] }],
+        audit: { events: withJournal ? [
+          { seq: 10, timestamp: 100, kind: { type: 'assistant_message_stored', data: { message_id: 'answer', content: 'prior answer' } } },
+          { seq: 100, timestamp: 200, kind: { type: 'run_completed', data: { run_id: 'rejected', outcome: 'failed' } } }
+        ] : [] }
+      } }
+    });
+    const live = applySessionNotification(session, {
+      sessionId: 'session-tail',
+      update: { sessionUpdate: 'user_message_chunk', messageId: 'live', content: { type: 'text', text: 'next' } }
+    });
+    expect(buildSessionConversation(live).filter((turn) => turn.user).map((turn) => turn.user?.messageId)).toEqual(['failed', 'live']);
+  });
+
+  it('places an unmatched prompt before later assistant work using its persisted timestamp', () => {
+    const session = activeSessionFromLoadResponse('session-time-anchor', {
+      _meta: { 'querymt/sessionLoadSnapshot.v1': {
+        userPrompts: [{ messageId: 'failed', messageOrder: 0, timestamp: 100, blocks: [{ type: 'text', text: 'failed' }] }],
+        audit: { events: [
+          { seq: 50, timestamp: 200, kind: { type: 'assistant_message_stored', data: { message_id: 'answer', content: 'later work' } } }
+        ] }
+      } }
+    });
+    const turns = buildSessionConversation(session);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].user?.messageId).toBe('failed');
+    expect(turns[0].content.map((item) => item.id)).toEqual(['snapshot-50']);
   });
 
   it('degrades malformed historical images to an unavailable preview', () => {
