@@ -568,16 +568,22 @@ function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionTo
 }
 
 function compareRawItems(a: RawConversationItem, b: RawConversationItem): number {
-  const aHasIndex = typeof a.eventIndex === 'number';
-  const bHasIndex = typeof b.eventIndex === 'number';
+  const aAnchor = a.type === 'transcript' ? a.transcript.historyAnchor : undefined;
+  const bAnchor = b.type === 'transcript' ? b.transcript.historyAnchor : undefined;
+  const aIndex = a.eventIndex ?? aAnchor?.eventIndex;
+  const bIndex = b.eventIndex ?? bAnchor?.eventIndex;
+  const aHasIndex = typeof aIndex === 'number';
+  const bHasIndex = typeof bIndex === 'number';
 
-  if (aHasIndex && bHasIndex && a.eventIndex !== b.eventIndex) {
-    return a.eventIndex! - b.eventIndex!;
+  if (aHasIndex && bHasIndex && aIndex !== bIndex) {
+    return aIndex! - bIndex!;
   }
   if (aHasIndex !== bHasIndex) {
     return aHasIndex ? -1 : 1;
   }
-  return a.sourceOrder - b.sourceOrder;
+  const aSide = a.eventIndex !== undefined || !aAnchor ? 0 : aAnchor.side === 'before' ? -1 : 1;
+  const bSide = b.eventIndex !== undefined || !bAnchor ? 0 : bAnchor.side === 'before' ? -1 : 1;
+  return aSide - bSide || a.sourceOrder - b.sourceOrder;
 }
 
 function canonicalizeTools(tools: SessionToolCallItem[]): SessionToolCallItem[] {

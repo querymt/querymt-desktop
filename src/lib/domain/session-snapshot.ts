@@ -1,5 +1,5 @@
 import { createEmptyActiveSession, normalizeContentBlocks, stringifyOptional, summarizeContentBlocks } from '$lib/domain/session-updates';
-import type { ActiveSessionViewModel, PromptAttachment, SessionContentBlock, SessionToolCallItem } from '$lib/domain/types';
+import type { ActiveSessionViewModel, PromptAttachment, SessionContentBlock, SessionToolCallItem, SessionTranscriptItem } from '$lib/domain/types';
 import { appendHistoricalUsage } from '$lib/domain/session-usage';
 
 type SnapshotEvent = {
@@ -289,22 +289,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
     }
   }
 
-  const unmatchedPrompts = [...structuredPrompts.values()]
-    .filter(({ record }) => {
-      const messageId = readString(record.messageId) ?? readString(record.message_id);
-      return !messageId || !restoredStructuredPrompts.has(messageId);
-    })
-    .sort(compareStructuredPromptFallback);
-  for (const { record, sourceIndex } of unmatchedPrompts) {
-    const messageId = readString(record.messageId) ?? readString(record.message_id) ?? `structured-prompt-${sourceIndex + 1}`;
-    appendStructuredPrompt(
-      session,
-      record,
-      messageId,
-      `snapshot-structured-${messageId}`,
-      readNonNegativeNumber(record.eventIndex ?? record.event_index ?? record.seq) ?? undefined
-    );
-  }
+  restoreUnmatchedPrompts(session, snapshot, structuredPrompts, restoredStructuredPrompts, toolCallsById);
 
   session.toolCalls = finalizeHistoricalToolCalls(Array.from(toolCallsById.values()), snapshot.audit?.events ?? []);
   return normalizeHistoricalSession(session);
@@ -494,13 +479,72 @@ function indexStructuredPrompts(snapshot: SessionLoadSnapshot): Map<string, Inde
   return indexed;
 }
 
+function restoreUnmatchedPrompts(
+  session: ActiveSessionViewModel,
+  snapshot: SessionLoadSnapshot,
+  prompts: Map<string, IndexedStructuredPrompt>,
+  restored: Set<string>,
+  tools: Map<string, SessionToolCallItem>
+) {
+  if (restored.size === prompts.size) return;
+  const ordered = [...prompts.entries()].sort((a, b) => compareStructuredPromptFallback(a[1], b[1]));
+  const matchedPositions = new Map(session.transcript
+    .filter((item) => item.messageId && typeof item.eventIndex === 'number')
+    .map((item) => [item.messageId!, item.eventIndex!]));
+  const visiblePositions = new Set([
+    ...session.transcript.map((item) => item.eventIndex),
+    ...[...tools.values()].map((tool) => tool.eventIndex)
+  ].filter((index): index is number => typeof index === 'number'));
+  const visibleEvents = (snapshot.audit?.events ?? [])
+    .filter((event) => typeof event.seq === 'number' && visiblePositions.has(event.seq))
+    .sort((a, b) => a.seq! - b.seq!);
+  const lastPosition = visibleEvents.at(-1)?.seq ?? -1;
+  const nextPositions = new Map<string, number>();
+  let nextPosition: number | undefined;
+  for (const [id] of [...ordered].reverse()) {
+    if (nextPosition !== undefined) nextPositions.set(id, nextPosition);
+    if (restored.has(id)) nextPosition = matchedPositions.get(id) ?? nextPosition;
+  }
+  let previousPosition = -1;
+  let previousAnchor: SessionTranscriptItem['historyAnchor'];
+  for (const [id, { record }] of ordered) {
+    if (restored.has(id)) {
+      previousPosition = matchedPositions.get(id) ?? previousPosition;
+      previousAnchor = { eventIndex: previousPosition, side: 'after' };
+      continue;
+    }
+    const eventIndex = readNonNegativeNumber(record.eventIndex ?? record.event_index ?? record.seq) ?? undefined;
+    const timestampMs = readTimestampMs(record.timestamp) ?? undefined;
+    const next = nextPositions.get(id);
+    // History order bounds a missing prompt between known prompts. Timestamps
+    // refine that placement among intervening assistant/tool events. Anchors
+    // are presentation-only: never invent a journal index from messageOrder.
+    const later = timestampMs === undefined ? undefined : visibleEvents.find((event) =>
+      event.seq! > previousPosition && (next === undefined || event.seq! <= next)
+      && (readTimestampMs(event.timestamp) ?? -1) > timestampMs
+    )?.seq;
+    const before = later ?? next;
+    let historyAnchor: NonNullable<SessionTranscriptItem['historyAnchor']> = before === undefined
+      ? { eventIndex: lastPosition, side: 'after' }
+      : { eventIndex: before, side: 'before' };
+    if (previousAnchor && (previousAnchor.eventIndex > historyAnchor.eventIndex
+        || (previousAnchor.eventIndex === historyAnchor.eventIndex && previousAnchor.side === 'after'))) {
+      historyAnchor = previousAnchor;
+    }
+    previousAnchor = eventIndex === undefined ? historyAnchor : { eventIndex, side: 'after' };
+    appendStructuredPrompt(session, record, id, `snapshot-structured-${id}`, eventIndex, timestampMs,
+      eventIndex === undefined ? historyAnchor : undefined);
+  }
+}
+
 function appendStructuredPrompt(
   session: ActiveSessionViewModel,
   record: StructuredPromptRecord,
   messageId: string,
   eventId: string,
   eventIndex?: number,
-  timestampMs?: number
+  timestampMs?: number,
+  historyAnchor?: SessionTranscriptItem['historyAnchor']
 ) {
   const blocks = normalizeContentBlocks(
     record.blocks ?? record.content ?? record.contentBlocks ?? record.content_blocks ?? record.prompt ?? []
@@ -515,7 +559,8 @@ function appendStructuredPrompt(
     messageId,
     clientPromptId: readString(record.clientPromptId) ?? readString(record.client_prompt_id) ?? null,
     eventIndex,
-    timestampMs
+    timestampMs,
+    historyAnchor
   });
   session.events.push({
     id: `${eventId}-event`,
