@@ -749,6 +749,9 @@ export class AgentsStore {
   }
 
   getWorkspaceCapability(agentId: string): WorkspaceCapability | null {
+    // `clients` is not reactive; read connection state so derived callers re-evaluate on connect/disconnect.
+    void this.connectionStates[agentId];
+    void this.controlCapabilitiesByAgent[agentId];
     return this.clients.get(agentId)?.client.getWorkspaceCapability() ?? null;
   }
 
@@ -4192,6 +4195,8 @@ export class AgentsStore {
     } while (cursor);
     children.sort(compareSessionsByActivity);
     if (!isCurrentSource()) return children;
+    // Keep summaries available to the session page; children stay nested and out of workspace sources.
+    this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], children) };
     this.sessionChildrenByParent = { ...this.sessionChildrenByParent, [key]: children };
     this.rememberSessionChildren(agentId, parentId, children.map((child) => child.sessionId));
     return children;

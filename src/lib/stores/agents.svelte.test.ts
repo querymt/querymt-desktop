@@ -9373,6 +9373,11 @@ describe('AgentsStore worktree sessions', () => {
     ] });
     const children = await store.loadSessionChildren('agent-1', 's1');
     expect(children.map((session) => session.sessionId).sort()).toEqual(['fork', 'wt']);
+    const known = store.sessionsByAgent['agent-1'].map((session) => session.sessionId);
+    expect(known).toEqual(expect.arrayContaining(['fork', 'wt']));
+    expect(known).not.toContain('other');
+    expect(known).not.toContain('delegate');
+    expect(store.workspaceSessionSources['agent-1']?.['/tmp/work']?.sessions.map((session) => session.sessionId) ?? []).not.toContain('fork');
     await store.loadSessionChildren('agent-1', 's1');
     expect(mockClient.listSessionChildren).toHaveBeenCalledTimes(1);
     await store.loadSessionChildren('agent-1', 's1', true);
