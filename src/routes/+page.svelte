@@ -5,6 +5,7 @@
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import { agentsStore, LAUNCH_MODE_OPTIONS, LAUNCH_REASONING_OPTIONS } from '$lib/stores/agents.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
+  import { WORKSPACE_MODE_OPTIONS, type ComposerWorkspaceMode } from '$lib/domain/session-workspace';
   import { inboxStore } from '$lib/stores/inbox.svelte';
 
   const onlineAgents = $derived(agentsStore.connectedAgents);
@@ -113,6 +114,10 @@
       selectedLaunchReasoningId={agentsStore.composerReasoningId}
       targetOptions={agentsStore.getTargetOptions(primaryAgentId)}
       selectedTargetId={agentsStore.composerTargetId}
+      workspaceModeOptions={primaryAgentId && agentsStore.composerTargetId === 'local' && agentsStore.canCreateWorktree(primaryAgentId)
+        ? WORKSPACE_MODE_OPTIONS : []}
+      selectedWorkspaceMode={agentsStore.composerWorkspaceMode}
+      onWorkspaceModeChange={(mode) => agentsStore.setComposerWorkspaceMode(mode as ComposerWorkspaceMode, primaryAgentId)}
       onCwdInput={(value) => agentsStore.setComposerCwd(value)}
       onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
       onModelChange={(value) => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
-import { compareSessionsByPin, readSessionPin, sessionMatchesLifecycle, buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
+import { buildListSessionChildrenRequest, getSessionGroupCwd, compareSessionsByPin, readSessionPin, sessionMatchesLifecycle, buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 
 function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionId: string }): DesktopSessionSummary {
@@ -233,6 +233,33 @@ describe('isRootSession', () => {
 
     expect(isRootSession(delegateSession)).toBe(false);
     expect(isRootSession(forkedSession)).toBe(false);
+  });
+});
+
+describe('worktree session metadata', () => {
+  const workspace = { workspaceId: 'ws_1', branch: 'qmt/ws_1', checkoutPath: '/w/ws_1', sourceCwd: '/p/app', baselineMode: 'head', lifecycle: 'ready' };
+
+  it('maps workspace and access metadata and groups under the source cwd', () => {
+    const [summary] = mapAcpSessionsToDesktopSessions([
+      { ...createSession({ forkOrigin: 'worktree', parentSessionId: 'p', querymt: { workspace, sessionAccess: { mode: 'read_only', ownerSessionId: 'o' } } }), cwd: '/w/ws_1' } as SessionInfo
+    ], { agentId: 'a', agentName: 'A' });
+    expect(summary.workspace?.branch).toBe('qmt/ws_1');
+    expect(summary.access?.ownerSessionId).toBe('o');
+    expect(summary.cwd).toBe('/w/ws_1');
+    expect(getSessionGroupCwd(summary)).toBe('/p/app');
+    expect(groupSessionsByWorkspace([summary])[0].cwd).toBe('/p/app');
+  });
+
+  it('leaves sessions without metadata untouched', () => {
+    const [summary] = mapAcpSessionsToDesktopSessions([createSession()], { agentId: 'a', agentName: 'A' });
+    expect(summary.workspace).toBeNull();
+    expect(summary.access).toBeNull();
+    expect(getSessionGroupCwd(summary)).toBe('/tmp/project');
+  });
+
+  it('builds the children request', () => {
+    expect(buildListSessionChildrenRequest('p1')).toEqual({ _meta: { session_scope: 'children', querymt: { parentSessionId: 'p1' } } });
+    expect(buildListSessionChildrenRequest('p1', 'c2').cursor).toBe('c2');
   });
 });
 

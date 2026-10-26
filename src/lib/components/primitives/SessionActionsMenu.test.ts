@@ -105,3 +105,22 @@ describe('SessionActionsMenu', () => {
     expect(onSetLifecycle).not.toHaveBeenCalled();
   });
 });
+
+describe('SessionActionsMenu worktree entries', () => {
+  it('shows worktree actions only when the caller enables them', async () => {
+    const view = render(SessionActionsMenu, { session });
+    await fireEvent.click(screen.getByRole('button', { name: 'Session actions for Lifecycle task' }));
+    expect(screen.queryByRole('menuitem', { name: 'New worktree session' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Hand off worktree' })).not.toBeInTheDocument();
+    const onCreateWorktree = vi.fn();
+    const onHandoffWorktree = vi.fn();
+    await view.rerender({ onCreateWorktree, onHandoffWorktree });
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'New worktree session' }));
+    expect(onCreateWorktree).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+    await fireEvent.click(screen.getByRole('button', { name: 'Session actions for Lifecycle task' }));
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Hand off worktree' }));
+    expect(onHandoffWorktree).toHaveBeenCalledOnce();
+  });
+});
+

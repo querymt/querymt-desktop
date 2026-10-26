@@ -119,6 +119,9 @@ function createAgentsStore() {
     }),
     setComposerTarget: vi.fn((value: string) => { agentsStore.composerTargetId = value; }),
     setComposerAgent: vi.fn((value: string | null) => { agentsStore.composerAgentId = value; }),
+    composerWorkspaceMode: 'local',
+    canCreateWorktree: vi.fn((_agentId: string | null) => false),
+    setComposerWorkspaceMode: vi.fn(),
     requestPromptFocus: vi.fn(),
     refreshAllSessions: vi.fn(),
     loadWorkspaceSessions: vi.fn(),
@@ -291,6 +294,17 @@ describe('Landing page session start', () => {
     expect(agentsStore.createSession).toHaveBeenCalledWith('agent-1');
     if (created) expect(goto).toHaveBeenCalledExactlyOnceWith('/sessions/agent-1/new-session');
     else expect(goto).not.toHaveBeenCalled();
+  });
+
+  it('offers the Workspace choice for the launcher agent even when no composer agent is set', async () => {
+    agentsStore.composerAgentId = null;
+    agentsStore.canCreateWorktree.mockImplementation((agentId: string | null) => agentId === 'agent-1');
+    render(LandingPage);
+    const props = vi.mocked(SessionComposer).mock.calls.at(-1)![1];
+    expect(props.workspaceModeOptions?.length).toBeGreaterThan(1);
+
+    props.onWorkspaceModeChange!('worktree');
+    expect(agentsStore.setComposerWorkspaceMode).toHaveBeenCalledWith('worktree', 'agent-1');
   });
 
   it('starts an attachment-only landing session without clearing wiring prematurely', async () => {

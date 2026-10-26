@@ -13,6 +13,8 @@
   import SessionHeader from '$lib/components/session/SessionHeader.svelte';
   import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
   import SessionUndoDialog from '$lib/components/session/SessionUndoDialog.svelte';
+  import WorktreeSessionDialog from '$lib/components/session/WorktreeSessionDialog.svelte';
+  import type { WorktreeCreateOptions, WorktreeHandoffOptions } from '$lib/domain/session-workspace';
   import {
     createFollowScrollScheduler,
     getDistanceFromBottom,
@@ -96,6 +98,9 @@
   let forkDialogOpen = $state(false);
   let forkTarget = $state<SessionForkTarget | null>(null);
   let delegateModelDialogOpen = $state(false);
+  let worktreeDialogOpen = $state(false);
+  let worktreeDialogMode = $state<'create' | 'handoff'>('create');
+  let worktreeDialogError = $state<string | null>(null);
 
   const debugEventsTooltip = $derived.by(() => {
     const count = agentsStore.activeSession.events.length;
@@ -118,8 +123,17 @@
       )
     ).length
   );
-  const undoSupported = $derived(agentId ? agentsStore.canUseSessionUndo(agentId) : false);
-  const forkSupported = $derived(agentId ? agentsStore.canForkSession(agentId) : false);
+  // Read-only is agent-authoritative (load response or owner_transferred prompt failure).
+  const readOnlyAccess = $derived(agentsStore.activeSessionId === sessionId ? agentsStore.activeSessionAccess : null);
+  const readOnlyOwnerId = $derived(readOnlyAccess?.ownerSessionId ?? selectedSession?.workspace?.handedOffTo ?? null);
+  const undoSupported = $derived(agentId && !readOnlyAccess ? agentsStore.canUseSessionUndo(agentId) : false);
+  const forkSupported = $derived(agentId && !readOnlyAccess ? agentsStore.canForkSession(agentId) : false);
+  const canCreateWorktree = $derived(!!agentId && !readOnlyAccess && selectedSession?.location !== 'remote' &&
+    agentsStore.canCreateWorktree(agentId));
+  const canHandoffWorktree = $derived(!!agentId && !readOnlyAccess && selectedSession?.location !== 'remote' &&
+    agentsStore.canHandoffWorktree(agentId) && !!selectedSession?.workspace && !selectedSession.workspace.handedOffTo &&
+    (!selectedSession.workspace.ownerSessionId || selectedSession.workspace.ownerSessionId === sessionId));
+  const worktreeSummarySupported = $derived(agentId ? agentsStore.getWorkspaceCapability(agentId)?.handoffSummary === true : false);
   const undoTarget = $derived(
     undoTargetMessageId
       ? getUndoableSessionTurns(agentsStore.activeSession).find((turn) => turn.messageId === undoTargetMessageId) ?? null
@@ -276,6 +290,30 @@
     forkDialogOpen = false;
     forkTarget = null;
     await goto(`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(forkedSessionId)}`);
+  }
+
+  function openWorktreeDialog(mode: 'create' | 'handoff') {
+    worktreeDialogMode = mode;
+    worktreeDialogError = null;
+    agentsStore.clearError();
+    worktreeDialogOpen = true;
+  }
+
+  async function finishWorktreeDialog(newSessionId: string | null) {
+    if (!newSessionId) {
+      worktreeDialogError = agentsStore.error;
+      return;
+    }
+    worktreeDialogOpen = false;
+    await goto(`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(newSessionId)}`);
+  }
+
+  async function confirmCreateWorktree(options: WorktreeCreateOptions) {
+    await finishWorktreeDialog(await agentsStore.createWorktreeSessionFrom(agentId, sessionId, options));
+  }
+
+  async function confirmHandoffWorktree(options: WorktreeHandoffOptions) {
+    await finishWorktreeDialog(await agentsStore.handoffWorktreeSession(agentId, sessionId, options));
   }
 
   function openUndoDialog(messageId: string) {
@@ -552,6 +590,8 @@
     debugLabel={debugEventsTooltip}
     showDebug={chatPreferencesStore.developerMode}
     forkPending={agentsStore.forkPending}
+    onCreateWorktree={canCreateWorktree ? () => openWorktreeDialog('create') : null}
+    onHandoffWorktree={canHandoffWorktree ? () => openWorktreeDialog('handoff') : null}
     onBack={() => goto('/sessions')}
     onRefresh={() => refreshSession()}
     onDebug={() => (debugEventsOpen = true)}
@@ -624,6 +664,17 @@
         <SessionActivityBar session={agentsStore.activeSession} forkPending={agentsStore.forkPending} />
       </div>
 
+      {#if readOnlyAccess}
+        <div class="session-read-only-notice" role="status" data-testid="read-only-notice"
+          style={dockAlignLeft != null && dockAlignWidth != null ? `left:${dockAlignLeft}px;width:${dockAlignWidth}px;` : ''}>
+          <span>
+            This worktree was handed off, so this conversation is read-only.
+          </span>
+          {#if readOnlyOwnerId}
+            <a class="action-btn" href={`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(readOnlyOwnerId)}`}>Open current session</a>
+          {/if}
+        </div>
+      {:else}
       <SessionComposer
         docked={true}
         collapsed={composerCollapsed}
@@ -672,6 +723,7 @@
         onDismissError={() => agentsStore.clearError()}
         onSendPrompt={() => sendPrompt()}
       />
+      {/if}
     {/if}
 
     <div class="session-chat-end-anchor" aria-hidden="true"></div>
@@ -703,6 +755,17 @@
     target={forkTarget}
     pending={agentsStore.forkPending}
     onConfirm={confirmFork}
+  />
+
+  <WorktreeSessionDialog
+    bind:open={worktreeDialogOpen}
+    mode={worktreeDialogMode}
+    sourceTitle={selectedSession?.title ?? 'this session'}
+    pending={agentsStore.worktreePending}
+    error={worktreeDialogError}
+    summarySupported={worktreeSummarySupported}
+    onCreate={confirmCreateWorktree}
+    onHandoff={confirmHandoffWorktree}
   />
 
   <SessionUndoDialog

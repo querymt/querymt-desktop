@@ -1,5 +1,6 @@
 import type { ListSessionsRequest, SessionInfo } from '@agentclientprotocol/sdk';
 import type { DesktopSessionSummary, SessionBrowserState, SessionPin, SessionLifecycle, SessionLifecycleFilter, SessionLifecycleView, SessionStatus } from '$lib/domain/types';
+import { readSessionAccess, readSessionWorkspace } from '$lib/domain/session-workspace';
 import {
   type SessionMeta as QuerymtSessionMeta,
   SessionRuntimePhase as QuerymtSessionRuntimePhase
@@ -148,8 +149,27 @@ export function mapAcpSessionsToDesktopSessions(
     pin: readSessionPin(session._meta?.querymt, session.sessionId),
     // Disconnected bookmark fallbacks do not carry owner-sourced parentage.
     relationshipKnown: session._meta?.location !== 'remote' || session._meta?.connectionState !== 'disconnected',
+    workspace: readSessionWorkspace(session._meta),
+    access: readSessionAccess(session._meta),
     ...readSessionRelationshipMeta(session)
   }));
+}
+
+/**
+ * Workspace group of a session: a managed worktree session belongs to the
+ * project it was started from (`workspace.sourceCwd`), not its checkout path.
+ */
+export function getSessionGroupCwd(session: Pick<DesktopSessionSummary, 'cwd' | 'workspace'>): string {
+  return session.workspace?.sourceCwd ?? session.cwd;
+}
+
+/** Children request for one parent (forks and worktree children; delegates excluded by the agent). */
+export function buildListSessionChildrenRequest(parentSessionId: string, cursor?: string | null): ListSessionsRequest {
+  const request: ListSessionsRequest = {
+    _meta: { session_scope: 'children', querymt: { parentSessionId } }
+  };
+  if (cursor) request.cursor = cursor;
+  return request;
 }
 
 export function readSessionPin(namespace: unknown, sessionId: string): SessionPin | null {
@@ -306,7 +326,7 @@ export function groupSessionsByWorkspace(sessions: DesktopSessionSummary[]): Wor
   const groups = new Map<string, DesktopSessionSummary[]>();
 
   for (const session of sessions) {
-    const key = getSessionWorkspaceKey(session.cwd);
+    const key = getSessionWorkspaceKey(getSessionGroupCwd(session));
     const existing = groups.get(key) ?? [];
     existing.push(session);
     groups.set(key, existing);

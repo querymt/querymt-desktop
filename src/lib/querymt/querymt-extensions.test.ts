@@ -269,6 +269,16 @@ describe('QuerymtExtensions session pins', () => {
   });
 });
 
+describe('QuerymtExtensions worktrees', () => {
+  it('uses the exact wire methods and payloads', async () => {
+    const { extensions, extMethod } = extensionClient();
+    await extensions.worktreeCreate({ cwd: '/p', source_session_id: 's', include_local_changes: true });
+    expect(extMethod).toHaveBeenLastCalledWith('_querymt/worktree/create', { cwd: '/p', source_session_id: 's', include_local_changes: true });
+    await extensions.worktreeHandoff({ session_id: 's', summary: true });
+    expect(extMethod).toHaveBeenLastCalledWith('_querymt/worktree/handoff', { session_id: 's', summary: true });
+  });
+});
+
 describe('QuerymtExtensions control methods', () => {
   it('fetches profiles through the profiles method', async () => {
     const { extensions, extMethod } = extensionClient();

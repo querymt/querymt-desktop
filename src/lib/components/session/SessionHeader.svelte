@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Archive, ArrowLeft, Bug, CircleCheckBig, FileCog, Info, Network, Pin, RefreshCw } from '@lucide/svelte';
+  import { Archive, ArrowLeft, Bug, CircleCheckBig, FileCog, GitBranch, Info, Network, Pin, RefreshCw } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
@@ -7,6 +7,7 @@
   import SessionContextDial from '$lib/components/session/SessionContextDial.svelte';
   import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
   import { autoCollapsePopover } from '$lib/design/details-popover';
+  import { isWorkspaceUsable, worktreeTooltip } from '$lib/domain/session-workspace';
   import type { ActiveSessionViewModel, DesktopSessionSummary, SessionLifecyclePatch, SessionStatus } from '$lib/domain/types';
 
   let {
@@ -28,6 +29,8 @@
     debugLabel = 'Debug events',
     showDebug = false,
     forkPending = false,
+    onCreateWorktree = null,
+    onHandoffWorktree = null,
     onBack,
     onRefresh,
     onDebug
@@ -55,6 +58,8 @@
     debugLabel?: string;
     showDebug?: boolean;
     forkPending?: boolean;
+    onCreateWorktree?: (() => void) | null;
+    onHandoffWorktree?: (() => void) | null;
     onBack?: () => void;
     onRefresh?: () => void | Promise<void>;
     onDebug?: () => void;
@@ -142,6 +147,13 @@
       {@render lifecycleIcons()}
       {@render remoteHostIcon()}
       <CopyTextChip class="session-header-workspace" value={workspacePath ?? workspace} display={workspace} title="Copy project path" />
+      {#if summary?.workspace}
+        {@const usable = isWorkspaceUsable(summary.workspace)}
+        <span aria-hidden="true">·</span>
+        <span class="session-header-worktree" class:session-header-worktree-warning={!usable} data-testid="header-worktree-chip" title={worktreeTooltip(summary.workspace)}>
+          <GitBranch size={11} aria-hidden="true" />{summary.workspace.branch ?? 'worktree'}{#if !usable} · {summary.workspace.lifecycle}{/if}
+        </span>
+      {/if}
       {#if session.sessionId}
         <span class="session-header-session-id"><span aria-hidden="true">·</span><SessionIdChip sessionId={session.sessionId} /></span>
       {/if}
@@ -164,7 +176,7 @@
   <div class="session-header-controls">
     <div class="session-header-action-group" aria-label="Session actions">
       {#if summary}
-        <SessionActionsMenu session={summary} canManage={canManageLifecycle} {canPin} {onSetPinned} pending={pinPending || lifecyclePending} error={pinError || lifecycleError} {onSetLifecycle} triggerClass="icon-btn" />
+        <SessionActionsMenu session={summary} canManage={canManageLifecycle} {canPin} {onSetPinned} pending={pinPending || lifecyclePending} error={pinError || lifecycleError} {onSetLifecycle} {onCreateWorktree} {onHandoffWorktree} triggerClass="icon-btn" />
       {/if}
       <details class="session-header-details" use:autoCollapsePopover>
         <summary class="icon-btn" aria-label="Session details" title="Session details"><Info size={16} /></summary>
@@ -183,6 +195,14 @@
             {/if}
             {#if profileLabel}
               <div><dt>Profile</dt><dd>{profileLabel}</dd></div>
+            {/if}
+            {#if summary?.workspace}
+              {@const wt = summary.workspace}
+              <div><dt>Worktree branch</dt><dd>{wt.branch ?? 'Unknown'}</dd></div>
+              {#if wt.checkoutPath}<div><dt>Checkout</dt><dd><CopyTextChip value={wt.checkoutPath} display={wt.checkoutPath} title="Copy checkout path" /></dd></div>{/if}
+              {#if wt.baselineMode}<div><dt>Baseline</dt><dd>{wt.baselineMode.replace(/_/g, ' ')}</dd></div>{/if}
+              {#if wt.lifecycle}<div><dt>Worktree state</dt><dd>{wt.lifecycle}</dd></div>{/if}
+              {#if wt.handedOffTo}<div><dt>Handed off</dt><dd>Yes</dd></div>{/if}
             {/if}
             <div><dt>Updated</dt><dd>{updatedAt}</dd></div>
             {#if session.sessionId}

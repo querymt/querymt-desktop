@@ -130,6 +130,22 @@ export const QMT_METHOD_SESSION_RUNTIME_STATE = 'querymt/session/runtimeState';
 export const QMT_METHOD_SESSION_GET_LIFECYCLE = 'querymt/session/getLifecycle';
 export const QMT_METHOD_SESSION_SET_LIFECYCLE = 'querymt/session/setLifecycle';
 export const QMT_METHOD_SESSION_SET_PINNED = 'querymt/session/setPinned';
+export const QMT_METHOD_WORKTREE_CREATE = 'querymt/worktree/create';
+export const QMT_METHOD_WORKTREE_HANDOFF = 'querymt/worktree/handoff';
+
+export interface QuerymtWorktreeCreateRequest {
+  cwd: string;
+  source_session_id?: string;
+  name?: string;
+  base_ref?: string;
+  include_local_changes?: boolean;
+}
+
+export interface QuerymtWorktreeHandoffRequest {
+  session_id: string;
+  name?: string;
+  summary?: boolean;
+}
 export const QMT_NOTIFICATION_SESSION_PINS_CHANGED = 'querymt/session/pinsChanged';
 export const QMT_NOTIFICATION_SESSION_INPUT_STATE = 'querymt/session/inputState';
 
@@ -437,6 +453,14 @@ export class QuerymtExtensions {
       params as Record<string, unknown>
     );
     return response as T;
+  }
+
+  async worktreeCreate(request: QuerymtWorktreeCreateRequest): Promise<unknown> {
+    return this.call<unknown>(QMT_METHOD_WORKTREE_CREATE, request);
+  }
+
+  async worktreeHandoff(request: QuerymtWorktreeHandoffRequest): Promise<unknown> {
+    return this.call<unknown>(QMT_METHOD_WORKTREE_HANDOFF, request);
   }
 
   async getSessionLifecycle(session_id: string): Promise<SessionLifecycle> {

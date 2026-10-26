@@ -115,6 +115,7 @@
       onSetLifecycle={(session, patch) => agentsStore.setSessionLifecycle(session.agentId, session.sessionId, patch)}
       canDeleteSession={(session) => session.location !== 'remote' && agentsStore.canDeleteSession(session.agentId)}
       onDeleteSession={deleteSession}
+      loadChildren={(session) => agentsStore.loadSessionChildren(session.agentId, session.sessionId)}
     />
   </div>
 </div>

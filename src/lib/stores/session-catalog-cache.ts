@@ -1,5 +1,6 @@
 import type { AgentConfig, DesktopSessionSummary, SessionLifecycleFilter } from '$lib/domain/types';
 import { readSessionLifecycle, readSessionPin } from '$lib/domain/sessions';
+import { readSessionWorkspace } from '$lib/domain/session-workspace';
 
 export const SESSION_CATALOG_STORAGE_KEY = 'querymt-desktop.session-catalog.v1';
 export const SESSION_CATALOG_FRESH_MS = 5 * 60_000;
@@ -171,7 +172,8 @@ function persistedSummary(session: DesktopSessionSummary): DesktopSessionSummary
     remoteConnectionState: session.location === 'remote' ? 'disconnected' : undefined,
     pin: session.pin, lifecycle: session.lifecycle, relationshipKnown: session.relationshipKnown,
     parentSessionId: session.parentSessionId, forkOrigin: session.forkOrigin,
-    sessionKind: session.sessionKind, hasChildren: session.hasChildren, forkCount: session.forkCount
+    sessionKind: session.sessionKind, hasChildren: session.hasChildren, forkCount: session.forkCount,
+    workspace: session.workspace ?? null
   };
 }
 
@@ -191,5 +193,7 @@ function readSummary(value: unknown): DesktopSessionSummary | null {
   if (row.lifecycle != null && lifecycle === null) return null;
   const pin = readSessionPin({ pin: row.pin }, row.sessionId);
   if (row.pin != null && (pin === null || row.pin.session_id !== row.sessionId)) return null;
-  return persistedSummary({ ...row, lifecycle, pin });
+  // Worktree metadata is optional; a malformed value is dropped rather than trusted.
+  const workspace = readSessionWorkspace({ querymt: { workspace: row.workspace } });
+  return persistedSummary({ ...row, lifecycle, pin, workspace });
 }

@@ -3,7 +3,7 @@
   import { SessionSearchClient } from '$lib/domain/session-search-client';
   import type { SessionSearchMatch } from '$lib/domain/session-search';
   import { Accordion, Popover, RadioGroup } from 'bits-ui';
-  import { AlertTriangle, Archive, Bot, Check, ChevronDown, Clock3, Folder, FolderOpen, FolderSync, GitFork, Info, LoaderCircle, MessageSquarePlus, Network, PlugZap, Pin, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, X } from '@lucide/svelte';
+  import { AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, Clock3, Folder, FolderOpen, FolderSync, GitBranch, GitFork, Info, LoaderCircle, MessageSquarePlus, Network, PlugZap, Pin, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, X } from '@lucide/svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
@@ -11,6 +11,7 @@
   import SessionLifecycleBadges from '$lib/components/primitives/SessionLifecycleBadges.svelte';
   import { createSessionBrowserState, SESSION_LIFECYCLE_VIEWS, RECENT_SESSION_GROUP_KEY, PINNED_SESSION_GROUP_KEY, compareSessionsByPin, getSessionKey, getSessionWorkspaceName, isRootSession, sessionMatchesLifecycle, compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import Identicon from '$lib/components/primitives/Identicon.svelte';
+  import { isWorkspaceUsable, worktreeTooltip } from '$lib/domain/session-workspace';
   import type { DesktopSessionSummary, ExcludedSessionAgent, SessionBrowserState, SessionLifecyclePatch, SessionLifecycleView, SessionStatus } from '$lib/domain/types';
 
   let {
@@ -44,7 +45,8 @@
     onLoadMoreWorkspace = null,
     onOpenSession = null,
     canDeleteSession = null,
-    onDeleteSession = null
+    onDeleteSession = null,
+    loadChildren = null
   }: {
     sessions?: DesktopSessionSummary[];
     recentSessionKeys?: string[];
@@ -80,7 +82,40 @@
     onOpenSession?: ((session: DesktopSessionSummary) => void) | null;
     canDeleteSession?: ((session: DesktopSessionSummary) => boolean) | null;
     onDeleteSession?: ((session: DesktopSessionSummary) => Promise<void>) | null;
+    /** Loads direct children (forks and worktree children) of a session; enables the expand control. */
+    loadChildren?: ((session: DesktopSessionSummary) => Promise<DesktopSessionSummary[]>) | null;
   } = $props();
+
+  let expandedRows = $state<Record<string, boolean>>({});
+  let childrenByRow = $state<Record<string, DesktopSessionSummary[]>>({});
+  let childrenLoading = $state<Record<string, boolean>>({});
+  let childrenError = $state<Record<string, string | null>>({});
+
+  function hasExpandableChildren(session: DesktopSessionSummary): boolean {
+    return !!loadChildren && ((session.forkCount ?? 0) > 0 || session.hasChildren === true);
+  }
+
+  async function toggleChildren(session: DesktopSessionSummary) {
+    const key = getSessionKey(session);
+    if (expandedRows[key]) {
+      // Drop the local copy so the next expansion re-reads the store (which owns invalidation).
+      const { [key]: _dropped, ...rest } = childrenByRow;
+      childrenByRow = rest;
+      expandedRows = { ...expandedRows, [key]: false };
+      return;
+    }
+    expandedRows = { ...expandedRows, [key]: true };
+    if (!loadChildren || childrenLoading[key]) return;
+    childrenLoading = { ...childrenLoading, [key]: true };
+    childrenError = { ...childrenError, [key]: null };
+    try {
+      childrenByRow = { ...childrenByRow, [key]: await loadChildren(session) };
+    } catch (cause) {
+      childrenError = { ...childrenError, [key]: cause instanceof Error ? cause.message : 'Could not load child sessions.' };
+    } finally {
+      childrenLoading = { ...childrenLoading, [key]: false };
+    }
+  }
 
   type RuntimeFilter = SessionBrowserState['runtime'];
 
@@ -430,6 +465,125 @@
   </div>
 {/snippet}
 
+{#snippet sessionRow(session: DesktopSessionSummary, group: WorkspaceSessionGroup, depth: number)}
+                   {@const sessionKey = `${session.agentId}:${session.sessionId}`}
+                   {@const canDelete = canDeleteSession?.(session) ?? false}
+                   {@const expandable = hasExpandableChildren(session)}
+                   {@const expanded = !!expandedRows[sessionKey]}
+                   {@const handedOff = !!session.workspace?.handedOffTo || session.access?.mode === 'read_only'}
+                   <div class="model-picker-row session-row" class:session-row-nested={depth > 0} style={depth > 0 ? `margin-left: ${depth * 1.1}rem` : undefined} data-depth={depth}>
+                    <button
+                      class="session-row-navigation"
+                      type="button"
+                      aria-label={`Open session ${session.title}`}
+                      onclick={() => onOpenSession?.(session)}
+                    ></button>
+                     {#if expandable}
+                       <button class="session-row-expand" type="button" aria-expanded={expanded}
+                         aria-label={`${expanded ? 'Collapse' : 'Expand'} child sessions of ${session.title}`}
+                         onclick={() => toggleChildren(session)}>
+                         {#if childrenLoading[sessionKey]}<LoaderCircle size={13} class="animate-spin" />{:else}<ChevronRight size={13} class={expanded ? 'session-row-expand-open' : ''} />{/if}
+                       </button>
+                     {/if}
+                    <span class="session-row-identicon" aria-hidden="true">
+                      <Identicon seed={session.sessionId} />
+                    </span>
+                    <span class="session-row-main">
+                       <span class="session-row-title-line">
+                            <span class="session-row-title">{session.title}</span>
+                            {#if session.pin?.pinned && group.kind !== 'pinned'}<Pin size={12} class="session-pin-indicator" aria-label="Pinned" />{/if}
+                           <SessionLifecycleBadges lifecycle={session.lifecycle} showUnavailable={browserState.resolution === 'any' && browserState.archive === 'any'} />
+                           {#if session.location === 'remote' && session.remoteConnectionState === 'disconnected'}
+                             <span class="session-relationship-badge session-relationship-badge-remote">Remote · disconnected</span>
+                           {:else if group.location === 'mixed' && session.location === 'remote'}
+                             <span class="session-relationship-badge session-relationship-badge-remote">Remote</span>
+                           {/if}
+                          {#if session.parentSessionId}
+                           {#if session.forkOrigin === 'user'}
+                             <span class="session-relationship-badge session-relationship-badge-fork"><GitFork size={11} />Fork</span>
+                           {:else if session.forkOrigin === 'worktree'}
+                             <span class="session-relationship-badge session-relationship-badge-worktree"><GitBranch size={11} />Worktree</span>
+                          {:else if session.forkOrigin === 'delegation'}
+                            <span class="session-relationship-badge session-relationship-badge-delegate"><Bot size={11} />Delegate</span>
+                          {:else}
+                            <span class="session-relationship-badge session-relationship-badge-child"><GitFork size={11} />Child</span>
+                          {/if}
+                        {/if}
+                        {#if session.workspace}
+                          {@const usable = isWorkspaceUsable(session.workspace)}
+                          <span class="session-relationship-badge session-relationship-badge-branch" class:session-relationship-badge-warning={!usable}
+                            title={worktreeTooltip(session.workspace)} data-testid="worktree-branch-badge">
+                            {#if usable}<GitBranch size={11} />{:else}<AlertTriangle size={11} />{/if}{session.workspace.branch ?? 'worktree'}{#if !usable} · {session.workspace.lifecycle}{/if}
+                          </span>
+                        {/if}
+                        {#if handedOff}
+                          <span class="session-relationship-badge session-relationship-badge-handoff" title="This worktree was handed off to another session">Handed off</span>
+                        {/if}
+                        {#if (session.forkCount ?? 0) > 0}
+                          <span class="session-relationship-badge session-relationship-badge-count">
+                            <GitFork size={11} />{session.forkCount} {session.forkCount === 1 ? 'fork' : 'forks'}
+                          </span>
+                        {/if}
+                      </span>
+                      <span class="session-row-meta">
+                        {#if !!group.kind}
+                          <span class="session-row-workspace" title={session.cwd}>
+                            {getSessionWorkspaceName(session.cwd)}{#if session.location === 'remote'} · {session.remoteNodeLabel || compactRemoteNodeId(session.remoteNodeId ?? '')}{/if}
+                          </span>
+                        {/if}
+                        {#if showAgentNames}<span>{session.agentName}</span>{/if}
+                        <span class="session-row-status-line">
+                          <span
+                            class={`session-header-status-dot session-header-status-dot-${getStatusTone(session.status)}`}
+                            aria-label={`Status: ${getStatusLabel(session.status)}`}
+                            title={`Status: ${getStatusLabel(session.status)}`}
+                          ></span>
+                          <SessionIdChip sessionId={session.sessionId} />
+                          <span aria-hidden="true">·</span>
+                          <button
+                            class="session-row-timestamp"
+                            type="button"
+                            title={formatSessionTimestampAbsolute(session.updatedAt)}
+                            onclick={() => onOpenSession?.(session)}
+                          >{formatSessionTimestamp(session.updatedAt)}</button>
+                        </span>
+                      </span>
+                    </span>
+                     <span class="session-row-side">
+                       <SessionActionsMenu
+                         {session}
+                          canManage={canManageLifecycle?.(session) ?? false}
+                          canPin={canPinSession?.(session) ?? false}
+                          onSetPinned={onSetPinned ? (pinned) => onSetPinned!(session, pinned) : null}
+                         pending={pinPending[sessionKey] || lifecyclePending[sessionKey] || deletingSessionKey === sessionKey}
+                         error={pinErrors[sessionKey] || lifecycleErrors[sessionKey]}
+                         onSetLifecycle={onSetLifecycle ? (patch) => onSetLifecycle!(session, patch) : null}
+                         onCopy={() => copySessionId(session.sessionId)}
+                         copied={copiedSessionId === session.sessionId}
+                         onDelete={onDeleteSession && canDelete && !deletingSessionKey ? () => requestDeleteSession(session) : null}
+                       />
+                     </span>
+                  </div>
+                  {#if expandable && expanded}
+                    <div class="session-row-children" role="group" aria-label={`Child sessions of ${session.title}`}>
+                      {#if childrenLoading[sessionKey] && !childrenByRow[sessionKey]}
+                        <div class="session-workspace-loading" style={`margin-left: ${(depth + 1) * 1.1}rem`}><LoaderCircle size={13} class="animate-spin" /> Loading child sessions...</div>
+                      {:else if childrenError[sessionKey]}
+                        <div class="session-workspace-pagination" style={`margin-left: ${(depth + 1) * 1.1}rem`}>
+                          <span class="alert-error" role="alert">{childrenError[sessionKey]}</span>
+                          <button class="action-btn" type="button" onclick={() => { expandedRows = { ...expandedRows, [sessionKey]: false }; void toggleChildren(session); }}>Retry</button>
+                        </div>
+                      {:else}
+                        {#each (childrenByRow[sessionKey] ?? []).filter((child) => child.parentSessionId === session.sessionId) as child (getSessionKey(child))}
+                          {@render sessionRow(child, group, depth + 1)}
+                        {:else}
+                          <div class="session-workspace-loading" style={`margin-left: ${(depth + 1) * 1.1}rem`}>No child sessions.</div>
+                        {/each}
+                      {/if}
+                    </div>
+                  {/if}
+{/snippet}
+
 <div class="session-browser">
   <div class="session-browser-toolbar">
     <label class="session-browser-search">
@@ -654,82 +808,7 @@
               {:else}
                 <div class="model-picker-list session-workspace-session-list">
                   {#each group.sessions as session (getSessionKey(session))}
-                   {@const sessionKey = `${session.agentId}:${session.sessionId}`}
-                   {@const canDelete = canDeleteSession?.(session) ?? false}
-                   <div class="model-picker-row session-row">
-                    <button
-                      class="session-row-navigation"
-                      type="button"
-                      aria-label={`Open session ${session.title}`}
-                      onclick={() => onOpenSession?.(session)}
-                    ></button>
-                    <span class="session-row-identicon" aria-hidden="true">
-                      <Identicon seed={session.sessionId} />
-                    </span>
-                    <span class="session-row-main">
-                       <span class="session-row-title-line">
-                            <span class="session-row-title">{session.title}</span>
-                            {#if session.pin?.pinned && group.kind !== 'pinned'}<Pin size={12} class="session-pin-indicator" aria-label="Pinned" />{/if}
-                           <SessionLifecycleBadges lifecycle={session.lifecycle} showUnavailable={browserState.resolution === 'any' && browserState.archive === 'any'} />
-                           {#if session.location === 'remote' && session.remoteConnectionState === 'disconnected'}
-                             <span class="session-relationship-badge session-relationship-badge-remote">Remote · disconnected</span>
-                           {:else if group.location === 'mixed' && session.location === 'remote'}
-                             <span class="session-relationship-badge session-relationship-badge-remote">Remote</span>
-                           {/if}
-                          {#if session.parentSessionId}
-                          {#if session.forkOrigin === 'user'}
-                            <span class="session-relationship-badge session-relationship-badge-fork"><GitFork size={11} />Fork</span>
-                          {:else if session.forkOrigin === 'delegation'}
-                            <span class="session-relationship-badge session-relationship-badge-delegate"><Bot size={11} />Delegate</span>
-                          {:else}
-                            <span class="session-relationship-badge session-relationship-badge-child"><GitFork size={11} />Child</span>
-                          {/if}
-                        {/if}
-                        {#if (session.forkCount ?? 0) > 0}
-                          <span class="session-relationship-badge session-relationship-badge-count">
-                            <GitFork size={11} />{session.forkCount} {session.forkCount === 1 ? 'fork' : 'forks'}
-                          </span>
-                        {/if}
-                      </span>
-                      <span class="session-row-meta">
-                        {#if !!group.kind}
-                          <span class="session-row-workspace" title={session.cwd}>
-                            {getSessionWorkspaceName(session.cwd)}{#if session.location === 'remote'} · {session.remoteNodeLabel || compactRemoteNodeId(session.remoteNodeId ?? '')}{/if}
-                          </span>
-                        {/if}
-                        {#if showAgentNames}<span>{session.agentName}</span>{/if}
-                        <span class="session-row-status-line">
-                          <span
-                            class={`session-header-status-dot session-header-status-dot-${getStatusTone(session.status)}`}
-                            aria-label={`Status: ${getStatusLabel(session.status)}`}
-                            title={`Status: ${getStatusLabel(session.status)}`}
-                          ></span>
-                          <SessionIdChip sessionId={session.sessionId} />
-                          <span aria-hidden="true">·</span>
-                          <button
-                            class="session-row-timestamp"
-                            type="button"
-                            title={formatSessionTimestampAbsolute(session.updatedAt)}
-                            onclick={() => onOpenSession?.(session)}
-                          >{formatSessionTimestamp(session.updatedAt)}</button>
-                        </span>
-                      </span>
-                    </span>
-                     <span class="session-row-side">
-                       <SessionActionsMenu
-                         {session}
-                          canManage={canManageLifecycle?.(session) ?? false}
-                          canPin={canPinSession?.(session) ?? false}
-                          onSetPinned={onSetPinned ? (pinned) => onSetPinned!(session, pinned) : null}
-                         pending={pinPending[sessionKey] || lifecyclePending[sessionKey] || deletingSessionKey === sessionKey}
-                         error={pinErrors[sessionKey] || lifecycleErrors[sessionKey]}
-                         onSetLifecycle={onSetLifecycle ? (patch) => onSetLifecycle!(session, patch) : null}
-                         onCopy={() => copySessionId(session.sessionId)}
-                         copied={copiedSessionId === session.sessionId}
-                         onDelete={onDeleteSession && canDelete && !deletingSessionKey ? () => requestDeleteSession(session) : null}
-                       />
-                     </span>
-                  </div>
+                    {@render sessionRow(session, group, 0)}
                   {/each}
                 </div>
                 {#if group.error}

@@ -33,6 +33,18 @@ describe('SessionCatalogCache', () => {
       .toMatchObject({ relationshipKnown, parentSessionId: 'root', forkOrigin: 'delegation' });
   });
 
+  it('round trips worktree metadata and drops a malformed workspace', () => {
+    const workspace = { workspaceId: 'ws_1', branch: 'qmt/ws_1', checkoutPath: '/w/ws_1', sourceCwd: '/p/app', baselineMode: 'clean', lifecycle: 'ready', ownerSessionId: null, handedOffTo: null };
+    const cache = new SessionCatalogCache();
+    cache.set(entry({ sessions: [{ ...session, workspace }] }));
+    cache.flush();
+    expect(new SessionCatalogCache().get('scope')?.sessions[0].workspace).toEqual(workspace);
+
+    cache.set(entry({ sessions: [{ ...session, workspace: { branch: 'x' } as never }] }));
+    cache.flush();
+    expect(new SessionCatalogCache().get('scope')?.sessions[0].workspace ?? null).toBeNull();
+  });
+
   it('round trips pin metadata and rejects malformed pin snapshots', () => {
     const pin = { session_id: session.sessionId, pinned: true, pinned_at: '2026-10-20T10:00:00Z' };
     const cache = new SessionCatalogCache();

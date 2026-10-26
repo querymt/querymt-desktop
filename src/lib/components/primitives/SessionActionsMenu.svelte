@@ -1,13 +1,14 @@
 <script lang="ts">
   import { getContext } from 'svelte';
   import { DropdownMenu } from 'bits-ui';
-  import { Archive, ArchiveRestore, Check, Copy, Ellipsis, LoaderCircle, Pin, PinOff, RotateCcw, Trash2 } from '@lucide/svelte';
+  import { Archive, ArchiveRestore, Check, Copy, Ellipsis, GitBranch, GitBranchPlus, LoaderCircle, Pin, PinOff, RotateCcw, Trash2 } from '@lucide/svelte';
   import type { DesktopSessionSummary, SessionLifecyclePatch } from '$lib/domain/types';
 
   let {
     session, canManage = false, pending = false, error = null,
     canPin = false, onSetPinned = null,
     onSetLifecycle = null, onCopy = null, onDelete = null, copied = false,
+    onCreateWorktree = null, onHandoffWorktree = null,
     triggerClass = 'session-row-menu-trigger', open = $bindable(false)
   }: {
     session: Pick<DesktopSessionSummary, 'sessionId' | 'title' | 'lifecycle' | 'pin'>;
@@ -19,6 +20,9 @@
     onSetLifecycle?: ((patch: SessionLifecyclePatch) => Promise<unknown>) | null;
     onCopy?: (() => void | Promise<void>) | null;
     onDelete?: (() => void) | null;
+    /** Gated by the caller on capability, ownership and read-only state; null hides the entry. */
+    onCreateWorktree?: (() => void) | null;
+    onHandoffWorktree?: (() => void) | null;
     copied?: boolean;
     triggerClass?: string;
     open?: boolean;
@@ -75,6 +79,16 @@
         </DropdownMenu.Item>
       {:else}
         <div class="session-actions-hint">Lifecycle controls unavailable{#if !session.lifecycle}: state is unknown{/if}.</div>
+      {/if}
+      {#if onCreateWorktree}
+        <DropdownMenu.Item disabled={busy} onSelect={() => onCreateWorktree?.()}>
+          <GitBranchPlus size={14} />New worktree session
+        </DropdownMenu.Item>
+      {/if}
+      {#if onHandoffWorktree}
+        <DropdownMenu.Item disabled={busy} onSelect={() => onHandoffWorktree?.()}>
+          <GitBranch size={14} />Hand off worktree
+        </DropdownMenu.Item>
       {/if}
       {#if onCopy}
         <DropdownMenu.Item closeOnSelect={false} onSelect={() => onCopy?.()} aria-label={`Copy session ID for ${session.title}`}>

@@ -10410,6 +10410,88 @@ summary:focus-visible {
   background: var(--status-muted-bg);
 }
 
+.session-relationship-badge-worktree,
+.session-relationship-badge-branch {
+  border-color: color-mix(in srgb, var(--status-success, var(--accent)) 40%, var(--border));
+  background: color-mix(in srgb, var(--status-success, var(--accent)) 9%, transparent);
+  color: var(--status-success, var(--accent));
+}
+
+.session-relationship-badge-branch {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-relationship-badge-warning {
+  border-color: color-mix(in srgb, var(--status-warning, #d97706) 50%, var(--border));
+  background: color-mix(in srgb, var(--status-warning, #d97706) 10%, transparent);
+  color: var(--status-warning, #d97706);
+}
+
+.session-relationship-badge-handoff {
+  background: var(--status-muted-bg);
+}
+
+.session-header-worktree {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  max-width: 14rem;
+  overflow: hidden;
+  color: var(--status-success, var(--accent));
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-header-worktree-warning {
+  color: var(--status-warning, #d97706);
+}
+
+.session-read-only-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--status-muted-bg);
+  padding: 0.7rem 0.9rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.session-row-expand {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 1.2rem;
+  height: 1.2rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.session-row-expand:hover {
+  background: var(--row-surface-hover);
+  color: var(--text);
+}
+
+.session-row-expand-open {
+  transform: rotate(90deg);
+}
+
+.session-row-nested {
+  border-left: 1px solid var(--subtle-border);
+}
+
 .session-row-meta {
   display: flex;
   min-width: 0;
