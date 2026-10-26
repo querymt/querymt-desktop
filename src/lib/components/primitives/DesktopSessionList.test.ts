@@ -1228,3 +1228,61 @@ function createWorkspaceGroup(overrides: Partial<{
     ...overrides
   };
 }
+
+describe('DesktopSessionList worktree sessions', () => {
+  const workspace = { workspaceId: 'ws_1', branch: 'qmt/ws_1', checkoutPath: '/w/ws_1', sourceCwd: '/projects/querymt', baselineMode: 'head', lifecycle: 'ready', ownerSessionId: null, handedOffTo: null };
+  const parent: DesktopSessionSummary = { ...sessions[1], sessionId: 'parent', title: 'Parent', hasChildren: true, forkCount: 1 };
+  const worktreeChild: DesktopSessionSummary = {
+    ...sessions[1], sessionId: 'wt-child', title: 'WT child', cwd: '/w/ws_1', parentSessionId: 'parent', forkOrigin: 'worktree', workspace
+  };
+
+  it('marks worktree sessions with a branch badge, tooltip and Worktree relationship', () => {
+    render(DesktopSessionList, { sessions: [worktreeChild], catalogComplete: true });
+    expect(screen.getByText('Worktree')).toBeInTheDocument();
+    const badge = screen.getByTestId('worktree-branch-badge');
+    expect(badge).toHaveTextContent('qmt/ws_1');
+    expect(badge.getAttribute('title')).toContain('Checkout /w/ws_1');
+    expect(screen.queryByText('Handed off')).not.toBeInTheDocument();
+  });
+
+  it('groups a worktree session under its source project', () => {
+    render(DesktopSessionList, { sessions: [worktreeChild], catalogComplete: true });
+    expect(screen.getByText('querymt')).toBeInTheDocument();
+  });
+
+  it('shows missing lifecycle and handed-off markers', () => {
+    render(DesktopSessionList, { sessions: [{ ...worktreeChild, workspace: { ...workspace, lifecycle: 'missing', handedOffTo: 'next' } }], catalogComplete: true });
+    expect(screen.getByTestId('worktree-branch-badge')).toHaveTextContent('missing');
+    expect(screen.getByText('Handed off')).toBeInTheDocument();
+  });
+
+  it('shows no worktree markers for plain sessions', () => {
+    render(DesktopSessionList, { sessions, catalogComplete: true });
+    expect(screen.queryByTestId('worktree-branch-badge')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Expand child sessions/ })).not.toBeInTheDocument();
+  });
+
+  it('expands children in place with relationship markers and drops other parents', async () => {
+    const fork = { ...sessions[1], sessionId: 'fork-child', title: 'Fork child', parentSessionId: 'parent', forkOrigin: 'user' };
+    const stray = { ...sessions[1], sessionId: 'stray', title: 'Stray', parentSessionId: 'other', forkOrigin: 'user' };
+    const loadChildren = vi.fn(async () => [fork, worktreeChild, stray]);
+    render(DesktopSessionList, { sessions: [parent], catalogComplete: true, loadChildren });
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand child sessions of Parent' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open session Fork child' })).toBeInTheDocument());
+    expect(loadChildren).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Open session WT child' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open session Stray' })).not.toBeInTheDocument();
+    const group = screen.getByRole('group', { name: 'Child sessions of Parent' });
+    expect(within(group).getByText('Fork')).toBeInTheDocument();
+    expect(within(group).getByText('Worktree')).toBeInTheDocument();
+    expect(group.querySelector('[data-depth="1"]')).not.toBeNull();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse child sessions of Parent' }));
+    expect(screen.queryByRole('button', { name: 'Open session Fork child' })).not.toBeInTheDocument();
+  });
+
+  it('offers no expand control without a children loader', () => {
+    render(DesktopSessionList, { sessions: [parent], catalogComplete: true });
+    expect(screen.queryByRole('button', { name: /Expand child sessions/ })).not.toBeInTheDocument();
+  });
+});

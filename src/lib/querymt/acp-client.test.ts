@@ -134,6 +134,62 @@ describe('DesktopAcpClient session pins', () => {
   });
 });
 
+describe('DesktopAcpClient worktrees', () => {
+  const workspaceCaps = (workspace: Record<string, unknown>) => ({
+    protocolVersion: 1,
+    agentCapabilities: { _meta: { querymt: { workspace: { supported: true, ...workspace } } } },
+    authMethods: []
+  });
+
+  it('sends session workspace metadata only when requested', async () => {
+    const { client } = promptClient({});
+    const newSession = vi.fn(async () => ({ sessionId: 'n' }));
+    (client as unknown as { connection: unknown }).connection = { newSession };
+    await client.createSession('/p');
+    expect(newSession).toHaveBeenLastCalledWith({ cwd: '/p', mcpServers: [], _meta: undefined });
+    await client.createSession('/p', 'prof', { execution: 'worktree' });
+    expect(newSession).toHaveBeenLastCalledWith({
+      cwd: '/p', mcpServers: [], _meta: { querymt: { profile_id: 'prof', sessionWorkspace: { execution: 'worktree' } } }
+    });
+  });
+
+  it('gates create, lineage and handoff on the advertised capability', async () => {
+    const { client } = promptClient({});
+    const internal = client as unknown as { initializeResponse: unknown; querymtExtensions: unknown };
+    const worktreeCreate = vi.fn(async () => ({ session_id: 'new' }));
+    const worktreeHandoff = vi.fn(async () => ({ session_id: 'next', previous_session_id: 's' }));
+    internal.querymtExtensions = { worktreeCreate, worktreeHandoff };
+
+    expect(client.getWorkspaceCapability()).toBeNull();
+    await expect(client.createWorktreeSession('/p', 's')).rejects.toThrow('not enabled');
+
+    internal.initializeResponse = workspaceCaps({});
+    await client.createWorktreeSession('/p', 's', { name: ' feat ', baseRef: 'main' });
+    expect(worktreeCreate).toHaveBeenLastCalledWith({ cwd: '/p', name: 'feat', base_ref: 'main' });
+    await expect(client.handoffWorktreeSession('s')).rejects.toThrow('not supported');
+
+    internal.initializeResponse = workspaceCaps({ sourceSession: true, handoff: true });
+    await client.createWorktreeSession('/p', 's', { includeLocalChanges: true, baseRef: 'main' });
+    expect(worktreeCreate).toHaveBeenLastCalledWith({ cwd: '/p', source_session_id: 's', include_local_changes: true });
+    await client.handoffWorktreeSession('s', { summary: true });
+    expect(worktreeHandoff).toHaveBeenLastCalledWith({ session_id: 's' });
+
+    internal.initializeResponse = workspaceCaps({ handoff: true, handoffSummary: true });
+    await client.handoffWorktreeSession('s', { summary: true });
+    expect(worktreeHandoff).toHaveBeenLastCalledWith({ session_id: 's', summary: true });
+    expect((await client.handoffWorktreeSession('s')).previousSessionId).toBe('s');
+    expect(worktreeHandoff).toHaveBeenLastCalledWith({ session_id: 's' });
+  });
+
+  it('lists children with the children scope', async () => {
+    const { client } = promptClient({});
+    const listSessions = vi.fn(async () => ({ sessions: [] }));
+    (client as unknown as { connection: unknown }).connection = { listSessions };
+    await client.listSessionChildren('p1');
+    expect(listSessions).toHaveBeenCalledWith({ _meta: { session_scope: 'children', querymt: { parentSessionId: 'p1' } } });
+  });
+});
+
 describe('DesktopAcpClient session lifecycle', () => {
   it('requires the lifecycle feature and both methods before allowing writes', async () => {
     const { client } = promptClient({});

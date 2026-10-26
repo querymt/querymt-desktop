@@ -11,6 +11,22 @@ import type {
   SessionNotification
 } from '@agentclientprotocol/sdk';
 import { tick } from 'svelte';
+import {
+  buildSessionWorkspaceRequest,
+  describeWorktreeError,
+  readSessionAccess,
+  readSessionWorkspace,
+  readDisclosedSessionCwd,
+  readWorktreeErrorCode,
+  validateWorktreeCreateOptions,
+  WORKTREE_FORK_ORIGIN,
+  type WorktreeSessionResult,
+  type ComposerWorkspaceMode,
+  type SessionAccessInfo,
+  type WorkspaceCapability,
+  type WorktreeCreateOptions,
+  type WorktreeHandoffOptions
+} from '$lib/domain/session-workspace';
 import { normalizePromptError, type PromptFailure } from '$lib/domain/prompt-errors';
 import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
@@ -40,6 +56,8 @@ import {
   getSessionKey,
   getSessionWorkspaceKey,
   getSessionWorkspaceName,
+  getSessionGroupCwd,
+  buildListSessionChildrenRequest,
   getWorkspaceLocation,
   getWorkspaceRemoteMachines,
   isActiveSessionStatus,
@@ -419,6 +437,12 @@ export class AgentsStore {
   composerModeId = $state<string>('build');
   composerReasoningId = $state<string>('auto');
   composerTargetId = $state<string>('local');
+  composerWorkspaceMode = $state<ComposerWorkspaceMode>('local');
+  /** Read-only grant of the active session (worktree handed off); agent-authoritative. */
+  activeSessionAccess = $state<SessionAccessInfo | null>(null);
+  /** Direct children (forks, worktree children) per `agentId:parentId`, loaded on expansion. */
+  sessionChildrenByParent = $state<Record<string, DesktopSessionSummary[]>>({});
+  worktreePending = $state(false);
   composerAgentId = $state<string | null>(null);
   get sessionConfigPending(): Record<string, boolean> {
     const key = this.activeAgentId && this.activeSessionId
@@ -722,6 +746,27 @@ export class AgentsStore {
 
   canDeleteSession(agentId: string): boolean {
     return Boolean(this.clients.get(agentId)?.initializeResponse?.agentCapabilities?.sessionCapabilities?.delete);
+  }
+
+  getWorkspaceCapability(agentId: string): WorkspaceCapability | null {
+    // `clients` is not reactive; read connection state so derived callers re-evaluate on connect/disconnect.
+    void this.connectionStates[agentId];
+    void this.controlCapabilitiesByAgent[agentId];
+    return this.clients.get(agentId)?.client.getWorkspaceCapability() ?? null;
+  }
+
+  canCreateWorktree(agentId: string): boolean {
+    return this.getWorkspaceCapability(agentId) !== null;
+  }
+
+  canHandoffWorktree(agentId: string): boolean {
+    return this.getWorkspaceCapability(agentId)?.handoff === true;
+  }
+
+  /** Session actions that run or change a session are unavailable once it is read-only. */
+  isSessionReadOnly(agentId: string, sessionId: string): boolean {
+    if (this.activeAgentId === agentId && this.activeSessionId === sessionId && this.activeSessionAccess) return true;
+    return false;
   }
 
   canForkSession(agentId: string): boolean {
@@ -1055,10 +1100,21 @@ export class AgentsStore {
       this.composerProfileId = targetId === 'local' ? 'default' : 'querymt:owner-default';
     }
     this.composerTargetId = targetId;
+    // The agent refuses worktree placement on remote mesh targets.
+    if (targetId !== 'local') this.composerWorkspaceMode = 'local';
+  }
+
+  /** `agentId` is the agent the composer will launch on (the launcher may fall back to the first online agent). */
+  setComposerWorkspaceMode(mode: ComposerWorkspaceMode, agentId: string | null = this.composerAgentId) {
+    const canIsolate = this.composerTargetId === 'local' && !!agentId && this.canCreateWorktree(agentId);
+    this.composerWorkspaceMode = canIsolate ? mode : 'local';
   }
 
   setComposerAgent(agentId: string | null) {
     this.composerAgentId = agentId;
+    if (this.composerWorkspaceMode !== 'local' && (!agentId || !this.canCreateWorktree(agentId))) {
+      this.composerWorkspaceMode = 'local';
+    }
   }
 
     addPromptAttachments(attachments: PromptAttachment[]) {
@@ -2187,6 +2243,7 @@ export class AgentsStore {
   private invalidateSessionCatalogCache(broadcast = true) {
     if (broadcast) this.invalidateSharedSessionLists();
     this.openSessionPages = {};
+    this.sessionChildrenByParent = {};
     this.sessionCatalogGeneration += 1;
     this.sessionCatalogFlight = null;
     this.sessionCatalogLoading = false;
@@ -2638,15 +2695,16 @@ export class AgentsStore {
       ...this.sessionsByAgent,
       [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [summary])
     };
-    if (previous && previous.cwd !== summary.cwd) {
-      const source = this.workspaceSessionSources[agentId]?.[previous.cwd];
+    const previousGroup = previous ? getSessionGroupCwd(previous) : null;
+    if (previous && previousGroup !== getSessionGroupCwd(summary)) {
+      const source = this.workspaceSessionSources[agentId]?.[previousGroup!];
       if (source) {
         const sessions = source.sessions.filter((session) => session.sessionId !== summary.sessionId);
         this.workspaceSessionSources = {
           ...this.workspaceSessionSources,
           [agentId]: {
             ...this.workspaceSessionSources[agentId],
-            [previous.cwd]: { ...source, sessions, latestActivity: maxTimestamp(sessions.map((session) => session.updatedAt)) }
+            [previousGroup!]: { ...source, sessions, latestActivity: maxTimestamp(sessions.map((session) => session.updatedAt)) }
           }
         };
       }
@@ -2724,9 +2782,10 @@ export class AgentsStore {
     const currentSources = this.workspaceSessionSources[config.id] ?? {};
     const discovered = new Map<string, DesktopSessionSummary[]>();
     for (const session of sessions) {
-      const workspaceSessions = discovered.get(session.cwd) ?? [];
+      const groupCwd = getSessionGroupCwd(session);
+      const workspaceSessions = discovered.get(groupCwd) ?? [];
       workspaceSessions.push(session);
-      discovered.set(session.cwd, workspaceSessions);
+      discovered.set(groupCwd, workspaceSessions);
     }
 
     const nextSources: Record<string, WorkspaceSessionSource> = replace ? {} : { ...currentSources };
@@ -2763,9 +2822,10 @@ export class AgentsStore {
     const currentSources = { ...(this.workspaceSessionSources[agentId] ?? {}) };
     const grouped = new Map<string, DesktopSessionSummary[]>();
     for (const session of sessions) {
-      const workspaceSessions = grouped.get(session.cwd) ?? [];
+      const groupCwd = getSessionGroupCwd(session);
+      const workspaceSessions = grouped.get(groupCwd) ?? [];
       workspaceSessions.push(session);
-      grouped.set(session.cwd, workspaceSessions);
+      grouped.set(groupCwd, workspaceSessions);
     }
 
     for (const [cwd, workspaceSessions] of grouped) {
@@ -2965,7 +3025,12 @@ export class AgentsStore {
     }
   }
 
-  async createBackgroundSession(agentId: string, cwd: string, profileId = this.composerProfileId) {
+  async createBackgroundSession(
+    agentId: string,
+    cwd: string,
+    profileId = this.composerProfileId,
+    workspaceMode: ComposerWorkspaceMode = 'local'
+  ) {
     const isCurrentSource = this.sessionMutationScope(agentId);
     const config = this.configs.find((candidate) => candidate.id === agentId);
     const normalizedCwd = cwd.trim();
@@ -2986,17 +3051,22 @@ export class AgentsStore {
     }
 
     if (!isCurrentSource()) throw new Error('Agent endpoint changed before creating the session.');
-    const response = await record.client.createSession(
-      normalizedCwd,
-      profileId === 'default' ? null : profileId
-    );
+    // Worktree placement needs an advertising agent; never send it blindly.
+    const sessionWorkspace = record.client.getWorkspaceCapability()
+      ? buildSessionWorkspaceRequest(workspaceMode) : null;
+    const launchProfileId = profileId === 'default' ? null : profileId;
+    const response = sessionWorkspace
+      ? await record.client.createSession(normalizedCwd, launchProfileId, sessionWorkspace)
+      : await record.client.createSession(normalizedCwd, launchProfileId);
     if (!this.canPublishCreatedSession(agentId, record, isCurrentSource)) return response;
+    const workspace = readSessionWorkspace(response._meta);
     const summary: DesktopSessionSummary = {
       agentId,
       agentName: config.name,
       sessionId: response.sessionId,
       title: 'Untitled session',
-      cwd: normalizedCwd,
+      cwd: readDisclosedSessionCwd(response._meta) ?? normalizedCwd,
+      workspace: workspace ? { ...workspace, sourceCwd: workspace.sourceCwd ?? normalizedCwd } : null,
       updatedAt: new Date().toISOString(),
       runtimeId: agentId,
       runtimeName: config.name,
@@ -3039,6 +3109,7 @@ export class AgentsStore {
 
     const launch = {
       targetId: this.composerTargetId,
+      workspaceMode: this.composerTargetId === 'local' ? this.composerWorkspaceMode : 'local' as ComposerWorkspaceMode,
       profileId: this.composerProfileId,
       modeId: this.composerModeId,
       reasoningId: this.composerReasoningId,
@@ -3065,7 +3136,7 @@ export class AgentsStore {
         return sessionId;
       }
 
-      const response = await this.createBackgroundSession(agentId, cwd, launch.profileId);
+      const response = await this.createBackgroundSession(agentId, cwd, launch.profileId, launch.workspaceMode);
       const sessionId = response.sessionId;
       if (!isCurrentSource()) return sessionId;
       this.resetActiveSession(agentId, sessionId);
@@ -3114,6 +3185,10 @@ export class AgentsStore {
   async sendPromptToActiveSession(retryFailure: PromptFailure | null = null) {
     this.error = null;
     this.promptFailure = null;
+    if (this.activeSessionAccess) {
+      this.error = 'This session is read-only.';
+      return;
+    }
     const prompt = (retryFailure?.prompt ?? this.composerPrompt).trim();
     const attachments = (retryFailure?.attachments ?? this.promptAttachments).map((attachment) => ({ ...attachment }));
     if (!prompt && attachments.length === 0) {
@@ -3222,6 +3297,26 @@ export class AgentsStore {
     } catch (error) {
       if (!ownsAction()) return;
       endSessionWork(this.activeSession);
+      if (readWorktreeErrorCode(error) === 'owner_transferred') {
+        // A handoff elsewhere won the race: keep the transcript, drop the composer.
+        const previous = this.findSessionSummary(agentId, sessionId);
+        this.activeSessionAccess = { mode: 'read_only', reason: 'owner_transferred', ownerSessionId: previous?.workspace?.handedOffTo ?? null };
+        this.activeSession.runState = 'idle';
+        this.activeSession.activityLabel = null;
+        this.error = describeWorktreeError(error);
+        // Restore the rejected text and learn the current owner from the agent.
+        if (!retryFailure && !this.composerPrompt.trim() && this.promptAttachments.length === 0) {
+          this.composerPrompt = prompt;
+          this.promptAttachments = attachments.map((attachment) => ({ ...attachment }));
+        }
+        void this.refreshSessionsForAgent(agentId).then(() => {
+          const ownerId = this.findSessionSummary(agentId, sessionId)?.workspace?.handedOffTo ?? null;
+          if (ownerId && this.activeSessionAccess && !this.activeSessionAccess.ownerSessionId && this.isSelectedSession(agentId, sessionId)) {
+            this.activeSessionAccess = { ...this.activeSessionAccess, ownerSessionId: ownerId };
+          }
+        }).catch(() => undefined);
+        return;
+      }
       const normalizedError = normalizePromptError(error);
       if (turnEventIndex === undefined) {
         this.error = normalizedError.message;
@@ -3743,6 +3838,19 @@ export class AgentsStore {
       } else if (!target) {
         this.ensureSessionLoadTarget(agentId, sessionId);
       }
+      // Access is agent-authoritative: only the load response may grant or clear read-only.
+      this.activeSessionAccess = readSessionAccess(loadedSession._meta);
+      const loadedWorkspace = readSessionWorkspace(loadedSession._meta);
+      if (loadedWorkspace || this.activeSessionAccess) {
+        const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+        if (current) {
+          const workspace = loadedWorkspace ? {
+            ...loadedWorkspace,
+            sourceCwd: loadedWorkspace.sourceCwd ?? current.workspace?.sourceCwd ?? null
+          } : current.workspace ?? null;
+          this.syncLoadedSessionSummary(agentId, { ...current, workspace, access: this.activeSessionAccess });
+        }
+      }
       const relationship = readSessionRelationshipMeta(loadedSession);
       if (relationship.parentSessionId || relationship.forkOrigin) {
         const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
@@ -3925,6 +4033,173 @@ export class AgentsStore {
       measurement.cleanup();
       if (this.activeLoadMeasurement === measurement) this.activeLoadMeasurement = null;
     }
+  }
+
+  /** Insert an optimistic child under its source and refresh the catalog, as forks do. */
+  private async publishWorktreeChild(
+    agentId: string,
+    source: DesktopSessionSummary,
+    result: WorktreeSessionResult,
+    title: string,
+    isCurrentSource: () => boolean
+  ) {
+    this.invalidateSessionCatalogCache();
+    await this.refreshSessionsForAgent(agentId).catch(() => undefined);
+    if (!isCurrentSource()) return;
+    const known = this.findSessionSummary(agentId, result.sessionId);
+    const sourceCwd = source.workspace?.sourceCwd ?? source.cwd;
+    const child: DesktopSessionSummary = known ?? {
+      ...source,
+      sessionId: result.sessionId,
+      title,
+      cwd: result.sessionCwd ?? result.checkoutPath ?? source.cwd,
+      updatedAt: new Date().toISOString(),
+      status: 'idle',
+      parentSessionId: source.sessionId,
+      forkOrigin: WORKTREE_FORK_ORIGIN,
+      relationshipKnown: true,
+      sessionKind: null,
+      hasChildren: false,
+      forkCount: 0,
+      lifecycle: null,
+      pin: null,
+      access: null,
+      workspace: result.workspaceId ? {
+        workspaceId: result.workspaceId,
+        branch: result.branch,
+        checkoutPath: result.checkoutPath,
+        sourceCwd,
+        baselineMode: source.workspace?.baselineMode ?? null,
+        lifecycle: 'ready',
+        ownerSessionId: result.sessionId,
+        handedOffTo: null
+      } : null
+    };
+    const updatedSource: DesktopSessionSummary = { ...(this.findSessionSummary(agentId, source.sessionId) ?? source), hasChildren: true };
+    this.sessionsByAgent = {
+      ...this.sessionsByAgent,
+      [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [updatedSource, child])
+    };
+    this.upsertWorkspaceSessions(agentId, [updatedSource, child]);
+    this.rememberSessionChildren(agentId, source.sessionId, [result.sessionId]);
+  }
+
+  /** Create an isolated session from `sessionId` in a new managed worktree and return its ID. */
+  async createWorktreeSessionFrom(agentId: string, sessionId: string, options: WorktreeCreateOptions = {}): Promise<string | null> {
+    const invalid = validateWorktreeCreateOptions(options);
+    if (invalid) {
+      this.error = invalid;
+      return null;
+    }
+    if (this.worktreePending) return null;
+    const source = this.findSessionSummary(agentId, sessionId);
+    if (!source || source.location === 'remote') {
+      this.error = 'Worktree sessions can only be created from local sessions.';
+      return null;
+    }
+    if (this.isSessionReadOnly(agentId, sessionId)) {
+      this.error = 'This session is read-only.';
+      return null;
+    }
+    const isCurrentSource = this.sessionMutationScope(agentId);
+    this.error = null;
+    this.worktreePending = true;
+    try {
+      const record = await this.connectInitializedRecord(agentId);
+      if (!record) throw new Error('Failed to connect to the agent.');
+      if (!record.client.getWorkspaceCapability()) throw new Error('Worktrees are not enabled on this agent.');
+      const result = await record.client.createWorktreeSession(source.workspace?.sourceCwd ?? source.cwd, sessionId, options);
+      await this.publishWorktreeChild(agentId, source, result, options.name?.trim() || `Worktree of ${source.title}`, isCurrentSource);
+      return result.sessionId;
+    } catch (error) {
+      this.error = describeWorktreeError(error, 'Failed to create the worktree session.');
+      return null;
+    } finally {
+      this.worktreePending = false;
+    }
+  }
+
+  /** Start a fresh conversation in the same checkout and return its session ID. */
+  async handoffWorktreeSession(agentId: string, sessionId: string, options: WorktreeHandoffOptions = {}): Promise<string | null> {
+    if (this.worktreePending) return null;
+    const source = this.findSessionSummary(agentId, sessionId);
+    if (!source) {
+      this.error = 'Unable to locate the source session.';
+      return null;
+    }
+    if (this.isSessionReadOnly(agentId, sessionId)) {
+      this.error = 'This session is read-only.';
+      return null;
+    }
+    const isCurrentSource = this.sessionMutationScope(agentId);
+    this.error = null;
+    this.worktreePending = true;
+    try {
+      const record = await this.connectInitializedRecord(agentId);
+      if (!record) throw new Error('Failed to connect to the agent.');
+      const result = await record.client.handoffWorktreeSession(sessionId, options);
+      await this.publishWorktreeChild(agentId, source, result, options.name?.trim() || source.title, isCurrentSource);
+      // The previous owner is now read-only; mark it so lists stay informational and consistent.
+      const previous = this.findSessionSummary(agentId, sessionId);
+      if (previous?.workspace) {
+        const marked = { ...previous, workspace: { ...previous.workspace, handedOffTo: result.sessionId } };
+        this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [marked]) };
+        this.upsertWorkspaceSessions(agentId, [marked]);
+      }
+      return result.sessionId;
+    } catch (error) {
+      this.error = describeWorktreeError(error, 'Failed to hand off the worktree.');
+      return null;
+    } finally {
+      this.worktreePending = false;
+    }
+  }
+
+  /** Direct children of one session, cached per parent and filtered by `parentSessionId`. */
+  private sessionChildrenFlights = new Map<string, Promise<DesktopSessionSummary[]>>();
+
+  async loadSessionChildren(agentId: string, parentId: string, force = false): Promise<DesktopSessionSummary[]> {
+    const key = buildSessionKey(agentId, parentId);
+    const cached = this.sessionChildrenByParent[key];
+    if (cached && !force) return cached;
+    const inFlight = this.sessionChildrenFlights.get(key);
+    if (inFlight) return inFlight;
+    const flight = this.fetchSessionChildren(agentId, parentId, key).finally(() => {
+      if (this.sessionChildrenFlights.get(key) === flight) this.sessionChildrenFlights.delete(key);
+    });
+    this.sessionChildrenFlights.set(key, flight);
+    return flight;
+  }
+
+  private async fetchSessionChildren(agentId: string, parentId: string, key: string): Promise<DesktopSessionSummary[]> {
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) return [];
+    const isCurrentSource = this.sessionMutationScope(agentId);
+    const record = await this.connectInitializedRecord(agentId);
+    if (!record) return [];
+    const children: DesktopSessionSummary[] = [];
+    const seen = new Set<string>();
+    let cursor: string | null = null;
+    do {
+      const page = await record.client.listSessionChildren(parentId, cursor);
+      const summaries = this.mapSessionSummaries(page.sessions, { agentId, agentName: config.name })
+        .filter((session) => session.parentSessionId === parentId && session.forkOrigin !== 'delegation');
+      for (const summary of summaries) {
+        if (seen.has(summary.sessionId)) continue;
+        seen.add(summary.sessionId);
+        children.push(summary);
+      }
+      cursor = page.nextCursor ?? null;
+      if (cursor && seen.has(`cursor:${cursor}`)) break;
+      if (cursor) seen.add(`cursor:${cursor}`);
+    } while (cursor);
+    children.sort(compareSessionsByActivity);
+    if (!isCurrentSource()) return children;
+    // Keep summaries available to the session page; children stay nested and out of workspace sources.
+    this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], children) };
+    this.sessionChildrenByParent = { ...this.sessionChildrenByParent, [key]: children };
+    this.rememberSessionChildren(agentId, parentId, children.map((child) => child.sessionId));
+    return children;
   }
 
   async forkActiveSessionAt(messageId: string): Promise<string | null> {
@@ -5507,6 +5782,7 @@ export class AgentsStore {
     this.activeSessionId = sessionId;
     this.activeSession = createEmptyActiveSession();
     this.activeSession.sessionId = sessionId;
+    this.activeSessionAccess = null;
     this.snapshotUserMessageIds.clear();
     this.sessionHistoryLoading = false;
     this.promptFailure = null;
@@ -6339,6 +6615,9 @@ function mergeSessions(current: DesktopSessionSummary[], incoming: DesktopSessio
       // Parentage is immutable; an incomplete list/load must not promote a known child.
       parentSessionId: session.parentSessionId ?? existing.parentSessionId,
       forkOrigin: session.forkOrigin ?? existing.forkOrigin,
+      // A list that lacks worktree metadata must not erase what a richer list/load established.
+      workspace: session.workspace ?? existing.workspace ?? null,
+      access: session.access ?? existing.access ?? null,
       relationshipKnown: existing.relationshipKnown === true ? true : session.relationshipKnown ?? existing.relationshipKnown,
       updatedAt: newestTimestamp(existing.updatedAt, session.updatedAt)
     } : session);

@@ -114,6 +114,27 @@ describe('SessionComposer', () => {
     expect(screen.getByRole('button', { name: 'Profile' })).toHaveTextContent('Default profile');
   });
 
+  it('offers the Workspace option only with worktree choices and reports changes', async () => {
+    const onWorkspaceModeChange = vi.fn();
+    renderComposer({ launch: true, workspaceModeOptions: [], onWorkspaceModeChange });
+    // With no other options, nothing opens the options panel and no Workspace control exists.
+    expect(screen.queryByRole('button', { name: 'Session workspace' })).not.toBeInTheDocument();
+    cleanup();
+
+    renderComposer({
+      launch: true,
+      workspaceModeOptions: [
+        { id: 'local', label: 'Local checkout' },
+        { id: 'worktree', label: 'New worktree' },
+        { id: 'worktree_local_changes', label: 'New worktree with local changes' }
+      ],
+      selectedWorkspaceMode: 'local',
+      onWorkspaceModeChange
+    });
+    await fireEvent.click(screen.getByLabelText('Session options'));
+    expect(screen.getByRole('button', { name: 'Session workspace' })).toHaveTextContent('Local checkout');
+  });
+
   it('adds delegate routing to options only when the active agent supports it', async () => {
     const onOpenDelegateModels = vi.fn();
     renderComposer({

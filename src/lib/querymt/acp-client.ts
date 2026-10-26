@@ -105,13 +105,24 @@ import {
   type QuerymtUndoResponse,
   type QuerymtUndoStackResponse,
   toLogicalQuerymtMethod,
-  type QuerymtLogicalMethod
+  type QuerymtLogicalMethod,
+  type QuerymtWorktreeCreateRequest,
+  type QuerymtWorktreeHandoffRequest
 } from '$lib/querymt/querymt-extensions';
+import {
+  parseWorktreeSessionResult,
+  readWorkspaceCapability,
+  type WorkspaceCapability,
+  type WorktreeCreateOptions,
+  type WorktreeHandoffOptions,
+  type WorktreeSessionResult
+} from '$lib/domain/session-workspace';
 import { createTauriAcpStream, createWebSocketAcpStream } from '$lib/querymt/transport';
 import type { Stream } from '@agentclientprotocol/sdk';
 import { isEmbedded } from '$lib/platform/runtime';
 import { acpWebSocketUrl } from '$lib/querymt/websocket-url';
 import { mapRemoteUpgradeRequired } from '$lib/domain/remote-errors';
+import { buildListSessionChildrenRequest } from '$lib/domain/sessions';
 import { version } from '../../../package.json';
 
 const PROTOCOL_VERSION = 1;
@@ -551,6 +562,11 @@ export class DesktopAcpClient {
     return this.connection!.listSessions(request);
   }
 
+  /** Direct children (forks and worktree children) of one session; the caller filters by parent. */
+  async listSessionChildren(parentSessionId: string, cursor?: string | null): Promise<ListSessionsResponse> {
+    return this.listSessions(buildListSessionChildrenRequest(parentSessionId, cursor));
+  }
+
   async deleteSession(sessionId: string): Promise<void> {
     if (!this.connection) {
       await this.connect();
@@ -559,22 +575,55 @@ export class DesktopAcpClient {
     await this.connection!.deleteSession({ sessionId });
   }
 
-  async createSession(cwd: string, profileId?: string | null): Promise<NewSessionResponse> {
+  async createSession(
+    cwd: string,
+    profileId?: string | null,
+    sessionWorkspace?: Record<string, unknown> | null
+  ): Promise<NewSessionResponse> {
     if (!this.connection) {
       await this.connect();
     }
 
+    const querymt: Record<string, unknown> = {};
+    if (profileId) querymt.profile_id = profileId;
+    if (sessionWorkspace) querymt.sessionWorkspace = sessionWorkspace;
     return this.connection!.newSession({
       cwd,
       mcpServers: [],
-      _meta: profileId
-        ? {
-            querymt: {
-              profile_id: profileId
-            }
-          }
-        : undefined
+      _meta: Object.keys(querymt).length ? { querymt } : undefined
     });
+  }
+
+  /** Managed worktree support advertised in `initialize`, or `null`. */
+  getWorkspaceCapability(): WorkspaceCapability | null {
+    return readWorkspaceCapability(this.initializeResponse?.agentCapabilities);
+  }
+
+  async createWorktreeSession(
+    cwd: string,
+    sourceSessionId: string | null,
+    options: WorktreeCreateOptions = {}
+  ): Promise<WorktreeSessionResult> {
+    if (!this.querymtExtensions) await this.connect();
+    const capability = this.getWorkspaceCapability();
+    if (!capability) throw new Error('Worktrees are not enabled on this agent.');
+    const request: QuerymtWorktreeCreateRequest = { cwd };
+    if (sourceSessionId && capability.sourceSession) request.source_session_id = sourceSessionId;
+    if (options.name?.trim()) request.name = options.name.trim();
+    if (options.includeLocalChanges) request.include_local_changes = true;
+    else if (options.baseRef?.trim()) request.base_ref = options.baseRef.trim();
+    return parseWorktreeSessionResult(await this.querymtExtensions!.worktreeCreate(request));
+  }
+
+  async handoffWorktreeSession(sessionId: string, options: WorktreeHandoffOptions = {}): Promise<WorktreeSessionResult> {
+    if (!this.querymtExtensions) await this.connect();
+    const capability = this.getWorkspaceCapability();
+    if (!capability?.handoff) throw new Error('Worktree handoff is not supported by this agent.');
+    const request: QuerymtWorktreeHandoffRequest = { session_id: sessionId };
+    if (options.name?.trim()) request.name = options.name.trim();
+    // Clean by default: the summary flag is sent only on explicit request.
+    if (options.summary && capability.handoffSummary) request.summary = true;
+    return parseWorktreeSessionResult(await this.querymtExtensions!.worktreeHandoff(request));
   }
 
   async loadSession(sessionId: string, cwd: string, operationId?: string | null): Promise<LoadedAcpSession> {

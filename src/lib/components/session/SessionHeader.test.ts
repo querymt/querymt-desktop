@@ -360,3 +360,25 @@ describe('SessionHeader', () => {
     expect(screen.getByText('$0.05')).toBeInTheDocument();
   });
 });
+
+describe('SessionHeader worktree', () => {
+  const workspace = { workspaceId: 'ws_1', branch: 'qmt/ws_1', checkoutPath: '/w/ws_1', sourceCwd: '/p', baselineMode: 'local_changes', lifecycle: 'missing', ownerSessionId: null, handedOffTo: null };
+
+  it('shows the branch chip and worktree detail rows', () => {
+    const summary = { sessionId: 'session-1', title: 'Task', workspace } as DesktopSessionSummary;
+    render(SessionHeader, { session: session(), summary, title: 'Task', workspace: 'work', updatedAt: 'Just now' });
+    const chip = screen.getByTestId('header-worktree-chip');
+    expect(chip).toHaveTextContent('qmt/ws_1');
+    expect(chip).toHaveTextContent('missing');
+    expect(chip.getAttribute('title')).toContain('Checkout /w/ws_1');
+    expect(screen.getByText('Worktree branch')).toBeInTheDocument();
+    expect(screen.getByText('local changes')).toBeInTheDocument();
+  });
+
+  it('shows no worktree chip for plain sessions', () => {
+    const summary = { sessionId: 'session-1', title: 'Task' } as DesktopSessionSummary;
+    render(SessionHeader, { session: session(), summary, title: 'Task', workspace: 'work', updatedAt: 'Just now' });
+    expect(screen.queryByTestId('header-worktree-chip')).not.toBeInTheDocument();
+  });
+});
+

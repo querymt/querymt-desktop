@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, FileCog, FilePlus2, Lock, Monitor, Navigation, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
+  import { ChevronDown, GitBranch, FileCog, FilePlus2, Lock, Monitor, Navigation, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
   import { tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import type { TransitionConfig } from 'svelte/transition';
@@ -64,6 +64,8 @@
     selectedLaunchReasoningId = 'auto',
     targetOptions = [],
     selectedTargetId = 'local',
+    workspaceModeOptions = [],
+    selectedWorkspaceMode = 'local',
     sessionConfigOptions = [],
     sessionConfigPending = {},
     delegateModelCount = 0,
@@ -79,6 +81,7 @@
     onLaunchModeChange = null,
     onLaunchReasoningChange = null,
     onTargetChange = null,
+    onWorkspaceModeChange = null,
     onSessionConfigChange = null,
     onOpenDelegateModels = null,
     onCreateSession = null,
@@ -125,6 +128,9 @@
     selectedLaunchReasoningId?: string;
     targetOptions?: ComposerOption[];
     selectedTargetId?: string;
+    /** Workspace choices (Local checkout / New worktree ...); fewer than two hides the option. */
+    workspaceModeOptions?: ComposerOption[];
+    selectedWorkspaceMode?: string;
     sessionConfigOptions?: SessionConfigOption[];
     sessionConfigPending?: Record<string, boolean>;
     delegateModelCount?: number;
@@ -140,6 +146,7 @@
     onLaunchModeChange?: ((modeId: string) => void) | null;
     onLaunchReasoningChange?: ((reasoningId: string) => void) | null;
     onTargetChange?: ((targetId: string) => void) | null;
+    onWorkspaceModeChange?: ((mode: string) => void) | null;
     onSessionConfigChange?: ((configId: string, value: string) => void | Promise<void>) | null;
     onOpenDelegateModels?: (() => void) | null;
     onCreateSession?: (() => void) | null;
@@ -264,12 +271,16 @@
       (!sessionOnly && profileOptions.length > 0 ? 1 : 0) +
       (sessionOnly && sessionProfileLabel ? 1 : 0) +
       (!sessionOnly && targetOptions.length > 1 ? 1 : 0) +
+      (!sessionOnly && workspaceModeOptions.length > 1 ? 1 : 0) +
       (sessionOnly && onOpenDelegateModels ? 1 : 0)
   );
   const optionsSummary = $derived.by(() => {
     const labels: string[] = [];
     if (!sessionOnly && profileOptions.length > 0 && selectedProfileId !== 'default') labels.push(selectedProfileLabel);
     if (!sessionOnly && targetOptions.length > 1 && selectedTargetId !== 'local') labels.push(selectedTargetLabel);
+    if (!sessionOnly && workspaceModeOptions.length > 1 && selectedWorkspaceMode !== 'local') {
+      labels.push(workspaceModeOptions.find((option) => option.id === selectedWorkspaceMode)?.label ?? 'Worktree');
+    }
     return labels.join(' · ');
   });
   const reasoningControl = $derived.by((): ModelPickerReasoningControl | null => {
@@ -765,6 +776,19 @@
                      ariaLabel="Session target"
                      class="composer-control-pill"
                      onValueChange={(value) => onTargetChange?.(value)}
+                   />
+                 </div>
+               {/if}
+               {#if !sessionOnly && workspaceModeOptions.length > 1}
+                 <div class="composer-option-row">
+                   <div class="composer-option-copy"><GitBranch size={15} /><span><strong>Workspace</strong><small>Run in the checkout or an isolated worktree</small></span></div>
+                   <ComposerSplitPillSelect
+                     value={selectedWorkspaceMode}
+                     options={workspaceModeOptions.map((option) => ({ value: option.id, label: option.label }))}
+                     icon={GitBranch}
+                     ariaLabel="Session workspace"
+                     class="composer-control-pill"
+                     onValueChange={(value) => onWorkspaceModeChange?.(value)}
                    />
                  </div>
                {/if}

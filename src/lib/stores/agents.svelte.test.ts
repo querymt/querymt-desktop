@@ -72,6 +72,10 @@ const mockClient = vi.hoisted(() => {
     })),
     listSessions: vi.fn(async (_request?: ListSessionsRequest): Promise<{ sessions: SessionInfo[]; nextCursor?: string }> => ({ sessions: [] })),
     deleteSession: vi.fn(async () => undefined),
+    getWorkspaceCapability: vi.fn((): Record<string, unknown> | null => null),
+    createWorktreeSession: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({ sessionId: 'wt-1' })),
+    handoffWorktreeSession: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({ sessionId: 'handoff-1' })),
+    listSessionChildren: vi.fn(async (_parentId?: string, _cursor?: string | null): Promise<{ sessions: SessionInfo[]; nextCursor?: string }> => ({ sessions: [] })),
     supportsSessionLifecycle: vi.fn(() => false),
     supportsSessionPins: vi.fn(() => false),
     setSessionPinned: vi.fn(async (session_id: string, pinned: boolean) => ({ session_id, pinned, pinned_at: pinned ? '2026-10-20T10:00:00Z' : null })),
@@ -475,6 +479,10 @@ beforeEach(() => {
   mockClient.listSessions.mockReset().mockResolvedValue({ sessions: [] });
   mockClient.loadSession.mockReset().mockResolvedValue({ response: { configOptions: [] }, replay: [] });
   mockClient.createSession.mockReset().mockResolvedValue({ sessionId: 'session-1', configOptions: [] });
+  mockClient.getWorkspaceCapability.mockReset().mockReturnValue(null);
+  mockClient.createWorktreeSession.mockReset().mockResolvedValue({ sessionId: 'wt-1' });
+  mockClient.handoffWorktreeSession.mockReset().mockResolvedValue({ sessionId: 'handoff-1' });
+  mockClient.listSessionChildren.mockReset().mockResolvedValue({ sessions: [] });
 });
 
 afterEach(() => {
@@ -9234,5 +9242,219 @@ describe('session header freshness and context usage', () => {
       contextLimit: 200_000,
       cumulativeCostUsd: 0.75
     });
+  });
+});
+
+describe('AgentsStore worktree sessions', () => {
+  const capability = { supported: true, defaultBaseline: null, sourceSession: true, handoff: true, handoffSummary: true };
+
+  function source(sessionId = 's1'): DesktopSessionSummary {
+    return {
+      agentId: 'agent-1', agentName: 'QMTCODE', sessionId, title: 'Source', cwd: '/tmp/work', updatedAt: '2026-10-01T00:00:00Z',
+      runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', location: 'local', status: 'idle', relationshipKnown: true
+    };
+  }
+
+  function info(sessionId: string, meta: Record<string, unknown> = {}, cwd = '/tmp/work'): SessionInfo {
+    return { sessionId, title: sessionId, cwd, _meta: meta } as SessionInfo;
+  }
+
+  async function connectedStore() {
+    const store = createStore();
+    mockClient.getWorkspaceCapability.mockReturnValue(capability);
+    await store.connectAgent('agent-1');
+    store.setComposerAgent('agent-1');
+    store.sessionsByAgent = { 'agent-1': [source()] };
+    return store;
+  }
+
+  it('groups a worktree session under its source cwd while keeping the execution path', async () => {
+    const store = createStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('wt', {
+      forkOrigin: 'worktree', parentSessionId: 's1',
+      querymt: { workspace: { workspaceId: 'ws_1', branch: 'qmt/ws_1', checkoutPath: '/w/ws_1', sourceCwd: '/p/app' } }
+    }, '/w/ws_1')] });
+    await store.refreshSessionsForAgent('agent-1');
+
+    expect(store.workspaceSessionSources['agent-1']['/p/app']?.sessions.map((session) => session.sessionId)).toEqual(['wt']);
+    expect(store.workspaceSessionSources['agent-1']['/w/ws_1']).toBeUndefined();
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'wt')?.cwd).toBe('/w/ws_1');
+  });
+
+  it('keeps worktree metadata when a later list omits it', async () => {
+    const store = createStore();
+    const meta = { querymt: { workspace: { workspaceId: 'ws_1', branch: 'b', sourceCwd: '/p/app' } } };
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('wt', meta, '/w/ws_1')] });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [info('wt', {}, '/w/ws_1')] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'wt')?.workspace?.branch).toBe('b');
+  });
+
+  it('sends session workspace metadata only for a worktree choice on a capable local target', async () => {
+    const store = await connectedStore();
+    await store.createSession('agent-1');
+    expect(mockClient.createSession).toHaveBeenLastCalledWith('/tmp/work', null);
+
+    store.setComposerWorkspaceMode('worktree_local_changes');
+    await store.createSession('agent-1');
+    expect(mockClient.createSession).toHaveBeenLastCalledWith('/tmp/work', null, { execution: 'worktree', includeLocalChanges: true });
+
+    store.setComposerWorkspaceMode('worktree');
+    await store.createSession('agent-1');
+    expect(mockClient.createSession).toHaveBeenLastCalledWith('/tmp/work', null, { execution: 'worktree' });
+  });
+
+  it('resets the workspace choice for remote targets and agents that cannot isolate', async () => {
+    const store = await connectedStore();
+    store.setComposerWorkspaceMode('worktree');
+    expect(store.composerWorkspaceMode).toBe('worktree');
+    store.setComposerTarget('node-1');
+    expect(store.composerWorkspaceMode).toBe('local');
+    store.setComposerTarget('local');
+    mockClient.getWorkspaceCapability.mockReturnValue(null);
+    store.setComposerWorkspaceMode('worktree');
+    expect(store.composerWorkspaceMode).toBe('local');
+    expect(store.canCreateWorktree('agent-1')).toBe(false);
+  });
+
+  it('creates a worktree session from a source and inserts an optimistic child', async () => {
+    const store = await connectedStore();
+    mockClient.createWorktreeSession.mockResolvedValueOnce({
+      sessionId: 'wt-1', workspaceId: 'ws_1', branch: 'qmt/ws_1', checkoutPath: '/w/ws_1', sessionCwd: '/w/ws_1'
+    });
+
+    expect(await store.createWorktreeSessionFrom('agent-1', 's1', { name: 'feat' })).toBe('wt-1');
+    expect(mockClient.createWorktreeSession).toHaveBeenCalledWith('/tmp/work', 's1', { name: 'feat' });
+    const child = store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'wt-1');
+    expect(child).toMatchObject({ parentSessionId: 's1', forkOrigin: 'worktree', cwd: '/w/ws_1', workspace: { branch: 'qmt/ws_1', sourceCwd: '/tmp/work' } });
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 's1')).toMatchObject({ hasChildren: true, title: 'Source' });
+    expect(store.workspaceSessionSources['agent-1']['/tmp/work'].sessions.map((session) => session.sessionId)).toContain('wt-1');
+    expect(store.error).toBeNull();
+  });
+
+  it('rejects conflicting create options and surfaces agent errors', async () => {
+    const store = await connectedStore();
+    expect(await store.createWorktreeSessionFrom('agent-1', 's1', { baseRef: 'main', includeLocalChanges: true })).toBeNull();
+    expect(store.error).toContain('not both');
+    expect(mockClient.createWorktreeSession).not.toHaveBeenCalled();
+
+    mockClient.createWorktreeSession.mockRejectedValueOnce(new RequestError(-32602, 'x', { code: 'workspace_missing' }));
+    expect(await store.createWorktreeSessionFrom('agent-1', 's1')).toBeNull();
+    expect(store.error).toContain('missing');
+    expect(store.worktreePending).toBe(false);
+  });
+
+  it('hands off a worktree, defaults to a clean handoff, and keeps the dialog error on refusal', async () => {
+    const store = await connectedStore();
+    store.sessionsByAgent = { 'agent-1': [{ ...source(), workspace: {
+      workspaceId: 'ws_1', branch: 'b', checkoutPath: '/w', sourceCwd: '/tmp/work', baselineMode: null, lifecycle: 'ready', ownerSessionId: 's1', handedOffTo: null
+    } }] };
+
+    mockClient.handoffWorktreeSession.mockRejectedValueOnce(new RequestError(-32602, 'x', { code: 'owner_active' }));
+    expect(await store.handoffWorktreeSession('agent-1', 's1')).toBeNull();
+    expect(store.error).toContain('Stop the running turn');
+
+    mockClient.handoffWorktreeSession.mockResolvedValueOnce({ sessionId: 'next', workspaceId: 'ws_1', branch: 'b', checkoutPath: '/w', sessionCwd: '/w' });
+    expect(await store.handoffWorktreeSession('agent-1', 's1')).toBe('next');
+    expect(mockClient.handoffWorktreeSession).toHaveBeenLastCalledWith('s1', {});
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 'next')?.parentSessionId).toBe('s1');
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === 's1')?.workspace?.handedOffTo).toBe('next');
+  });
+
+  it('loads children per parent, caches them, and drops rows with another parent or delegates', async () => {
+    const store = await connectedStore();
+    mockClient.listSessionChildren.mockResolvedValueOnce({ sessions: [
+      info('fork', { parentSessionId: 's1', forkOrigin: 'user' }),
+      info('wt', { parentSessionId: 's1', forkOrigin: 'worktree' }),
+      info('other', { parentSessionId: 'zzz', forkOrigin: 'user' }),
+      info('delegate', { parentSessionId: 's1', forkOrigin: 'delegation' }),
+      info('rootish')
+    ] });
+    const children = await store.loadSessionChildren('agent-1', 's1');
+    expect(children.map((session) => session.sessionId).sort()).toEqual(['fork', 'wt']);
+    const known = store.sessionsByAgent['agent-1'].map((session) => session.sessionId);
+    expect(known).toEqual(expect.arrayContaining(['fork', 'wt']));
+    expect(known).not.toContain('other');
+    expect(known).not.toContain('delegate');
+    expect(store.workspaceSessionSources['agent-1']?.['/tmp/work']?.sessions.map((session) => session.sessionId) ?? []).not.toContain('fork');
+    await store.loadSessionChildren('agent-1', 's1');
+    expect(mockClient.listSessionChildren).toHaveBeenCalledTimes(1);
+    await store.loadSessionChildren('agent-1', 's1', true);
+    expect(mockClient.listSessionChildren).toHaveBeenCalledTimes(2);
+  });
+
+  it('records read-only access from the load response and clears it on the next session', async () => {
+    const store = await connectedStore();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: { querymt: {
+      sessionAccess: { mode: 'read_only', reason: 'owner_transferred', ownerSessionId: 'next' }
+    } } }, replay: [] });
+    await store.loadSession('agent-1', 's1');
+    expect(store.activeSessionAccess).toEqual({ mode: 'read_only', reason: 'owner_transferred', ownerSessionId: 'next' });
+    expect(store.isSessionReadOnly('agent-1', 's1')).toBe(true);
+
+    await store.loadSession('agent-1', 's2');
+    expect(store.activeSessionAccess).toBeNull();
+  });
+
+  it('switches to read-only when a prompt is rejected with owner_transferred', async () => {
+    mockClient.sendPrompt.mockRejectedValueOnce(new RequestError(-32602, 'x', { code: 'owner_transferred' }));
+    const store = await connectedStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 's1';
+    await store.sendPromptToActiveSession();
+    expect(store.activeSessionAccess).toMatchObject({ mode: 'read_only', reason: 'owner_transferred' });
+    expect(store.promptFailure).toBeNull();
+    expect(store.activeSession.runState).not.toBe('failed');
+  });
+
+  it('applies the workspace choice for the launcher agent even when no composer agent is set', async () => {
+    const store = await connectedStore();
+    store.setComposerAgent(null);
+    store.setComposerWorkspaceMode('worktree');
+    expect(store.composerWorkspaceMode).toBe('local');
+    store.setComposerWorkspaceMode('worktree', 'agent-1');
+    expect(store.composerWorkspaceMode).toBe('worktree');
+  });
+
+  it('resets the workspace choice when switching to an agent that cannot isolate', async () => {
+    const store = await connectedStore();
+    store.setComposerWorkspaceMode('worktree');
+    mockClient.getWorkspaceCapability.mockReturnValue(null);
+    store.setComposerAgent('agent-1');
+    expect(store.composerWorkspaceMode).toBe('local');
+  });
+
+  it('refuses to prompt a read-only session', async () => {
+    const store = await connectedStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 's1';
+    store.activeSessionAccess = { mode: 'read_only', reason: 'owner_transferred', ownerSessionId: 'next' };
+    store.composerPrompt = 'hello';
+    mockClient.sendPrompt.mockClear();
+    await store.sendPromptToActiveSession();
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    expect(store.error).toBe('This session is read-only.');
+  });
+
+  it('restores the rejected prompt and learns the owner after owner_transferred', async () => {
+    mockClient.sendPrompt.mockRejectedValueOnce(new RequestError(-32602, 'x', { code: 'owner_transferred' }));
+    const store = await connectedStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 's1';
+    store.composerPrompt = 'keep me';
+    mockClient.listSessions.mockResolvedValue({ sessions: [info('s1', {
+      querymt: { workspace: { workspaceId: 'ws_1', branch: 'b', sourceCwd: '/tmp/work', handedOffTo: 'next' } }
+    })] });
+    await store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(store.activeSessionAccess?.ownerSessionId).toBe('next'));
+    expect(store.composerPrompt).toBe('keep me');
+  });
+
+  it('drops cached session children when the catalog is invalidated', async () => {
+    const store = await connectedStore();
+    store.sessionChildrenByParent = { 'agent-1:s1': [] };
+    (store as unknown as { invalidateSessionCatalogCache(): void }).invalidateSessionCatalogCache();
+    expect(store.sessionChildrenByParent).toEqual({});
   });
 });

@@ -145,6 +145,10 @@ export interface DesktopSessionSummary {
   sessionKind?: string | null;
   hasChildren?: boolean;
   forkCount?: number;
+  /** Managed Git worktree this session runs in, when the agent reports one. */
+  workspace?: import('$lib/domain/session-workspace').SessionWorkspaceInfo | null;
+  /** Read-only grant reported by the agent on load (for example after a worktree handoff). */
+  access?: import('$lib/domain/session-workspace').SessionAccessInfo | null;
 }
 
 export interface ModelEntry {
