@@ -7,9 +7,9 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{Arc, Mutex},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
+    sync::{mpsc, Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{ipc::Channel, Emitter, Manager};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -97,6 +97,7 @@ struct ManagedAgentProcess {
     session_updates: VecDeque<serde_json::Value>,
     pending_requests: HashMap<String, PendingAcpRequest>,
     state: ManagedAgentState,
+    started_at: Option<Instant>,
 }
 
 struct PendingAcpRequest {
@@ -160,6 +161,7 @@ impl ManagedAgentProcess {
             session_updates: VecDeque::new(),
             pending_requests: HashMap::new(),
             state: ManagedAgentState::configured(agent_id, command_line),
+            started_at: None,
         }
     }
 }
@@ -234,6 +236,7 @@ impl AcpAgentManager {
         close_pending_requests(process, "agent_restarted");
         process.session_updates.clear();
         process.state.state = AgentState::Running;
+        process.started_at = Some(Instant::now());
         process.state.pid = Some(pid);
         process.state.version = None;
         process.state.resolved_program = Some(program.path.display().to_string());
@@ -805,21 +808,48 @@ fn querymt_desktop_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf),
     Ok((app_data_dir, profiles_dir, templates_dir))
 }
 
-fn run_version_command(program: &Path) -> Option<String> {
-    let output = Command::new(program)
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Run `<program> --version`, killing the process if it does not finish in `timeout`.
+fn run_version_command(program: &Path, timeout: Duration) -> Option<String> {
+    use std::io::Read;
+
+    let mut child = Command::new(program)
         .arg("--version")
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
-    if !output.status.success() {
+    let mut stdout = child.stdout.take()?;
+
+    // Read on a helper thread so a program that never exits cannot block the probe.
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut output = String::new();
+        let _ = stdout.read_to_string(&mut output);
+        let _ = sender.send(output);
+    });
+
+    let output = match receiver.recv_timeout(timeout) {
+        Ok(output) => output,
+        Err(_) => {
+            // Killing the child closes its stdout, which also ends the reader thread.
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+    };
+    let status = child.wait().ok()?;
+    if !status.success() {
         return None;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
+    let version = output.trim().to_string();
+    if version.is_empty() {
         None
     } else {
-        Some(stdout)
+        Some(version)
     }
 }
 
@@ -830,8 +860,12 @@ fn spawn_version_probe(
     program: PathBuf,
     pid: u32,
 ) {
+    // `--version` is only known to be safe for qmtcode; other agents may start serving instead.
+    if !is_querymt_agent(&program) {
+        return;
+    }
     std::thread::spawn(move || {
-        let Some(version) = run_version_command(&program) else {
+        let Some(version) = run_version_command(&program, VERSION_PROBE_TIMEOUT) else {
             return;
         };
         let mut locked = inner.lock().expect("agent manager lock poisoned");
@@ -910,6 +944,55 @@ fn current_target_triple() -> &'static str {
     "unsupported-target"
 }
 
+#[cfg(unix)]
+fn exit_signal(status: &ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn exit_signal(_status: &ExitStatus) -> Option<i32> {
+    None
+}
+
+const SIGKILL: i32 = 9;
+/// A quarantine kill happens at exec; later SIGKILLs (OOM, user) are not quarantine related.
+const QUARANTINE_KILL_WINDOW: Duration = Duration::from_secs(10);
+
+/// The `.app` bundle that contains `program`, if any.
+fn app_bundle_path(program: &Path) -> Option<&Path> {
+    program
+        .ancestors()
+        .find(|ancestor| ancestor.extension().is_some_and(|ext| ext == "app"))
+}
+
+/// macOS kills quarantined, non-notarized executables with SIGKILL right after launch.
+/// Explain that (and the fix) when the bundled agent dies that way. The app path is
+/// derived from where the agent actually ran, so the hint stays right after the app is moved.
+fn quarantine_hint(
+    is_macos: bool,
+    signal: Option<i32>,
+    ran_for: Option<Duration>,
+    source: Option<ProgramSource>,
+    resolved_program: Option<&str>,
+) -> Option<String> {
+    if !is_macos
+        || signal != Some(SIGKILL)
+        || source != Some(ProgramSource::Bundled)
+        || !ran_for.is_some_and(|elapsed| elapsed <= QUARANTINE_KILL_WINDOW)
+    {
+        return None;
+    }
+    let target = resolved_program
+        .and_then(|program| app_bundle_path(Path::new(program)))
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<path to QueryMT Desktop.app>".to_string());
+    Some(format!(
+        "The bundled agent was killed right after launch. macOS may have blocked it because this \
+         unsigned app is still quarantined. Run: xattr -dr com.apple.quarantine \"{target}\" and restart the agent."
+    ))
+}
+
 fn reconcile_child_state(process: &mut ManagedAgentProcess) {
     let Some(child) = process.child.as_mut() else {
         return;
@@ -941,9 +1024,20 @@ fn reconcile_child_state(process: &mut ManagedAgentProcess) {
                 process.state.message = "ACP stdio agent is not running.".to_string();
                 process.state.last_error = None;
             } else {
+                let mut last_error = format!("Agent process exited with status {exit}.");
+                let ran_for = process.started_at.map(|started| started.elapsed());
+                if let Some(hint) = quarantine_hint(
+                    cfg!(target_os = "macos"),
+                    exit_signal(&status),
+                    ran_for,
+                    process.state.program_source,
+                    process.state.resolved_program.as_deref(),
+                ) {
+                    push_log(&mut process.logs, "system", &hint);
+                    last_error = format!("{last_error} {hint}");
+                }
                 process.state.state = AgentState::Failed;
-                process.state.last_error =
-                    Some(format!("Agent process exited with status {exit}."));
+                process.state.last_error = Some(last_error);
                 process.state.message = "ACP stdio agent exited unexpectedly.".to_string();
             }
         }
@@ -1427,6 +1521,113 @@ mod tests {
             process.logs.back().map(|l| l.message.as_str()),
             Some("boom")
         );
+    }
+
+    const APP_BINARY: &str = "/Users/me/Apps/QueryMT Desktop.app/Contents/MacOS/qmtcode";
+
+    #[test]
+    fn quarantine_hint_names_the_moved_app_bundle() {
+        let hint = quarantine_hint(
+            true,
+            Some(SIGKILL),
+            Some(Duration::from_millis(80)),
+            Some(ProgramSource::Bundled),
+            Some(APP_BINARY),
+        )
+        .expect("hint");
+        assert!(hint.contains("xattr -dr com.apple.quarantine"), "{hint}");
+        assert!(
+            hint.contains("\"/Users/me/Apps/QueryMT Desktop.app\""),
+            "{hint}"
+        );
+    }
+
+    #[test]
+    fn quarantine_hint_only_applies_to_early_sigkill_of_the_bundled_agent_on_macos() {
+        let early = Some(Duration::from_secs(1));
+        let bundled = Some(ProgramSource::Bundled);
+        let hint = |macos, signal, ran_for, source| {
+            quarantine_hint(macos, signal, ran_for, source, Some(APP_BINARY))
+        };
+
+        assert!(hint(true, Some(SIGKILL), early, bundled).is_some());
+        // Not macOS, other signals, normal exit, late kill, unknown start time.
+        assert!(hint(false, Some(SIGKILL), early, bundled).is_none());
+        assert!(hint(true, Some(15), early, bundled).is_none());
+        assert!(hint(true, None, early, bundled).is_none());
+        assert!(hint(true, Some(SIGKILL), Some(Duration::from_secs(60)), bundled).is_none());
+        assert!(hint(true, Some(SIGKILL), None, bundled).is_none());
+        // Only the bundled agent is explained by the app's own quarantine flag.
+        assert!(hint(true, Some(SIGKILL), early, Some(ProgramSource::Path)).is_none());
+        assert!(hint(true, Some(SIGKILL), early, Some(ProgramSource::Explicit)).is_none());
+        assert!(hint(true, Some(SIGKILL), early, None).is_none());
+    }
+
+    #[test]
+    fn quarantine_hint_falls_back_to_a_placeholder_outside_an_app_bundle() {
+        let hint = quarantine_hint(
+            true,
+            Some(SIGKILL),
+            Some(Duration::from_secs(1)),
+            Some(ProgramSource::Bundled),
+            Some("/usr/local/bin/qmtcode"),
+        )
+        .expect("hint");
+        assert!(hint.contains("<path to QueryMT Desktop.app>"), "{hint}");
+    }
+
+    #[cfg(unix)]
+    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = touch(dir, name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn version_probe_returns_trimmed_output() {
+        let root = temp_dir("version-ok");
+        let program = script(&root, "fake-agent", "echo 'qmtcode 1.2.3'");
+
+        let version = run_version_command(&program, Duration::from_secs(5));
+        assert_eq!(version.as_deref(), Some("qmtcode 1.2.3"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn version_probe_ignores_failing_programs() {
+        let root = temp_dir("version-fail");
+        let program = script(&root, "fake-agent", "echo nope; exit 3");
+
+        assert!(run_version_command(&program, Duration::from_secs(5)).is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn version_probe_kills_programs_that_never_exit() {
+        let root = temp_dir("version-hang");
+        let marker = root.join("still-running");
+        // Writes the marker after the probe timeout if it was not killed.
+        let program = script(
+            &root,
+            "fake-agent",
+            &format!("sleep 2; touch '{}'", marker.display()),
+        );
+
+        let started = Instant::now();
+        let version = run_version_command(&program, Duration::from_millis(200));
+        assert!(version.is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "probe waited for the program instead of timing out"
+        );
+        std::thread::sleep(Duration::from_millis(2300));
+        assert!(!marker.exists(), "hung program was not killed");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

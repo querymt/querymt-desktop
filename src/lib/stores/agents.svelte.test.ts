@@ -30,7 +30,7 @@ import { tick } from 'svelte';
 import { DesktopAcpClient } from '$lib/querymt/acp-client';
 import { BrowserClient } from '$lib/querymt/browser-client';
 import { buildSessionConversation } from '$lib/domain/session-conversation';
-import { startAgent } from '$native';
+import { restartAgent, startAgent } from '$native';
 import { AgentsStore } from './agents.svelte';
 import { chatPreferencesStore } from './chat-preferences.svelte';
 import { inboxStore } from './inbox.svelte';
@@ -5616,6 +5616,18 @@ describe('AgentsStore mesh node availability', () => {
     await store.startConfiguredAgent('agent-1');
 
     expect(store.error).toContain("Could not find the 'qmtcode' agent");
+  });
+
+  it('surfaces the native restart failure string instead of a generic reconnect error', async () => {
+    const store = createStore();
+    vi.mocked(restartAgent).mockRejectedValueOnce(
+      "Could not find the 'qmtcode' agent. Looked in: [/tmp/x/qmtcode]" as never
+    );
+
+    await store.restartConfiguredAgent('agent-1');
+
+    expect(store.error).toContain("Could not find the 'qmtcode' agent");
+    expect(store.error).not.toContain('Failed to reconnect');
   });
 
   it('does not resurrect mesh nodes when a pending refresh settles after a stop', async () => {

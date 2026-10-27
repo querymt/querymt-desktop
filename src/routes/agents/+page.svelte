@@ -28,6 +28,12 @@
   import { isEmbedded } from '$lib/platform/runtime';
   import { normalizeAcpWebSocketEndpoint } from '$lib/querymt/websocket-url';
 
+  const PROGRAM_SOURCE_LABELS = {
+    bundled: 'bundled with the app',
+    path: 'found on PATH',
+    explicit: 'explicit path'
+  } as const;
+
   type AgentDialogMode = 'add' | 'edit' | null;
   type AgentMessageTone = 'error' | 'warning';
 
@@ -639,6 +645,19 @@
                 {#if selectedCard.config.transport === 'stdio'}
                   <div><dt>Process ID</dt><dd class="agent-details-mono">{selectedCard.status?.pid ?? 'Unavailable'}</dd></div>
                   <div><dt>Version</dt><dd class="agent-details-mono">{selectedCard.status?.version ?? 'Unavailable'}</dd></div>
+                  <div>
+                    <dt>Binary</dt>
+                    <dd class="agent-details-mono">
+                      {#if selectedCard.status?.resolvedProgram}
+                        {selectedCard.status.resolvedProgram}
+                        {#if selectedCard.status.programSource}
+                          {' '}({PROGRAM_SOURCE_LABELS[selectedCard.status.programSource]})
+                        {/if}
+                      {:else}
+                        Not launched yet
+                      {/if}
+                    </dd>
+                  </div>
                 {/if}
                 {#if isEmbedded}
                   <div><dt>Management</dt><dd>Serving qmtcode instance</dd></div>

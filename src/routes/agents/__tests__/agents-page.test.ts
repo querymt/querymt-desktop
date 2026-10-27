@@ -300,6 +300,27 @@ describe('Agents page', () => {
     expect(within(drawer).getByText('session/list')).toBeInTheDocument();
   });
 
+  it('shows a placeholder when the agent has not been launched yet', async () => {
+    render(AgentsPage);
+    await fireEvent.click(screen.getByRole('button', { name: 'Details for QMTCODE' }));
+
+    expect(screen.getByText('Binary').nextElementSibling).toHaveTextContent('Not launched yet');
+  });
+
+  it('shows which binary a stdio agent was launched from', async () => {
+    agentsStore.statuses['agent-1'] = {
+      ...agentsStore.statuses['agent-1'],
+      resolvedProgram: '/Applications/QueryMT Desktop.app/Contents/MacOS/qmtcode',
+      programSource: 'bundled'
+    } as typeof agentsStore.statuses['agent-1'];
+    render(AgentsPage);
+    await fireEvent.click(screen.getByRole('button', { name: 'Details for QMTCODE' }));
+
+    expect(screen.getByText('Binary').nextElementSibling).toHaveTextContent(
+      '/Applications/QueryMT Desktop.app/Contents/MacOS/qmtcode (bundled with the app)'
+    );
+  });
+
   it('keeps delete visible with the other row actions', async () => {
     render(AgentsPage);
 
