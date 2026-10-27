@@ -5607,6 +5607,17 @@ describe('AgentsStore mesh node availability', () => {
     expect(store.meshNodeCount).toBe(2);
   });
 
+  it('surfaces the native start failure string instead of a generic connect error', async () => {
+    const store = createStore();
+    vi.mocked(startAgent).mockRejectedValueOnce(
+      "Could not find the 'qmtcode' agent. Looked in: [/tmp/x/qmtcode]" as never
+    );
+
+    await store.startConfiguredAgent('agent-1');
+
+    expect(store.error).toContain("Could not find the 'qmtcode' agent");
+  });
+
   it('does not resurrect mesh nodes when a pending refresh settles after a stop', async () => {
     const store = createStore();
     mockClient.listMeshNodes.mockResolvedValue(meshNodes([NODE_ALPHA]));

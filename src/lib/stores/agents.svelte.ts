@@ -1593,7 +1593,13 @@ export class AgentsStore {
         this.logsByAgent = { ...this.logsByAgent, [config.id]: await getAgentLogs(config.id) };
       }
     } catch (error) {
-      this.error = error instanceof Error ? error.message : `Failed to connect ${config.name}.`;
+      // Tauri rejects `invoke` with a plain string, so accept both shapes.
+      const detail = error instanceof Error ? error.message : typeof error === 'string' ? error.trim() : '';
+      this.error = detail || `Failed to connect ${config.name}.`;
+      if (config.transport === 'stdio') {
+        // Pull the failed status and logs so the agent card shows the real cause.
+        await this.refreshAgent(config).catch(() => undefined);
+      }
     }
   }
 
