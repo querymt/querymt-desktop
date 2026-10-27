@@ -8,6 +8,29 @@ The default target is QueryMT Desktop. It can manage local ACP subprocesses and 
 
 The embedded target is a static SPA for `qmtcode`. It registers one host-managed agent, connects to the serving origin at `/acp/ws`, uses `ws:` or `wss:` to match the page, and communicates through ACP plus capability-advertised QueryMT extensions. Workspace paths entered in this target refer to the `qmtcode` server filesystem.
 
+## macOS downloads
+
+Release builds are not yet signed with a Developer ID or notarized, so macOS Gatekeeper
+blocks them after download. After copying the app to `/Applications` (or anywhere else),
+clear the quarantine flag **recursively** so the bundled `qmtcode` agent is covered too:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/QueryMT Desktop.app"
+```
+
+Without `-r`, only the app folder is cleared and the bundled agent is still killed on start.
+
+## Bundled agent
+
+The release bundles a `qmtcode` binary next to the app executable. The default agent
+command is `qmtcode --acp`; the bare `qmtcode` is resolved on every start, in this order:
+
+1. the copy bundled with the app (`qmtcode` or `qmtcode-<target-triple>`), wherever the app is installed or moved to;
+2. a `qmtcode` on `PATH`.
+
+A command that contains a path (for example `/opt/tools/qmtcode --acp`) is used as written.
+The agents page and the agent log show which binary was launched.
+
 ## Linux downloads
 
 Linux release filenames identify the runtime:

@@ -3,12 +3,13 @@ use opentelemetry::Context;
 use serde::Serialize;
 use std::{
     collections::{HashMap, VecDeque},
+    ffi::OsStr,
     fs,
     io::{BufRead, BufReader, Write},
-    path::PathBuf,
-    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{Arc, Mutex},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    path::{Path, PathBuf},
+    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
+    sync::{mpsc, Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{ipc::Channel, Emitter, Manager};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -40,6 +41,31 @@ pub struct AgentRuntimeStatus {
     pub version: Option<String>,
     pub message: String,
     pub last_error: Option<String>,
+    /// Absolute path (or bare command) the agent was last launched from.
+    pub resolved_program: Option<String>,
+    pub program_source: Option<ProgramSource>,
+}
+
+/// Where the program for an agent command was found.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgramSource {
+    /// Shipped inside the application bundle (resolved at every start, never persisted).
+    Bundled,
+    /// Found by searching `PATH`.
+    Path,
+    /// The command line already contained a path.
+    Explicit,
+}
+
+impl ProgramSource {
+    fn label(self) -> &'static str {
+        match self {
+            ProgramSource::Bundled => "bundled",
+            ProgramSource::Path => "PATH",
+            ProgramSource::Explicit => "explicit path",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +97,7 @@ struct ManagedAgentProcess {
     session_updates: VecDeque<serde_json::Value>,
     pending_requests: HashMap<String, PendingAcpRequest>,
     state: ManagedAgentState,
+    started_at: Option<Instant>,
 }
 
 struct PendingAcpRequest {
@@ -89,6 +116,8 @@ struct ManagedAgentState {
     version: Option<String>,
     message: String,
     last_error: Option<String>,
+    resolved_program: Option<String>,
+    program_source: Option<ProgramSource>,
 }
 
 impl ManagedAgentState {
@@ -101,6 +130,8 @@ impl ManagedAgentState {
             version: None,
             message: "Agent is configured but not running.".to_string(),
             last_error: None,
+            resolved_program: None,
+            program_source: None,
         }
     }
 
@@ -113,6 +144,8 @@ impl ManagedAgentState {
             version: self.version,
             message: self.message,
             last_error: self.last_error,
+            resolved_program: self.resolved_program,
+            program_source: self.program_source,
         }
     }
 }
@@ -128,6 +161,7 @@ impl ManagedAgentProcess {
             session_updates: VecDeque::new(),
             pending_requests: HashMap::new(),
             state: ManagedAgentState::configured(agent_id, command_line),
+            started_at: None,
         }
     }
 }
@@ -174,29 +208,27 @@ impl AcpAgentManager {
             &format!("Starting agent with command: {command_line}"),
         );
 
-        let mut command = build_launch_command(app, &command_line)?;
-        apply_querymt_desktop_environment(app, &command_line, &mut command)?;
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("Failed to start agent: {error}"))?;
-
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "Failed to capture agent stdin pipe".to_string())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "Failed to capture agent stdout pipe".to_string())?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| "Failed to capture agent stderr pipe".to_string())?;
+        // Any failure from here on must leave the agent in `Failed`, never stuck in `Starting`.
+        let LaunchedAgent {
+            child,
+            stdin,
+            stdout,
+            stderr,
+            program,
+        } = match launch_agent(app, &command_line) {
+            Ok(launched) => launched,
+            Err(error) => {
+                let entry = record_start_failure(process, &error);
+                let _ = app.emit(
+                    LOG_EVENT,
+                    AgentLogEvent {
+                        agent_id: agent_id.clone(),
+                        entry,
+                    },
+                );
+                return Err(error);
+            }
+        };
 
         let pid = child.id();
         process.stdin = Some(stdin);
@@ -204,14 +236,21 @@ impl AcpAgentManager {
         close_pending_requests(process, "agent_restarted");
         process.session_updates.clear();
         process.state.state = AgentState::Running;
+        process.started_at = Some(Instant::now());
         process.state.pid = Some(pid);
-        process.state.version = run_version_command(app, command_line.split_whitespace().next());
+        process.state.version = None;
+        process.state.resolved_program = Some(program.path.display().to_string());
+        process.state.program_source = Some(program.source);
         process.state.message = "ACP stdio agent is running.".to_string();
         process.state.last_error = None;
         push_log(
             &mut process.logs,
             "system",
-            &format!("Agent process started with pid {pid}."),
+            &format!(
+                "Agent process started with pid {pid} from {} ({}).",
+                program.path.display(),
+                program.source.label()
+            ),
         );
 
         spawn_stdout_reader(
@@ -220,7 +259,13 @@ impl AcpAgentManager {
             stdout,
             app.clone(),
         );
-        spawn_stderr_reader(agent_id, Arc::clone(&self.inner), stderr, app.clone());
+        spawn_stderr_reader(
+            agent_id.clone(),
+            Arc::clone(&self.inner),
+            stderr,
+            app.clone(),
+        );
+        spawn_version_probe(agent_id, Arc::clone(&self.inner), program.path, pid);
 
         Ok(process.state.clone().into_status())
     }
@@ -549,16 +594,178 @@ fn close_pending_requests(process: &mut ManagedAgentProcess, status: &'static st
     }
 }
 
-fn build_launch_command(app: &AppHandle, command_line: &str) -> Result<Command, String> {
+/// A program resolved from the first token of an agent command line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedProgram {
+    path: PathBuf,
+    source: ProgramSource,
+}
+
+struct LaunchedAgent {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: ChildStdout,
+    stderr: ChildStderr,
+    program: ResolvedProgram,
+}
+
+/// Base name of the agent binary shipped inside the application bundle.
+const BUNDLED_AGENT_NAME: &str = "qmtcode";
+
+fn launch_agent(app: &AppHandle, command_line: &str) -> Result<LaunchedAgent, String> {
     let parts = shlex::split(command_line)
         .ok_or_else(|| "Could not parse command line for ACP agent.".to_string())?;
     let (program, args) = parts
         .split_first()
         .ok_or_else(|| "ACP command line cannot be empty.".to_string())?;
 
-    let mut command = Command::new(resolve_agent_program_path(app, program));
+    // Resolved on every start, never persisted, so the app keeps working after it is moved.
+    let resolved = resolve_program(
+        program,
+        &bundle_search_dirs(app),
+        std::env::var_os("PATH").as_deref(),
+    )?;
+
+    let mut command = Command::new(&resolved.path);
     command.args(args);
-    Ok(command)
+    if is_querymt_agent(&resolved.path) {
+        apply_querymt_desktop_environment(app, command_line, &mut command)?;
+    }
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "Failed to start agent '{}' ({}): {error}",
+            resolved.path.display(),
+            resolved.source.label()
+        )
+    })?;
+
+    match (child.stdin.take(), child.stdout.take(), child.stderr.take()) {
+        (Some(stdin), Some(stdout), Some(stderr)) => Ok(LaunchedAgent {
+            child,
+            stdin,
+            stdout,
+            stderr,
+            program: resolved,
+        }),
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err("Failed to capture agent stdio pipes".to_string())
+        }
+    }
+}
+
+/// Directories that may contain the bundled agent, relative to the running app.
+fn bundle_search_dirs(app: &AppHandle) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut push = |dir: PathBuf| {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    };
+
+    if let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    {
+        push(exe_dir.clone());
+        push(exe_dir.join("binaries"));
+    }
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        push(resource_dir.clone());
+        push(resource_dir.join("binaries"));
+    }
+    dirs
+}
+
+/// File names the bundled agent may have: the plain name Tauri installs for
+/// `externalBin`, and the target-suffixed name used by the CEF packaging.
+fn bundled_agent_file_names() -> [String; 2] {
+    let suffix = executable_suffix();
+    [
+        format!("{BUNDLED_AGENT_NAME}{suffix}"),
+        format!("{BUNDLED_AGENT_NAME}-{}{suffix}", current_target_triple()),
+    ]
+}
+
+fn is_bundled_agent_command(program: &str) -> bool {
+    program == BUNDLED_AGENT_NAME || program == format!("{BUNDLED_AGENT_NAME}.exe")
+}
+
+/// Whether the resolved program is a qmtcode binary (and so understands `--profiles-dir`).
+fn is_querymt_agent(path: &Path) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.starts_with(BUNDLED_AGENT_NAME))
+}
+
+/// Resolve the program of an agent command.
+///
+/// - Anything containing a path separator is used as written (`Explicit`).
+/// - A bare `qmtcode` prefers the copy shipped with the app (`Bundled`), then `PATH`.
+/// - Any other bare name is left to the OS `PATH` lookup (`Path`).
+fn resolve_program(
+    program: &str,
+    bundle_dirs: &[PathBuf],
+    path_var: Option<&OsStr>,
+) -> Result<ResolvedProgram, String> {
+    let configured = Path::new(program);
+    if configured.is_absolute() || configured.components().count() > 1 {
+        return Ok(ResolvedProgram {
+            path: configured.to_path_buf(),
+            source: ProgramSource::Explicit,
+        });
+    }
+
+    if !is_bundled_agent_command(program) {
+        return Ok(ResolvedProgram {
+            path: configured.to_path_buf(),
+            source: ProgramSource::Path,
+        });
+    }
+
+    let names = bundled_agent_file_names();
+    let mut searched = Vec::new();
+    for dir in bundle_dirs {
+        for name in &names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Ok(ResolvedProgram {
+                    path: candidate,
+                    source: ProgramSource::Bundled,
+                });
+            }
+            searched.push(candidate);
+        }
+    }
+
+    if let Some(found) = path_var.and_then(|path| find_on_path(&names[0], path)) {
+        return Ok(ResolvedProgram {
+            path: found,
+            source: ProgramSource::Path,
+        });
+    }
+
+    let searched = searched
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "Could not find the '{BUNDLED_AGENT_NAME}' agent. It is not bundled with this app and is not on PATH. \
+         Looked in: [{searched}]. Reinstall QueryMT Desktop, or set the agent command to the full path of a qmtcode binary."
+    ))
+}
+
+fn find_on_path(file_name: &str, path_var: &OsStr) -> Option<PathBuf> {
+    std::env::split_paths(path_var)
+        .map(|dir| dir.join(file_name))
+        .find(|candidate| candidate.is_file())
 }
 
 fn apply_querymt_desktop_environment(
@@ -566,10 +773,6 @@ fn apply_querymt_desktop_environment(
     command_line: &str,
     command: &mut Command,
 ) -> Result<(), String> {
-    if !command_line.contains("qmtcode") {
-        return Ok(());
-    }
-
     let (app_data_dir, profiles_dir, templates_dir) = querymt_desktop_paths(app)?;
     fs::create_dir_all(&profiles_dir).map_err(|error| {
         format!(
@@ -605,70 +808,96 @@ fn querymt_desktop_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf),
     Ok((app_data_dir, profiles_dir, templates_dir))
 }
 
-fn run_version_command(app: &AppHandle, program: Option<&str>) -> Option<String> {
-    let program = program?;
-    let output = Command::new(resolve_agent_program_path(app, program))
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Run `<program> --version`, killing the process if it does not finish in `timeout`.
+fn run_version_command(program: &Path, timeout: Duration) -> Option<String> {
+    use std::io::Read;
+
+    let mut child = Command::new(program)
         .arg("--version")
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
-    if !output.status.success() {
+    let mut stdout = child.stdout.take()?;
+
+    // Read on a helper thread so a program that never exits cannot block the probe.
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut output = String::new();
+        let _ = stdout.read_to_string(&mut output);
+        let _ = sender.send(output);
+    });
+
+    let output = match receiver.recv_timeout(timeout) {
+        Ok(output) => output,
+        Err(_) => {
+            // Killing the child closes its stdout, which also ends the reader thread.
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+    };
+    let status = child.wait().ok()?;
+    if !status.success() {
         return None;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
+    let version = output.trim().to_string();
+    if version.is_empty() {
         None
     } else {
-        Some(stdout)
+        Some(version)
     }
 }
 
-fn resolve_agent_program_path(app: &AppHandle, program: &str) -> PathBuf {
-    let configured = PathBuf::from(program);
-    if configured.components().count() > 1 || configured.is_absolute() {
-        return configured;
+/// Query the agent version off the start path so it never blocks the manager lock.
+fn spawn_version_probe(
+    agent_id: String,
+    inner: Arc<Mutex<HashMap<String, ManagedAgentProcess>>>,
+    program: PathBuf,
+    pid: u32,
+) {
+    // `--version` is only known to be safe for qmtcode; other agents may start serving instead.
+    if !is_querymt_agent(&program) {
+        return;
     }
+    std::thread::spawn(move || {
+        let Some(version) = run_version_command(&program, VERSION_PROBE_TIMEOUT) else {
+            return;
+        };
+        let mut locked = inner.lock().expect("agent manager lock poisoned");
+        if let Some(process) = locked.get_mut(&agent_id) {
+            if process.state.pid == Some(pid) {
+                process.state.version = Some(version);
+            }
+        }
+    });
+}
 
-    let Some(sidecar_filename) = qmtcode_sidecar_filename(program) else {
-        return configured;
+/// Move a failed start out of `Starting` and return the log entry describing it.
+fn record_start_failure(process: &mut ManagedAgentProcess, error: &str) -> AgentLogEntry {
+    process.child = None;
+    process.stdin = None;
+    process.state.state = AgentState::Failed;
+    process.state.pid = None;
+    process.state.resolved_program = None;
+    process.state.program_source = None;
+    process.state.message = "Failed to start ACP stdio agent.".to_string();
+    process.state.last_error = Some(error.to_string());
+
+    let entry = AgentLogEntry {
+        timestamp: unix_timestamp(),
+        stream: "system".to_string(),
+        message: error.to_string(),
     };
-
-    for candidate in qmtcode_sidecar_candidates(app, &sidecar_filename) {
-        if candidate.exists() {
-            return candidate;
-        }
+    if process.logs.len() >= MAX_LOG_LINES {
+        process.logs.pop_front();
     }
-
-    configured
-}
-
-fn qmtcode_sidecar_filename(program: &str) -> Option<String> {
-    match program {
-        "qmtcode" | "qmtcode.exe" => Some(format!(
-            "qmtcode-{}{}",
-            current_target_triple(),
-            executable_suffix()
-        )),
-        _ => None,
-    }
-}
-
-fn qmtcode_sidecar_candidates(app: &AppHandle, sidecar_filename: &str) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(exe_dir) = current_exe.parent() {
-            candidates.push(exe_dir.join(sidecar_filename));
-            candidates.push(exe_dir.join("binaries").join(sidecar_filename));
-        }
-    }
-
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join(sidecar_filename));
-        candidates.push(resource_dir.join("binaries").join(sidecar_filename));
-    }
-
-    candidates
+    process.logs.push_back(entry.clone());
+    entry
 }
 
 #[cfg(target_os = "windows")]
@@ -717,6 +946,55 @@ fn current_target_triple() -> &'static str {
     "unsupported-target"
 }
 
+#[cfg(unix)]
+fn exit_signal(status: &ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn exit_signal(_status: &ExitStatus) -> Option<i32> {
+    None
+}
+
+const SIGKILL: i32 = 9;
+/// A quarantine kill happens at exec; later SIGKILLs (OOM, user) are not quarantine related.
+const QUARANTINE_KILL_WINDOW: Duration = Duration::from_secs(10);
+
+/// The `.app` bundle that contains `program`, if any.
+fn app_bundle_path(program: &Path) -> Option<&Path> {
+    program
+        .ancestors()
+        .find(|ancestor| ancestor.extension().is_some_and(|ext| ext == "app"))
+}
+
+/// macOS kills quarantined, non-notarized executables with SIGKILL right after launch.
+/// Explain that (and the fix) when the bundled agent dies that way. The app path is
+/// derived from where the agent actually ran, so the hint stays right after the app is moved.
+fn quarantine_hint(
+    is_macos: bool,
+    signal: Option<i32>,
+    ran_for: Option<Duration>,
+    source: Option<ProgramSource>,
+    resolved_program: Option<&str>,
+) -> Option<String> {
+    if !is_macos
+        || signal != Some(SIGKILL)
+        || source != Some(ProgramSource::Bundled)
+        || !ran_for.is_some_and(|elapsed| elapsed <= QUARANTINE_KILL_WINDOW)
+    {
+        return None;
+    }
+    let target = resolved_program
+        .and_then(|program| app_bundle_path(Path::new(program)))
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<path to QueryMT Desktop.app>".to_string());
+    Some(format!(
+        "The bundled agent was killed right after launch. macOS may have blocked it because this \
+         unsigned app is still quarantined. Run: xattr -dr com.apple.quarantine \"{target}\" and restart the agent."
+    ))
+}
+
 fn reconcile_child_state(process: &mut ManagedAgentProcess) {
     let Some(child) = process.child.as_mut() else {
         return;
@@ -748,9 +1026,20 @@ fn reconcile_child_state(process: &mut ManagedAgentProcess) {
                 process.state.message = "ACP stdio agent is not running.".to_string();
                 process.state.last_error = None;
             } else {
+                let mut last_error = format!("Agent process exited with status {exit}.");
+                let ran_for = process.started_at.map(|started| started.elapsed());
+                if let Some(hint) = quarantine_hint(
+                    cfg!(target_os = "macos"),
+                    exit_signal(&status),
+                    ran_for,
+                    process.state.program_source,
+                    process.state.resolved_program.as_deref(),
+                ) {
+                    push_log(&mut process.logs, "system", &hint);
+                    last_error = format!("{last_error} {hint}");
+                }
                 process.state.state = AgentState::Failed;
-                process.state.last_error =
-                    Some(format!("Agent process exited with status {exit}."));
+                process.state.last_error = Some(last_error);
                 process.state.message = "ACP stdio agent exited unexpectedly.".to_string();
             }
         }
@@ -941,7 +1230,12 @@ fn truncate_for_log(value: &str) -> String {
         return value.to_string();
     }
 
-    format!("{}...", &value[..MAX_LEN])
+    // Cut on a char boundary; slicing mid-codepoint would panic.
+    let mut end = MAX_LEN;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &value[..end])
 }
 
 fn unix_timestamp() -> String {
@@ -1068,6 +1362,286 @@ mod tests {
             assert!(process.stdout_channel.is_none());
             assert_eq!(process.stdout_generation, second_generation);
         }
+    }
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "qmt-sidecar-{label}-{}-{}",
+            std::process::id(),
+            unix_timestamp()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn touch(dir: &Path, name: &str) -> PathBuf {
+        fs::create_dir_all(dir).unwrap();
+        let path = dir.join(name);
+        fs::write(&path, b"#!/bin/sh\n").unwrap();
+        path
+    }
+
+    #[test]
+    fn bare_qmtcode_resolves_to_plain_bundled_name() {
+        let root = temp_dir("plain");
+        let name = bundled_agent_file_names()[0].clone();
+        let expected = touch(&root, &name);
+
+        let resolved = resolve_program("qmtcode", std::slice::from_ref(&root), None).unwrap();
+        assert_eq!(resolved.path, expected);
+        assert_eq!(resolved.source, ProgramSource::Bundled);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bare_qmtcode_resolves_to_target_suffixed_bundled_name() {
+        let root = temp_dir("suffixed");
+        let name = bundled_agent_file_names()[1].clone();
+        let expected = touch(&root, &name);
+
+        let resolved = resolve_program("qmtcode", std::slice::from_ref(&root), None).unwrap();
+        assert_eq!(resolved.path, expected);
+        assert_eq!(resolved.source, ProgramSource::Bundled);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundled_copy_wins_over_path() {
+        let root = temp_dir("bundled-first");
+        let bundled = touch(&root.join("app"), &bundled_agent_file_names()[0]);
+        let on_path = root.join("bin");
+        touch(&on_path, &bundled_agent_file_names()[0]);
+        let path_var = std::env::join_paths([&on_path]).unwrap();
+
+        let resolved =
+            resolve_program("qmtcode", &[root.join("app")], Some(path_var.as_os_str())).unwrap();
+        assert_eq!(resolved.path, bundled);
+        assert_eq!(resolved.source, ProgramSource::Bundled);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn plain_name_wins_over_suffixed_name_in_same_dir() {
+        let root = temp_dir("both-names");
+        let plain = touch(&root, &bundled_agent_file_names()[0]);
+        touch(&root, &bundled_agent_file_names()[1]);
+
+        let resolved = resolve_program("qmtcode", std::slice::from_ref(&root), None).unwrap();
+        assert_eq!(resolved.path, plain);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn falls_back_to_path_when_not_bundled() {
+        let root = temp_dir("path-fallback");
+        let on_path = root.join("bin");
+        let expected = touch(&on_path, &bundled_agent_file_names()[0]);
+        let path_var = std::env::join_paths([&on_path]).unwrap();
+
+        let resolved = resolve_program(
+            "qmtcode",
+            &[root.join("missing")],
+            Some(path_var.as_os_str()),
+        )
+        .unwrap();
+        assert_eq!(resolved.path, expected);
+        assert_eq!(resolved.source, ProgramSource::Path);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_qmtcode_errors_listing_searched_locations() {
+        let root = temp_dir("missing");
+        let dir = root.join("Contents").join("MacOS");
+
+        let error = resolve_program("qmtcode", std::slice::from_ref(&dir), None).unwrap_err();
+        assert!(
+            error.contains("Could not find the 'qmtcode' agent"),
+            "{error}"
+        );
+        assert!(error.contains(&dir.display().to_string()), "{error}");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn moved_app_still_resolves_from_its_new_location() {
+        let root = temp_dir("moved");
+        let first = root.join("Applications").join("A.app").join("MacOS");
+        let name = bundled_agent_file_names()[0].clone();
+        touch(&first, &name);
+        let second = root.join("Elsewhere").join("B.app").join("MacOS");
+        fs::create_dir_all(second.parent().unwrap()).unwrap();
+        fs::rename(first.parent().unwrap(), second.parent().unwrap()).unwrap();
+
+        // The resolver only sees the current directory, so a stale location is never used.
+        let resolved = resolve_program("qmtcode", std::slice::from_ref(&second), None).unwrap();
+        assert_eq!(resolved.path, second.join(&name));
+        assert!(resolve_program("qmtcode", &[first], None).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explicit_paths_are_used_as_written() {
+        let resolved = resolve_program("/opt/tools/qmtcode", &[], None).unwrap();
+        assert_eq!(resolved.path, PathBuf::from("/opt/tools/qmtcode"));
+        assert_eq!(resolved.source, ProgramSource::Explicit);
+
+        let resolved = resolve_program("./bin/qmtcode", &[], None).unwrap();
+        assert_eq!(resolved.source, ProgramSource::Explicit);
+    }
+
+    #[test]
+    fn other_bare_commands_are_left_to_the_os_path_lookup() {
+        let resolved = resolve_program("npx", &[], None).unwrap();
+        assert_eq!(resolved.path, PathBuf::from("npx"));
+        assert_eq!(resolved.source, ProgramSource::Path);
+    }
+
+    #[test]
+    fn profiles_dir_is_injected_by_resolved_file_name() {
+        assert!(is_querymt_agent(Path::new("/x/Contents/MacOS/qmtcode")));
+        assert!(is_querymt_agent(Path::new(
+            "/x/qmtcode-aarch64-apple-darwin"
+        )));
+        assert!(!is_querymt_agent(Path::new("/x/qmtcode-tools/other-agent")));
+        assert!(!is_querymt_agent(Path::new("npx")));
+    }
+
+    #[test]
+    fn start_failure_moves_agent_out_of_starting() {
+        let mut process = ManagedAgentProcess::new("agent-1", "qmtcode --acp".to_string());
+        process.state.state = AgentState::Starting;
+        process.state.message = "Starting ACP stdio agent...".to_string();
+        process.state.resolved_program = Some("/old/qmtcode".to_string());
+        process.state.program_source = Some(ProgramSource::Bundled);
+
+        let entry = record_start_failure(&mut process, "boom");
+        assert_eq!(process.state.state, AgentState::Failed);
+        assert_eq!(process.state.resolved_program, None);
+        assert_eq!(process.state.program_source, None);
+        assert_eq!(process.state.last_error.as_deref(), Some("boom"));
+        assert_ne!(process.state.message, "Starting ACP stdio agent...");
+        assert_eq!(entry.message, "boom");
+        assert_eq!(
+            process.logs.back().map(|l| l.message.as_str()),
+            Some("boom")
+        );
+    }
+
+    const APP_BINARY: &str = "/Users/me/Apps/QueryMT Desktop.app/Contents/MacOS/qmtcode";
+
+    #[test]
+    fn quarantine_hint_names_the_moved_app_bundle() {
+        let hint = quarantine_hint(
+            true,
+            Some(SIGKILL),
+            Some(Duration::from_millis(80)),
+            Some(ProgramSource::Bundled),
+            Some(APP_BINARY),
+        )
+        .expect("hint");
+        assert!(hint.contains("xattr -dr com.apple.quarantine"), "{hint}");
+        assert!(
+            hint.contains("\"/Users/me/Apps/QueryMT Desktop.app\""),
+            "{hint}"
+        );
+    }
+
+    #[test]
+    fn quarantine_hint_only_applies_to_early_sigkill_of_the_bundled_agent_on_macos() {
+        let early = Some(Duration::from_secs(1));
+        let bundled = Some(ProgramSource::Bundled);
+        let hint = |macos, signal, ran_for, source| {
+            quarantine_hint(macos, signal, ran_for, source, Some(APP_BINARY))
+        };
+
+        assert!(hint(true, Some(SIGKILL), early, bundled).is_some());
+        // Not macOS, other signals, normal exit, late kill, unknown start time.
+        assert!(hint(false, Some(SIGKILL), early, bundled).is_none());
+        assert!(hint(true, Some(15), early, bundled).is_none());
+        assert!(hint(true, None, early, bundled).is_none());
+        assert!(hint(true, Some(SIGKILL), Some(Duration::from_secs(60)), bundled).is_none());
+        assert!(hint(true, Some(SIGKILL), None, bundled).is_none());
+        // Only the bundled agent is explained by the app's own quarantine flag.
+        assert!(hint(true, Some(SIGKILL), early, Some(ProgramSource::Path)).is_none());
+        assert!(hint(true, Some(SIGKILL), early, Some(ProgramSource::Explicit)).is_none());
+        assert!(hint(true, Some(SIGKILL), early, None).is_none());
+    }
+
+    #[test]
+    fn quarantine_hint_falls_back_to_a_placeholder_outside_an_app_bundle() {
+        let hint = quarantine_hint(
+            true,
+            Some(SIGKILL),
+            Some(Duration::from_secs(1)),
+            Some(ProgramSource::Bundled),
+            Some("/usr/local/bin/qmtcode"),
+        )
+        .expect("hint");
+        assert!(hint.contains("<path to QueryMT Desktop.app>"), "{hint}");
+    }
+
+    #[cfg(unix)]
+    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = touch(dir, name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn version_probe_returns_trimmed_output() {
+        let root = temp_dir("version-ok");
+        let program = script(&root, "fake-agent", "echo 'qmtcode 1.2.3'");
+
+        let version = run_version_command(&program, Duration::from_secs(5));
+        assert_eq!(version.as_deref(), Some("qmtcode 1.2.3"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn version_probe_ignores_failing_programs() {
+        let root = temp_dir("version-fail");
+        let program = script(&root, "fake-agent", "echo nope; exit 3");
+
+        assert!(run_version_command(&program, Duration::from_secs(5)).is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn version_probe_kills_programs_that_never_exit() {
+        let root = temp_dir("version-hang");
+        let marker = root.join("still-running");
+        // Writes the marker after the probe timeout if it was not killed.
+        let program = script(
+            &root,
+            "fake-agent",
+            &format!("sleep 2; touch '{}'", marker.display()),
+        );
+
+        let started = Instant::now();
+        let version = run_version_command(&program, Duration::from_millis(200));
+        assert!(version.is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "probe waited for the program instead of timing out"
+        );
+        std::thread::sleep(Duration::from_millis(2300));
+        assert!(!marker.exists(), "hung program was not killed");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn truncate_for_log_respects_char_boundaries() {
+        let value = "é".repeat(200);
+        let truncated = truncate_for_log(&value);
+        assert!(truncated.ends_with("..."));
+        assert_eq!(truncate_for_log("short"), "short");
     }
 
     fn dummy_stdout_channel() -> Channel<String> {

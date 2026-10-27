@@ -36,6 +36,10 @@ export interface AgentRuntimeStatus {
   version: string | null;
   message: string;
   lastError: string | null;
+  /** Program the agent was last launched from (stdio agents only). */
+  resolvedProgram?: string | null;
+  /** Where the program was found: shipped with the app, PATH, or an explicit path. */
+  programSource?: 'bundled' | 'path' | 'explicit' | null;
 }
 
 export interface AgentControlHealth {

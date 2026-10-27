@@ -1593,7 +1593,11 @@ export class AgentsStore {
         this.logsByAgent = { ...this.logsByAgent, [config.id]: await getAgentLogs(config.id) };
       }
     } catch (error) {
-      this.error = error instanceof Error ? error.message : `Failed to connect ${config.name}.`;
+      this.error = describeInvokeError(error, `Failed to connect ${config.name}.`);
+      if (config.transport === 'stdio') {
+        // Pull the failed status and logs so the agent card shows the real cause.
+        await this.refreshAgent(config).catch(() => undefined);
+      }
     }
   }
 
@@ -1629,7 +1633,7 @@ export class AgentsStore {
       }
       this.clearDelegateAssignmentsForAgent(config.id);
     } catch (error) {
-      this.error = error instanceof Error ? error.message : `Failed to disconnect ${config.name}.`;
+      this.error = describeInvokeError(error, `Failed to disconnect ${config.name}.`);
     }
   }
 
@@ -1663,7 +1667,11 @@ export class AgentsStore {
         this.logsByAgent = { ...this.logsByAgent, [config.id]: await getAgentLogs(config.id) };
       }
     } catch (error) {
-      this.error = error instanceof Error ? error.message : `Failed to reconnect ${config.name}.`;
+      this.error = describeInvokeError(error, `Failed to reconnect ${config.name}.`);
+      if (config.transport === 'stdio') {
+        // Pull the failed status and logs so the agent card shows the real cause.
+        await this.refreshAgent(config).catch(() => undefined);
+      }
     }
   }
 
@@ -6327,6 +6335,15 @@ function reconnectDelayMs(attempt: number): number {
 
 function isOnlineConnectionState(connectionState: AgentConnectionState | undefined): boolean {
   return connectionState === 'initialized' || connectionState === 'loading-sessions';
+}
+
+/**
+ * Tauri rejects `invoke` with a plain string rather than an `Error`, so accept
+ * both shapes and only fall back to the generic message when there is no detail.
+ */
+function describeInvokeError(error: unknown, fallback: string): string {
+  const detail = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return detail.trim() || fallback;
 }
 
 function websocketStatus(
