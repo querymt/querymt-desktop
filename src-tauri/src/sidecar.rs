@@ -883,6 +883,8 @@ fn record_start_failure(process: &mut ManagedAgentProcess, error: &str) -> Agent
     process.stdin = None;
     process.state.state = AgentState::Failed;
     process.state.pid = None;
+    process.state.resolved_program = None;
+    process.state.program_source = None;
     process.state.message = "Failed to start ACP stdio agent.".to_string();
     process.state.last_error = Some(error.to_string());
 
@@ -1511,9 +1513,13 @@ mod tests {
         let mut process = ManagedAgentProcess::new("agent-1", "qmtcode --acp".to_string());
         process.state.state = AgentState::Starting;
         process.state.message = "Starting ACP stdio agent...".to_string();
+        process.state.resolved_program = Some("/old/qmtcode".to_string());
+        process.state.program_source = Some(ProgramSource::Bundled);
 
         let entry = record_start_failure(&mut process, "boom");
         assert_eq!(process.state.state, AgentState::Failed);
+        assert_eq!(process.state.resolved_program, None);
+        assert_eq!(process.state.program_source, None);
         assert_eq!(process.state.last_error.as_deref(), Some("boom"));
         assert_ne!(process.state.message, "Starting ACP stdio agent...");
         assert_eq!(entry.message, "boom");
