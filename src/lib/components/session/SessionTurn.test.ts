@@ -6,9 +6,13 @@ import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionConversationTurn } from '$lib/domain/session-conversation';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
+import { agentsStore } from '$lib/stores/agents.svelte';
+import type { DesktopSessionSummary } from '$lib/domain/types';
+import { buildSessionLinkIndex } from '$lib/domain/sessions';
 import * as frontMatter from '$lib/domain/message-frontmatter';
 import SessionTurn from './SessionTurn.svelte';
 
+const originalAgentConfigs = agentsStore.configs;
 const preloadSessionToolPatchDiff = vi.hoisted(() => vi.fn());
 vi.mock('./session-tool-patch-diff', () => ({ preloadSessionToolPatchDiff }));
 
@@ -71,6 +75,142 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   chatPreferencesStore.setDeveloperMode(false);
+  agentsStore.configs = originalAgentConfigs;
+  agentsStore.sessionsByAgent = {};
+  agentsStore.activeAgentId = null;
+});
+
+describe('SessionTurn known session references', () => {
+  const id = '019aa123-4567-789a-bcde-0123456789ab';
+  const unknown = '019bb123-4567-789a-bcde-0123456789ab';
+  const summary: DesktopSessionSummary = {
+    agentId: 'agent-1', agentName: 'Agent', sessionId: id, title: 'Related work', cwd: '/tmp/work',
+    updatedAt: null, runtimeId: 'agent-1', runtimeName: 'Agent', source: 'acp', status: 'idle', location: 'local'
+  };
+
+  function referenceTurn(text = `See ${id} and ${unknown}.`): SessionConversationTurn {
+    return {
+      id: 'references', forkMessageId: 'answer', settled: true,
+      user: { id: 'prompt', messageId: 'prompt', text, html: '' },
+      content: [{ type: 'assistant', id: 'answer', messageId: 'answer', text, html: '', relatedEvents: [] }]
+    };
+  }
+
+  function knownSessions(sessions: DesktopSessionSummary[]) {
+    agentsStore.configs = [{ id: 'agent-1', name: 'Agent', transport: 'stdio', commandLine: 'qmtcode --acp', enabled: true, autoStart: true }];
+    agentsStore.sessionLinkIndex = buildSessionLinkIndex(sessions);
+    agentsStore.activeAgentId = 'agent-1';
+  }
+
+  it('links known sessions in both prompt and response while leaving unrelated UUIDs plain', async () => {
+    knownSessions([summary]);
+    const { container, getByRole } = render(SessionTurn, { turn: referenceTurn() });
+    for (const selector of ['.session-message-body', '.session-agent-body']) {
+      const body = container.querySelector(selector)!;
+      const links = body.querySelectorAll('a');
+      expect(links).toHaveLength(1);
+      expect(links[0]).toHaveAttribute('href', `/sessions/agent-1/${id}`);
+      expect(links[0].firstElementChild).toHaveClass('lucide-monitor');
+      expect(links[0].textContent).toBe(id);
+      expect(body).toHaveTextContent(unknown);
+    }
+    const writeText = vi.fn(async () => undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    await fireEvent.click(getByRole('button', { name: 'Copy prompt' }));
+    expect(writeText).toHaveBeenCalledWith(referenceTurn().user!.text);
+  });
+
+  it('uses the app tooltip on hover and keyboard focus without a native title', async () => {
+    knownSessions([summary]);
+    const { container, findByRole, queryByRole, unmount } = render(SessionTurn, { turn: referenceTurn() });
+    const link = container.querySelector<HTMLAnchorElement>('.session-agent-body a')!;
+    expect(link).not.toHaveAttribute('title');
+    await fireEvent.pointerEnter(link);
+    const tooltip = await findByRole('tooltip', { hidden: true });
+    expect(tooltip).toHaveClass('app-tooltip-content');
+    expect(tooltip).toHaveTextContent('Open local session: Related work');
+    expect(link).toHaveAttribute('aria-describedby', tooltip.id);
+    await fireEvent.keyDown(link, { key: 'Escape' });
+    expect(queryByRole('tooltip', { hidden: true })).toBeNull();
+    await fireEvent.pointerLeave(link);
+    link.focus();
+    await tick();
+    expect(await findByRole('tooltip', { hidden: true })).toHaveTextContent('Open local session: Related work');
+    unmount();
+    await tick();
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+  });
+
+  it('turns unknown references into delegate links after background discovery without rerendering the turn', async () => {
+    knownSessions([]);
+    const stop = vi.fn();
+    const source = vi.spyOn(agentsStore, 'activeSessionReferenceSource', 'get').mockReturnValue('endpoint-1');
+    const discover = vi.spyOn(agentsStore, 'watchSessionReferences').mockImplementation(() => {
+      queueMicrotask(() => { agentsStore.sessionLinkIndex = buildSessionLinkIndex([
+        { ...summary, parentSessionId: 'parent', forkOrigin: 'delegation' }
+      ]); });
+      return stop;
+    });
+    try {
+      const { container, findAllByRole, unmount } = render(SessionTurn, { turn: referenceTurn() });
+      expect(discover).toHaveBeenCalledWith('agent-1', [id, unknown]);
+      const links = await findAllByRole('link', { name: `${id}: Open local delegate: Related work` });
+      expect(links).toHaveLength(2);
+      expect(container.querySelectorAll('.session-reference .lucide-bot')).toHaveLength(2);
+      expect(container.querySelector('.session-agent-body')).toHaveTextContent(`See ${id} and ${unknown}.`);
+      unmount();
+      expect(stop).toHaveBeenCalledTimes(2);
+    } finally {
+      discover.mockRestore();
+      source.mockRestore();
+    }
+  });
+
+  it('updates the prefix when known session locality changes', async () => {
+    knownSessions([summary]);
+    const { container } = render(SessionTurn, { turn: referenceTurn() });
+    expect(container.querySelectorAll('.session-reference .lucide-monitor')).toHaveLength(2);
+    agentsStore.sessionLinkIndex = buildSessionLinkIndex([{ ...summary, location: 'remote', remoteNodeLabel: 'Build host' }]);
+    await tick();
+    expect(container.querySelector('.session-reference .lucide-monitor')).toBeNull();
+    expect(container.querySelectorAll('.session-reference .lucide-network')).toHaveLength(2);
+    const link = container.querySelector('.session-agent-body a')!;
+    expect(link).toHaveAttribute('href', `/sessions/agent-1/${id}`);
+    expect(link).toHaveAccessibleName(`${id}: Open remote session on Build host: Related work`);
+    expect(link.textContent).toBe(id);
+  });
+
+  it('reacts to sessions arriving and being removed without changing the message', async () => {
+    knownSessions([]);
+    const { container } = render(SessionTurn, { turn: referenceTurn() });
+    expect(container.querySelector('a.session-reference')).toBeNull();
+    agentsStore.sessionLinkIndex = buildSessionLinkIndex([summary]);
+    await tick();
+    expect(container.querySelectorAll('a.session-reference')).toHaveLength(2);
+    agentsStore.sessionLinkIndex = buildSessionLinkIndex([]);
+    await tick();
+    expect(container.querySelector('a.session-reference')).toBeNull();
+    expect(container.querySelector('.session-message-body')).toHaveTextContent(`See ${id} and ${unknown}.`);
+  });
+
+  it('keeps a streaming tail untouched and links it when the response settles', async () => {
+    knownSessions([summary]);
+    const response = referenceTurn();
+    const { container, rerender } = render(SessionTurn, { turn: { ...response, settled: false } });
+    expect(container.querySelector('.session-agent-body-tail')).toHaveTextContent(id);
+    expect(container.querySelector('.session-agent-body a')).toBeNull();
+    await rerender({ turn: response });
+    expect(container.querySelector('.session-agent-body a')).toHaveAttribute('href', `/sessions/agent-1/${id}`);
+  });
+
+  it('enhances replacement HTML without leaving stale session links', async () => {
+    knownSessions([summary]);
+    const { container, rerender } = render(SessionTurn, { turn: referenceTurn(`See ${id}.`) });
+    expect(container.querySelectorAll('a.session-reference')).toHaveLength(2);
+    await rerender({ turn: referenceTurn(`Now ${unknown}.`) });
+    expect(container.querySelector('a.session-reference')).toBeNull();
+    expect(container.querySelector('.session-agent-body')).toHaveTextContent(`Now ${unknown}.`);
+  });
 });
 
 describe('SessionTurn', () => {
