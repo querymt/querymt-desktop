@@ -580,6 +580,51 @@ describe('SessionTurn', () => {
     expect(pill.closest('.session-assistant-message-actions')).toBeInTheDocument();
   });
 
+  it('places a delegation/count pill immediately to the right of the diff pill and opens this turn\'s delegate sessions', async () => {
+    const delegatedTurn: SessionConversationTurn = {
+      ...turn, durationMs: 42000, settled: true,
+      content: [
+        { type: 'tool', id: 'edit', tool: { id: 'edit', title: 'edit', kind: 'edit', status: 'completed', result: 'OK added=1 deleted=2' } },
+        { type: 'tool', id: 'delegate', tool: { id: 'delegate', title: 'Run delegate', kind: 'delegate', status: 'completed', childSessionId: 'review-child', arguments: '{"target_agent_id":"reviewer","objective":"Review this turn"}' } },
+        ...turn.content
+      ]
+    };
+    const { getByRole } = render(SessionTurn, { turn: delegatedTurn, agentId: 'agent-1', sessionId: 'parent', forkAvailable: true, undoAvailable: true });
+    const diff = getByRole('button', { name: 'Turn changes: 1 line added, 2 lines deleted' });
+    const delegates = getByRole('button', { name: '1 delegate in this turn' });
+    expect(diff.nextElementSibling).toBe(delegates);
+    expect(delegates.parentElement).toHaveClass('session-turn-pills');
+    expect(delegates).toHaveClass('session-turn-diff-pill', 'session-turn-delegates-pill');
+    expect(delegates.querySelector('.lucide-network')).not.toBeNull();
+    expect(delegates).toHaveTextContent(/^1$/);
+    expect(delegates.closest('.session-turn-meta')).toBe(diff.closest('.session-turn-meta'));
+    expect(getByRole('button', { name: 'Copy response' })).toBeInTheDocument();
+    expect(getByRole('button', { name: 'Fork into new session' })).toBeInTheDocument();
+    expect(getByRole('button', { name: 'Undo to this prompt' })).toBeInTheDocument();
+    await fireEvent.click(delegates);
+    expect(getByRole('link', { name: 'Open reviewer session' })).toHaveAttribute('href', '/sessions/agent-1/review-child');
+    const panel = getByRole('region', { name: 'Delegates in this turn' });
+    expect(within(panel).getByRole('img', { name: 'Completed' }).querySelector('.lucide-check')).not.toBeNull();
+    expect(within(panel).queryByText('Completed')).toBeNull();
+  });
+
+  it('shows delegate-only turn access without requiring file changes or a duration', async () => {
+    const delegatedTurn: SessionConversationTurn = {
+      id: 'historical-delegates', forkMessageId: null, settled: true,
+      content: [{ type: 'tool', id: 'delegate', tool: { id: 'delegate', title: 'Run delegate', kind: 'delegate', status: 'failed', childSessionId: 'failed-child' } }]
+    };
+    const { getByRole, queryByRole, queryByText } = render(SessionTurn, { turn: delegatedTurn, agentId: 'agent-1' });
+    expect(queryByRole('button', { name: /Turn changes:/ })).toBeNull();
+    expect(queryByText(/Worked for/)).toBeNull();
+    await fireEvent.click(getByRole('button', { name: '1 delegate in this turn' }));
+    expect(getByRole('link', { name: 'Open Delegate session' })).toHaveAttribute('href', '/sessions/agent-1/failed-child');
+  });
+
+  it('does not add an empty delegates pill to turns without delegations', () => {
+    const { queryByRole } = render(SessionTurn, { turn, agentId: 'agent-1' });
+    expect(queryByRole('button', { name: /delegates? in this turn/ })).toBeNull();
+  });
+
   it('toggles turn diffs through a borderless button without a native tooltip', async () => {
     const onToggleDiff = vi.fn();
     const changedTurn: SessionConversationTurn = {

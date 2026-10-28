@@ -6048,6 +6048,55 @@ summary:focus-visible {
   transition: bottom 180ms ease;
 }
 
+.session-delegates-bubble ~ .session-activity-bar .session-activity-meta {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-delegate-session {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  min-width: 0;
+  gap: 0.5rem;
+  border-radius: calc(var(--radius-control) - 2px);
+  background: var(--bg-card);
+  padding: 0.4rem 0.5rem;
+  color: var(--text);
+  font-size: 0.74rem;
+  line-height: 1.25rem;
+  text-decoration: none;
+}
+
+a.session-delegate-session:hover {
+  background: var(--bg-card-hover);
+}
+
+.session-delegate-copy {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.session-delegate-copy > span {
+  color: var(--muted);
+}
+
+.session-delegate-status {
+  margin-top: 0.125rem;
+  color: var(--muted);
+}
+
+.session-delegate-status-completed {
+  color: var(--status-success);
+}
+
+.session-delegate-status-failed {
+  color: var(--status-danger);
+}
+
 .session-activity-bar-failed {
   color: var(--status-danger);
 }
@@ -7183,6 +7232,28 @@ summary:focus-visible {
    assistant shell and stay visible like user-message rows. */
 .session-turn-content > .session-assistant-message-actions {
   min-height: 1.9rem;
+}
+
+.session-assistant-message-actions:has(.session-turn-delegates-pill) {
+  position: relative;
+  flex-wrap: wrap;
+}
+
+/* Keep the two turn-summary pills together when the footer wraps. */
+.session-turn-pills {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.session-turn-delegates-panel {
+  z-index: 35;
+}
+
+.session-turn-delegates-panel-below {
+  top: calc(100% + 0.5rem);
+  bottom: auto;
 }
 
 .session-turn-meta {

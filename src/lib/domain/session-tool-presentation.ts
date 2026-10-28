@@ -126,6 +126,10 @@ export function isDelegateToolName(name: string): boolean {
   return name === 'delegate' || name === 'route_delegation_to_peer';
 }
 
+export function isDelegateTool(tool: SessionToolCallItem): boolean {
+  return isDelegateToolName(normalizeToolName(tool));
+}
+
 export function getDelegateTargetAgentId(tool: SessionToolCallItem): string | null {
   return getDelegateTargetAgentIdFromArgs(parseObject(tool.arguments));
 }
