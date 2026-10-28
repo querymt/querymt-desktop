@@ -377,12 +377,13 @@ export class AgentsStore {
   lastPluginUpdateByAgent = $state<Record<string, PluginUpdateResult[] | null>>({});
   lastRemoteAttachByAgent = $state<Record<string, RemoteSessionAttachInfo | null>>({});
   lastRemoteDismissByAgent = $state<Record<string, RemoteSessionDismissInfo | null>>({});
-  sessionsByAgent = $state<Record<string, DesktopSessionSummary[]>>({});
-  private knownSessionParents = $state<Record<string, string>>({});
+  // Raw (non-proxied): replaced immutably everywhere, so deep proxies only add trap overhead.
+  sessionsByAgent = $state.raw<Record<string, DesktopSessionSummary[]>>({});
+  private knownSessionParents = $state.raw<Record<string, string>>({});
   private recentSessionEntries = $state<RecentSessionEntry[]>(loadRecentSessions());
   private openSessionPages = $state<Record<string, OpenSessionPage>>({});
   sessionBrowser = $state(createSessionBrowserState());
-  sessionCatalog = $state<DesktopSessionSummary[]>([]);
+  sessionCatalog = $state.raw<DesktopSessionSummary[]>([]);
   sessionCatalogLoading = $state(false);
   sessionCatalogLoadedCount = $state(0);
   sessionCatalogError = $state<string | null>(null);
@@ -395,8 +396,8 @@ export class AgentsStore {
   sessionLifecycleRevision = $state(0);
   sessionPinPending = $state<Record<string, boolean>>({});
   sessionPinErrors = $state<Record<string, string | null>>({});
-  private sessionPins = $state<Record<string, SessionPin>>({});
-  private pinnedSessionsByAgent = $state<Record<string, DesktopSessionSummary[]>>({});
+  private sessionPins = $state.raw<Record<string, SessionPin>>({});
+  private pinnedSessionsByAgent = $state.raw<Record<string, DesktopSessionSummary[]>>({});
   pinnedSessionsLoading = $state<Record<string, boolean>>({});
   pinnedSessionsErrors = $state<Record<string, string | null>>({});
   private pinWrites = new Map<string, symbol>();
@@ -594,18 +595,18 @@ export class AgentsStore {
   private rememberSessionChildren(agentId: string, parentSessionId: string, childIds: Array<string | null | undefined>) {
     if (typeof parentSessionId !== 'string' || !parentSessionId.trim()) return;
     parentSessionId = parentSessionId.trim();
-    const parents = { ...this.knownSessionParents };
-    let changed = false;
+    // Copy lazily: this runs once per child on every list refresh and almost always changes nothing.
+    let parents: Record<string, string> | null = null;
     for (const childId of childIds) {
       const childSessionId = typeof childId === 'string' ? childId.trim() : null;
       if (!childSessionId || childSessionId === parentSessionId) continue;
       const key = buildSessionKey(agentId, childSessionId);
-      if (parents[key] === parentSessionId) continue;
+      if ((parents ?? this.knownSessionParents)[key] === parentSessionId) continue;
+      parents ??= { ...this.knownSessionParents };
       parents[key] = parentSessionId;
-      changed = true;
     }
     // A child can be announced before its summary arrives, or while another root is selected.
-    if (!changed) return;
+    if (!parents) return;
     this.knownSessionParents = parents;
     const update = (session: DesktopSessionSummary) => this.withKnownSessionParent(session);
     this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: (this.sessionsByAgent[agentId] ?? []).map(update) };
@@ -619,15 +620,17 @@ export class AgentsStore {
     return pin ? { ...session, pin } : session;
   }
 
-  get pinnedSessions(): DesktopSessionSummary[] {
+  pinnedSessions: DesktopSessionSummary[] = $derived.by(() => {
+    const pinnedLists = Object.values(this.pinnedSessionsByAgent).flat();
+    if (!pinnedLists.length) return [];
     const current = new Map(this.sessions.map((session) => [getSessionKey(session), session]));
     const enabled = new Set(this.configs.filter((config) => config.enabled).map((config) => config.id));
-    return Object.values(this.pinnedSessionsByAgent).flat()
+    return pinnedLists
       .filter((session) => enabled.has(session.agentId))
       .map((session) => this.withKnownSessionPin(this.withKnownSessionParent({ ...session, ...current.get(getSessionKey(session)) })))
       .filter((session) => session.location !== 'remote' && session.pin?.pinned && isRootSession(session))
       .sort(compareSessionsByPin);
-  }
+  });
 
   get recentSessionKeys(): string[] {
     const sources = new Map(this.configs.filter((config) => config.enabled)
@@ -654,14 +657,21 @@ export class AgentsStore {
     persistRecentSessions(this.recentSessionEntries);
   }
 
-  get sessions(): DesktopSessionSummary[] {
-    return Object.values(this.sessionsByAgent).flat().map((session) => this.withKnownSessionPin(this.withKnownSessionParent(session)))
-      .filter((session) => this.sessionVisibleInCatalog(session)).sort((a, b) => {
-        const aValue = a.updatedAt ?? '';
-        const bValue = b.updatedAt ?? '';
-        return bValue.localeCompare(aValue);
-      });
-  }
+  // Cached: rebuilt only when its reactive inputs change, not on every read.
+  sessions: DesktopSessionSummary[] = $derived.by(() => {
+    // Read preferences once instead of once per session.
+    const showRemote = chatPreferencesStore.showRemoteSessions;
+    const remotePeers = new Set(chatPreferencesStore.remoteSessionPeers);
+    const visible: DesktopSessionSummary[] = [];
+    for (const list of Object.values(this.sessionsByAgent)) {
+      for (const session of list) {
+        const next = this.withKnownSessionPin(this.withKnownSessionParent(session));
+        if (next.location !== 'remote' || (showRemote && remotePeers.has(next.remoteNodeId ?? ''))) visible.push(next);
+      }
+    }
+    // ISO-8601 timestamps sort lexicographically; avoids locale-aware comparison.
+    return visible.sort((a, b) => compareIsoDesc(a.updatedAt, b.updatedAt));
+  });
 
   get workspaceSessionGroups(): WorkspaceSessionGroup[] {
     return this.workspaceSessionGroupsForLocation('all');
@@ -1516,7 +1526,7 @@ export class AgentsStore {
     delete this.lastPluginUpdateByAgent[agentId];
     delete this.lastRemoteAttachByAgent[agentId];
     delete this.lastRemoteDismissByAgent[agentId];
-    delete this.sessionsByAgent[agentId];
+    this.sessionsByAgent = omitKey(this.sessionsByAgent, agentId);
     this.knownSessionParents = Object.fromEntries(Object.entries(this.knownSessionParents)
       .filter(([key]) => !key.startsWith(`${agentId}:`)));
     this.completedWorkspaceDiscoveries.delete(agentId);
@@ -1928,7 +1938,7 @@ export class AgentsStore {
     }
     this.sessionPinPending = Object.fromEntries(Object.entries(this.sessionPinPending).filter(([key]) => !key.startsWith(`${agentId}:`)));
     this.sessionPinErrors = Object.fromEntries(Object.entries(this.sessionPinErrors).filter(([key]) => !key.startsWith(`${agentId}:`)));
-    delete this.pinnedSessionsByAgent[agentId];
+    this.pinnedSessionsByAgent = omitKey(this.pinnedSessionsByAgent, agentId);
     delete this.pinnedSessionsLoading[agentId];
     delete this.pinnedSessionsErrors[agentId];
     this.sessionPins = Object.fromEntries(Object.entries(this.sessionPins).filter(([key]) => !key.startsWith(`${agentId}:`)));
@@ -2990,7 +3000,7 @@ export class AgentsStore {
     this.forgetRecentSessions(agentId, sessionId);
     this.pinVersions.set(agentId, (this.pinVersions.get(agentId) ?? 0) + 1);
     this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: (this.pinnedSessionsByAgent[agentId] ?? []).filter((session) => session.sessionId !== sessionId) };
-    delete this.sessionPins[buildSessionKey(agentId, sessionId)];
+    this.sessionPins = omitKey(this.sessionPins, buildSessionKey(agentId, sessionId));
     this.invalidateSharedSessionLists(agentId);
     delete this.openSessionPages[agentId];
     this.patchSessionCatalog(agentId, sessionId, null);
@@ -5973,6 +5983,7 @@ export class AgentsStore {
     }
 
     const updated = new Map<string, DesktopSessionSummary>();
+    const activityNow = Date.parse(activityUpdatedAt);
     for (const [agentId, agentPatches] of patches) {
       const changes: DesktopSessionSummary[] = [];
       const sessions = (this.sessionsByAgent[agentId] ?? []).map((session) => {
@@ -5980,6 +5991,13 @@ export class AgentsStore {
         if (!patch) return session;
         const next = { ...session, ...patch, updatedAt: newestTimestamp(session.updatedAt, patch.updatedAt) };
         if (next.title === session.title && next.status === session.status && next.updatedAt === session.updatedAt) return session;
+        // Streaming activity bumps updatedAt on every notification; rebuilding every derived
+        // session list that often is the dominant cost with several busy sessions. Coalesce
+        // activity-only bumps to at most once per ACTIVITY_SUMMARY_THROTTLE_MS per session.
+        if (next.title === session.title && next.status === session.status && patch.updatedAt === activityUpdatedAt) {
+          const previous = Date.parse(session.updatedAt ?? '');
+          if (Number.isFinite(previous) && Math.abs(activityNow - previous) < ACTIVITY_SUMMARY_THROTTLE_MS) return session;
+        }
         const key = getSessionKey(next);
         updated.set(key, next);
         const write = this.catalogWrites.get(key);
@@ -6613,6 +6631,21 @@ function compareSessionsByActivity(a: DesktopSessionSummary, b: DesktopSessionSu
   const activityDifference = (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '');
   if (activityDifference !== 0) return activityDifference;
   return getSessionKey(a).localeCompare(getSessionKey(b));
+}
+
+const ACTIVITY_SUMMARY_THROTTLE_MS = 1000;
+
+// ISO-8601 timestamps order lexicographically; avoids locale-aware localeCompare per comparison.
+function compareIsoDesc(a: string | null | undefined, b: string | null | undefined): number {
+  const left = a ?? '';
+  const right = b ?? '';
+  return left === right ? 0 : left < right ? 1 : -1;
+}
+
+function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in record)) return record;
+  const { [key]: _removed, ...rest } = record;
+  return rest;
 }
 
 function deduplicateSessions(sessions: DesktopSessionSummary[]): DesktopSessionSummary[] {
