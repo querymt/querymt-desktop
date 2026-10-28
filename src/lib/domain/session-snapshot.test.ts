@@ -544,6 +544,22 @@ describe('activeSessionFromLoadResponse', () => {
     });
   });
 
+  it.each(['forked', 'completed', 'failed', 'cancelled'] as const)('restores delegation lifecycle from snapshot updates without changing dispatch status (%s)', (state) => {
+    const session = activeSessionFromLoadResponse('session-1', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: { events: [
+            { seq: 1, kind: { type: 'tool_call_start', data: { tool_call_id: 'delegate-1', tool_name: 'delegate' } } },
+            { seq: 2, kind: { type: 'tool_call_end', data: { tool_call_id: 'delegate-1', tool_name: 'delegate', result: 'Delegation queued.' } } }
+          ] },
+          delegationUpdates: [{ sessionId: 'session-1', toolCallId: 'delegate-1', childSessionId: 'child-1', state, updatedAt: 3 }]
+        }
+      }
+    });
+    expect(session.toolCalls[0]).toMatchObject({ status: 'completed', childSessionId: 'child-1', delegationState: state });
+    expect(normalizeHistoricalSession(session, { loadCompleted: true }).toolCalls[0].delegationState).toBe(state);
+  });
+
   it('attaches child session ids when the fork event arrives before the requested event', () => {
     const session = activeSessionFromLoadResponse('session-1', {
       _meta: {

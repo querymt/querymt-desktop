@@ -585,7 +585,7 @@ describe('SessionTurn', () => {
       ...turn, durationMs: 42000, settled: true,
       content: [
         { type: 'tool', id: 'edit', tool: { id: 'edit', title: 'edit', kind: 'edit', status: 'completed', result: 'OK added=1 deleted=2' } },
-        { type: 'tool', id: 'delegate', tool: { id: 'delegate', title: 'Run delegate', kind: 'delegate', status: 'completed', childSessionId: 'review-child', arguments: '{"target_agent_id":"reviewer","objective":"Review this turn"}' } },
+        { type: 'tool', id: 'delegate', tool: { id: 'delegate', title: 'Run delegate', kind: 'delegate', status: 'completed', delegationState: 'completed', childSessionId: 'review-child', arguments: '{"target_agent_id":"reviewer","objective":"Review this turn"}' } },
         ...turn.content
       ]
     };

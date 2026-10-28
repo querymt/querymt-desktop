@@ -51,6 +51,11 @@
     const childSessionId = tool.childSessionId?.trim();
     const child = sessions.find((candidate) => candidate.agentId === agentId && candidate.sessionId === childSessionId);
     const args = parseObject(tool.arguments);
+    const state = tool.delegationState;
+    const status = state === 'forked' ? 'in_progress'
+      : state === 'completed' ? 'completed'
+      : state === 'failed' || state === 'cancelled' || tool.status === 'failed' ? 'failed'
+      : 'pending';
     return {
       id: tool.id,
       name: getDelegateTargetAgentId(tool) ?? 'Delegate',
@@ -58,8 +63,10 @@
       href: agentId && childSessionId
         ? `/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(childSessionId)}`
         : null,
-      status: tool.status,
-      statusLabel: getSessionToolPresentation(tool).statusLabel
+      status,
+      statusLabel: state === 'cancelled' ? 'Cancelled'
+        : !state && tool.status !== 'failed' ? 'Status unavailable'
+        : getSessionToolPresentation({ ...tool, status }).statusLabel
     };
   }));
 

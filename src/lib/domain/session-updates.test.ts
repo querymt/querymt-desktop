@@ -357,6 +357,41 @@ describe('applySessionNotification tool calls', () => {
     expect(session.toolCalls[0]?.childSessionId).toBeUndefined();
   });
 
+  it.each(['completed', 'failed', 'cancelled'] as const)('tracks delegate lifecycle separately from the completed dispatch tool (%s)', (state) => {
+    let session = createEmptyActiveSession();
+    session.sessionId = 'session-1';
+    session = applySessionNotification(session, notification({
+      sessionUpdate: 'tool_call', toolCallId: 'delegate-1', title: 'Run delegate', status: 'completed'
+    }));
+    const update = { sessionId: 'session-1', toolCallId: 'delegate-1' };
+
+    session = applyDelegationChildSession(session, { ...update, state: 'requested', updatedAt: 1 });
+    expect(session.toolCalls[0]).toMatchObject({ status: 'completed', delegationState: 'requested' });
+    session = applyDelegationChildSession(session, { ...update, state: 'forked', updatedAt: 2, childSessionId: 'child-1' });
+    expect(session.toolCalls[0]).toMatchObject({ status: 'completed', delegationState: 'forked', childSessionId: 'child-1' });
+    session = applyDelegationChildSession(session, { ...update, state, updatedAt: 3, childSessionId: 'child-1' });
+    expect(session.toolCalls[0]).toMatchObject({ status: 'completed', delegationState: state, delegationUpdatedAt: 3 });
+
+    const terminal = session;
+    session = applyDelegationChildSession(session, { ...update, state: 'forked', updatedAt: 2, childSessionId: 'child-1' });
+    expect(session).toBe(terminal);
+    session = appendSessionReplay(session, [notification({
+      sessionUpdate: 'tool_call_update', toolCallId: 'delegate-1', status: 'completed'
+    })]);
+    expect(session.toolCalls[0]).toMatchObject({ status: 'completed', delegationState: state });
+  });
+
+  it('does not replace newer delegation state with an older snapshot', () => {
+    const session = createEmptyActiveSession();
+    session.sessionId = 'session-1';
+    session.toolCalls = [{ id: 'delegate-1', title: 'Run delegate', kind: 'delegate', status: 'completed' }];
+    const update = { sessionId: 'session-1', toolCallId: 'delegate-1' };
+    const running = applyDelegationChildSession(session, { ...update, state: 'forked', updatedAt: 5 });
+    expect(running.toolCalls[0].delegationState).toBe('forked');
+    expect(session.toolCalls[0].delegationState).toBeUndefined();
+    expect(applyDelegationChildSession(running, { ...update, state: 'requested', updatedAt: 1 })).toBe(running);
+  });
+
   it('ignores delegation updates for another session or missing child id', () => {
     const session = createEmptyActiveSession();
     session.sessionId = 'session-1';

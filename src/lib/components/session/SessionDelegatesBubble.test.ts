@@ -8,6 +8,7 @@ import SessionQueuedBubble from './SessionQueuedBubble.svelte';
 import SessionActivityBar from './SessionActivityBar.svelte';
 import { session } from './session-fixture';
 import { buildSessionConversation } from '$lib/domain/session-conversation';
+import { applyDelegationChildSession } from '$lib/domain/session-updates';
 import type { ActiveSessionViewModel, DesktopSessionSummary, SessionToolCallItem, SessionTranscriptItem } from '$lib/domain/types';
 
 const appCss = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
@@ -25,7 +26,7 @@ function delegate(overrides: Partial<SessionToolCallItem> = {}): SessionToolCall
   return {
     id: 'delegate-1', title: 'Run delegate', kind: 'delegate', status: 'in_progress', eventIndex: 2,
     arguments: JSON.stringify({ target_agent_id: 'reviewer', objective: 'Review the current changes' }),
-    childSessionId: 'child-1',
+    childSessionId: 'child-1', delegationState: 'forked',
     ...overrides
   };
 }
@@ -56,9 +57,9 @@ describe('SessionDelegatesBubble', () => {
   it('counts all delegates in the active turn and shows status icons before inline names and descriptions', async () => {
     renderDelegates(active([
       delegate(),
-      delegate({ id: 'pending', status: 'pending', childSessionId: undefined, eventIndex: 3 }),
-      delegate({ id: 'done', status: 'completed', childSessionId: 'done-child', eventIndex: 4 }),
-      delegate({ id: 'failed', status: 'failed', childSessionId: 'failed-child', eventIndex: 5 })
+      delegate({ id: 'pending', status: 'completed', delegationState: 'requested', childSessionId: undefined, eventIndex: 3 }),
+      delegate({ id: 'done', status: 'completed', delegationState: 'completed', childSessionId: 'done-child', eventIndex: 4 }),
+      delegate({ id: 'failed', status: 'completed', delegationState: 'failed', childSessionId: 'failed-child', eventIndex: 5 })
     ]));
     const trigger = screen.getByRole('button', { name: '4 delegates in this turn' });
     expect(trigger).toHaveTextContent(/^4$/);
@@ -77,6 +78,37 @@ describe('SessionDelegatesBubble', () => {
     expect(appCss).toMatch(/\.session-delegate-copy \{[^}]*display: block;/);
     expect(appCss).toMatch(/\.session-delegate-status-completed \{[^}]*color: var\(--status-success\);/);
     expect(within(panel).getAllByRole('link')).toHaveLength(3);
+  });
+
+  it.each(['activity', 'turn'] as const)('shows actual delegate progress after dispatch completes (%s)', async (variant) => {
+    let current = active([
+      delegate({ status: 'completed', delegationState: undefined }),
+      { id: 'later-tool', title: 'Run shell', kind: 'execute', status: 'completed', eventIndex: 3 }
+    ], { runState: variant === 'turn' ? 'completed' : 'tool-running' });
+    const props = () => variant === 'turn'
+      ? { turn: buildSessionConversation(current)[0] }
+      : { session: current };
+    const { rerender } = render(SessionDelegatesBubble, { agentId: 'agent-1', variant, ...props() });
+    await fireEvent.click(screen.getByRole('button', { name: '1 delegate in this turn' }));
+    expect(screen.getByRole('img', { name: 'Status unavailable' }).querySelector('.lucide-circle-ellipsis')).not.toBeNull();
+    expect(screen.queryByRole('img', { name: 'Completed' })).toBeNull();
+
+    for (const [state, label, icon] of [
+      ['forked', 'Running', '.lucide-loader-circle'],
+      ['completed', 'Completed', '.lucide-check']
+    ] as const) {
+      current = applyDelegationChildSession(current, { sessionId: 'parent', toolCallId: 'delegate-1', state });
+      await rerender(props());
+      expect(screen.getByRole('img', { name: label }).querySelector(icon)).not.toBeNull();
+      expect(current.toolCalls[0].status).toBe('completed');
+    }
+  });
+
+  it('shows cancelled delegation as a warning rather than a successful dispatch', async () => {
+    renderDelegates(active([delegate({ status: 'completed', delegationState: 'cancelled' })]));
+    await fireEvent.click(screen.getByRole('button', { name: '1 delegate in this turn' }));
+    expect(screen.getByRole('img', { name: 'Cancelled' }).querySelector('.lucide-triangle-alert')).not.toBeNull();
+    expect(screen.queryByRole('img', { name: 'Completed' })).toBeNull();
   });
 
   it('shows the total delegate count in the turn pill, including completed and failed sessions', async () => {
