@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
-import { buildListSessionChildrenRequest, getSessionGroupCwd, compareSessionsByPin, readSessionPin, sessionMatchesLifecycle, buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
+import { buildSessionLinkIndex, resolveSessionLink, buildListSessionChildrenRequest, getSessionGroupCwd, compareSessionsByPin, readSessionPin, sessionMatchesLifecycle, buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 
 function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionId: string }): DesktopSessionSummary {
@@ -30,6 +30,52 @@ function createSession(meta?: Record<string, unknown>): SessionInfo {
     _meta: meta
   } as SessionInfo;
 }
+
+describe('known session link index', () => {
+  const sessionId = '019aa123-4567-789a-bcde-0123456789ab';
+  const first = { agentId: 'agent-1', sessionId, title: 'First session' };
+  const second = { ...first, agentId: 'agent-2', title: 'Second session' };
+
+  it('matches known UUIDs case-insensitively and preserves the backend identity', () => {
+    const index = buildSessionLinkIndex([first]);
+    expect(resolveSessionLink(index, sessionId.toUpperCase(), null)).toEqual(first);
+    expect(resolveSessionLink(index, '019bb123-4567-789a-bcde-0123456789ab', 'agent-1')).toBeNull();
+  });
+
+  it('prefers the current agent, otherwise requires one unambiguous target', () => {
+    const index = buildSessionLinkIndex([first, second]);
+    expect(resolveSessionLink(index, sessionId, 'agent-1')).toEqual(first);
+    expect(resolveSessionLink(index, sessionId, 'agent-2')).toEqual(second);
+    expect(resolveSessionLink(index, sessionId, 'agent-3')).toBeNull();
+    expect(resolveSessionLink(index, sessionId, null)).toBeNull();
+    expect(resolveSessionLink(buildSessionLinkIndex([second]), sessionId, 'agent-1')).toEqual(second);
+  });
+
+  it('preserves location and remote host metadata without guessing missing locations', () => {
+    const local = { ...first, location: 'local' as const };
+    const remote = { ...second, location: 'remote' as const, remoteNodeId: 'peer-1', remoteNodeLabel: 'Build host' };
+    const index = buildSessionLinkIndex([local, remote]);
+    expect(resolveSessionLink(index, sessionId, 'agent-1')).toEqual(local);
+    expect(resolveSessionLink(index, sessionId, 'agent-2')).toEqual(remote);
+    expect(resolveSessionLink(buildSessionLinkIndex([first]), sessionId, null)?.location).toBeUndefined();
+
+    const refreshed = buildSessionLinkIndex([remote, { ...second, location: 'local' as const }]);
+    expect(resolveSessionLink(refreshed, sessionId, 'agent-2')).toMatchObject({ location: 'local' });
+    expect(resolveSessionLink(refreshed, sessionId, 'agent-2')?.remoteNodeId).toBeUndefined();
+  });
+
+  it('preserves the relationship metadata needed to distinguish delegates', () => {
+    const delegate = { ...first, parentSessionId: 'parent', forkOrigin: 'delegation' };
+    expect(resolveSessionLink(buildSessionLinkIndex([delegate]), sessionId, 'agent-1')).toEqual(delegate);
+  });
+
+  it('deduplicates records by backend and retains updated titles', () => {
+    const updated = { ...first, title: 'Renamed' };
+    const index = buildSessionLinkIndex([first, updated]);
+    expect(index.get(sessionId)?.size).toBe(1);
+    expect(resolveSessionLink(index, sessionId, null)).toEqual(updated);
+  });
+});
 
 describe('session pin metadata and requests', () => {
   it('parses only authoritative, valid pin metadata without changing lifecycle or activity', () => {

@@ -6,6 +6,8 @@
   import SessionMessageMetadata from '$lib/components/session/SessionMessageMetadata.svelte';
   import { extractMessageFrontMatter } from '$lib/domain/message-frontmatter';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
+  import { agentsStore } from '$lib/stores/agents.svelte';
+  import { enhanceSessionLinks } from './session-links';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
   import { preloadSessionToolPatchDiff } from './session-tool-patch-diff';
   import { buildTurnPresentation, formatTurnDuration, getTurnChangedFileCount, getTurnChangeStats, type SessionConversationTurn } from '$lib/domain/session-conversation';
@@ -176,7 +178,7 @@
           {#if segment.type === 'text'}
             {@const parts = markdownParts(userPresentation.frontMatter ? undefined : turn.user.html, segment.block.text, false, turn.user.text)}
             <div class="session-message-body markdown-body" use:enhanceCodeBlocks>
-              {#if parts.frozenHtml}<div class="session-message-body-frozen">{@html parts.frozenHtml}</div>{/if}
+              {#if parts.frozenHtml}<div class="session-message-body-frozen" use:enhanceSessionLinks={{ index: agentsStore.sessionLinkIndex, agentId: agentsStore.activeAgentId, html: parts.frozenHtml, discoverySource: agentsStore.activeSessionReferenceSource, discover: agentsStore.watchSessionReferences }}>{@html parts.frozenHtml}</div>{/if}
               {#if parts.tailText}<div class="session-message-body-tail">{parts.tailText}</div>{/if}
             </div>
           {:else}
@@ -320,7 +322,7 @@
             {#if segment.type === 'text'}
               {@const parts = markdownParts(item.html, segment.block.text, turn.settled === false, item.text)}
               <div class="session-agent-body markdown-body" use:enhanceCodeBlocks>
-                {#if parts.frozenHtml}<div class="session-agent-body-frozen">{@html parts.frozenHtml}</div>{/if}
+                {#if parts.frozenHtml}<div class="session-agent-body-frozen" use:enhanceSessionLinks={{ index: agentsStore.sessionLinkIndex, agentId: agentsStore.activeAgentId, html: parts.frozenHtml, discoverySource: agentsStore.activeSessionReferenceSource, discover: agentsStore.watchSessionReferences }}>{@html parts.frozenHtml}</div>{/if}
                 {#if parts.tailText}<div class="session-agent-body-tail">{parts.tailText}</div>{/if}
               </div>
             {:else}

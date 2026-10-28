@@ -739,6 +739,201 @@ describe('AgentsStore visibility-aware polling', () => {
   });
 });
 
+describe('AgentsStore known session links', () => {
+  it('uses fetched records, not stored recent IDs or arbitrary active session IDs', async () => {
+    const config = createStore().configs[0];
+    localStorage.setItem(RECENT_SESSIONS_STORAGE_KEY, JSON.stringify([{
+      agentId: config.id, sessionId: 'recent-only', source: sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' })
+    }]));
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'unverified';
+    expect(store.recentSessionKeys).toContain('agent-1:recent-only');
+    expect(store.sessionLinkIndex.size).toBe(0);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
+
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{ sessionId: 'listed', title: 'Listed', cwd: '/tmp/work' }] });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.listSessions.mockClear();
+    expect(store.sessionLinkIndex.get('listed')?.get('agent-1')?.title).toBe('Listed');
+    expect(store.sessionLinkIndex.has('recent-only')).toBe(false);
+    expect(store.sessionLinkIndex.has('unverified')).toBe(false);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
+  });
+
+  it('excludes disabled agents and drops old records when a saved endpoint changes', async () => {
+    const store = createStore();
+    await store.loadSession('agent-1', 'confirmed');
+    expect(store.sessionLinkIndex.has('confirmed')).toBe(true);
+    store.updateConfig('agent-1', { enabled: false });
+    expect(store.sessionLinkIndex.has('confirmed')).toBe(false);
+    store.updateConfig('agent-1', { enabled: true });
+    expect(store.sessionLinkIndex.has('confirmed')).toBe(true);
+    store.saveConfig({ ...store.configs[0], commandLine: 'different-agent' });
+    expect(store.sessionLinkIndex.has('confirmed')).toBe(false);
+  });
+});
+
+describe('AgentsStore lazy delegate references', () => {
+  const firstId = '01a175c1-d675-75c6-9926-7dc13c476cd5';
+  const laterId = '01a175c1-d675-75c6-9926-7dc24d001d62';
+  const parentId = '01a16fbd-5674-72a9-a8b3-3dfe6bff7af8';
+  const unknownId = '019bb123-4567-789a-bcde-0123456789ab';
+  function delegate(sessionId: string, meta: Record<string, unknown> = {}): SessionInfo {
+    return { sessionId, title: `Delegate ${sessionId}`, cwd: '/tmp/work', _meta: {
+      parentSessionId: parentId, forkOrigin: 'delegation',
+      querymt: { lifecycle: { session_id: sessionId, resolved: true, archived: true, resolved_at: '2026-10-20', archived_at: '2026-10-20' } },
+      ...meta
+    } };
+  }
+
+  it('shares a lazy paginated scan, caches delegate references, and leaves catalog/history alone', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [delegate(firstId)], nextCursor: 'second-page' })
+      .mockResolvedValueOnce({ sessions: [delegate(laterId)], nextCursor: 'third-page' });
+    const stopFirst = store.watchSessionReferences('agent-1', [firstId]);
+    const stopLater = store.watchSessionReferences('agent-1', [laterId.toUpperCase()]);
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(store.sessionLinkIndex.has(laterId)).toBe(true));
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+    expect(mockClient.listSessions.mock.calls.map(([request]) => request?.cursor)).toEqual([undefined, 'second-page']);
+    for (const [request] of mockClient.listSessions.mock.calls) expect(request?._meta).toEqual({
+      session_scope: 'delegates', querymt: { sessionFilters: { resolution: 'any', archive: 'any' } }
+    });
+    expect(store.sessionLinkIndex.get(firstId)?.get('agent-1')).toMatchObject({ location: 'local', parentSessionId: parentId, forkOrigin: 'delegation' });
+    expect(store.sessionsByAgent).toEqual({});
+    expect(store.sessionCatalog).toEqual([]);
+    expect(store.workspaceSessionSources).toEqual({});
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
+    stopFirst(); stopLater();
+    store.watchSessionReferences('agent-1', [firstId, laterId]);
+    await tick();
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [] });
+    store.watchSessionReferences('agent-1', [unknownId]);
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledTimes(3));
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'third-page' }));
+    expect(store.sessionLinkIndex.has(unknownId)).toBe(false);
+  });
+
+  it('does not connect an offline agent just because a UUID appears', async () => {
+    const store = createStore();
+    store.watchSessionReferences('agent-1', [firstId]);
+    await tick();
+    expect(mockClient.connect).not.toHaveBeenCalled();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+  });
+
+  it('ignores non-delegates and unknown-parent remote bookmarks even if returned by a backend', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [
+      delegate(firstId, { forkOrigin: 'user' }),
+      delegate(laterId, { location: 'remote', nodeId: 'peer-1', connectionState: 'disconnected' })
+    ] });
+    store.watchSessionReferences('agent-1', [firstId, laterId]);
+    await vi.waitFor(() => expect(mockClient.listSessions).toHaveBeenCalledOnce());
+    await tick();
+    expect(store.sessionLinkIndex.size).toBe(0);
+  });
+
+  it('scopes remote discovery to selected peers and preserves the delegate owner', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('peer-1', true);
+    store.activeAgentId = 'agent-1';
+    const source = store.activeSessionReferenceSource;
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [delegate(firstId, {
+      location: 'remote', nodeId: 'peer-1', nodeLabel: 'Build host', connectionState: 'available'
+    })] });
+    store.watchSessionReferences('agent-1', [firstId]);
+    await vi.waitFor(() => expect(store.sessionLinkIndex.has(firstId)).toBe(true));
+    expect(mockClient.listSessions).toHaveBeenLastCalledWith(expect.objectContaining({ _meta: expect.objectContaining({ remoteNodeIds: ['peer-1'] }) }));
+    expect(store.sessionLinkIndex.get(firstId)?.get('agent-1')).toMatchObject({ location: 'remote', remoteNodeId: 'peer-1', forkOrigin: 'delegation' });
+    chatPreferencesStore.setRemoteSessionPeer('peer-1', false);
+    expect(store.activeSessionReferenceSource).not.toBe(source);
+    expect(store.sessionLinkIndex.has(firstId)).toBe(false);
+  });
+
+  it('drops late results when the endpoint changes or the store is disposed', async () => {
+    for (const change of ['endpoint', 'dispose'] as const) {
+      const store = createStore();
+      await store.connectAgent('agent-1');
+      let release!: (page: { sessions: SessionInfo[] }) => void;
+      mockClient.listSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+      store.watchSessionReferences('agent-1', [firstId]);
+      await vi.waitFor(() => expect(release).toBeDefined());
+      if (change === 'endpoint') store.saveConfig({ ...store.configs[0], commandLine: 'another-agent' });
+      else store.dispose();
+      release({ sessions: [delegate(firstId)] });
+      await tick(); await tick();
+      expect(store.sessionLinkIndex.has(firstId)).toBe(false);
+    }
+  });
+
+  it('waits for a replacement connection before discovering on a changed endpoint', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    expect(store.activeSessionReferenceSource).not.toBeNull();
+    store.saveConfig({ ...store.configs[0], commandLine: 'another-agent' });
+    expect(store.activeSessionReferenceSource).toBeNull();
+    store.watchSessionReferences('agent-1', [firstId]);
+    await tick();
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    await store.connectAgent('agent-1', true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [delegate(firstId)] });
+    store.watchSessionReferences('agent-1', [firstId]);
+    await vi.waitFor(() => expect(store.sessionLinkIndex.has(firstId)).toBe(true));
+  });
+
+  it('attaches a discovered remote delegate without another catalog scan or losing its parentage', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('node-1', true);
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [delegate(firstId, {
+      location: 'remote', nodeId: 'node-1', nodeLabel: 'Build host', connectionState: 'available'
+    })] });
+    store.watchSessionReferences('agent-1', [firstId]);
+    await vi.waitFor(() => expect(store.sessionLinkIndex.has(firstId)).toBe(true));
+    mockClient.listSessions.mockClear();
+    mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32602, 'Invalid params', { message: 'session not found' }));
+    mockClient.attachRemoteSession.mockResolvedValueOnce({ session_id: firstId, node_id: 'node-1', attached: true, config_options: [], snapshot: {} });
+    await store.loadSession('agent-1', firstId);
+    expect(mockClient.attachRemoteSession).toHaveBeenCalledWith({ session_id: firstId, node_id: 'node-1' });
+    expect(mockClient.listSessions).not.toHaveBeenCalled();
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === firstId)).toMatchObject({
+      parentSessionId: parentId, forkOrigin: 'delegation', location: 'remote', remoteNodeId: 'node-1', title: `Delegate ${firstId}`
+    });
+    expect(store.sessionLinkIndex.get(firstId)?.get('agent-1')?.forkOrigin).toBe('delegation');
+  });
+
+  it('loads a discovered delegate with its workspace and parent metadata, and removes deleted references', async () => {
+    const store = createStore();
+    mockClient.connect.mockResolvedValueOnce({ protocolVersion: 1, authMethods: [], agentCapabilities: {
+      loadSession: true, sessionCapabilities: { delete: {} }
+    } });
+    await store.connectAgent('agent-1');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{ ...delegate(firstId), cwd: '/tmp/delegate-workspace' }] });
+    store.watchSessionReferences('agent-1', [firstId]);
+    await vi.waitFor(() => expect(store.sessionLinkIndex.has(firstId)).toBe(true));
+    await store.loadSession('agent-1', firstId);
+    expect(mockClient.loadSession).toHaveBeenCalledWith(firstId, '/tmp/delegate-workspace');
+    expect(store.sessionsByAgent['agent-1'].find((session) => session.sessionId === firstId))
+      .toMatchObject({ parentSessionId: parentId, forkOrigin: 'delegation', location: 'local' });
+    expect(store.sessionLinkIndex.get(firstId)?.get('agent-1')?.forkOrigin).toBe('delegation');
+    await store.deleteSession('agent-1', firstId);
+    expect(store.sessionLinkIndex.has(firstId)).toBe(false);
+  });
+});
+
 describe('AgentsStore recent sessions', () => {
   it('remembers successful opens in MRU order and restores them without loading history', async () => {
     const store = createStore();
@@ -782,6 +977,7 @@ describe('AgentsStore recent sessions', () => {
     mockClient.loadSession.mockRejectedValueOnce(new Error('Missing session'));
     await store.loadSession('agent-1', 'missing');
     expect(store.recentSessionKeys).toEqual([]);
+    expect(store.sessionLinkIndex.has('missing')).toBe(false);
     mockClient.listSessions.mockResolvedValueOnce({ sessions: [{
       sessionId: 'child', title: 'Child', cwd: '/tmp/work', _meta: { parentSessionId: 'root', forkOrigin: 'delegation' }
     }] });
@@ -839,8 +1035,10 @@ describe('AgentsStore recent sessions', () => {
     expect(restored.recentSessionKeys).toEqual([]);
     store.updateConfig('agent-1', { name: 'Renamed' });
     expect(store.recentSessionKeys).toEqual(['agent-1:session-1']);
+    expect(store.sessionLinkIndex.has('session-1')).toBe(true);
     store.updateConfig('agent-1', { commandLine: 'different-agent' });
     expect(store.recentSessionKeys).toEqual([]);
+    expect(store.sessionLinkIndex.has('session-1')).toBe(false);
     expect(JSON.parse(localStorage.getItem(RECENT_SESSIONS_STORAGE_KEY)!)).toEqual([]);
   });
 
@@ -860,6 +1058,7 @@ describe('AgentsStore recent sessions', () => {
     expect(store.sessionCatalog).toEqual(retained);
     expect(store.sessionsByAgent['agent-1']).toEqual([]);
     expect(store.recentSessionKeys).toEqual([]);
+    expect(store.sessionLinkIndex.has('session-1')).toBe(false);
     expect(createStore().recentSessionKeys).toEqual([]);
   });
 

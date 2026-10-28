@@ -89,6 +89,30 @@ export function buildSessionKey(agentId: string, sessionId: string): string {
   return `${agentId}:${sessionId}`;
 }
 
+export type SessionLinkTarget = Pick<DesktopSessionSummary,
+  'agentId' | 'sessionId' | 'title' | 'location' | 'remoteNodeId' | 'remoteNodeLabel' | 'parentSessionId' | 'forkOrigin'>;
+export type SessionLinkIndex = ReadonlyMap<string, ReadonlyMap<string, SessionLinkTarget>>;
+
+/** Only backend-sourced summaries belong here, never saved recent IDs or text mentions. */
+export function buildSessionLinkIndex(sessions: Iterable<SessionLinkTarget>): SessionLinkIndex {
+  const index = new Map<string, Map<string, SessionLinkTarget>>();
+  for (const { agentId, sessionId, title, location, remoteNodeId, remoteNodeLabel, parentSessionId, forkOrigin } of sessions) {
+    const id = sessionId.toLowerCase();
+    let targets = index.get(id);
+    if (!targets) index.set(id, targets = new Map());
+    targets.set(agentId, { agentId, sessionId, title, location, remoteNodeId, remoteNodeLabel, parentSessionId, forkOrigin });
+  }
+  return index;
+}
+
+export function resolveSessionLink(index: SessionLinkIndex, sessionId: string, agentId: string | null): SessionLinkTarget | null {
+  const targets = index.get(sessionId.toLowerCase());
+  if (!targets) return null;
+  // Prefer the current backend; never guess between multiple other backends.
+  return (agentId ? targets.get(agentId) : undefined)
+    ?? (targets.size === 1 ? targets.values().next().value ?? null : null);
+}
+
 /** Build a root-session catalog request with optional workspace and selected remote peers. */
 export function buildListSessionsRequest(input: {
   cwd?: string | null;

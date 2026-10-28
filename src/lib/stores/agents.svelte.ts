@@ -52,6 +52,7 @@ import {
   readSessionPin,
   sessionMatchesLifecycle,
   buildSessionKey,
+  buildSessionLinkIndex,
   getSessionById,
   getSessionKey,
   getSessionWorkspaceKey,
@@ -179,6 +180,7 @@ import {
 import { inboxStore } from '$lib/stores/inbox.svelte';
 import { SessionCatalogCache, isCatalogFresh, sessionCatalogKey, type CachedSessionCatalog } from '$lib/stores/session-catalog-cache';
 import { SessionListCoordinator, SupersededSessionListError } from '$lib/stores/session-list-coordination';
+import { SessionReferenceDiscovery } from '$lib/stores/session-reference-discovery';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import {
   loadSessionModePreferences,
@@ -231,6 +233,7 @@ type UnlistenFn = () => void;
 
 interface AgentClientRecord {
   client: DesktopAcpClient;
+  endpointSource: string;
   connectionState: AgentConnectionState;
   initializeResponse: InitializeResponse | null;
   error: string | null;
@@ -378,6 +381,9 @@ export class AgentsStore {
   lastRemoteAttachByAgent = $state<Record<string, RemoteSessionAttachInfo | null>>({});
   lastRemoteDismissByAgent = $state<Record<string, RemoteSessionDismissInfo | null>>({});
   sessionsByAgent = $state<Record<string, DesktopSessionSummary[]>>({});
+  private sessionLinkSources = $state<Record<string, string>>({});
+  private delegateSessionLinks = $state<Record<string, { source: string; sessions: DesktopSessionSummary[] }>>({});
+  private delegateReferenceDiscoveries = new Map<string, { source: string; discovery: SessionReferenceDiscovery<DesktopSessionSummary> }>();
   private knownSessionParents = $state<Record<string, string>>({});
   private recentSessionEntries = $state<RecentSessionEntry[]>(loadRecentSessions());
   private openSessionPages = $state<Record<string, OpenSessionPage>>({});
@@ -397,6 +403,12 @@ export class AgentsStore {
   sessionPinErrors = $state<Record<string, string | null>>({});
   private sessionPins = $state<Record<string, SessionPin>>({});
   private pinnedSessionsByAgent = $state<Record<string, DesktopSessionSummary[]>>({});
+  sessionLinkIndex = $derived(buildSessionLinkIndex(this.configs.filter((config) => config.enabled).flatMap((config) => {
+    const source = sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' });
+    return [...this.delegateReferenceSessions(config.id),
+      ...[...(this.pinnedSessionsByAgent[config.id] ?? []), ...(this.sessionsByAgent[config.id] ?? [])]
+        .filter((session) => this.sessionLinkSources[getSessionKey(session)] === source)];
+  })));
   pinnedSessionsLoading = $state<Record<string, boolean>>({});
   pinnedSessionsErrors = $state<Record<string, string | null>>({});
   private pinWrites = new Map<string, symbol>();
@@ -575,7 +587,72 @@ export class AgentsStore {
       chatPreferencesStore.remoteSessionPeers.includes(session.remoteNodeId ?? ''));
   }
 
+  private rememberSessionLinkSources(agentId: string, sessionIds: Iterable<string>) {
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    if (!config) return;
+    const source = sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' });
+    for (const sessionId of sessionIds) this.sessionLinkSources[buildSessionKey(agentId, sessionId)] = source;
+  }
+
+  private delegateReferenceSource(config: AgentConfig): string {
+    const remoteNodeIds = chatPreferencesStore.showRemoteSessions ? chatPreferencesStore.remoteSessionPeers : [];
+    return JSON.stringify([sessionCatalogKey([config], remoteNodeIds, { resolution: 'any', archive: 'any' }),
+      isEmbedded ? this.composerProfileId : null]);
+  }
+
+  private delegateReferenceSessions(agentId: string): DesktopSessionSummary[] {
+    const config = this.configs.find((candidate) => candidate.id === agentId && candidate.enabled);
+    const cached = this.delegateSessionLinks[agentId];
+    return config && cached?.source === this.delegateReferenceSource(config) ? cached.sessions : [];
+  }
+
+  get activeSessionReferenceSource(): string | null {
+    const config = this.configs.find((candidate) => candidate.id === this.activeAgentId && candidate.enabled);
+    if (!config || !isOnlineConnectionState(this.connectionStates[config.id])) return null;
+    const record = this.initializedClientRecord(config.id);
+    if (!record || record.endpointSource !== sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' })) return null;
+    return JSON.stringify([this.delegateReferenceSource(config), this.connectGeneration(config.id)]);
+  }
+
+  watchSessionReferences = (agentId: string | null, sessionIds: string[]): (() => void) => {
+    const config = this.configs.find((candidate) => candidate.id === agentId && candidate.enabled);
+    const record = config && this.initializedClientRecord(config.id);
+    if (!config || !record || this.pollingDisposed ||
+      record.endpointSource !== sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' })) return () => {};
+    const missing = sessionIds.filter((id) => !this.sessionLinkIndex.has(id.toLowerCase()));
+    if (!missing.length) return () => {};
+    const source = this.delegateReferenceSource(config);
+    let cached = this.delegateReferenceDiscoveries.get(config.id);
+    if (cached?.source !== source) {
+      cached?.discovery.dispose();
+      const isCurrent = () => !this.pollingDisposed && this.clients.get(config.id) === record &&
+        this.configs.some((current) => current.id === config.id && current.enabled && this.delegateReferenceSource(current) === source);
+      const discovery = new SessionReferenceDiscovery<DesktopSessionSummary>({
+        isCurrent,
+        fetchPage: async (cursor) => {
+          const request = buildListSessionsRequest({ cursor, remoteNodeIds: this.openSessionListScope(config).remoteNodeIds,
+            lifecycle: { resolution: 'any', archive: 'any' } });
+          request._meta = { ...request._meta, session_scope: 'delegates' };
+          const page = await this.listSessionPage(config, record, request, false, 5 * 60_000);
+          return { ...page, sessions: mapAcpSessionsToDesktopSessions(page.sessions, { agentId: config.id, agentName: config.name })
+            .filter((session) => session.relationshipKnown && session.parentSessionId && session.forkOrigin === 'delegation') };
+        },
+        publish: (sessions) => { this.delegateSessionLinks[config.id] = { source, sessions }; }
+      });
+      cached = { source, discovery };
+      this.delegateReferenceDiscoveries.set(config.id, cached);
+    }
+    return cached.discovery.watch(missing);
+  };
+
+  private clearDelegateSessionReferences(agentId: string) {
+    this.delegateReferenceDiscoveries.get(agentId)?.discovery.dispose();
+    this.delegateReferenceDiscoveries.delete(agentId);
+    delete this.delegateSessionLinks[agentId];
+  }
+
   private mapSessionSummaries(sessions: SessionInfo[], agent: { agentId: string; agentName: string }): DesktopSessionSummary[] {
+    this.rememberSessionLinkSources(agent.agentId, sessions.map((session) => session.sessionId));
     const incoming = mapAcpSessionsToDesktopSessions(sessions, agent);
     const incomingKeys = new Set(incoming.map(getSessionKey));
     const summaries = mergeSessions(this.sessionsByAgent[agent.agentId] ?? [], incoming)
@@ -962,6 +1039,7 @@ export class AgentsStore {
 
   dispose() {
     this.pollingDisposed = true;
+    for (const agentId of this.delegateReferenceDiscoveries.keys()) this.clearDelegateSessionReferences(agentId);
     this.sessionListSharing?.dispose();
     this.sessionListSharing = null;
     for (const retry of this.supersededListRetries.values()) if (retry.timer !== null) clearTimeout(retry.timer);
@@ -1429,6 +1507,7 @@ export class AgentsStore {
       const lifecycle = { resolution: 'any', archive: 'any' } as const;
       if (sessionCatalogKey([this.configs[existingIndex]], [], lifecycle) !== sessionCatalogKey([input], [], lifecycle)) {
         this.sessionMutationScopes.delete(input.id);
+        this.clearDelegateSessionReferences(input.id);
       }
       this.configs = this.configs.map((config) => (config.id === input.id ? input : config));
     }
@@ -1457,7 +1536,10 @@ export class AgentsStore {
           normalizedUpdates.websocketUrl !== current.websocketUrl) ||
         (updates.commandLine !== undefined && updates.commandLine !== current.commandLine) ||
         (normalizedUpdates.websocketSecure !== undefined && normalizedUpdates.websocketSecure !== (current.websocketSecure ?? false)));
-    if (endpointChanged || normalizedUpdates.enabled === false) this.clearSessionPins(agentId);
+    if (endpointChanged || normalizedUpdates.enabled === false) {
+      this.clearSessionPins(agentId);
+      this.clearDelegateSessionReferences(agentId);
+    }
     if (endpointChanged) {
       this.clearRemoteProfilesForAgent(agentId);
       this.sessionMutationScopes.delete(agentId);
@@ -2025,6 +2107,7 @@ export class AgentsStore {
     const cacheKey = `pins:${source}${isEmbedded ? this.sessionListSource(config, record) : ''}`;
     const cached = force ? undefined : this.sessionCatalogCache.get(cacheKey);
     if (cached) {
+      this.rememberSessionLinkSources(agentId, cached.sessions.map((session) => session.sessionId));
       this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: cached.sessions };
       if (isCatalogFresh(cached)) {
         this.reconcileSessionPins(agentId, cached.sessions);
@@ -2158,10 +2241,16 @@ export class AgentsStore {
   private findSessionSummary(agentId: string, sessionId: string): DesktopSessionSummary | undefined {
     return (this.sessionsByAgent[agentId] ?? []).find((session) => session.sessionId === sessionId) ??
       this.sessionCatalog.find((session) => session.agentId === agentId && session.sessionId === sessionId) ??
-      (this.pinnedSessionsByAgent[agentId] ?? []).find((session) => session.sessionId === sessionId);
+      (this.pinnedSessionsByAgent[agentId] ?? []).find((session) => session.sessionId === sessionId) ??
+      getSessionById(this.delegateReferenceSessions(agentId), sessionId) ?? undefined;
   }
 
   private patchSessionCatalog(agentId: string, sessionId: string, summary: DesktopSessionSummary | null) {
+    if (summary) this.rememberSessionLinkSources(agentId, [sessionId]);
+    else {
+      delete this.sessionLinkSources[buildSessionKey(agentId, sessionId)];
+      this.delegateReferenceDiscoveries.get(agentId)?.discovery.forget(sessionId);
+    }
     this.catalogWrites.set(buildSessionKey(agentId, sessionId), { revision: ++this.catalogWriteRevision, session: summary });
     const patch = (sessions: DesktopSessionSummary[], scope: CachedSessionCatalog['scope']) => {
       const existing = sessions.find((session) => session.agentId === agentId && session.sessionId === sessionId);
@@ -2240,6 +2329,7 @@ export class AgentsStore {
     this.sessionCatalog = cached?.sessions.slice() ?? [];
     for (const agentId of new Set(this.sessionCatalog.map((session) => session.agentId))) {
       const summaries = this.sessionCatalog.filter((session) => session.agentId === agentId);
+      this.rememberSessionLinkSources(agentId, summaries.map((session) => session.sessionId));
       this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: mergeSessions(summaries, this.sessionsByAgent[agentId] ?? []) };
     }
     this.sessionCatalogHasSessions = cached?.hasSessions ?? null;
@@ -2624,6 +2714,11 @@ export class AgentsStore {
     if (!config) return null;
 
     const knownSessions = this.sessionsByAgent[agentId] ?? [];
+    const reference = getSessionById(this.delegateReferenceSessions(agentId), sessionId);
+    if (reference) {
+      this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: mergeSessions(knownSessions, [reference]) };
+      return reference;
+    }
     const cwd =
       this.composerCwd.trim() ||
       (this.activeAgentId === agentId
@@ -3700,7 +3795,7 @@ export class AgentsStore {
 
     // A deep link may arrive before catalog discovery. Do not create a local
     // placeholder or scan every peer before the backend checks the bookmark.
-    let target = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    let target = this.findSessionSummary(agentId, sessionId);
     this.acknowledgeSession(agentId, sessionId);
 
     const record = await this.connectInitializedRecord(agentId);
@@ -3709,7 +3804,7 @@ export class AgentsStore {
       this.error = 'Failed to connect to the agent.';
       return;
     }
-    target ??= getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    target ??= this.findSessionSummary(agentId, sessionId);
 
     if (!record.initializeResponse?.agentCapabilities?.loadSession) {
       this.error = 'This agent does not support session/load.';
@@ -3810,6 +3905,7 @@ export class AgentsStore {
         return;
       }
       this.lastLoadedSession = loadedSession;
+      this.rememberSessionLinkSources(agentId, [sessionId]);
       const loadMeta = loadedSession._meta;
       if (loadMeta?.location === 'remote' && typeof loadMeta.nodeId === 'string') {
         const config = this.configs.find((candidate) => candidate.id === agentId);
@@ -3843,8 +3939,9 @@ export class AgentsStore {
           remoteNodeId: undefined, remoteNodeLabel: undefined, remoteConnectionState: undefined,
           remoteProfileId: undefined, remoteProfileLabel: undefined
         });
-      } else if (!target) {
-        this.ensureSessionLoadTarget(agentId, sessionId);
+      } else if (!getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId)) {
+        if (target) this.syncLoadedSessionSummary(agentId, target);
+        else this.ensureSessionLoadTarget(agentId, sessionId);
       }
       // Access is agent-authoritative: only the load response may grant or clear read-only.
       this.activeSessionAccess = readSessionAccess(loadedSession._meta);
@@ -4280,6 +4377,7 @@ export class AgentsStore {
         [agentId]: optimisticSessions.sort(compareSessionsByActivity)
       };
       this.upsertWorkspaceSessions(agentId, optimisticSessions);
+      this.rememberSessionLinkSources(agentId, [response.sessionId]);
       return response.sessionId;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fork session.';
@@ -4586,6 +4684,7 @@ export class AgentsStore {
 
     const record: AgentClientRecord = {
       client: new DesktopAcpClient(config),
+      endpointSource: sessionCatalogKey([config], [], { resolution: 'any', archive: 'any' }),
       connectionState: 'idle',
       initializeResponse: null,
       error: null,
@@ -4622,6 +4721,7 @@ export class AgentsStore {
   }
 
   private disposeClient(agentId: string) {
+    this.clearDelegateSessionReferences(agentId);
     for (const [key, retry] of this.supersededListRetries) if (retry.agentId === agentId) {
       if (retry.timer !== null) clearTimeout(retry.timer);
       this.supersededListRetries.delete(key);
@@ -5169,7 +5269,8 @@ export class AgentsStore {
       ...this.lastRemoteAttachByAgent,
       [agentId]: result
     };
-    const discovered = this.sessionsByAgent[agentId]?.find((session) => session.sessionId === session_id && session.remoteNodeId === node_id);
+    const candidate = this.findSessionSummary(agentId, session_id);
+    const discovered = candidate?.remoteNodeId === node_id ? candidate : undefined;
     return this.hydrateRemoteAttach(agentId, node_id, result, remoteSession ?? {
       id: session_id, node_id, title: discovered?.title, cwd: discovered?.cwd, updated_at: discovered?.updatedAt ?? undefined,
       profile_id: discovered?.remoteProfileId, profile_label: discovered?.remoteProfileLabel
@@ -5189,6 +5290,7 @@ export class AgentsStore {
     if (!config) throw new Error(`Unable to locate agent ${agentId}.`);
 
     const sessionId = result.session_id;
+    this.rememberSessionLinkSources(agentId, [sessionId]);
     this.resetActiveSession(agentId, sessionId, preserveSelectionGeneration);
     const configOptions = result.config_options ?? [];
     const snapshot = activeSessionFromLoadResponse(sessionId, {
@@ -5202,7 +5304,7 @@ export class AgentsStore {
       _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
     });
     this.applySessionConfigOptionsSnapshot(agentId, sessionId, configOptions);
-    const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    const current = this.findSessionSummary(agentId, sessionId);
     const summary: DesktopSessionSummary = {
       ...current,
       agentId,
