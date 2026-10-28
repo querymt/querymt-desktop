@@ -13,6 +13,25 @@ function tool(overrides: Partial<SessionToolCallItem> = {}): SessionToolCallItem
 }
 
 describe('getSessionToolPresentation', () => {
+  it('previews the target and change stats for historical and canonical edit arguments', () => {
+    const historical = getSessionToolPresentation(
+      tool({ kind: 'edit', title: 'Run edit', arguments: '{"filePath":"src/a.ts","oldString":"one","newString":"two"}' })
+    );
+    const canonical = getSessionToolPresentation(
+      tool({ kind: 'edit', title: 'Run edit', arguments: '{"file_path":"src/a.ts","old_string":"one","new_string":"two"}' })
+    );
+    expect(historical.preview).toBe('src/a.ts');
+    expect(canonical.preview).toBe('src/a.ts');
+    expect(canonical.changeStats).toEqual(historical.changeStats);
+    expect(canonical.changeStats).not.toBeNull();
+  });
+
+  it('previews canonical file_path for reads', () => {
+    expect(getSessionToolPresentation(tool({ arguments: '{"file_path":"src/app.ts","offset":2}' })).preview).toBe(
+      'src/app.ts (lines 3+)'
+    );
+  });
+
   it('uses semantic labels, icons, and path previews for file reads', () => {
     expect(getSessionToolPresentation(tool({ arguments: '{"path":"src/app.ts"}' }))).toMatchObject({
       name: 'read_tool',
