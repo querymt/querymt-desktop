@@ -6072,6 +6072,7 @@ summary:focus-visible {
 
 .session-queued-bubble {
   display: inline-flex;
+  flex: 0 0 auto;
   width: fit-content;
   min-width: 0;
   align-items: center;
@@ -6112,12 +6113,15 @@ summary:focus-visible {
 }
 
 .session-queued-panel {
-  position: fixed;
-  z-index: 150;
+  /* Anchor to the full activity dock, not the compact queue trigger. */
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 0.5rem);
   display: grid;
-  min-width: 16rem;
-  max-width: min(24rem, calc(100vw - 2rem));
-  gap: 0.2rem;
+  pointer-events: auto;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--bg-panel-strong);
@@ -6125,13 +6129,15 @@ summary:focus-visible {
   box-shadow: var(--shadow-lg);
 }
 
-.session-queued-panel-heading {
-  padding: 0.15rem 0.35rem 0.3rem;
-  color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.session-queued-panel-list {
+  display: grid;
+  grid-auto-rows: max-content;
+  min-width: 0;
+  max-height: min(16rem, 30dvh);
+  gap: 0.2rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .session-queued-panel-item {
@@ -6149,6 +6155,7 @@ summary:focus-visible {
 .session-queued-panel-state {
   display: inline-flex;
   align-items: center;
+  align-self: start;
   gap: 0.25rem;
   color: var(--status-warn);
   font-size: 0.64rem;
@@ -6159,16 +6166,16 @@ summary:focus-visible {
 
 .session-queued-panel-prompt {
   min-width: 0;
-  overflow: hidden;
   color: var(--text);
   font-size: 0.74rem;
   line-height: 1.25rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .session-queued-panel-remove {
   display: inline-flex;
+  align-self: start;
   width: 1.5rem;
   height: 1.5rem;
   flex: 0 0 auto;
