@@ -101,6 +101,76 @@ describe('buildSessionTurnDiffs', () => {
 });
 
 describe('buildSessionToolDiffs', () => {
+  describe('historical and canonical argument spellings', () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['historical camelCase', { filePath: 'src/a.ts', oldString: 'one', newString: 'two' }],
+      ['canonical snake_case', { file_path: 'src/a.ts', old_string: 'one', new_string: 'two' }],
+      ['short forms', { file_path: 'src/a.ts', old_str: 'one', new_str: 'two' }]
+    ];
+    for (const [label, args] of cases) {
+      it(`renders an edit diff from ${label} arguments`, () => {
+        const [file] = buildSessionToolDiffs('edit', 'completed', JSON.stringify(args), 'OK paths=1 edits=1 added=1 deleted=1');
+        expect(file?.path).toBe('src/a.ts');
+        expect(file?.patch).toContain('-one');
+        expect(file?.patch).toContain('+two');
+      });
+    }
+
+    it('renders multiedit from canonical items and from historical camelCase items', () => {
+      const canonical = buildSessionToolDiffs(
+        'multiedit',
+        'completed',
+        JSON.stringify({ file_path: 'src/a.ts', edits: [{ old_string: 'a', new_string: 'b' }] })
+      );
+      const historical = buildSessionToolDiffs(
+        'multiedit',
+        'completed',
+        JSON.stringify({ filePath: 'src/a.ts', edits: [{ oldString: 'a', newString: 'b' }] })
+      );
+      expect(canonical[0]?.patch).toContain('+b');
+      expect(historical).toEqual(canonical);
+    });
+
+    it('reads a historical record whose edits array was stored as a JSON string', () => {
+      const [file] = buildSessionToolDiffs(
+        'multiedit',
+        'completed',
+        JSON.stringify({ filePath: 'src/a.ts', edits: JSON.stringify([{ oldString: 'a', newString: 'b' }]) })
+      );
+      expect(file?.path).toBe('src/a.ts');
+      expect(file?.patch).toContain('-a');
+      expect(file?.patch).toContain('+b');
+    });
+
+    it('does not decode edit text that merely looks like JSON', () => {
+      const [file] = buildSessionToolDiffs(
+        'edit',
+        'completed',
+        JSON.stringify({ file_path: 'src/a.json', old_string: '[1]', new_string: '[1, 2]' })
+      );
+      expect(file?.patch).toContain('-[1]');
+      expect(file?.patch).toContain('+[1, 2]');
+    });
+
+    it('renders replace_symbol items with canonical new_text', () => {
+      const [file] = buildSessionToolDiffs(
+        'replace_symbol',
+        'completed',
+        JSON.stringify({ replacements: [{ path: 'src/a.rs', symbol: 'foo', new_text: 'fn foo() {}' }] }),
+        'OK paths=1 edits=1 added=1 deleted=0'
+      );
+      expect(file?.path).toBe('src/a.rs');
+      expect(file?.patch).toContain('+fn foo() {}');
+    });
+
+    it('renders the effective (hook-modified) target, not the original one', () => {
+      // `tool_call_start` carries effective arguments; a hook redirected the edit.
+      const effective = JSON.stringify({ file_path: 'src/redirected.ts', old_string: 'x', new_string: 'y' });
+      const [file] = buildSessionToolDiffs('edit', 'completed', effective, 'OK paths=1 edits=1 added=1 deleted=1');
+      expect(file?.path).toBe('src/redirected.ts');
+    });
+  });
+
   it('builds a unified patch from edit input, including snake_case keys', () => {
     const [file] = buildSessionToolDiffs(
       'edit',

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActiveSessionViewModel } from './types';
 import { buildSessionConversation } from './session-conversation';
 import { applySessionNotification } from './session-updates';
+import { buildSessionToolDiffs } from './session-tool-diff';
 import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession } from './session-snapshot';
 
 describe('getSnapshotProviderChange', () => {
@@ -228,6 +229,42 @@ describe('activeSessionFromLoadResponse', () => {
     expect(turns[1].content.map((item) => item.id)).toEqual(['snapshot-21']);
     expect(turns[1].user).toMatchObject({ text: '', eventIndex: 20 });
     expect(turns[1].user?.blocks?.[0]).toMatchObject({ type: 'image', name: 'second.jpg' });
+  });
+
+  it('renders historical camelCase and canonical snake_case edit calls without duplicating them', () => {
+    const start = (seq: number, id: string, args: Record<string, unknown>) => ({
+      seq,
+      kind: { type: 'tool_call_start', data: { tool_call_id: id, tool_name: 'edit', arguments: JSON.stringify(args) } }
+    });
+    const end = (seq: number, id: string) => ({
+      seq,
+      kind: { type: 'tool_call_end', data: { tool_call_id: id, tool_name: 'edit', result: 'OK paths=1 edits=1 added=1 deleted=1' } }
+    });
+    const session = activeSessionFromLoadResponse('session-edit-spellings', {
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          userPrompts: [],
+          audit: {
+            events: [
+              // Recorded before the canonical naming release.
+              start(1, 'old', { filePath: 'src/a.ts', oldString: 'one', newString: 'two' }),
+              end(2, 'old'),
+              // Effective record of a call whose raw form was aliased; a hook
+              // redirected the target, and the start event carries the executed one.
+              start(3, 'new', { file_path: 'src/redirected.ts', old_string: 'one', new_string: 'two' }),
+              end(4, 'new')
+            ]
+          }
+        }
+      }
+    });
+
+    expect(session.toolCalls.map((tool) => tool.id)).toEqual(['old', 'new']);
+    const [oldTool, newTool] = session.toolCalls;
+    expect(buildSessionToolDiffs('edit', oldTool.status, oldTool.arguments, oldTool.result)[0]?.path).toBe('src/a.ts');
+    expect(buildSessionToolDiffs('edit', newTool.status, newTool.arguments, newTool.result)[0]?.path).toBe(
+      'src/redirected.ts'
+    );
   });
 
   it('materializes a structured prompt only once when duplicate prompt_received events are present', () => {
