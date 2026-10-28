@@ -9080,7 +9080,7 @@ describe('session header freshness and context usage', () => {
     expect(store.sessionsByAgent['agent-1'].find((entry) => entry.sessionId === 'session-1')!.updatedAt).toBe(liveStamp);
   });
 
-  it('coalesces a burst into two summary passes while preserving every transcript delta', async () => {
+  it('coalesces a burst into one summary pass and skips activity-only bumps inside the throttle window', async () => {
     vi.useFakeTimers();
     const store = createStore();
     await store.connectAgent('agent-1');
@@ -9098,12 +9098,51 @@ describe('session header freshness and context usage', () => {
     }
     expect(summaries).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(20);
-    expect(summaries).toHaveBeenCalledTimes(2);
+    // The batched pass only bumps updatedAt (status/title unchanged) within the throttle window,
+    // so it must not rebuild the session lists again.
+    expect(summaries).toHaveBeenCalledOnce();
     expect(store.activeSession.transcript).toHaveLength(100);
     expect(store.sessionCatalog.find((session) => session.sessionId === 'session-1')?.status).toBe('thinking');
     expect(store.sessionCatalog.find((session) => session.sessionId === 'session-2')?.status).toBe('idle');
     expect(mockClient.listSessions).not.toHaveBeenCalled();
     summaries.mockRestore();
+  });
+
+  it('caches the derived session lists until their inputs change', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': Array.from({ length: 500 }, (_, index) => ({ ...summary('2026-01-01T00:00:00Z'), sessionId: `session-${index}` }))
+    };
+    const first = store.sessions;
+    expect(first).toHaveLength(500);
+    // Repeated reads (layout, rail, pinned list) must not rebuild the list.
+    expect(store.sessions).toBe(first);
+    expect(store.pinnedSessions).toBe(store.pinnedSessions);
+
+    store.sessionsByAgent = { 'agent-1': store.sessionsByAgent['agent-1'].slice(0, 10) };
+    expect(store.sessions).not.toBe(first);
+    expect(store.sessions).toHaveLength(10);
+  });
+
+  it('applies an activity-only updatedAt bump again once the throttle window has elapsed', async () => {
+    vi.useFakeTimers();
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.sessionsByAgent = { 'agent-1': [summary('2020-01-01T00:00:00Z')] };
+    const emit = (id: string) => mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'agent_message_chunk', messageId: id, content: { type: 'text', text: id }
+    } });
+    emit('a');
+    await vi.advanceTimersByTimeAsync(20);
+    const first = store.sessionsByAgent['agent-1'].find((s) => s.sessionId === 'session-1')!.updatedAt;
+    await vi.advanceTimersByTimeAsync(300);
+    emit('b');
+    await vi.advanceTimersByTimeAsync(20);
+    expect(store.sessionsByAgent['agent-1'].find((s) => s.sessionId === 'session-1')!.updatedAt).toBe(first);
+    await vi.advanceTimersByTimeAsync(1500);
+    emit('c');
+    await vi.advanceTimersByTimeAsync(20);
+    expect(store.sessionsByAgent['agent-1'].find((s) => s.sessionId === 'session-1')!.updatedAt).not.toBe(first);
   });
 
   it('flushes queued chunks before metadata updates and drops batches owned by replaced clients', async () => {
