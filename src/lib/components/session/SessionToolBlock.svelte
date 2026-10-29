@@ -47,6 +47,7 @@
   let sourceOpenForId = $state<string | null>(null);
   let copiedPart = $state<'arguments' | 'result' | null>(null);
   const presentation = $derived(getSessionToolPresentation(tool));
+  const displayStatus = $derived(presentation.status);
   const READ_FILE_TOOLS = new Set(['read_tool', 'get_function', 'get_symbol', 'read', 'read_shared']);
   const toolName = $derived(getSessionToolName(tool));
   // Active-turn updates replace tool wrappers even when this output is unchanged.
@@ -149,7 +150,7 @@
 
 <details
   bind:open
-  class={`details-reset session-tool-block session-tool-block-${tool.status}`}
+  class={`details-reset session-tool-block session-tool-block-${displayStatus}`}
   class:session-tool-block-diff={diffs.length > 0}
   class:session-tool-block-attached={diffs.length > 0 || isRead || isShell}
   aria-label={summaryLabel}
@@ -224,12 +225,12 @@
       {#if expandable}
         <span class="session-tool-disclosure" aria-hidden="true"><ChevronDown size={13} /></span>
       {/if}
-      <span class={`session-tool-status session-tool-status-${tool.status}`} title={presentation.statusLabel}>
-        {#if tool.status === 'failed'}
+      <span class={`session-tool-status session-tool-status-${displayStatus}`} title={presentation.statusLabel}>
+        {#if displayStatus === 'failed'}
           <AlertTriangle size={13} aria-hidden="true" />
-        {:else if tool.status === 'in_progress'}
+        {:else if displayStatus === 'in_progress'}
           <LoaderCircle size={13} class="animate-spin" aria-hidden="true" />
-        {:else if tool.status === 'completed'}
+        {:else if displayStatus === 'completed'}
           <Check size={13} aria-hidden="true" />
         {:else}
           <CircleEllipsis size={13} aria-hidden="true" />

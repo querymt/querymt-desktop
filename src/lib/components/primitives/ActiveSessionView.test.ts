@@ -757,7 +757,7 @@ describe('ActiveSessionView turn window', () => {
     expect(document.querySelector('.session-turn-spacer')).toBeInTheDocument();
   });
 
-  it('shows a running delegation link when the child session arrives', async () => {
+  it('shows a running delegate after dispatch completes and the child session arrives', async () => {
     const session = createEmptyActiveSession();
     session.sessionId = 'session-delegate';
     session.runState = 'tool-running';
@@ -772,23 +772,25 @@ describe('ActiveSessionView turn window', () => {
     session.toolCalls = [{
       id: 'delegate-1',
       title: 'Run delegate',
-      status: 'in_progress',
+      status: 'completed',
       kind: 'delegate',
       arguments: '{"target_agent_id":"linus","objective":"Review the diff"}',
       eventIndex: 2
     }];
     const { rerender } = render(ActiveSessionView, { session });
     expect(screen.queryByRole('button', { name: 'Open linus session' })).toBeNull();
+    expect(screen.getByTitle('Status unavailable').querySelector('.lucide-check')).toBeNull();
 
     await rerender({
       session: {
         ...session,
-        toolCalls: [{ ...session.toolCalls[0], childSessionId: 'child-session-1' }]
+        toolCalls: [{ ...session.toolCalls[0], childSessionId: 'child-session-1', delegationState: 'forked' }]
       }
     });
 
     expect(screen.getByRole('button', { name: 'Open linus session' })).toBeInTheDocument();
     expect(screen.getByText('Running')).toHaveClass('sr-only');
+    expect(screen.getByTitle('Running').querySelector('.lucide-loader-circle')).toHaveClass('animate-spin');
   });
 
   it('mounts transcript after an empty first load without waiting for resize', async () => {

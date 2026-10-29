@@ -33,6 +33,7 @@ export type SessionToolPresentation = {
   label: string;
   preview: string | null;
   icon: SessionToolIcon;
+  status: SessionToolCallItem['status'];
   statusLabel: string;
   expandable: boolean;
   argumentsText: string | null;
@@ -51,13 +52,24 @@ export function getSessionToolPresentation(tool: SessionToolCallItem): SessionTo
   const args = parseObject(tool.arguments);
   const argumentsText = formatTechnicalText(tool.arguments);
   const resultText = formatTechnicalText(tool.result);
+  const delegate = isDelegateToolName(name);
+  const state = delegate ? tool.delegationState : undefined;
+  // A successful dispatch does not mean the delegated task has finished.
+  const status = !delegate ? tool.status
+    : state === 'forked' ? 'in_progress'
+    : state === 'completed' ? 'completed'
+    : state === 'failed' || state === 'cancelled' || tool.status === 'failed' ? 'failed'
+    : 'pending';
 
   return {
     name,
     label: toolLabel(name),
     preview: toolPreview(toolName, args, tool.result),
     icon: toolIcon(name),
-    statusLabel: statusLabel(tool.status),
+    status,
+    statusLabel: state === 'cancelled' ? 'Cancelled'
+      : delegate && !state && tool.status !== 'failed' ? 'Status unavailable'
+      : statusLabel(status),
     expandable: Boolean(argumentsText || resultText),
     argumentsText,
     resultText,
