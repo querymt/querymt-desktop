@@ -1,8 +1,9 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { AccountingSnapshot } from '$lib/querymt/generated/types';
 import SessionUsageBar from './SessionUsageBar.svelte';
 
-const usage = { contextUsed: 48_000, contextLimit: 200_000, cumulativeCostUsd: 0.125, activeWorkMs: 62_000, activeWorkStartedAt: null };
+const usage = { contextUsed: 48_000, contextLimit: 200_000, accounting: { version: 1, cycle: null, session: { knownSubtotalUsd: 0.125, completeTotalUsd: 0.125, complete: true, billing: 'metered', reasons: [], pricedAttempts: 1, excludedAttempts: 0, unresolvedAttempts: 0, incompleteAttempts: 0, unaccountedGenerations: 0 } } as unknown as AccountingSnapshot, standardCostUsd: null, activeWorkMs: 62_000, activeWorkStartedAt: null };
 const counts = { inputTokens: 100, outputTokens: 162, reasoningTokens: 1024, cacheReadTokens: 700, cacheWriteTokens: 200 };
 const detailed = { ...usage, breakdown: { latestRequest: counts, sessionTotals: { ...counts, cacheReadTokens: 1700 }, partial: false } };
 afterEach(cleanup);
@@ -129,7 +130,7 @@ describe('SessionUsageBar', () => {
   });
 
   it('omits context before the first usage update', () => {
-    render(SessionUsageBar, { usage: { ...usage, contextUsed: null, contextLimit: null, cumulativeCostUsd: null, activeWorkMs: 0 } });
+    render(SessionUsageBar, { usage: { ...usage, contextUsed: null, contextLimit: null, accounting: undefined, activeWorkMs: 0 } });
     expect(screen.queryByText('Context')).toBeNull();
     expect(screen.queryByRole('meter')).toBeNull();
     expect(screen.getByText('0s')).toBeTruthy();
@@ -145,5 +146,55 @@ describe('SessionUsageBar', () => {
     screen.getByRole('button', { name: 'About token usage' }).focus();
     await fireEvent.pointerEnter(screen.getByRole('button', { name: 'About token usage' }));
     expect(await screen.findByText(/separate from current context occupancy/, { selector: '.session-usage-help-content' })).toBeTruthy();
+  });
+
+  function withSession(session: Record<string, unknown>, cycle: unknown = null) {
+    return { ...usage, accounting: { ...usage.accounting, cycle, session: { ...usage.accounting.session, ...session } } } as never;
+  }
+
+  it('labels a complete total as an estimated API cost', () => {
+    render(SessionUsageBar, { usage });
+    expect(screen.getByText('Estimated API cost')).toBeTruthy();
+    expect(screen.getByText('$0.13')).toBeTruthy();
+  });
+
+  it('labels an incomplete total as a known subtotal with reasons', () => {
+    render(SessionUsageBar, { usage: withSession({ completeTotalUsd: null, complete: false, knownSubtotalUsd: 0.05,
+      reasons: [{ kind: 'valuation', reason: { kind: 'missing_rate', category: 'cache_write' } }] }) });
+    expect(screen.getByText('Known API subtotal')).toBeTruthy();
+    expect(screen.getByText('Incomplete')).toBeTruthy();
+    expect(screen.getByText('$0.05').closest('.session-usage-stat')?.getAttribute('title')).toContain('No cache write rate is configured');
+    expect(screen.queryByText('Estimated API cost')).toBeNull();
+  });
+
+  it('shows excluded subscription usage without a dollar figure', () => {
+    render(SessionUsageBar, { usage: withSession({ billing: 'excluded', pricedAttempts: 0, excludedAttempts: 2, knownSubtotalUsd: 0, completeTotalUsd: 0 }) });
+    expect(screen.getByText('Subscription usage excluded')).toBeTruthy();
+    expect(screen.queryByText('$0.00')).toBeNull();
+  });
+
+  it('discloses excluded usage in mixed sessions and shows the cycle budget separately', () => {
+    const budget = { knownSubtotalUsd: 0.2, completeTotalUsd: null, reasons: [{ kind: 'valuation', reason: { kind: 'missing_rate', category: 'cache_read' } }],
+      incompleteAttempts: 1, bestEffort: true };
+    const cycle = { cycleId: 'c1', scope: usage.accounting.session, budget };
+    render(SessionUsageBar, { usage: withSession({ billing: 'mixed', excludedAttempts: 1 }, cycle) });
+    expect(screen.getByText('Estimated API cost')).toBeTruthy();
+    expect(screen.getByText('Subscription usage excluded')).toBeTruthy();
+    expect(screen.getByText('Cycle budget')).toBeTruthy();
+    expect(screen.getByText('$0.20')).toBeTruthy();
+    expect(screen.getByText('Best-effort')).toBeTruthy();
+  });
+
+  it('shows standard ACP cost from agents without QueryMT accounting', () => {
+    render(SessionUsageBar, { usage: { ...usage, accounting: undefined, standardCostUsd: 0.42 } });
+    expect(screen.getByText('Cost')).toBeTruthy();
+    expect(screen.getByText('$0.42').closest('.session-usage-stat')?.getAttribute('title')).toContain('reported by the agent');
+    expect(screen.queryByText('Estimated API cost')).toBeNull();
+  });
+
+  it('prefers QueryMT accounting over standard cost', () => {
+    render(SessionUsageBar, { usage: { ...usage, standardCostUsd: 9 } });
+    expect(screen.getByText('Estimated API cost')).toBeTruthy();
+    expect(screen.queryByText('$9.00')).toBeNull();
   });
 });

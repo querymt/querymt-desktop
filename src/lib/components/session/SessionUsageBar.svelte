@@ -3,7 +3,7 @@
   import { onDestroy } from 'svelte';
   import { Tooltip } from 'bits-ui';
   import type { SessionTokenUsage, SessionUsageStats } from '$lib/domain/types';
-  import { formatCostUsd, formatDuration, formatTokenCount, getActiveWorkMs, getContextPercent, getContextRemaining } from '$lib/domain/session-usage';
+  import { describeAccountingReasons, formatCostUsd, formatDuration, formatTokenCount, getActiveWorkMs, getContextPercent, getContextRemaining, getSessionCostDisplay } from '$lib/domain/session-usage';
 
   let { usage }: { usage: SessionUsageStats } = $props();
   let now = $state(Date.now());
@@ -20,6 +20,14 @@
   const contextPercent = $derived(getContextPercent(usage));
   const contextRemaining = $derived(getContextRemaining(usage));
   const activeWorkLabel = $derived(formatDuration(getActiveWorkMs(usage, now)));
+  const cost = $derived(getSessionCostDisplay(usage.accounting, usage.standardCostUsd ?? null));
+  const budget = $derived(usage.accounting?.cycle?.budget ?? null);
+  const budgetReasons = $derived(budget ? describeAccountingReasons(budget) : []);
+  const costTitle = $derived(cost.kind === 'incomplete'
+    ? `Known API subtotal - incomplete: ${cost.reasons.join('; ') || 'some charges are unknown'}`
+    : cost.kind === 'excluded' ? 'Subscription usage excluded: no metered API charges are reported'
+    : cost.kind === 'reported' ? 'Cost reported by the agent; completeness is not indicated'
+    : 'Estimated API cost for metered requests, independent of the selected token scope');
   const rows: { key: keyof SessionTokenUsage; label: string; short: string; hint: string }[] = [
     { key: 'inputTokens', label: 'Uncached input', short: 'Uncached', hint: 'Input not served from or written to the cache' },
     { key: 'cacheReadTokens', label: 'Cache read', short: 'Read', hint: 'Input reused from a cached prefix' },
@@ -136,8 +144,27 @@
     </div>
   {/if}
   <div class="session-usage-footer">
-    {#if usage.cumulativeCostUsd !== null}
-      <span class="session-usage-stat" title="Cumulative session cost, independent of the selected token scope"><CircleDollarSign size={13} aria-hidden="true" /><span>Cost</span><strong>{formatCostUsd(usage.cumulativeCostUsd)}</strong></span>
+    {#if cost.kind === 'estimated'}
+      <span class="session-usage-stat" title={costTitle}><CircleDollarSign size={13} aria-hidden="true" /><span>Estimated API cost</span><strong>{formatCostUsd(cost.amountUsd)}</strong>
+        {#if cost.excludesSubscription}<em class="session-usage-partial">Subscription usage excluded</em>{/if}
+      </span>
+    {:else if cost.kind === 'incomplete'}
+      <span class="session-usage-stat" title={costTitle}><CircleDollarSign size={13} aria-hidden="true" /><span>Known API subtotal</span><strong>{formatCostUsd(cost.knownSubtotalUsd)}</strong>
+        <em class="session-usage-partial">Incomplete</em>
+        {#if cost.excludesSubscription}<em class="session-usage-partial">Subscription usage excluded</em>{/if}
+      </span>
+    {:else if cost.kind === 'reported'}
+      <span class="session-usage-stat" title={costTitle}><CircleDollarSign size={13} aria-hidden="true" /><span>Cost</span><strong>{formatCostUsd(cost.amountUsd)}</strong></span>
+    {:else if cost.kind === 'excluded'}
+      <span class="session-usage-stat" title={costTitle}><CircleDollarSign size={13} aria-hidden="true" /><span>Subscription usage excluded</span></span>
+    {/if}
+    {#if budget && (budget.knownSubtotalUsd > 0 || budget.bestEffort)}
+      <span class="session-usage-stat" title={budget.bestEffort
+        ? `Cycle budget valuation is best-effort: ${budgetReasons.join('; ') || 'some charges are unknown'}`
+        : 'Spend counted against this cycle\'s price limit (manual rates when configured)'}>
+        <span>Cycle budget</span><strong>{formatCostUsd(budget.completeTotalUsd ?? budget.knownSubtotalUsd)}</strong>
+        {#if budget.bestEffort}<em class="session-usage-partial">Best-effort</em>{/if}
+      </span>
     {/if}
     <span class="session-usage-stat" title="Time spent actively processing prompts"><Activity size={13} aria-hidden="true" /><span>Active</span><strong>{activeWorkLabel}</strong>
       {#if usage.activeWorkStartedAt !== null}<i class="session-usage-live-dot" aria-label="Active now"></i>{/if}

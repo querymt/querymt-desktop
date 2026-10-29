@@ -1,4 +1,10 @@
 import type { SessionTokenUsage, SessionUsageBreakdown, SessionUsageStats } from '$lib/domain/types';
+import type {
+  AccountingBillingScope,
+  AccountingBudgetSnapshot,
+  AccountingScopeSnapshot,
+  AccountingSnapshot
+} from '$lib/querymt/generated/types';
 
 const tokenKeys = ['inputTokens', 'outputTokens', 'reasoningTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const;
 
@@ -32,6 +38,159 @@ export function readUsageBreakdown(meta: unknown): SessionUsageBreakdown | undef
     sessionTotals,
     partial: payload.partial || [latestRequest, sessionTotals].some((counts) => counts && tokenKeys.some((key) => counts[key] === null))
   };
+}
+
+const billingScopes = new Set<string>(['empty', 'metered', 'excluded', 'mixed']);
+
+function readAmount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function readCount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function readReasons(value: unknown): Array<Record<string, unknown>> | null {
+  if (!Array.isArray(value)) return null;
+  return value.every((reason) => readObject(reason) !== null) ? value as Array<Record<string, unknown>> : null;
+}
+
+/** `completeTotalUsd` must be present: an explicit `null` clears, omission is malformed. */
+function readCompleteTotal(object: Record<string, unknown>): number | null | undefined {
+  if (!('completeTotalUsd' in object)) return undefined;
+  if (object.completeTotalUsd === null) return null;
+  return readAmount(object.completeTotalUsd) ?? undefined;
+}
+
+function readScope(value: unknown): AccountingScopeSnapshot | null {
+  const object = readObject(value);
+  if (!object) return null;
+  const knownSubtotalUsd = readAmount(object.knownSubtotalUsd);
+  const completeTotalUsd = readCompleteTotal(object);
+  const reasons = readReasons(object.reasons);
+  const counts = ['pricedAttempts', 'excludedAttempts', 'unresolvedAttempts', 'incompleteAttempts', 'unaccountedGenerations']
+    .map((key) => readCount(object[key]));
+  if (knownSubtotalUsd === null || completeTotalUsd === undefined || typeof object.complete !== 'boolean' ||
+    typeof object.billing !== 'string' || !billingScopes.has(object.billing) || !reasons || counts.some((count) => count === null)) return null;
+  const [pricedAttempts, excludedAttempts, unresolvedAttempts, incompleteAttempts, unaccountedGenerations] = counts as number[];
+  return {
+    knownSubtotalUsd,
+    completeTotalUsd,
+    // A complete flag without a total cannot be shown as complete.
+    complete: object.complete && completeTotalUsd !== null,
+    billing: object.billing as AccountingBillingScope,
+    reasons,
+    pricedAttempts,
+    excludedAttempts,
+    unresolvedAttempts,
+    incompleteAttempts,
+    unaccountedGenerations
+  };
+}
+
+function readBudget(value: unknown): AccountingBudgetSnapshot | null {
+  const object = readObject(value);
+  if (!object) return null;
+  const knownSubtotalUsd = readAmount(object.knownSubtotalUsd);
+  const completeTotalUsd = readCompleteTotal(object);
+  const reasons = readReasons(object.reasons);
+  const incompleteAttempts = readCount(object.incompleteAttempts);
+  if (knownSubtotalUsd === null || completeTotalUsd === undefined || !reasons || incompleteAttempts === null ||
+    typeof object.bestEffort !== 'boolean') return null;
+  return { knownSubtotalUsd, completeTotalUsd, reasons, incompleteAttempts, bestEffort: object.bestEffort };
+}
+
+/**
+ * Parses an `AccountingSnapshot` v1 (from `_meta.querymt.accounting` or
+ * `SessionLoadSnapshot.accounting`). Returns `undefined` for an absent or
+ * malformed payload, which must not update accounting state.
+ */
+export function readAccountingSnapshot(value: unknown): AccountingSnapshot | undefined {
+  const object = readObject(value);
+  if (!object || object.version !== 1 || !('cycle' in object)) return undefined;
+  const session = readScope(object.session);
+  if (!session) return undefined;
+  if (object.cycle === null) return { version: 1, session, cycle: null };
+  const cycle = readObject(object.cycle);
+  const scope = readScope(cycle?.scope);
+  const budget = readBudget(cycle?.budget);
+  if (!cycle || typeof cycle.cycleId !== 'string' || !scope || !budget) return undefined;
+  return { version: 1, session, cycle: { cycleId: cycle.cycleId, scope, budget } };
+}
+
+/** Reads the replacement accounting carried by `usage_update` or `session_info_update`. */
+export function readAccountingMeta(meta: unknown): AccountingSnapshot | undefined {
+  return readAccountingSnapshot(readObject(readObject(meta)?.querymt)?.accounting);
+}
+
+export function hasAccountingMeta(meta: unknown): boolean {
+  const querymt = readObject(readObject(meta)?.querymt);
+  return querymt !== null && 'accounting' in querymt;
+}
+
+export type SessionCostDisplay =
+  | { kind: 'none' }
+  | { kind: 'estimated'; amountUsd: number; excludesSubscription: boolean }
+  | { kind: 'incomplete'; knownSubtotalUsd: number; reasons: string[]; excludesSubscription: boolean }
+  | { kind: 'excluded' }
+  | { kind: 'reported'; amountUsd: number };
+
+/** Maps session API-spend accounting to the label the usage bar shows. */
+export function getSessionCostDisplay(accounting: AccountingSnapshot | undefined, standardCostUsd: number | null = null): SessionCostDisplay {
+  // Agents without QueryMT accounting only report standard ACP cost; once
+  // accounting exists it is authoritative and standard cost is ignored.
+  if (!accounting) return standardCostUsd !== null ? { kind: 'reported', amountUsd: standardCostUsd } : { kind: 'none' };
+  const scope = accounting.session;
+  const billing: string = scope.billing;
+  if (billing === 'empty' && scope.reasons.length === 0 && scope.unresolvedAttempts === 0) return { kind: 'none' };
+  // All-excluded usage is never a known zero-dollar invoice.
+  if (billing === 'excluded' && scope.reasons.length === 0 && scope.unresolvedAttempts === 0) return { kind: 'excluded' };
+  const excludesSubscription = billing === 'mixed' || billing === 'excluded';
+  if (scope.complete && scope.completeTotalUsd !== null) {
+    return { kind: 'estimated', amountUsd: scope.completeTotalUsd, excludesSubscription };
+  }
+  return { kind: 'incomplete', knownSubtotalUsd: scope.knownSubtotalUsd, reasons: describeAccountingReasons(scope), excludesSubscription };
+}
+
+export function describeAccountingReasons(scope: { reasons: Array<Record<string, unknown>>; unresolvedAttempts?: number; unaccountedGenerations?: number }): string[] {
+  const descriptions = scope.reasons.map(describeAccountingReason);
+  if (scope.unresolvedAttempts && !scope.reasons.some((reason) => reason.kind === 'unresolved_attempt')) {
+    descriptions.push(describeAccountingReason({ kind: 'unresolved_attempt' }));
+  }
+  if (scope.unaccountedGenerations && !scope.reasons.some((reason) => reason.kind === 'unaccounted_history')) {
+    descriptions.push(describeAccountingReason({ kind: 'unaccounted_history' }));
+  }
+  return [...new Set(descriptions)];
+}
+
+const categoryLabels: Record<string, string> = {
+  input: 'input', output: 'output', cache_read: 'cache read', cache_write: 'cache write', cache_write_1h: 'one-hour cache write'
+};
+
+export function describeAccountingReason(reason: Record<string, unknown>): string {
+  switch (reason.kind) {
+    case 'unresolved_attempt': return 'A request has no recorded outcome';
+    case 'partial_usage': return 'An interrupted request reported only partial usage';
+    case 'usage_unavailable': return 'A request reported no usage';
+    case 'invalid_settlement': return 'A recorded charge could not be trusted';
+    case 'unaccounted_history': return 'Earlier history has no recorded pricing basis';
+    case 'valuation': {
+      const detail = readObject(reason.reason);
+      const category = typeof detail?.category === 'string' ? categoryLabels[detail.category] ?? detail.category : 'a';
+      switch (detail?.kind) {
+        case 'usage_unavailable': return 'A request reported no usage';
+        case 'pricing_unavailable': return 'No price is available for the model';
+        case 'missing_rate': return `No ${category} rate is configured`;
+        case 'invalid_rate': return `The ${category} rate is invalid`;
+        case 'contradictory_write_detail': return 'Cache-write usage details are contradictory';
+        case 'unsupported_dimension': return `Pricing dimension '${String(detail.dimension ?? 'unknown')}' is not supported`;
+        case 'amount_overflow': return 'A charge was not representable';
+        case 'pricing_inapplicable': return `No price applies to the served model '${String(detail.effective_model ?? 'unknown')}'`;
+        default: return 'A charge could not be priced';
+      }
+    }
+    default: return 'Accounting is incomplete';
+  }
 }
 
 /** Audit events contain disjoint, already-normalized token categories. */

@@ -1,3 +1,4 @@
+import type { AccountingSnapshot } from '$lib/querymt/generated/types';
 import { describe, expect, it } from 'vitest';
 import type { SessionUsageStats } from '$lib/domain/types';
 import {
@@ -5,6 +6,7 @@ import {
   readTokenUsage,
   readUsageBreakdown,
   formatCostUsd,
+  getSessionCostDisplay,
   formatDuration,
   formatTokenCount,
   getActiveWorkMs,
@@ -16,7 +18,7 @@ import {
 const usage: SessionUsageStats = {
   contextUsed: 48_000,
   contextLimit: 200_000,
-  cumulativeCostUsd: 0.0042,
+  standardCostUsd: null,
   activeWorkMs: 30_000,
   activeWorkStartedAt: null
 };
@@ -68,5 +70,15 @@ describe('session usage formatting', () => {
     expect(getContextPressure(95)).toBe('full');
     expect(getContextRemaining(usage)).toBe(152_000);
     expect(getContextRemaining({ ...usage, contextLimit: null })).toBeNull();
+  });
+
+  it('falls back to standard cost only when no accounting exists', () => {
+    expect(getSessionCostDisplay(undefined, null)).toEqual({ kind: 'none' });
+    expect(getSessionCostDisplay(undefined, 0.5)).toEqual({ kind: 'reported', amountUsd: 0.5 });
+    const cleared = { version: 1, cycle: null, session: {
+      knownSubtotalUsd: 0.05, completeTotalUsd: null, complete: false, billing: 'metered', reasons: [{ kind: 'partial_usage' }],
+      pricedAttempts: 1, excludedAttempts: 0, unresolvedAttempts: 0, incompleteAttempts: 1, unaccountedGenerations: 0
+    } } as unknown as AccountingSnapshot;
+    expect(getSessionCostDisplay(cleared, 0.5)).toMatchObject({ kind: 'incomplete', knownSubtotalUsd: 0.05 });
   });
 });

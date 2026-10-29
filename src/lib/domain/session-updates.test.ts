@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionNotification } from '@agentclientprotocol/sdk';
+import type { AccountingSnapshot } from '$lib/querymt/generated/types';
 import {
   applyDelegationChildSession,
   applySessionNotification,
@@ -14,6 +15,23 @@ import {
 function notification(update: SessionNotification['update']): SessionNotification {
   return { sessionId: 'session-1', update };
 }
+
+function scope(overrides: Record<string, unknown> = {}) {
+  return {
+    knownSubtotalUsd: 0.0425, completeTotalUsd: 0.0425, complete: true, billing: 'metered', reasons: [],
+    pricedAttempts: 1, excludedAttempts: 0, unresolvedAttempts: 0, incompleteAttempts: 0, unaccountedGenerations: 0,
+    ...overrides
+  };
+}
+
+function accounting(session: Record<string, unknown> = {}) {
+  return { version: 1, session: scope(session), cycle: null };
+}
+
+const incompleteAccounting = accounting({
+  knownSubtotalUsd: 0.05, completeTotalUsd: null, complete: false, incompleteAttempts: 1,
+  reasons: [{ kind: 'valuation', reason: { kind: 'missing_rate', category: 'cache_write' } }]
+});
 
 describe('conversation event ordering', () => {
   it('continues after sparse persisted indexes instead of using the debug event count', () => {
@@ -160,41 +178,92 @@ describe('session usage updates', () => {
     expect(target.usage.breakdown).toBe(authoritative);
   });
 
-  it('stores live context-window and USD cost updates', () => {
+  it('stores live context-window and replacement accounting updates', () => {
     const next = applySessionNotification(
       createEmptyActiveSession(),
       notification({
         sessionUpdate: 'usage_update',
         used: 32_768,
         size: 128_000,
-        cost: { amount: 0.0425, currency: 'USD' }
+        cost: { amount: 0.0425, currency: 'USD' },
+        _meta: { querymt: { accounting: accounting() } }
       })
     );
 
-    expect(next.usage).toMatchObject({
-      contextUsed: 32_768,
-      contextLimit: 128_000,
-      cumulativeCostUsd: 0.0425
-    });
+    expect(next.usage).toMatchObject({ contextUsed: 32_768, contextLimit: 128_000 });
+    expect(next.usage.accounting?.session.completeTotalUsd).toBe(0.0425);
     expect(next.events.at(-1)?.text).toContain('26%');
     expect(next.events.at(-1)?.text).toContain('$0.0425');
   });
 
-  it('preserves known limits and costs when later updates omit them', () => {
+  it('tracks standard cost separately without creating accounting', () => {
+    const next = applySessionNotification(createEmptyActiveSession(),
+      notification({ sessionUpdate: 'usage_update', used: 1, size: 10, cost: { amount: 9, currency: 'USD' } }));
+    expect(next.usage.accounting).toBeUndefined();
+    expect(next.usage.standardCostUsd).toBe(9);
+  });
+
+  it('keeps the last standard cost when a plain ACP agent omits it, live and on replay', () => {
+    const updates = [
+      notification({ sessionUpdate: 'usage_update', used: 1, size: 10, cost: { amount: 0.2, currency: 'USD' } }),
+      notification({ sessionUpdate: 'usage_update', used: 2, size: 10 }),
+      notification({ sessionUpdate: 'usage_update', used: 3, size: 10, cost: { amount: 1, currency: 'EUR' } })
+    ];
+    expect(updates.reduce(applySessionNotification, createEmptyActiveSession()).usage.standardCostUsd).toBe(0.2);
+    expect(appendSessionReplay(createEmptyActiveSession(), updates).usage.standardCostUsd).toBe(0.2);
+  });
+
+  it('fills a missing standard cost during load merging', () => {
+    const target = createEmptyActiveSession();
+    const source = createEmptyActiveSession();
+    source.usage.standardCostUsd = 0.3;
+    mergeMissingSessionUsage(target, source);
+    expect(target.usage.standardCostUsd).toBe(0.3);
+    target.usage.standardCostUsd = 0.4;
+    mergeMissingSessionUsage(target, source);
+    expect(target.usage.standardCostUsd).toBe(0.4);
+  });
+
+  it('preserves known limits and accounting when later updates omit them', () => {
     const session = createEmptyActiveSession();
     session.usage.contextLimit = 200_000;
-    session.usage.cumulativeCostUsd = 0.1;
+    const known = applySessionNotification(session,
+      notification({ sessionUpdate: 'session_info_update', _meta: { querymt: { accounting: accounting() } } }));
 
     const next = applySessionNotification(
-      session,
+      known,
       notification({ sessionUpdate: 'usage_update', used: 45_000, size: 0 })
     );
 
-    expect(next.usage).toMatchObject({
-      contextUsed: 45_000,
-      contextLimit: 200_000,
-      cumulativeCostUsd: 0.1
-    });
+    expect(next.usage).toMatchObject({ contextUsed: 45_000, contextLimit: 200_000 });
+    expect(next.usage.accounting).toEqual(known.usage.accounting);
+  });
+
+  it.each(['usage_update', 'session_info_update'] as const)('clears a complete total atomically via %s', (kind) => {
+    const carrier = (value: unknown) => notification(kind === 'usage_update'
+      ? { sessionUpdate: kind, used: 10, size: 100, _meta: { querymt: { accounting: value } } }
+      : { sessionUpdate: kind, _meta: { querymt: { accounting: value } } });
+    for (const reduce of [
+      (updates: SessionNotification[]) => updates.reduce(applySessionNotification, createEmptyActiveSession()),
+      (updates: SessionNotification[]) => appendSessionReplay(createEmptyActiveSession(), updates)
+    ]) {
+      const next = reduce([carrier(accounting()), carrier(incompleteAccounting)]);
+      expect(next.usage.accounting?.session).toMatchObject({ completeTotalUsd: null, complete: false, knownSubtotalUsd: 0.05 });
+    }
+  });
+
+  it('does not apply malformed or unsupported accounting payloads', () => {
+    let current = applySessionNotification(createEmptyActiveSession(),
+      notification({ sessionUpdate: 'session_info_update', _meta: { querymt: { accounting: accounting() } } }));
+    const before = current.usage.accounting;
+    const missingTotal: Record<string, unknown> = scope();
+    delete missingTotal.completeTotalUsd;
+    for (const value of [{ ...accounting(), version: 2 }, { version: 1, session: missingTotal, cycle: null },
+      { version: 1, session: scope() }, 'invalid']) {
+      current = applySessionNotification(current,
+        notification({ sessionUpdate: 'session_info_update', _meta: { querymt: { accounting: value } } }));
+      expect(current.usage.accounting).toBe(before);
+    }
   });
 
   it('tracks active processing time without double-starting a span', () => {
@@ -215,15 +284,12 @@ describe('mergeMissingSessionUsage', () => {
     const source = createEmptyActiveSession();
     source.usage.contextUsed = 12_000;
     source.usage.contextLimit = 200_000;
-    source.usage.cumulativeCostUsd = 0.5;
+    source.usage.accounting = accounting() as unknown as AccountingSnapshot;
 
     mergeMissingSessionUsage(target, source);
 
-    expect(target.usage).toMatchObject({
-      contextUsed: 48_000,
-      contextLimit: 200_000,
-      cumulativeCostUsd: 0.5
-    });
+    expect(target.usage).toMatchObject({ contextUsed: 48_000, contextLimit: 200_000 });
+    expect(target.usage.accounting).toBe(source.usage.accounting);
     expect(source.usage.contextUsed).toBe(12_000);
   });
 
@@ -231,19 +297,25 @@ describe('mergeMissingSessionUsage', () => {
     const target = createEmptyActiveSession();
     target.usage.contextUsed = 48_000;
     target.usage.contextLimit = 200_000;
-    target.usage.cumulativeCostUsd = 0.5;
     const source = createEmptyActiveSession();
     source.usage.contextUsed = 1_000;
     source.usage.contextLimit = 100_000;
-    source.usage.cumulativeCostUsd = 0.01;
 
     mergeMissingSessionUsage(target, source);
 
-    expect(target.usage).toMatchObject({
-      contextUsed: 48_000,
-      contextLimit: 200_000,
-      cumulativeCostUsd: 0.5
-    });
+    expect(target.usage).toMatchObject({ contextUsed: 48_000, contextLimit: 200_000 });
+  });
+
+  it('never refills an explicitly cleared complete total from an older candidate', () => {
+    const target = createEmptyActiveSession();
+    target.usage.accounting = incompleteAccounting as unknown as AccountingSnapshot;
+    const source = createEmptyActiveSession();
+    source.usage.accounting = accounting({ completeTotalUsd: 0.5, knownSubtotalUsd: 0.5 }) as unknown as AccountingSnapshot;
+
+    mergeMissingSessionUsage(target, source);
+
+    expect(target.usage.accounting?.session.completeTotalUsd).toBeNull();
+    expect(target.usage.accounting?.session.knownSubtotalUsd).toBe(0.05);
   });
 
   it('leaves active-work timers untouched', () => {

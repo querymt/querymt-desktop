@@ -1,5 +1,5 @@
 import type { SessionConfigOption } from '@agentclientprotocol/sdk';
-import type { DelegationUpdateState } from '$lib/querymt/generated/types';
+import type { AccountingSnapshot, DelegationUpdateState } from '$lib/querymt/generated/types';
 
 export type RuntimeStatus = 'running' | 'starting' | 'degraded' | 'stopped';
 export type SessionStatus = 'idle' | 'thinking' | 'waiting' | 'completed' | 'cancelling';
@@ -355,7 +355,17 @@ export interface SessionUsageStats {
   breakdown?: SessionUsageBreakdown;
   contextUsed: number | null;
   contextLimit: number | null;
-  cumulativeCostUsd: number | null;
+  /**
+   * Replacement `_meta.querymt.accounting` v1 state. `undefined` means no
+   * accounting payload has been received; a present payload with
+   * `completeTotalUsd: null` is an intentional clear and is never refilled.
+   */
+  accounting?: AccountingSnapshot;
+  /**
+   * Last standard ACP `usage_update.cost` in USD. Fallback for agents that
+   * never send QueryMT accounting; ignored once `accounting` is present.
+   */
+  standardCostUsd: number | null;
   activeWorkMs: number;
   activeWorkStartedAt: number | null;
 }

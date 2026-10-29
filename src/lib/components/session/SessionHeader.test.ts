@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AccountingSnapshot } from '$lib/querymt/generated/types';
 import SessionHeader from './SessionHeader.svelte';
 import { session } from './session-fixture';
 import type { DesktopSessionSummary } from '$lib/domain/types';
@@ -8,7 +9,8 @@ import type { DesktopSessionSummary } from '$lib/domain/types';
 const usageFixture = {
   contextUsed: 24_000,
   contextLimit: 100_000,
-  cumulativeCostUsd: 0.05,
+  standardCostUsd: null,
+  accounting: { version: 1, cycle: null, session: { knownSubtotalUsd: 0.05, completeTotalUsd: 0.05, complete: true, billing: 'metered', reasons: [], pricedAttempts: 1, excludedAttempts: 0, unresolvedAttempts: 0, incompleteAttempts: 0, unaccountedGenerations: 0 } } as unknown as AccountingSnapshot,
   activeWorkMs: 12_000,
   activeWorkStartedAt: null
 };

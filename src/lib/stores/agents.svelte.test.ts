@@ -9197,12 +9197,21 @@ describe('session header freshness and context usage', () => {
     );
   });
 
+  function storeAccounting(session: Record<string, unknown> = {}) {
+    return { version: 1, cycle: null, session: {
+      knownSubtotalUsd: 0.1, completeTotalUsd: 0.1, complete: true, billing: 'metered', reasons: [],
+      pricedAttempts: 1, excludedAttempts: 0, unresolvedAttempts: 0, incompleteAttempts: 0, unaccountedGenerations: 0,
+      ...session
+    } };
+  }
+
   function loadSessionWithSnapshotUsage() {
     mockClient.loadSession.mockResolvedValueOnce({
       response: {
         configOptions: [],
         _meta: {
           'querymt/sessionLoadSnapshot.v1': {
+            accounting: storeAccounting({ knownSubtotalUsd: 0.5, completeTotalUsd: 0.5 }),
             audit: {
               events: [
                 { seq: 1, timestamp: 1_000, kind: { type: 'llm_request_start', data: {} } },
@@ -9237,11 +9246,8 @@ describe('session header freshness and context usage', () => {
     await store.loadSession('agent-1', 'session-1');
 
     expect(store.activeSession.transcript.some((item) => item.messageId === 'm1')).toBe(true);
-    expect(store.activeSession.usage).toMatchObject({
-      contextUsed: 42_000,
-      contextLimit: 200_000,
-      cumulativeCostUsd: 0.5
-    });
+    expect(store.activeSession.usage).toMatchObject({ contextUsed: 42_000, contextLimit: 200_000 });
+    expect(store.activeSession.usage.accounting?.session.completeTotalUsd).toBe(0.5);
   });
 
   it('keeps the snapshot as the history baseline and merges one captured live update into it', async () => {
@@ -9300,15 +9306,64 @@ describe('session header freshness and context usage', () => {
         sessionUpdate: 'usage_update',
         used: 61_500,
         size: 200_000,
-        cost: { amount: 0.75, currency: 'USD' }
+        cost: { amount: 0.75, currency: 'USD' },
+        _meta: { querymt: { accounting: storeAccounting({ knownSubtotalUsd: 0.75, completeTotalUsd: 0.75 }) } }
       }
     });
 
-    expect(store.activeSession.usage).toMatchObject({
-      contextUsed: 61_500,
-      contextLimit: 200_000,
-      cumulativeCostUsd: 0.75
+    expect(store.activeSession.usage).toMatchObject({ contextUsed: 61_500, contextLimit: 200_000 });
+    expect(store.activeSession.usage.accounting?.session.completeTotalUsd).toBe(0.75);
+  });
+
+  it('lets a newer cleared total win over the older snapshot complete total', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2026-07-18T17:00:00Z')] };
+    await store.connectAgent('agent-1');
+    loadSessionWithSnapshotUsage();
+    await store.loadSession('agent-1', 'session-1');
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: { sessionUpdate: 'session_info_update', _meta: { querymt: { accounting: storeAccounting({
+        knownSubtotalUsd: 0.6, completeTotalUsd: null, complete: false, incompleteAttempts: 1,
+        reasons: [{ kind: 'valuation', reason: { kind: 'missing_rate', category: 'cache_read' } }] }) } } }
     });
+
+    expect(store.activeSession.usage.accounting?.session).toMatchObject({ completeTotalUsd: null, knownSubtotalUsd: 0.6 });
+  });
+
+  it('shows standard ACP cost for agents without load snapshots or accounting', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2026-07-18T17:00:00Z')] };
+    await store.connectAgent('agent-1');
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [] },
+      replay: [{ sessionId: 'session-1', update: { sessionUpdate: 'usage_update', used: 100, size: 1000, cost: { amount: 0.3, currency: 'USD' } } }]
+    });
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.activeSession.usage).toMatchObject({ contextUsed: 100, standardCostUsd: 0.3 });
+    expect(store.activeSession.usage.accounting).toBeUndefined();
+
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: { sessionUpdate: 'usage_update', used: 200, size: 1000 } });
+    expect(store.activeSession.usage).toMatchObject({ contextUsed: 200, standardCostUsd: 0.3 });
+  });
+
+  it('does not refresh the catalog for accounting-only session info updates', async () => {
+    const store = createStore();
+    store.sessionsByAgent = { 'agent-1': [summary('2026-01-01T00:00:00Z')] };
+    await store.connectAgent('agent-1');
+    const before = store.sessionsByAgent['agent-1'];
+    const refresh = vi.spyOn(store as unknown as { scheduleSessionRefresh: (agentId: string) => void }, 'scheduleSessionRefresh');
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: { sessionUpdate: 'session_info_update', _meta: { querymt: { accounting: storeAccounting() } } }
+    });
+
+    expect(refresh).not.toHaveBeenCalled();
+    expect(store.sessionsByAgent['agent-1']).toBe(before);
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: { sessionUpdate: 'session_info_update', title: 'Renamed' } });
+    expect(refresh).toHaveBeenCalledWith('agent-1');
   });
 });
 

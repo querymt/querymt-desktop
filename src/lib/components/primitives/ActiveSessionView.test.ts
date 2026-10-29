@@ -101,7 +101,7 @@ function sessionWithImages(): ActiveSessionViewModel {
     usage: {
       contextUsed: null,
       contextLimit: null,
-      cumulativeCostUsd: null,
+      standardCostUsd: null,
       activeWorkMs: 0,
       activeWorkStartedAt: null
     },

@@ -5967,7 +5967,8 @@ export class AgentsStore {
     for (const { agentId, notification } of notifications) {
       const update = notification.update;
       const status = inferSessionStatusFromNotification(update);
-      if (!status && update.sessionUpdate !== 'session_info_update') continue;
+      const summaryInfo = sessionInfoChangesSummary(update);
+      if (!status && !summaryInfo) continue;
       let agentPatches = patches.get(agentId);
       if (!agentPatches) patches.set(agentId, agentPatches = new Map());
       const patch = agentPatches.get(notification.sessionId) ?? {};
@@ -5975,7 +5976,7 @@ export class AgentsStore {
         patch.status = status;
         patch.updatedAt = newestTimestamp(patch.updatedAt, activityUpdatedAt);
       }
-      if (update.sessionUpdate === 'session_info_update') {
+      if (summaryInfo && update.sessionUpdate === 'session_info_update') {
         if (update.title !== undefined) patch.title = update.title ?? 'Untitled session';
         patch.updatedAt = newestTimestamp(patch.updatedAt, update.updatedAt);
       }
@@ -6015,7 +6016,7 @@ export class AgentsStore {
       return next ? { ...session, title: next.title, updatedAt: next.updatedAt, status: next.status } : session;
     };
     this.sessionCatalog = this.sessionCatalog.map(updateKnown);
-    if (notifications.some(({ notification }) => notification.update.sessionUpdate === 'session_info_update')) {
+    if (notifications.some(({ notification }) => sessionInfoChangesSummary(notification.update))) {
       this.sessionCatalogCache.update((entry) => entry.sessions.some((session) => updated.has(getSessionKey(session)))
         ? { ...entry, sessions: entry.sessions.map(updateKnown) } : entry);
     }
@@ -6084,7 +6085,9 @@ export class AgentsStore {
   ) {
     if (this.pollingDisposed || this.clients.get(agentId) !== record) return;
     if (updateSummary) this.applySessionSummaryUpdates([{ agentId, notification }]);
-    if (notification.update.sessionUpdate === 'session_info_update') this.scheduleSessionRefresh(agentId);
+    // Accounting-only `session_info_update` (metadata fallback) changes no
+    // summary field, so it must not trigger catalog refreshes.
+    if (sessionInfoChangesSummary(notification.update)) this.scheduleSessionRefresh(agentId);
 
     if (this.activeAgentId !== agentId || (this.activeSessionId && notification.sessionId !== this.activeSessionId)) {
       console.debug('querymt session/update dropped', {
@@ -6330,6 +6333,12 @@ function hashString(value: string): string {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
+}
+
+/** True for a `session_info_update` that patches a session-summary field. */
+function sessionInfoChangesSummary(update: SessionNotification['update']): boolean {
+  return update.sessionUpdate === 'session_info_update' &&
+    (update.title !== undefined || update.updatedAt !== undefined);
 }
 
 function inferSessionStatusFromNotification(update: SessionNotification['update']): SessionStatus | null {
