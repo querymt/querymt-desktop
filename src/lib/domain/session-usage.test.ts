@@ -7,6 +7,7 @@ import {
   readUsageBreakdown,
   formatCostUsd,
   getSessionCostDisplay,
+  getCostLines,
   formatDuration,
   formatTokenCount,
   getActiveWorkMs,
@@ -80,5 +81,42 @@ describe('session usage formatting', () => {
       pricedAttempts: 1, excludedAttempts: 0, unresolvedAttempts: 0, incompleteAttempts: 1, unaccountedGenerations: 0
     } } as unknown as AccountingSnapshot;
     expect(getSessionCostDisplay(cleared, 0.5)).toMatchObject({ kind: 'incomplete', knownSubtotalUsd: 0.05 });
+  });
+});
+
+describe('cost lines', () => {
+  const budget = (overrides: Record<string, unknown> = {}) => ({
+    knownSubtotalUsd: 0.2, completeTotalUsd: 0.2, reasons: [], incompleteAttempts: 0, bestEffort: false, ...overrides
+  }) as never;
+
+  it('renders one dense line per cost state', () => {
+    expect(getCostLines({ kind: 'none' }, null)).toEqual([]);
+    expect(getCostLines({ kind: 'estimated', amountUsd: 0.125, excludesSubscription: false }, null)).toMatchObject([
+      { key: 'cost', label: 'API cost', value: '$0.13' }
+    ]);
+    expect(getCostLines({ kind: 'estimated', amountUsd: 0.125, excludesSubscription: true }, null)[0]).toMatchObject({
+      label: 'API cost (excl. subscription)', value: '$0.13'
+    });
+    expect(getCostLines({ kind: 'reported', amountUsd: 0.42 }, null)[0]).toMatchObject({ label: 'Agent-reported cost', value: '$0.42' });
+    expect(getCostLines({ kind: 'excluded' }, null)[0]).toMatchObject({ label: 'API cost', value: 'Subscription', tone: 'muted' });
+  });
+
+  it('marks incomplete totals as a lower bound with reasons in the title', () => {
+    const [line] = getCostLines({ kind: 'incomplete', knownSubtotalUsd: 0.05, reasons: ['No cache write rate is configured'], excludesSubscription: false }, null);
+    expect(line).toMatchObject({ prefix: '≥', tone: 'warn', value: '$0.05' });
+    expect(line.title).toContain('At least $0.05');
+    expect(line.title).toContain('No cache write rate is configured');
+    const [unknown] = getCostLines({ kind: 'incomplete', knownSubtotalUsd: 0, reasons: [], excludesSubscription: true }, null);
+    expect(unknown.title).toContain('some charges are unknown');
+    expect(unknown.title).toContain('Subscription usage is excluded');
+  });
+
+  it('adds the cycle budget and marks best-effort valuations as approximate', () => {
+    const none = { kind: 'none' } as const;
+    expect(getCostLines(none, budget())).toMatchObject([{ key: 'budget', label: 'Cycle budget', value: '$0.20', prefix: undefined }]);
+    const [best] = getCostLines(none, budget({ completeTotalUsd: null, bestEffort: true, knownSubtotalUsd: 0.3 }));
+    expect(best).toMatchObject({ value: '$0.30', prefix: '~' });
+    expect(best.title).toContain('best-effort');
+    expect(getCostLines(none, budget({ knownSubtotalUsd: 0, completeTotalUsd: 0 }))).toEqual([]);
   });
 });

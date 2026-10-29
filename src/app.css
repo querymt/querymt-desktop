@@ -6271,7 +6271,7 @@ a.session-delegate-session:hover {
 
 .session-usage-context-row,
 .session-usage-lens-heading,
-.session-usage-footer {
+.session-usage-lens-meta {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -6308,6 +6308,11 @@ a.session-delegate-session:hover {
 
 .session-usage-lens-heading {
   justify-content: space-between;
+}
+
+.session-usage-lens-meta {
+  flex: 0 0 auto;
+  gap: 0.35rem;
 }
 
 .session-usage-scope {
@@ -6439,7 +6444,10 @@ a.session-delegate-session:hover {
 
 .session-usage-ring-caption {
   height: 1rem;
+  max-width: 100%;
   margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 0.65rem;
   line-height: 1rem;
   white-space: nowrap;
@@ -6504,13 +6512,6 @@ a.session-delegate-session:hover {
   flex: 0 0 auto;
   border-radius: 999px;
   background: var(--token-color);
-}
-
-.session-usage-footer {
-  flex-wrap: wrap;
-  justify-content: space-between;
-  border-top: 1px solid var(--subtle-border);
-  padding-top: 0.4rem;
 }
 
 .session-usage-help {
@@ -6585,49 +6586,55 @@ a.session-delegate-session:hover {
   transition: stroke-dashoffset 240ms ease, opacity 180ms ease;
 }
 
-.session-usage-meta {
-  display: flex;
+/* Cost and activity are label/value rows: labels stay left, values share one
+   right-aligned column, so no label combination can reflow the panel. */
+.session-usage-lines {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  border-top: 1px solid var(--subtle-border);
+  padding-top: 0.4rem;
+}
+
+.session-usage-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 0.7rem;
+  gap: 0.75rem;
+  min-height: 1.25rem;
 }
 
-.session-usage-stat > svg {
-  flex: 0 0 auto;
-  color: var(--accent);
-}
-
-.session-usage-stat > span {
+.session-usage-line dt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-family: var(--font-sans);
-  font-size: 0.63rem;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
-.session-usage-stat strong {
-  color: var(--text);
-  font-size: 0.72rem;
-  font-weight: 650;
-  white-space: nowrap;
-}
-
-.session-usage-stat {
-  display: flex;
+.session-usage-line dd {
+  display: inline-flex;
   align-items: center;
-  flex: 0 0 auto;
-  gap: 0.35rem;
-}
-
-.session-usage-stat + .session-usage-stat {
-  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  padding-left: 0.7rem;
-}
-
-.session-usage-active {
-  margin-left: auto;
+  justify-content: flex-end;
+  gap: 0.3rem;
+  margin: 0;
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.session-usage-line[data-tone='warn'] dd {
+  color: var(--status-warn);
+}
+
+.session-usage-line[data-tone='muted'] dd {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.session-usage-prefix {
+  font-weight: 500;
 }
 
 .session-usage-live-dot {
@@ -12197,12 +12204,8 @@ a.session-delegate-session:hover {
     padding-inline: 0.1rem;
   }
 
-  .app-shell-active-session .session-header-details-panel .session-usage-meta {
-    min-height: 1.25rem;
-  }
-
-  .app-shell-active-session .session-header-details-panel .session-usage-stat > span {
-    font-size: 0.58rem;
+  .app-shell-active-session .session-header-details-panel .session-usage-line {
+    gap: 0.5rem;
   }
 
   .app-shell-active-session .session-page-content {

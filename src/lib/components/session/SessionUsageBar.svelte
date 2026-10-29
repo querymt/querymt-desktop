@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { Activity, CircleDollarSign, Info } from '@lucide/svelte';
+  import { Info } from '@lucide/svelte';
   import { onDestroy } from 'svelte';
   import { Tooltip } from 'bits-ui';
   import type { SessionTokenUsage, SessionUsageStats } from '$lib/domain/types';
-  import { describeAccountingReasons, formatCostUsd, formatDuration, formatTokenCount, getActiveWorkMs, getContextPercent, getContextRemaining, getSessionCostDisplay } from '$lib/domain/session-usage';
+  import { formatDuration, formatTokenCount, getActiveWorkMs, getContextPercent, getContextRemaining, getCostLines, getSessionCostDisplay } from '$lib/domain/session-usage';
 
   let { usage }: { usage: SessionUsageStats } = $props();
   let now = $state(Date.now());
@@ -21,13 +21,7 @@
   const contextRemaining = $derived(getContextRemaining(usage));
   const activeWorkLabel = $derived(formatDuration(getActiveWorkMs(usage, now)));
   const cost = $derived(getSessionCostDisplay(usage.accounting, usage.standardCostUsd ?? null));
-  const budget = $derived(usage.accounting?.cycle?.budget ?? null);
-  const budgetReasons = $derived(budget ? describeAccountingReasons(budget) : []);
-  const costTitle = $derived(cost.kind === 'incomplete'
-    ? `Known API subtotal - incomplete: ${cost.reasons.join('; ') || 'some charges are unknown'}`
-    : cost.kind === 'excluded' ? 'Subscription usage excluded: no metered API charges are reported'
-    : cost.kind === 'reported' ? 'Cost reported by the agent; completeness is not indicated'
-    : 'Estimated API cost for metered requests, independent of the selected token scope');
+  const costLines = $derived(getCostLines(cost, usage.accounting?.cycle?.budget ?? null));
   const rows: { key: keyof SessionTokenUsage; label: string; short: string; hint: string }[] = [
     { key: 'inputTokens', label: 'Uncached input', short: 'Uncached', hint: 'Input not served from or written to the cache' },
     { key: 'cacheReadTokens', label: 'Cache read', short: 'Read', hint: 'Input reused from a cached prefix' },
@@ -101,7 +95,10 @@
           <button type="button" aria-pressed={effectiveScope === 'latestRequest'} disabled={!usage.breakdown?.latestRequest} onclick={() => changeScope('latestRequest')}>Latest request</button>
           <button type="button" aria-pressed={effectiveScope === 'sessionTotals'} disabled={!usage.breakdown?.sessionTotals} onclick={() => changeScope('sessionTotals')}>Session totals</button>
         </div>
-        {#if partial}<span class="session-usage-partial" title="Some requests did not report complete usage">Partial</span>{/if}
+        <div class="session-usage-lens-meta">
+          {#if partial}<span class="session-usage-partial" title="Some requests did not report complete usage">Partial</span>{/if}
+          {@render help()}
+        </div>
       </div>
       <div class="session-usage-rings">
         {#each charts as chart}
@@ -143,41 +140,38 @@
       </div>
     </div>
   {/if}
-  <div class="session-usage-footer">
-    {#if cost.kind === 'estimated'}
-      <span class="session-usage-stat" title={costTitle}><CircleDollarSign size={13} aria-hidden="true" /><span>Estimated API cost</span><strong>{formatCostUsd(cost.amountUsd)}</strong>
-        {#if cost.excludesSubscription}<em class="session-usage-partial">Subscription usage excluded</em>{/if}
-      </span>
-    {:else if cost.kind === 'incomplete'}
-      <span class="session-usage-stat" title={costTitle}><CircleDollarSign size={13} aria-hidden="true" /><span>Known API subtotal</span><strong>{formatCostUsd(cost.knownSubtotalUsd)}</strong>
-        <em class="session-usage-partial">Incomplete</em>
-        {#if cost.excludesSubscription}<em class="session-usage-partial">Subscription usage excluded</em>{/if}
-      </span>
-    {:else if cost.kind === 'reported'}
-      <span class="session-usage-stat" title={costTitle}><CircleDollarSign size={13} aria-hidden="true" /><span>Cost</span><strong>{formatCostUsd(cost.amountUsd)}</strong></span>
-    {:else if cost.kind === 'excluded'}
-      <span class="session-usage-stat" title={costTitle}><CircleDollarSign size={13} aria-hidden="true" /><span>Subscription usage excluded</span></span>
-    {/if}
-    {#if budget && (budget.knownSubtotalUsd > 0 || budget.bestEffort)}
-      <span class="session-usage-stat" title={budget.bestEffort
-        ? `Cycle budget valuation is best-effort: ${budgetReasons.join('; ') || 'some charges are unknown'}`
-        : 'Spend counted against this cycle\'s price limit (manual rates when configured)'}>
-        <span>Cycle budget</span><strong>{formatCostUsd(budget.completeTotalUsd ?? budget.knownSubtotalUsd)}</strong>
-        {#if budget.bestEffort}<em class="session-usage-partial">Best-effort</em>{/if}
-      </span>
-    {/if}
-    <span class="session-usage-stat" title="Time spent actively processing prompts"><Activity size={13} aria-hidden="true" /><span>Active</span><strong>{activeWorkLabel}</strong>
-      {#if usage.activeWorkStartedAt !== null}<i class="session-usage-live-dot" aria-label="Active now"></i>{/if}
-    </span>
-    <Tooltip.Provider delayDuration={200}>
-      <Tooltip.Root>
-        <Tooltip.Trigger class="session-usage-help" type="button" aria-label="About token usage"><Info size={13} aria-hidden="true" /></Tooltip.Trigger>
-        <Tooltip.Portal>
-          <Tooltip.Content class="app-tooltip-content session-usage-help-content" side="top" sideOffset={6}>
-            Request token usage is separate from current context occupancy. Cache reads reuse a prefix; cache writes create a cache entry. Reported zeros do not establish provider support. Select a category to inspect its exact count.
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
-    </Tooltip.Provider>
-  </div>
+  {#if costLines.length > 0}
+    <dl class="session-usage-lines" aria-label="Cost">
+      {#each costLines as line (line.key)}
+        <div class="session-usage-line" data-tone={line.tone} title={line.title}>
+          <dt>{line.label}</dt>
+          <dd aria-label={`${line.prefix === '≥' ? 'at least ' : line.prefix === '~' ? 'approximately ' : ''}${line.value}`}>
+            {#if line.prefix}<span class="session-usage-prefix" aria-hidden="true">{line.prefix}</span>{/if}{line.value}
+          </dd>
+        </div>
+      {/each}
+    </dl>
+  {/if}
+  <dl class="session-usage-lines" aria-label="Activity">
+    <div class="session-usage-line" title="Time spent actively processing prompts">
+      <dt>Active</dt>
+      <dd>
+        {#if usage.activeWorkStartedAt !== null}<i class="session-usage-live-dot" aria-label="Active now"></i>{/if}{activeWorkLabel}
+        {#if !counts}{@render help()}{/if}
+      </dd>
+    </div>
+  </dl>
 </div>
+
+{#snippet help()}
+  <Tooltip.Provider delayDuration={200}>
+    <Tooltip.Root>
+      <Tooltip.Trigger class="session-usage-help" type="button" aria-label="About token usage"><Info size={13} aria-hidden="true" /></Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content class="app-tooltip-content session-usage-help-content" side="top" sideOffset={6}>
+          Request token usage is separate from current context occupancy. Cache reads reuse a prefix; cache writes create a cache entry. Reported zeros do not establish provider support. Select a category to inspect its exact count.
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  </Tooltip.Provider>
+{/snippet}

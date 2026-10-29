@@ -152,6 +152,81 @@ export function getSessionCostDisplay(accounting: AccountingSnapshot | undefined
   return { kind: 'incomplete', knownSubtotalUsd: scope.knownSubtotalUsd, reasons: describeAccountingReasons(scope), excludesSubscription };
 }
 
+/** One aligned label/value row in the usage panel. */
+export type UsageLine = {
+  key: 'cost' | 'budget';
+  label: string;
+  value: string;
+  /** Qualifier shown before the value: `≥` for a lower bound, `~` for an approximation. */
+  prefix?: '≥' | '~';
+  tone?: 'muted' | 'warn';
+  /** Full explanation, used as the tooltip and accessible description. */
+  title: string;
+};
+
+const SUBSCRIPTION_NOTE = 'Subscription usage is excluded from this figure';
+
+/**
+ * Maps cost state to dense label/value rows. Status is carried by the label,
+ * a value prefix and tone rather than by extra tags, so every state fits on a
+ * single line.
+ */
+export function getCostLines(cost: SessionCostDisplay, budget: AccountingBudgetSnapshot | null): UsageLine[] {
+  const lines: UsageLine[] = [];
+  switch (cost.kind) {
+    case 'estimated':
+      lines.push({
+        key: 'cost',
+        label: cost.excludesSubscription ? 'API cost (excl. subscription)' : 'API cost',
+        value: formatCostUsd(cost.amountUsd),
+        title: `Estimated API cost for metered requests, independent of the selected token scope${cost.excludesSubscription ? `. ${SUBSCRIPTION_NOTE}` : ''}`
+      });
+      break;
+    case 'incomplete':
+      lines.push({
+        key: 'cost',
+        label: cost.excludesSubscription ? 'API cost (excl. subscription)' : 'API cost',
+        value: formatCostUsd(cost.knownSubtotalUsd),
+        prefix: '≥',
+        tone: 'warn',
+        title: `At least ${formatCostUsd(cost.knownSubtotalUsd)} - incomplete: ${cost.reasons.join('; ') || 'some charges are unknown'}${cost.excludesSubscription ? `. ${SUBSCRIPTION_NOTE}` : ''}`
+      });
+      break;
+    case 'excluded':
+      lines.push({
+        key: 'cost',
+        label: 'API cost',
+        value: 'Subscription',
+        tone: 'muted',
+        title: 'Subscription usage excluded: no metered API charges are reported'
+      });
+      break;
+    case 'reported':
+      lines.push({
+        key: 'cost',
+        label: 'Agent-reported cost',
+        value: formatCostUsd(cost.amountUsd),
+        title: 'Cost reported by the agent; completeness is not indicated'
+      });
+      break;
+    case 'none':
+      break;
+  }
+  if (budget && (budget.knownSubtotalUsd > 0 || budget.bestEffort)) {
+    const reasons = describeAccountingReasons(budget);
+    lines.push({
+      key: 'budget',
+      label: 'Cycle budget',
+      value: formatCostUsd(budget.completeTotalUsd ?? budget.knownSubtotalUsd),
+      prefix: budget.bestEffort ? '~' : undefined,
+      title: budget.bestEffort
+        ? `Cycle budget valuation is best-effort: ${reasons.join('; ') || 'some charges are unknown'}`
+        : 'Spend counted against this cycle\'s price limit (manual rates when configured)'
+    });
+  }
+  return lines;
+}
+
 export function describeAccountingReasons(scope: { reasons: Array<Record<string, unknown>>; unresolvedAttempts?: number; unaccountedGenerations?: number }): string[] {
   const descriptions = scope.reasons.map(describeAccountingReason);
   if (scope.unresolvedAttempts && !scope.reasons.some((reason) => reason.kind === 'unresolved_attempt')) {
