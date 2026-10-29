@@ -362,15 +362,9 @@ jobs:
             exit 1
           fi
 
-          cd dist
-          for file in *; do
-            if command -v sha256sum >/dev/null 2>&1; then
-              sha256sum "$file" > "$file.sha256"
-            else
-              shasum -a 256 "$file" > "$file.sha256"
-            fi
-          done
-          ls -l
+          # Checksums are published as one SHA256SUMS file by publish-nightly
+          # (GitHub also shows a digest for every release asset).
+          ls -l dist
 
       - name: Upload nightly assets
         uses: actions/upload-artifact@v7
@@ -413,21 +407,38 @@ jobs:
           grep -q '"acpWebSocketPath": "/acp/ws"' embedded-ui/build-embedded/querymt-ui.json
 
           cp embedded-ui/querymt-embedded-ui.tar.gz "artifacts/querymt-embedded-ui-${VERSION_NAME}.tar.gz"
-          (cd artifacts && sha256sum "querymt-embedded-ui-${VERSION_NAME}.tar.gz" > "querymt-embedded-ui-${VERSION_NAME}.tar.gz.sha256")
-          ls -l artifacts
 
-      # Delete the previous nightly release and tag so assets and the tag
-      # target are always fresh.
-      - name: Delete existing nightly release
-        continue-on-error: true
-        run: gh release delete nightly --yes --cleanup-tag || true
+      # One combined checksum file instead of a .sha256 file per asset.
+      - name: Generate SHA256SUMS
+        working-directory: artifacts
+        run: |
+          set -euo pipefail
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+          ls -l
 
-      - name: Create Nightly Release
+      # The rolling release is replaced in three steps so the time without a
+      # `nightly` release is a few seconds instead of the whole upload:
+      #   1. upload everything to a draft release under a staging tag
+      #      (drafts are invisible to the public and create no git tag),
+      #   2. delete the previous `nightly` release and tag,
+      #   3. retag the draft as `nightly` at this commit and publish it.
+      # If the upload fails, the previous nightly is left untouched.
+      - name: Create staging draft release
+        id: draft
         env:
           DESKTOP_SHA: ${{ github.sha }}
           QMTCODE_REVISION: ${{ needs.check-changes.outputs.qmtcode_revision }}
           QMTCODE_ASSET: ${{ needs.check-changes.outputs.qmtcode_asset }}
         run: |
+          set -euo pipefail
+
+          # Remove drafts left behind by an earlier failed run.
+          for id in $(gh api "repos/${GH_REPO}/releases" --paginate \
+            --jq '.[] | select(.draft and .tag_name == "nightly-staging") | .id'); do
+            gh api -X DELETE "repos/${GH_REPO}/releases/${id}"
+          done
+
           # The `QueryMT: <sha>` line is parsed by the next run's check-changes.
           cat > notes.md <<EOF
           **This is a pre-release nightly build of QueryMT Desktop.**
@@ -439,9 +450,47 @@ jobs:
           Bundled qmtcode: \`${QMTCODE_ASSET}\`
           EOF
 
-          gh release create nightly \
+          gh release create nightly-staging \
+            --draft \
             --title "Nightly Build (${VERSION_NAME})" \
             --notes-file notes.md \
             --prerelease \
             --target "$DESKTOP_SHA" \
             artifacts/*
+
+          ID=$(gh api "repos/${GH_REPO}/releases" --paginate \
+            --jq '.[] | select(.draft and .tag_name == "nightly-staging") | .id')
+          test -n "$ID"
+          test "$(wc -l <<<"$ID")" -eq 1
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+
+      - name: Delete previous nightly release
+        run: |
+          set -euo pipefail
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release delete nightly --yes --cleanup-tag
+          fi
+          # A leftover tag without a release would stop the publish below from
+          # creating the tag at the new commit.
+          if gh api "repos/${GH_REPO}/git/ref/tags/nightly" >/dev/null 2>&1; then
+            gh api -X DELETE "repos/${GH_REPO}/git/refs/tags/nightly"
+          fi
+
+      - name: Publish nightly release
+        env:
+          DESKTOP_SHA: ${{ github.sha }}
+          RELEASE_ID: ${{ steps.draft.outputs.id }}
+        run: |
+          set -euo pipefail
+          gh api -X PATCH "repos/${GH_REPO}/releases/${RELEASE_ID}" \
+            -f tag_name=nightly \
+            -f target_commitish="$DESKTOP_SHA" \
+            -F draft=false \
+            -F prerelease=true
+
+          # The tag must now point at this commit; check-changes relies on it.
+          TAG_SHA=$(gh api "repos/${GH_REPO}/git/ref/tags/nightly" --jq '.object.sha')
+          if [ "$TAG_SHA" != "$DESKTOP_SHA" ]; then
+            echo "::error::nightly tag points at ${TAG_SHA}, expected ${DESKTOP_SHA}"
+            exit 1
+          fi
