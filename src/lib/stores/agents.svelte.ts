@@ -6574,12 +6574,13 @@ export class AgentsStore {
       const patch = agentPatches.get(notification.sessionId) ?? {};
       const hasUserHistory = update.sessionUpdate === 'user_message_chunk' ? true
         : patch.hasUserHistory ?? getSessionById(this.sessionsByAgent[agentId] ?? [], notification.sessionId)?.hasUserHistory;
-      const status = runtime?.observation ? runtimeSessionStatus(runtime, hasUserHistory) : inferSessionStatusFromNotification(update);
+      const activityStatus = inferSessionStatusFromNotification(update);
+      const status = runtime?.observation ? runtimeSessionStatus(runtime, hasUserHistory) : activityStatus;
       if (!status && !summaryInfo) continue;
       if (hasUserHistory !== undefined) patch.hasUserHistory = hasUserHistory;
       if (status) {
         patch.status = status;
-        patch.updatedAt = newestTimestamp(patch.updatedAt, activityUpdatedAt);
+        if (activityStatus) patch.updatedAt = newestTimestamp(patch.updatedAt, activityUpdatedAt);
       }
       if (summaryInfo && update.sessionUpdate === 'session_info_update') {
         if (update.title !== undefined) patch.title = update.title ?? 'Untitled session';

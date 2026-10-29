@@ -5871,6 +5871,65 @@ describe('AgentsStore mesh node availability', () => {
 describe('AgentsStore status consistency', () => {
   afterEach(cleanup);
 
+  it.each([
+    { sessionUpdate: 'config_option_update', configOptions: [] },
+    { sessionUpdate: 'current_mode_update', currentModeId: 'build' },
+    { sessionUpdate: 'usage_update', used: 4, size: 100 },
+    { sessionUpdate: 'available_commands_update', availableCommands: [] }
+  ] satisfies SessionNotification['update'][])('keeps observed-idle recency/order for $sessionUpdate while reconciling status', async (update) => {
+    const store = await selectedStore();
+    const oldStamp = '2020-01-01T00:00:00Z';
+    const otherStamp = '2021-01-01T00:00:00Z';
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [
+      { sessionId: 'session-1', title: 'Idle S', cwd: '/work', updatedAt: oldStamp, _meta: {
+        userMessageCount: 0, runtimeStatus: runtime(SessionRuntimePhase.Idle, 1)
+      } },
+      { sessionId: 'other-session', title: 'Newer T', cwd: '/work', updatedAt: otherStamp, _meta: {
+        userMessageCount: 0, runtimeStatus: runtime(SessionRuntimePhase.Idle, 1)
+      } }
+    ] });
+    await store.refreshSessionsForAgent('agent-1');
+    // A stale summary must still converge to cached runtime without inventing activity.
+    store.sessionsByAgent = { ...store.sessionsByAgent, 'agent-1': store.sessionsByAgent['agent-1'].map((item) =>
+      item.sessionId === 'session-1' ? { ...item, status: 'unknown' as const } : item) };
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update });
+    const own = () => store.sessionsByAgent['agent-1'].find((item) => item.sessionId === 'session-1');
+    expect(own()).toMatchObject({ status: 'idle', updatedAt: oldStamp, hasUserHistory: false });
+    expect(store.sessions.map((item) => item.sessionId)).toEqual(['other-session', 'session-1']);
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'session_info_update', title: 'Renamed S'
+    } });
+    expect(own()).toMatchObject({ title: 'Renamed S', updatedAt: oldStamp });
+    const explicitStamp = '2022-01-01T00:00:00Z';
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'session_info_update', updatedAt: explicitStamp
+    } });
+    expect(own()).toMatchObject({ title: 'Renamed S', updatedAt: explicitStamp, status: 'idle' });
+    expect(store.sessions.map((item) => item.sessionId)).toEqual(['session-1', 'other-session']);
+  });
+
+  it.each([
+    { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'New turn' } },
+    { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working' } },
+    { sessionUpdate: 'tool_call', toolCallId: 'shell-new', title: 'Shell', status: 'in_progress' }
+  ] satisfies SessionNotification['update'][])('still bumps genuine $sessionUpdate activity with observed runtime', async (update) => {
+    const store = await selectedStore();
+    const oldStamp = '2020-01-01T00:00:00Z';
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [
+      { sessionId: 'session-1', cwd: '/work', updatedAt: oldStamp, _meta: {
+        userMessageCount: 0, runtimeStatus: runtime(SessionRuntimePhase.Idle, 1)
+      } },
+      { sessionId: 'other-session', cwd: '/work', updatedAt: '2021-01-01T00:00:00Z' }
+    ] });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update });
+    const own = store.sessionsByAgent['agent-1'].find((item) => item.sessionId === 'session-1')!;
+    expect(own.updatedAt! > '2021-01-01T00:00:00Z').toBe(true);
+    expect(store.sessions.map((item) => item.sessionId)).toEqual(['session-1', 'other-session']);
+    expect(own.hasUserHistory).toBe(update.sessionUpdate === 'user_message_chunk');
+    expect(own.status).toBe(update.sessionUpdate === 'user_message_chunk' ? 'completed' : 'idle');
+  });
+
   it('retains positive user-history evidence accumulated within one summary batch', async () => {
     const store = await selectedStore();
     const listed = (revision: number): SessionInfo => ({ sessionId: 'session-1', cwd: '/work', _meta: {
