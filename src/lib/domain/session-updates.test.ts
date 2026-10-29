@@ -381,15 +381,21 @@ describe('applySessionNotification tool calls', () => {
     expect(session.toolCalls[0]).toMatchObject({ status: 'completed', delegationState: state });
   });
 
-  it('does not replace newer delegation state with an older snapshot', () => {
+  it('preserves newer delegation state and child links while still accepting ID-only notifications', () => {
     const session = createEmptyActiveSession();
     session.sessionId = 'session-1';
     session.toolCalls = [{ id: 'delegate-1', title: 'Run delegate', kind: 'delegate', status: 'completed' }];
     const update = { sessionId: 'session-1', toolCallId: 'delegate-1' };
-    const running = applyDelegationChildSession(session, { ...update, state: 'forked', updatedAt: 5 });
+    const running = applyDelegationChildSession(session, { ...update, state: 'forked', updatedAt: 5, childSessionId: 'current-child' });
     expect(running.toolCalls[0].delegationState).toBe('forked');
     expect(session.toolCalls[0].delegationState).toBeUndefined();
-    expect(applyDelegationChildSession(running, { ...update, state: 'requested', updatedAt: 1 })).toBe(running);
+    for (const lifecycle of [{ state: 'requested', updatedAt: 1 }, { updatedAt: 1 }, { state: 'requested' }] as const) {
+      expect(applyDelegationChildSession(running, { ...update, ...lifecycle, childSessionId: 'stale-child' })).toBe(running);
+    }
+    const idOnly = applyDelegationChildSession(running, { ...update, childSessionId: 'id-only-child' });
+    expect(idOnly.toolCalls[0]).toMatchObject({
+      childSessionId: 'id-only-child', delegationState: 'forked', delegationUpdatedAt: 5
+    });
   });
 
   it('ignores delegation updates for another session or missing child id', () => {

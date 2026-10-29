@@ -830,8 +830,10 @@ export function applyDelegationChildSession(
   const terminal = ['completed', 'failed', 'cancelled'].includes(target.delegationState ?? '');
   const stale = target.delegationUpdatedAt !== undefined && (updatedAt === undefined || updatedAt < target.delegationUpdatedAt);
   const acceptState = state && !terminal && !stale && !(target.delegationState === 'forked' && state === 'requested');
+  const hasLifecycleUpdate = state !== undefined || updatedAt !== undefined;
+  const acceptChildSessionId = childSessionId && (!hasLifecycleUpdate || !stale);
   const patch = {
-    childSessionId: childSessionId ?? target.childSessionId,
+    childSessionId: acceptChildSessionId ? childSessionId : target.childSessionId,
     delegationState: acceptState ? state : target.delegationState,
     delegationUpdatedAt: acceptState ? updatedAt : target.delegationUpdatedAt
   };
