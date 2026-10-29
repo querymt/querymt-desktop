@@ -142,6 +142,8 @@ export interface DesktopSessionSummary {
   remoteProfileLabel?: string;
   remoteConnectionState?: 'available' | 'disconnected';
   status: SessionStatus;
+  /** Undefined when the owner has not supplied user-history evidence. */
+  hasUserHistory?: boolean;
   lifecycle?: SessionLifecycle | null;
   pin?: SessionPin | null;
   /** False when load/bookmark metadata does not establish parentage. */

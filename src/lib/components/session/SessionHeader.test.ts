@@ -18,6 +18,18 @@ const usageFixture = {
 afterEach(cleanup);
 
 describe('SessionHeader', () => {
+  it.each(['thinking', 'streaming', 'tool-running'] as const)('preserves known %s execution over a stale unknown summary', (runState) => {
+    render(SessionHeader, { session: session({ runState }), summaryStatus: 'unknown', title: 'Active', workspace: 'work', updatedAt: 'Now' });
+    expect(screen.getByLabelText('Status: Working')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Status: Status unavailable')).not.toBeInTheDocument();
+  });
+
+  it('keeps observed failed execution visible while a dependency is live', () => {
+    render(SessionHeader, { session: session({ runState: 'failed', dependencyLabel: 'Verifying delegate result' }),
+      title: 'Failed', workspace: 'work', updatedAt: 'Now' });
+    expect(screen.getByLabelText('Status: Failed')).toBeInTheDocument();
+  });
+
   it.each([false, true])('offers pin/unpin only inside the ellipsis menu (pinned=%s)', async (pinned) => {
     const onSetPinned = vi.fn(async () => {});
     const onSetLifecycle = vi.fn(async () => {});

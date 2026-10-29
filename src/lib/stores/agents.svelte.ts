@@ -644,7 +644,8 @@ export class AgentsStore {
     }
     const incoming = mapAcpSessionsToDesktopSessions(sessions, agent).map((summary) => {
       const runtime = this.sessionRuntimeBySession[buildSessionKey(agent.agentId, summary.sessionId)];
-      return runtime?.observation ? { ...summary, status: runtimeSessionStatus(runtime) } : summary;
+      const hasUserHistory = summary.hasUserHistory ?? getSessionById(this.sessionsByAgent[agent.agentId] ?? [], summary.sessionId)?.hasUserHistory;
+      return runtime?.observation ? { ...summary, hasUserHistory, status: runtimeSessionStatus(runtime, hasUserHistory) } : summary;
     });
     const incomingKeys = new Set(incoming.map(getSessionKey));
     const summaries = mergeSessions(this.sessionsByAgent[agent.agentId] ?? [], incoming)
@@ -4039,9 +4040,8 @@ export class AgentsStore {
       ...runtime, delegation_activity: this.sessionDelegations.get(key)?.filter((item) => item.activity === 'live') ?? runtime.delegation_activity
     } };
     this.projectSelectedExecution(agentId, sessionId, runtime);
-    const status = runtimeSessionStatus(runtime);
     const patch = (session: DesktopSessionSummary) => session.agentId === agentId && session.sessionId === sessionId
-      ? { ...session, status } : session;
+      ? { ...session, status: runtimeSessionStatus(runtime, session.hasUserHistory) } : session;
     this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: (this.sessionsByAgent[agentId] ?? []).map(patch) };
     this.sessionCatalog = this.sessionCatalog.map(patch);
     this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: (this.pinnedSessionsByAgent[agentId] ?? []).map(patch) };
@@ -4053,6 +4053,11 @@ export class AgentsStore {
     if (!runtime || !this.isSelectedSession(agentId, sessionId)) return;
     const key = buildSessionKey(agentId, sessionId);
     this.activeSession.delegations = this.sessionDelegations.get(key) ?? this.activeSession.delegations;
+    if (runtime.active_run_id && runtime.phase !== 'idle' && runtime.phase !== 'unknown' && runtime.observation?.availability !== 'unavailable') {
+      for (const tool of this.activeSession.toolCalls) {
+        if (tool.runId === null && (tool.status === 'pending' || tool.status === 'in_progress')) tool.runId = runtime.active_run_id;
+      }
+    }
     projectSessionRuntime(this.activeSession, runtime);
     projectDelegationActivity(this.activeSession);
   }
@@ -6563,12 +6568,15 @@ export class AgentsStore {
     for (const { agentId, notification } of notifications) {
       const update = notification.update;
       const runtime = this.sessionRuntimeBySession[buildSessionKey(agentId, notification.sessionId)];
-      const status = runtime?.observation ? runtimeSessionStatus(runtime) : inferSessionStatusFromNotification(update);
       const summaryInfo = sessionInfoChangesSummary(update);
-      if (!status && !summaryInfo) continue;
       let agentPatches = patches.get(agentId);
       if (!agentPatches) patches.set(agentId, agentPatches = new Map());
       const patch = agentPatches.get(notification.sessionId) ?? {};
+      const hasUserHistory = update.sessionUpdate === 'user_message_chunk' ? true
+        : patch.hasUserHistory ?? getSessionById(this.sessionsByAgent[agentId] ?? [], notification.sessionId)?.hasUserHistory;
+      const status = runtime?.observation ? runtimeSessionStatus(runtime, hasUserHistory) : inferSessionStatusFromNotification(update);
+      if (!status && !summaryInfo) continue;
+      if (hasUserHistory !== undefined) patch.hasUserHistory = hasUserHistory;
       if (status) {
         patch.status = status;
         patch.updatedAt = newestTimestamp(patch.updatedAt, activityUpdatedAt);
@@ -6588,18 +6596,18 @@ export class AgentsStore {
         const patch = agentPatches.get(session.sessionId);
         if (!patch) return session;
         const next = { ...session, ...patch, updatedAt: newestTimestamp(session.updatedAt, patch.updatedAt) };
-        if (next.title === session.title && next.status === session.status && next.updatedAt === session.updatedAt) return session;
+        if (next.title === session.title && next.status === session.status && next.updatedAt === session.updatedAt && next.hasUserHistory === session.hasUserHistory) return session;
         // Streaming activity bumps updatedAt on every notification; rebuilding every derived
         // session list that often is the dominant cost with several busy sessions. Coalesce
         // activity-only bumps to at most once per ACTIVITY_SUMMARY_THROTTLE_MS per session.
-        if (next.title === session.title && next.status === session.status && patch.updatedAt === activityUpdatedAt) {
+        if (next.title === session.title && next.status === session.status && next.hasUserHistory === session.hasUserHistory && patch.updatedAt === activityUpdatedAt) {
           const previous = Date.parse(session.updatedAt ?? '');
           if (Number.isFinite(previous) && Math.abs(activityNow - previous) < ACTIVITY_SUMMARY_THROTTLE_MS) return session;
         }
         const key = getSessionKey(next);
         updated.set(key, next);
         const write = this.catalogWrites.get(key);
-        if (write?.session) write.session = { ...write.session, title: next.title, updatedAt: next.updatedAt, status: next.status };
+        if (write?.session) write.session = { ...write.session, title: next.title, updatedAt: next.updatedAt, status: next.status, hasUserHistory: next.hasUserHistory };
         changes.push(next);
         return next;
       });
@@ -6610,7 +6618,7 @@ export class AgentsStore {
     if (!updated.size) return;
     const updateKnown = (session: DesktopSessionSummary) => {
       const next = updated.get(getSessionKey(session));
-      return next ? { ...session, title: next.title, updatedAt: next.updatedAt, status: next.status } : session;
+      return next ? { ...session, title: next.title, updatedAt: next.updatedAt, status: next.status, hasUserHistory: next.hasUserHistory } : session;
     };
     this.sessionCatalog = this.sessionCatalog.map(updateKnown);
     if (notifications.some(({ notification }) => sessionInfoChangesSummary(notification.update))) {
@@ -6720,9 +6728,14 @@ export class AgentsStore {
     if (notification.update.sessionUpdate === 'tool_call' || notification.update.sessionUpdate === 'tool_call_update') {
       const toolCallId = notification.update.toolCallId;
       const tool = this.activeSession.toolCalls.find((item) => item.id === toolCallId);
-      if (tool && !tool.runId) tool.runId = observed?.active_run_id ?? this.activeSession.runId;
+      // New live tools after idle have no observed owner yet; never inherit the ended run.
+      if (tool && tool.runId === undefined) tool.runId = observed?.phase === 'idle' ? null : observed?.active_run_id ?? null;
     }
-    if (observed?.observation) this.projectSelectedExecution(agentId, notification.sessionId, observed);
+    const unobservedTool = this.activeSession.toolCalls.some((tool) =>
+      tool.runId === null && (tool.status === 'pending' || tool.status === 'in_progress'));
+    if (observed?.observation && !(observed.phase === 'idle' && unobservedTool)) {
+      this.projectSelectedExecution(agentId, notification.sessionId, observed);
+    }
     if (notification.update.sessionUpdate === 'config_option_update') {
       const key = buildSessionKey(agentId, notification.sessionId);
       // Authoritative updates may carry only the options relevant to the
@@ -7281,6 +7294,7 @@ function mergeSessions(current: DesktopSessionSummary[], incoming: DesktopSessio
       // A list that lacks worktree metadata must not erase what a richer list/load established.
       workspace: session.workspace ?? existing.workspace ?? null,
       access: session.access ?? existing.access ?? null,
+      hasUserHistory: session.hasUserHistory ?? existing.hasUserHistory,
       relationshipKnown: existing.relationshipKnown === true ? true : session.relationshipKnown ?? existing.relationshipKnown,
       updatedAt: newestTimestamp(existing.updatedAt, session.updatedAt)
     } : session);

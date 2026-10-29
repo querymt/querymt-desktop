@@ -206,7 +206,8 @@ describe('SessionQueuedBubble', () => {
     const activity = screen.getByRole('status');
     expect(container.firstElementChild).toBe(bubble);
     expect(bubble.nextElementSibling).toBe(activity);
-    expect(activity).toHaveTextContent('Double Esc to cancel');
+    expect(activity).not.toHaveTextContent('Double Esc to cancel');
+    expect(activity).toHaveAttribute('data-tooltip-trigger');
 
     await fireEvent.click(bubble);
     expect(screen.getByRole('region', { name: 'Waiting messages' }).parentElement).toBe(container);

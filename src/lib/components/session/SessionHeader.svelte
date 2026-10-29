@@ -69,11 +69,11 @@
     if (forkPending) return { label: 'Creating fork', tone: 'running', busy: true };
     if (session.undo.pendingOperation === 'undo') return { label: 'Undoing', tone: 'running', busy: true };
     if (session.undo.pendingOperation === 'redo') return { label: 'Restoring', tone: 'running', busy: true };
-    if (session.runState === 'unknown' || (!session.sessionId && summaryStatus === 'unknown')) return { label: 'Status unavailable', tone: 'warning', busy: false };
+    if (session.runState === 'unknown' || (summaryStatus === 'unknown' && (!session.sessionId || ['idle', 'completed'].includes(session.runState)))) return { label: 'Status unavailable', tone: 'warning', busy: false };
+    if (session.runState === 'failed') return { label: 'Failed', tone: 'danger', busy: false };
     if (session.dependencyLabel && !['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState)) {
       return { label: `Own turn idle - ${session.dependencyLabel}`, tone: 'running', busy: true };
     }
-    if (session.runState === 'failed') return { label: 'Failed', tone: 'danger', busy: false };
     if (session.runState === 'waiting-input' || (!session.sessionId && summaryStatus === 'waiting')) {
       return { label: 'Input needed', tone: 'warning', busy: false };
     }

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { AlertTriangle, LoaderCircle, MessageCircleQuestion } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
   import { getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
 
@@ -17,6 +18,7 @@
       session.runState === 'streaming' ||
       session.runState === 'tool-running'
   );
+  const canCancel = $derived(agentBusy && !session.undo.pendingOperation && !forkPending);
   const isBusy = $derived(session.undo.pendingOperation !== null || forkPending || agentBusy || !!session.dependencyLabel);
   const isVisible = $derived(isBusy || session.runState === 'failed' || session.runState === 'waiting-input' || session.runState === 'unknown');
   const activeTool = $derived(session.toolCalls.find((tool) => tool.id === session.activeToolCallId) ?? null);
@@ -44,27 +46,41 @@
 </script>
 
 {#if isVisible}
-  <section
-    class={`session-activity-bar ${isBusy ? 'session-activity-bar-busy' : ''} ${session.runState === 'failed' ? 'session-activity-bar-failed' : ''} ${session.runState === 'waiting-input' ? 'session-activity-bar-attention' : ''}`}
-    role={session.runState === 'failed' ? 'alert' : 'status'}
-    aria-live={session.runState === 'failed' ? 'assertive' : 'polite'}
-  >
-    <span class="session-activity-indicator" aria-hidden="true">
-      {#if isBusy}
-        <LoaderCircle size={14} class="animate-spin" />
-      {:else if session.runState === 'waiting-input'}
-        <MessageCircleQuestion size={14} />
-      {:else}
-        <AlertTriangle size={14} />
+  <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+    <Tooltip.Root disableHoverableContent disabled={!canCancel}>
+      <Tooltip.Trigger>
+        {#snippet child({ props })}
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (Focus exposes the informational tooltip without making the live region a button.) -->
+          <section
+            {...props}
+            class={`session-activity-bar ${isBusy ? 'session-activity-bar-busy' : ''} ${session.runState === 'failed' ? 'session-activity-bar-failed' : ''} ${session.runState === 'waiting-input' ? 'session-activity-bar-attention' : ''}`}
+            role={session.runState === 'failed' ? 'alert' : 'status'}
+            aria-live={session.runState === 'failed' ? 'assertive' : 'polite'}
+            tabindex={canCancel ? 0 : undefined}
+          >
+            <span class="session-activity-indicator" aria-hidden="true">
+              {#if isBusy}
+                <LoaderCircle size={14} class="animate-spin" />
+              {:else if session.runState === 'waiting-input'}
+                <MessageCircleQuestion size={14} />
+              {:else}
+                <AlertTriangle size={14} />
+              {/if}
+            </span>
+            <span class="session-activity-title">{primaryStatus}</span>
+            {#if session.runState === 'failed'}
+              <span class="session-activity-meta">Review the error, update the prompt, or refresh.</span>
+            {:else if session.runState === 'waiting-input'}
+              <span class="session-activity-meta">Respond below to continue.</span>
+            {/if}
+          </section>
+        {/snippet}
+      </Tooltip.Trigger>
+      {#if canCancel}
+        <Tooltip.Portal>
+          <Tooltip.Content class="app-tooltip-content" sideOffset={6}>Double Esc to cancel</Tooltip.Content>
+        </Tooltip.Portal>
       {/if}
-    </span>
-    <span class="session-activity-title">{primaryStatus}</span>
-    {#if session.runState === 'failed'}
-      <span class="session-activity-meta">Review the error, update the prompt, or refresh.</span>
-    {:else if session.runState === 'waiting-input'}
-      <span class="session-activity-meta">Respond below to continue.</span>
-    {:else if agentBusy && !session.undo.pendingOperation && !forkPending}
-      <span class="session-activity-meta">Double Esc to cancel</span>
-    {/if}
-  </section>
+    </Tooltip.Root>
+  </Tooltip.Provider>
 {/if}

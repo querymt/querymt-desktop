@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
 import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelte';
+import SessionHeader from '$lib/components/session/SessionHeader.svelte';
 import { RequestError, type InitializeResponse, type ListSessionsRequest, type PromptResponse, type SessionConfigOption, type SessionInfo, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
 import type { AgentConfig, DesktopSessionSummary, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { findModeConfigOption, findReasoningConfigOption, getModelSelectionKey } from '$lib/querymt/config-options';
@@ -5869,6 +5870,143 @@ describe('AgentsStore mesh node availability', () => {
 
 describe('AgentsStore status consistency', () => {
   afterEach(cleanup);
+
+  it('retains positive user-history evidence accumulated within one summary batch', async () => {
+    const store = await selectedStore();
+    const listed = (revision: number): SessionInfo => ({ sessionId: 'session-1', cwd: '/work', _meta: {
+      messageCount: 0, userMessageCount: 0, hasErrors: false, runtimeStatus: runtime(SessionRuntimePhase.Idle, revision)
+    } });
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed(1)] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(store.sessionsByAgent['agent-1'][0].hasUserHistory).toBe(false);
+    const notifications: SessionNotification[] = [
+      { sessionId: 'session-1', update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'New turn' } } },
+      { sessionId: 'session-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working' } } },
+      { sessionId: 'session-1', update: { sessionUpdate: 'tool_call', toolCallId: 'new-shell', title: 'Shell', status: 'in_progress' } }
+    ];
+    (store as unknown as { applySessionSummaryUpdates(updates: Array<{ agentId: string; notification: SessionNotification }>): void })
+      .applySessionSummaryUpdates(notifications.map((notification) => ({ agentId: 'agent-1', notification })));
+    expect(store.sessionsByAgent['agent-1'][0].hasUserHistory).toBe(true);
+    announce(runtime(SessionRuntimePhase.Idle, 2));
+    expect(store.sessionsByAgent['agent-1'][0].status).toBe('completed');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed(3)] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(store.sessionsByAgent['agent-1'][0]).toMatchObject({ status: 'idle', hasUserHistory: false });
+  });
+
+  it.each(['tool_call', 'tool_call_update'] as const)('keeps new B %s progress and Stop when cached Idle A predates it', async (sessionUpdate) => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Tools, 1, { active_run_id: 'run-a' }));
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'tool_call', toolCallId: 'shell-a', title: 'Shell A', status: 'in_progress'
+    } });
+    announce(runtime(SessionRuntimePhase.Idle, 2));
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate, toolCallId: 'shell-b', title: 'Long shell B', status: 'in_progress'
+    } });
+    const toolB = () => store.activeSession.toolCalls.find((tool) => tool.id === 'shell-b');
+    expect(toolB()).toMatchObject({ status: 'in_progress' });
+    expect(toolB()?.runId).not.toBe('run-a');
+    expect(store.activeRunBusy).toBe(true);
+    expect(store.activeSession.activeToolCallId).toBe('shell-b');
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'usage_update', used: 4, size: 100
+    } });
+    expect(toolB()?.status).toBe('in_progress');
+    expect(store.activeRunBusy).toBe(true);
+    announce(runtime(SessionRuntimePhase.Tools, 3, { active_run_id: 'run-b' }));
+    expect(toolB()).toMatchObject({ runId: 'run-b', status: 'in_progress' });
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'shell-a', status: 'completed', rawOutput: 'Late real A result'
+    } });
+    expect(toolB()).toMatchObject({ runId: 'run-b', status: 'in_progress' });
+    expect(store.activeSession).toMatchObject({ runId: 'run-b', activeToolCallId: 'shell-b' });
+    expect(store.activeRunBusy).toBe(true);
+  });
+
+  it.each(['unsupported', 'unavailable'] as const)('keeps actual loaded history unavailable in the header when execution is %s', async (mode) => {
+    const store = createStore();
+    mockClient.supportsQuerymtMethod.mockReturnValue(mode !== 'unsupported');
+    mockClient.listSessions.mockResolvedValue({ sessions: [{ sessionId: 'session-1', cwd: '/tmp/work' }] });
+    await store.connectAgent('agent-1', true);
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [] }, replay: [{ sessionId: 'session-1', update: {
+      sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Stored answer' }
+    } }] });
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Unknown, 0, {
+      observation: { availability: 'unavailable' }
+    }));
+    await store.loadSession('agent-1', 'session-1');
+    const summary = store.sessionsByAgent['agent-1'].find((item) => item.sessionId === 'session-1');
+    expect(summary?.status).toBe('unknown');
+    render(SessionHeader, { session: store.activeSession, summaryStatus: summary!.status,
+      title: 'History', workspace: 'work', updatedAt: 'Now' });
+    expect(screen.getByLabelText('Status: Status unavailable')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Status: Turn complete')).not.toBeInTheDocument();
+    if (mode === 'unsupported') expect(mockClient.getSessionRuntimeStatus).not.toHaveBeenCalled();
+  });
+
+  it('keeps an actual failed own outcome visible with a live verifier without exposing own Stop', async () => {
+    const store = await selectedStore();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+        { seq: 1, kind: { type: 'run_started', data: { run_id: 'run-a' } } },
+        { seq: 2, kind: { type: 'run_completed', data: { run_id: 'run-a', outcome: 'failed' } } }
+      ] } }
+    } }, replay: [] });
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle, 2, { delegation_activity: [verifier] }));
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.activeSession.runState).toBe('failed');
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    expect(store.activeRunBusy).toBe(false);
+    render(SessionHeader, { session: store.activeSession, title: 'Failed own turn', workspace: 'work', updatedAt: 'Now' });
+    expect(screen.getByLabelText('Status: Failed')).toBeInTheDocument();
+    expect(mockClient.cancelSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [SessionRuntimePhase.Tools, 'thinking'], [SessionRuntimePhase.Waiting, 'thinking'],
+    [SessionRuntimePhase.CancelRequested, 'cancelling'], [SessionRuntimePhase.Idle, 'idle'],
+    [SessionRuntimePhase.Unknown, 'unknown']
+  ] as const)('accepts remote runtime-only %s without inventing history or dropping owner metadata', async (phase, status) => {
+    const store = await selectedStore();
+    const runtimeStatus = runtime(phase, 1, { observation: { availability: phase === SessionRuntimePhase.Unknown ? 'unavailable' : 'live', epoch: 'remote-e1', revision: 1 } });
+    const lifecycle = { session_id: 'remote-s', resolved: false, archived: false, resolved_at: null, archived_at: null };
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{ sessionId: 'remote-s', cwd: '/remote/work', _meta: {
+      location: 'remote', nodeId: 'remote-node', nodeLabel: 'Owner', profileId: 'coder', profileLabel: 'Coder',
+      connectionState: 'available', parentSessionId: 'parent', forkOrigin: 'delegation', sessionKind: 'delegate',
+      querymt: { lifecycle }, runtimeStatus
+    } }] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(store.sessionsByAgent['agent-1'].find((item) => item.sessionId === 'remote-s')).toMatchObject({
+      status, location: 'remote', remoteNodeId: 'remote-node', remoteNodeLabel: 'Owner',
+      remoteProfileId: 'coder', remoteProfileLabel: 'Coder', remoteConnectionState: 'available',
+      lifecycle, parentSessionId: 'parent', forkOrigin: 'delegation', sessionKind: 'delegate', relationshipKnown: true
+    });
+  });
+
+  it('preserves zero, known and unavailable history evidence through list/runtime/notification summary paths', async () => {
+    const store = await selectedStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [
+      { sessionId: 'empty', cwd: '/work', _meta: { messageCount: 0, userMessageCount: 0, hasErrors: false, runtimeStatus: runtime(SessionRuntimePhase.Idle, 1) } },
+      { sessionId: 'used', cwd: '/work', _meta: { messageCount: 2, userMessageCount: 1, hasErrors: false, runtimeStatus: runtime(SessionRuntimePhase.Idle, 1) } },
+      { sessionId: 'runtime-only', cwd: '/remote', _meta: { runtimeStatus: runtime(SessionRuntimePhase.Idle, 1) } }
+    ] });
+    await store.refreshSessionsForAgent('agent-1');
+    const check = () => expect(Object.fromEntries(store.sessionsByAgent['agent-1'].filter((item) => ['empty', 'used', 'runtime-only'].includes(item.sessionId))
+      .map((item) => [item.sessionId, item.status]))).toEqual({ empty: 'idle', used: 'completed', 'runtime-only': 'idle' });
+    check();
+    for (const sessionId of ['empty', 'used', 'runtime-only']) {
+      mockClient.emitExtensionNotification({ method: 'querymt/session/runtimeChanged', params: {
+        version: 1, session_id: sessionId, runtime: runtime(SessionRuntimePhase.Tools, 2)
+      } });
+      mockClient.emitExtensionNotification({ method: 'querymt/session/runtimeChanged', params: {
+        version: 1, session_id: sessionId, runtime: runtime(SessionRuntimePhase.Idle, 3)
+      } });
+      mockClient.emitSessionUpdate({ sessionId, update: { sessionUpdate: 'config_option_update', configOptions: [] } });
+    }
+    check();
+  });
 
   it.each([SessionRuntimePhase.Tools, SessionRuntimePhase.Idle])('F1: rejects stale runtime errors after newer healthy %s', async (phase) => {
     const store = await selectedStore();
