@@ -6,6 +6,9 @@ import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import SessionToolBlock from './SessionToolBlock.svelte';
+import { activeSessionFromLoadResponse } from '$lib/domain/session-snapshot';
+import { applyDelegationChildSession } from '$lib/domain/session-updates';
+import type { SessionToolCallItem } from '$lib/domain/types';
 
 const appCss = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
 
@@ -777,6 +780,59 @@ describe('SessionToolBlock', () => {
     expect(screen.queryByRole('region', { name: 'File diff' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Show source data' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Hide source data' })).toBeNull();
+  });
+
+  it.each([
+    [undefined, 'Status unavailable', '.lucide-circle-ellipsis'],
+    ['requested', 'Pending', '.lucide-circle-ellipsis'],
+    ['forked', 'Running', '.lucide-loader-circle'],
+    ['completed', 'Completed', '.lucide-check'],
+    ['failed', 'Failed', '.lucide-triangle-alert'],
+    ['cancelled', 'Cancelled', '.lucide-triangle-alert']
+  ] as const)('renders delegate transcript status from lifecycle %s, not dispatch completion', (delegationState, label, icon) => {
+    const tool: SessionToolCallItem = {
+      id: 'delegate-1', title: 'Run delegate', kind: 'delegate', status: 'completed', delegationState,
+      arguments: '{"target_agent_id":"reviewer","objective":"Review changes"}', childSessionId: 'child-1'
+    };
+    const { container } = render(SessionToolBlock, { tool });
+    const status = screen.getByTitle(label);
+    expect(status).toHaveClass('session-tool-status');
+    expect(status.querySelector(icon)).not.toBeNull();
+    expect(container.querySelector('summary')).toHaveAccessibleName(new RegExp(`${label}$`));
+    if (delegationState === 'forked') {
+      expect(status.querySelector(icon)).toHaveClass('animate-spin');
+      expect(status).toHaveClass('session-tool-status-in_progress');
+    }
+    if (delegationState !== 'completed') expect(status.querySelector('.lucide-check')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open reviewer session' })).toBeInTheDocument();
+    expect(tool.status).toBe('completed');
+  });
+
+  it('updates a restored delegate spinner when its lifecycle finishes without changing dispatch output', async () => {
+    let current = activeSessionFromLoadResponse('parent', { _meta: { 'querymt/sessionLoadSnapshot.v1': {
+      audit: { events: [
+        { seq: 1, kind: { type: 'tool_call_start', data: { tool_call_id: 'delegate-1', tool_name: 'delegate' } } },
+        { seq: 2, kind: { type: 'tool_call_end', data: { tool_call_id: 'delegate-1', tool_name: 'delegate', result: 'Delegation queued.' } } }
+      ] },
+      delegationUpdates: [{ sessionId: 'parent', toolCallId: 'delegate-1', state: 'forked', updatedAt: 2, childSessionId: 'child-1' }]
+    } } });
+    const { rerender } = render(SessionToolBlock, { tool: current.toolCalls[0] });
+    expect(screen.getByTitle('Running').querySelector('.lucide-loader-circle')).toHaveClass('animate-spin');
+
+    current = applyDelegationChildSession(current, { sessionId: 'parent', toolCallId: 'delegate-1', state: 'completed', updatedAt: 3 });
+    await rerender({ tool: current.toolCalls[0] });
+    expect(screen.getByTitle('Completed').querySelector('.lucide-check')).not.toBeNull();
+    expect(screen.queryByTitle('Running')).toBeNull();
+    expect(current.toolCalls[0]).toMatchObject({ status: 'completed', result: 'Delegation queued.' });
+  });
+
+  it.each(['in_progress', 'completed', 'failed'] as const)('does not change an ordinary tool status indicator (%s)', (status) => {
+    const { container } = render(SessionToolBlock, { tool: {
+      id: 'shell-1', title: 'Run shell', kind: 'shell', status,
+      arguments: '{"command":"git status"}', delegationState: 'forked'
+    } });
+    const expectedIcon = { in_progress: '.lucide-loader-circle', completed: '.lucide-check', failed: '.lucide-triangle-alert' }[status];
+    expect(container.querySelector(`.session-tool-status-${status} ${expectedIcon}`)).not.toBeNull();
   });
 
   it('opens the delegated child session without expanding the tool row', async () => {

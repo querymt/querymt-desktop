@@ -4,17 +4,21 @@
   import SessionAttachmentPreview from '$lib/components/session/SessionAttachmentPreview.svelte';
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
   import SessionMessageMetadata from '$lib/components/session/SessionMessageMetadata.svelte';
+  import SessionDelegatesBubble from '$lib/components/session/SessionDelegatesBubble.svelte';
   import { extractMessageFrontMatter } from '$lib/domain/message-frontmatter';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { enhanceCodeBlocks } from '$lib/components/session/code-blocks';
   import { preloadSessionToolPatchDiff } from './session-tool-patch-diff';
-  import { buildTurnPresentation, formatTurnDuration, getTurnChangedFileCount, getTurnChangeStats, type SessionConversationTurn } from '$lib/domain/session-conversation';
+  import { buildTurnPresentation, formatTurnDuration, getTurnChangedFileCount, getTurnChangeStats, getTurnDelegates, type SessionConversationTurn } from '$lib/domain/session-conversation';
   import { normalizeMarkdownCodeFences, renderMarkdownToHtml, splitStreamingMarkdown } from '$lib/domain/markdown';
-  import type { SessionContentBlock, SessionImageGalleryItem } from '$lib/domain/types';
+  import type { DesktopSessionSummary, SessionContentBlock, SessionImageGalleryItem } from '$lib/domain/types';
   import type { PromptFailure } from '$lib/domain/prompt-errors';
 
   let {
     turn,
+    agentId = '',
+    sessionId = null,
+    sessions = [],
     imageGallery,
     failedImageKeys,
     onImageFailure,
@@ -38,6 +42,9 @@
     onDisclosureChange
   }: {
     turn: SessionConversationTurn;
+    agentId?: string;
+    sessionId?: string | null;
+    sessions?: DesktopSessionSummary[];
     imageGallery?: SessionImageGalleryItem[];
     failedImageKeys?: ReadonlySet<string>;
     onImageFailure?: ((key: string) => void) | null;
@@ -87,6 +94,7 @@
   const lastPresentationId = $derived(presentation.at(-1)?.id ?? null);
   const changeStats = $derived(getTurnChangeStats(turn));
   const changedFileCount = $derived(getTurnChangedFileCount(turn));
+  const delegateCount = $derived(getTurnDelegates(turn).length);
   // Everything the response copy button should capture: the turn's assistant
   // text as markdown, without reasoning traces or tool activity.
   const turnResponseMarkdown = $derived(
@@ -230,6 +238,29 @@
         onDismiss={onDismissPromptFailure}
       />
     {/if}
+    {#snippet turnDiffPill()}
+      {#if changeStats}
+        <button
+          class="session-turn-diff-pill"
+          type="button"
+          aria-label={`Turn changes: ${changeStats.added} ${changeStats.added === 1 ? 'line' : 'lines'} added, ${changeStats.removed} ${changeStats.removed === 1 ? 'line' : 'lines'} deleted${changedFileCount ? `, ${changedFileCount} ${changedFileCount === 1 ? 'file' : 'files'} changed` : ''}`}
+          aria-expanded={diffOpen}
+          aria-controls={diffOpen ? diffPanelId : undefined}
+          onpointerenter={preloadTurnDiff}
+          onfocus={preloadTurnDiff}
+          onclick={onToggleDiff}
+        >
+          <Diff size={13} aria-hidden="true" />
+          {#if changedFileCount !== null && changedFileCount > 0}
+            <span class="session-turn-diff-pill-files" aria-hidden="true">{changedFileCount}</span>
+          {/if}
+          <span class="session-tool-change-added" aria-hidden="true">+{changeStats.added}</span>
+          <span class="session-tool-change-removed" aria-hidden="true">-{changeStats.removed}</span>
+          <ArrowUpRight size={12} class="session-turn-diff-pill-arrow" aria-hidden="true" />
+        </button>
+      {/if}
+    {/snippet}
+
     {#snippet responseActions()}
       <div class="session-message-actions session-assistant-message-actions" aria-label="Message actions">
         {#if turnResponseMarkdown}<button
@@ -280,30 +311,18 @@
             <Redo2 size={15} />
           </button>
         {/if}
-        {#if turn.durationMs !== undefined || changeStats}
+        {#if turn.durationMs !== undefined || changeStats || delegateCount > 0}
           <div class="session-turn-meta">
             {#if turn.durationMs !== undefined}
               <span class="session-turn-duration">Worked for {formatTurnDuration(turn.durationMs)}</span>
             {/if}
-            {#if changeStats}
-              <button
-                class="session-turn-diff-pill"
-                type="button"
-                aria-label={`Turn changes: ${changeStats.added} ${changeStats.added === 1 ? 'line' : 'lines'} added, ${changeStats.removed} ${changeStats.removed === 1 ? 'line' : 'lines'} deleted${changedFileCount ? `, ${changedFileCount} ${changedFileCount === 1 ? 'file' : 'files'} changed` : ''}`}
-                aria-expanded={diffOpen}
-                aria-controls={diffOpen ? diffPanelId : undefined}
-                onpointerenter={preloadTurnDiff}
-                onfocus={preloadTurnDiff}
-                onclick={onToggleDiff}
-              >
-                <Diff size={13} aria-hidden="true" />
-                {#if changedFileCount !== null && changedFileCount > 0}
-                  <span class="session-turn-diff-pill-files" aria-hidden="true">{changedFileCount}</span>
-                {/if}
-                <span class="session-tool-change-added" aria-hidden="true">+{changeStats.added}</span>
-                <span class="session-tool-change-removed" aria-hidden="true">-{changeStats.removed}</span>
-                <ArrowUpRight size={12} class="session-turn-diff-pill-arrow" aria-hidden="true" />
-              </button>
+            {#if delegateCount > 0}
+              <div class="session-turn-pills">
+                {@render turnDiffPill()}
+                <SessionDelegatesBubble variant="turn" {turn} {agentId} {sessionId} {sessions} />
+              </div>
+            {:else}
+              {@render turnDiffPill()}
             {/if}
           </div>
         {/if}

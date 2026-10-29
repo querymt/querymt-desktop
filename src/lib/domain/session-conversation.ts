@@ -1,7 +1,7 @@
 import { renderMarkdownToHtml } from '$lib/domain/markdown';
 import { extractMessageFrontMatter } from '$lib/domain/message-frontmatter';
 import { asObjectArray, parseObject, replacementPair, toolFilePath } from '$lib/domain/session-tool-args';
-import { getSessionToolChangeStats, type SessionToolChangeStats } from '$lib/domain/session-tool-presentation';
+import { getSessionToolChangeStats, isDelegateTool, type SessionToolChangeStats } from '$lib/domain/session-tool-presentation';
 import { getTranscriptBlocks, mapTranscriptRole } from '$lib/domain/session-updates';
 import type {
   ActiveSessionViewModel,
@@ -125,7 +125,7 @@ function conversationRevision(session: ActiveSessionViewModel): string {
     JSON.stringify(lastTranscript?.blocks ?? []),
     String(lastTranscript?.eventIndex ?? ''),
     String(session.toolCalls.length),
-    JSON.stringify(session.toolCalls.map((tool) => tool.childSessionId ?? null)),
+    JSON.stringify(session.toolCalls.map((tool) => [tool.childSessionId ?? null, tool.delegationState ?? null])),
     lastTool?.id ?? '',
     lastTool?.status ?? '',
     lastTool?.title ?? '',
@@ -253,6 +253,7 @@ function canReuseSettledTurn(previous: SessionConversationTurn, draft: DraftTurn
         item.tool.arguments === next.tool.arguments &&
         item.tool.messageId === next.tool.messageId &&
         item.tool.childSessionId === next.tool.childSessionId &&
+        item.tool.delegationState === next.tool.delegationState &&
         item.tool.isError === next.tool.isError
       );
     }
@@ -362,6 +363,12 @@ function buildConversationDrafts(session: ActiveSessionViewModel): DraftTurn[] {
   });
 
   return turns.filter((turn) => turn.user || turn.content.length > 0);
+}
+
+export function getTurnDelegates(turn: SessionConversationTurn | undefined): SessionToolCallItem[] {
+  return turn?.content.flatMap((item) =>
+    item.type === 'tool' && isDelegateTool(item.tool) ? [item.tool] : []
+  ) ?? [];
 }
 
 /** Cumulative tool changes in this turn, not a net diff against the workspace. */

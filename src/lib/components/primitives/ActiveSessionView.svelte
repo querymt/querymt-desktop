@@ -13,10 +13,12 @@
     type SessionTurnWindowViewport
   } from '$lib/domain/session-turn-window';
   import type { PromptFailure } from '$lib/domain/prompt-errors';
-  import type { ActiveSessionViewModel, SessionImageBlock, SessionImageGalleryItem } from '$lib/domain/types';
+  import type { ActiveSessionViewModel, DesktopSessionSummary, SessionImageBlock, SessionImageGalleryItem } from '$lib/domain/types';
 
   let {
     session,
+    agentId = '',
+    sessions = [],
     undoSupported = false,
     forkSupported = false,
     forkPending = false,
@@ -30,6 +32,8 @@
     onDisclosureChange
   }: {
     session: ActiveSessionViewModel;
+    agentId?: string;
+    sessions?: DesktopSessionSummary[];
     undoSupported?: boolean;
     forkSupported?: boolean;
     forkPending?: boolean;
@@ -280,6 +284,9 @@
             {@const reverted = turn.user?.messageId ? isTurnReverted(session, turn.user.messageId) : false}
             <SessionTurn
               {turn}
+              {agentId}
+              sessionId={session.sessionId}
+              {sessions}
               {imageGallery}
               {failedImageKeys}
               onImageFailure={handleImageFailure}

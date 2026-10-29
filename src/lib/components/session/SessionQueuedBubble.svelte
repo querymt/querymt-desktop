@@ -5,14 +5,17 @@
 
   let {
     inputs = [],
-    onDiscardQueued
+    onDiscardQueued,
+    open = $bindable(false),
+    onOpen
   }: {
     inputs?: PendingSessionInput[];
     onDiscardQueued?: (inputId: string) => void | Promise<void>;
+    open?: boolean;
+    onOpen?: () => void;
   } = $props();
 
   const panelId = $props.id();
-  let open = $state(false);
   let panelElement = $state<HTMLElement>();
   let triggerElement = $state<HTMLButtonElement>();
 
@@ -28,6 +31,7 @@
   function toggleQueuedPanel(event: MouseEvent) {
     triggerElement = event.currentTarget as HTMLButtonElement;
     open = !open;
+    if (open) onOpen?.();
   }
 
   function handlePointerDown(event: MouseEvent) {

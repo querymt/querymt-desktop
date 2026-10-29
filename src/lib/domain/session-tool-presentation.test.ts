@@ -195,6 +195,35 @@ describe('getSessionToolPresentation', () => {
     ).toBeNull();
   });
 
+  it.each([
+    [undefined, 'pending', 'Status unavailable'],
+    ['requested', 'pending', 'Pending'],
+    ['forked', 'in_progress', 'Running'],
+    ['completed', 'completed', 'Completed'],
+    ['failed', 'failed', 'Failed'],
+    ['cancelled', 'failed', 'Cancelled']
+  ] as const)('presents delegate lifecycle %s without changing dispatch status', (delegationState, status, statusLabel) => {
+    const call = tool({ title: 'Run delegate', kind: 'delegate', delegationState });
+    expect(getSessionToolPresentation(call)).toMatchObject({ status, statusLabel });
+    expect(call.status).toBe('completed');
+  });
+
+  it('uses lifecycle status for peer delegation tools too', () => {
+    expect(getSessionToolPresentation(tool({
+      title: 'Run route_delegation_to_peer', kind: 'other', delegationState: 'forked'
+    }))).toMatchObject({ status: 'in_progress', statusLabel: 'Running' });
+  });
+
+  it('preserves a dispatch failure when no delegation lifecycle is available', () => {
+    expect(getSessionToolPresentation(tool({ title: 'Run delegate', kind: 'delegate', status: 'failed' })))
+      .toMatchObject({ status: 'failed', statusLabel: 'Failed' });
+  });
+
+  it.each(['pending', 'in_progress', 'completed', 'failed'] as const)('keeps ordinary tool status unchanged (%s)', (status) => {
+    expect(getSessionToolPresentation(tool({ status, delegationState: 'forked' })))
+      .toMatchObject({ status, statusLabel: { pending: 'Pending', in_progress: 'Running', completed: 'Completed', failed: 'Failed' }[status] });
+  });
+
   it('summarizes delegate targets and exposes the target agent id', () => {
     const delegate = tool({
       title: 'Run delegate',

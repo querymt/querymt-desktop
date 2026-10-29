@@ -1,6 +1,7 @@
-import { createEmptyActiveSession, normalizeContentBlocks, stringifyOptional, summarizeContentBlocks } from '$lib/domain/session-updates';
+import { applyDelegationChildSession, createEmptyActiveSession, normalizeContentBlocks, stringifyOptional, summarizeContentBlocks } from '$lib/domain/session-updates';
 import type { ActiveSessionViewModel, PromptAttachment, SessionContentBlock, SessionToolCallItem, SessionTranscriptItem } from '$lib/domain/types';
 import { appendHistoricalUsage } from '$lib/domain/session-usage';
+import type { DelegationUpdateNotification } from '$lib/querymt/generated/types';
 
 type SnapshotEvent = {
   seq?: number;
@@ -35,6 +36,7 @@ type IndexedStructuredPrompt = {
 };
 
 type SessionLoadSnapshot = {
+  delegationUpdates?: DelegationUpdateNotification[];
   audit?: {
     events?: SnapshotEvent[];
   };
@@ -292,7 +294,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
   restoreUnmatchedPrompts(session, snapshot, structuredPrompts, restoredStructuredPrompts, toolCallsById);
 
   session.toolCalls = finalizeHistoricalToolCalls(Array.from(toolCallsById.values()), snapshot.audit?.events ?? []);
-  return normalizeHistoricalSession(session);
+  return (snapshot.delegationUpdates ?? []).reduce(applyDelegationChildSession, normalizeHistoricalSession(session));
 }
 
 export function getSnapshotInputStates(response: unknown): SnapshotInputState[] {

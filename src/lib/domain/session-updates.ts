@@ -812,19 +812,34 @@ export function applyDelegationChildSession(
     tool_call_id?: string | null;
     childSessionId?: string | null;
     child_session_id?: string | null;
+    state?: SessionToolCallItem['delegationState'];
+    updatedAt?: number;
   }
 ): ActiveSessionViewModel {
   const sessionId = readNonEmptyString(update.sessionId) ?? readNonEmptyString(update.session_id);
   const toolCallId = readNonEmptyString(update.toolCallId) ?? readNonEmptyString(update.tool_call_id);
   const childSessionId = readNonEmptyString(update.childSessionId) ?? readNonEmptyString(update.child_session_id);
-  if (!toolCallId || !childSessionId) return current;
+  if (!toolCallId) return current;
   if (sessionId && current.sessionId && sessionId !== current.sessionId) return current;
 
-  const next = cloneSession(current);
-  const target = canonicalizeToolCall(next.toolCalls, toolCallId);
-  if (!target || target.childSessionId === childSessionId) return current;
-  target.childSessionId = childSessionId;
-  return next;
+  const target = current.toolCalls.find((tool) => tool.id === toolCallId);
+  if (!target) return current;
+  const state = ['requested', 'forked', 'completed', 'failed', 'cancelled'].includes(update.state ?? '')
+    ? update.state : undefined;
+  const updatedAt = typeof update.updatedAt === 'number' && Number.isFinite(update.updatedAt) ? update.updatedAt : undefined;
+  const terminal = ['completed', 'failed', 'cancelled'].includes(target.delegationState ?? '');
+  const stale = target.delegationUpdatedAt !== undefined && (updatedAt === undefined || updatedAt < target.delegationUpdatedAt);
+  const acceptState = state && !terminal && !stale && !(target.delegationState === 'forked' && state === 'requested');
+  const hasLifecycleUpdate = state !== undefined || updatedAt !== undefined;
+  const acceptChildSessionId = childSessionId && (!hasLifecycleUpdate || !stale);
+  const patch = {
+    childSessionId: acceptChildSessionId ? childSessionId : target.childSessionId,
+    delegationState: acceptState ? state : target.delegationState,
+    delegationUpdatedAt: acceptState ? updatedAt : target.delegationUpdatedAt
+  };
+  if (target.childSessionId === patch.childSessionId && target.delegationState === patch.delegationState &&
+    target.delegationUpdatedAt === patch.delegationUpdatedAt) return current;
+  return { ...current, toolCalls: current.toolCalls.map((tool) => tool.id === toolCallId ? { ...tool, ...patch } : tool) };
 }
 
 function readNonEmptyString(value: unknown): string | null {

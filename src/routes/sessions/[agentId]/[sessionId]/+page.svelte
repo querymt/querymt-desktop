@@ -8,6 +8,7 @@
   import SessionScrollToBottomPill from '$lib/components/session/SessionScrollToBottomPill.svelte';
   import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelte';
   import SessionQueuedBubble from '$lib/components/session/SessionQueuedBubble.svelte';
+  import SessionDelegatesBubble from '$lib/components/session/SessionDelegatesBubble.svelte';
   import DelegateModelDialog from '$lib/components/session/DelegateModelDialog.svelte';
   import SessionForkDialog from '$lib/components/session/SessionForkDialog.svelte';
   import SessionHeader from '$lib/components/session/SessionHeader.svelte';
@@ -85,6 +86,8 @@
   let dockAlignLeft = $state<number | null>(null);
   let dockAlignWidth = $state<number | null>(null);
   let debugEventsOpen = $state(false);
+  let queuedInputsOpen = $state(false);
+  let delegatesOpen = $state(false);
   let contentResizeObserver: ResizeObserver | null = null;
   let pageResizeObserver: ResizeObserver | null = null;
   let scrollViewport: HTMLElement | null = null;
@@ -602,6 +605,8 @@
   <div bind:this={sessionPageContent} class="session-page-content">
     <ActiveSessionView
       session={agentsStore.activeSession}
+      {agentId}
+      sessions={agentsStore.sessionsByAgent[agentId] ?? []}
       {undoSupported}
       {forkSupported}
       forkPending={agentsStore.forkPending}
@@ -657,9 +662,18 @@
       >
         <SessionQueuedBubble
           inputs={waitingInputs}
+          bind:open={queuedInputsOpen}
+          onOpen={() => (delegatesOpen = false)}
           onDiscardQueued={agentsStore.canDiscardQueuedInputs
             ? (inputId) => agentsStore.discardQueuedInput(inputId)
             : undefined}
+        />
+        <SessionDelegatesBubble
+          {agentId}
+          session={agentsStore.activeSession}
+          sessions={agentsStore.sessionsByAgent[agentId] ?? []}
+          bind:open={delegatesOpen}
+          onOpen={() => (queuedInputsOpen = false)}
         />
         <SessionActivityBar session={agentsStore.activeSession} forkPending={agentsStore.forkPending} />
       </div>

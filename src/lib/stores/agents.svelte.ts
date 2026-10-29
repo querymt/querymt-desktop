@@ -4700,14 +4700,7 @@ export class AgentsStore {
           }
         }
         if (notification.method === 'querymt/session/delegationUpdate') {
-          const params = (notification.params ?? {}) as {
-            sessionId?: string;
-            session_id?: string;
-            toolCallId?: string;
-            tool_call_id?: string;
-            childSessionId?: string;
-            child_session_id?: string;
-          };
+          const params = (notification.params ?? {}) as Parameters<typeof applyDelegationChildSession>[1];
           const sessionId = params.sessionId ?? params.session_id;
           if (sessionId) {
             this.rememberSessionChildren(agentId, sessionId, [params.childSessionId ?? params.child_session_id]);

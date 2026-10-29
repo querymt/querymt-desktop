@@ -1,4 +1,5 @@
 import type { SessionConfigOption } from '@agentclientprotocol/sdk';
+import type { DelegationUpdateState } from '$lib/querymt/generated/types';
 
 export type RuntimeStatus = 'running' | 'starting' | 'degraded' | 'stopped';
 export type SessionStatus = 'idle' | 'thinking' | 'waiting' | 'completed' | 'cancelling';
@@ -325,6 +326,9 @@ export interface SessionToolCallItem {
   isError?: boolean;
   eventIndex?: number;
   childSessionId?: string | null;
+  // The dispatch tool can finish before its delegated task does.
+  delegationState?: `${DelegationUpdateState}`;
+  delegationUpdatedAt?: number;
 }
 
 export interface SessionPlanEntry {
