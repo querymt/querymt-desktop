@@ -111,6 +111,30 @@ export function readDisclosedSessionCwd(meta: unknown): string | null {
   return str(record(record(record(meta)?.querymt)?.sessionWorkspace)?.sessionCwd);
 }
 
+/** Reasons the agent gives for a read-only session (`sessionAccess.reason` / prompt error code). */
+export const READ_ONLY_REASON_OWNER_TRANSFERRED = 'owner_transferred';
+export const READ_ONLY_REASON_WORKSPACE_ARCHIVED = 'workspace_archived';
+
+/** Error codes that put a session into the read-only presentation. */
+export function isReadOnlyErrorCode(code: string | null): code is string {
+  return code === READ_ONLY_REASON_OWNER_TRANSFERRED || code === READ_ONLY_REASON_WORKSPACE_ARCHIVED;
+}
+
+export function isWorkspaceArchivedAccess(access: SessionAccessInfo | null | undefined): boolean {
+  return access?.reason === READ_ONLY_REASON_WORKSPACE_ARCHIVED;
+}
+
+/** Notice shown in place of the composer; an unknown reason keeps the generic wording. */
+export function describeSessionAccess(access: SessionAccessInfo | null | undefined): string {
+  if (isWorkspaceArchivedAccess(access)) {
+    return 'This worktree was archived, so this conversation is read-only. To delete the checkout, run /worktree remove from another session.';
+  }
+  if (access?.reason === READ_ONLY_REASON_OWNER_TRANSFERRED || access?.ownerSessionId) {
+    return 'This worktree was handed off, so this conversation is read-only.';
+  }
+  return 'This conversation is read-only.';
+}
+
 /** Parse `_meta.querymt.sessionAccess`; only an explicit read-only grant counts. */
 export function readSessionAccess(meta: unknown): SessionAccessInfo | null {
   const access = record(record(record(meta)?.querymt)?.sessionAccess);
@@ -153,10 +177,13 @@ export function parseWorktreeSessionResult(value: unknown): WorktreeSessionResul
 }
 
 const WORKTREE_ERROR_MESSAGES: Record<string, string> = {
-  owner_active: 'Stop the running turn (and any shared delegates) before handing off this worktree.',
+  owner_active: 'Stop the running turn, queued input and any shared delegates before changing this worktree.',
   owner_transferred: 'This worktree was handed off to another session. This conversation is now read-only.',
   owner_conflict: 'This worktree already belongs to another session.',
-  workspace_archived: 'This worktree is archived and can no longer run sessions.',
+  workspace_archived: 'This worktree is archived. Its session is read-only and can no longer run turns.',
+  workspace_not_archived: 'Archive the worktree before removing it, or remove it with the archive option.',
+  unpreserved_content: 'The worktree has uncommitted, untracked or ignored files. Commit, publish or delete them first.',
+  unpreserved_commits: 'The worktree has commits that are not preserved. Publish the branch before removing it.',
   workspace_missing: 'The worktree checkout is missing on disk.',
   workspace_service_unavailable: 'Worktrees are not enabled on this agent.',
   isolation_unsupported_layout: 'This repository layout cannot be isolated in a worktree.',

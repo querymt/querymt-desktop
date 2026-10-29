@@ -1256,6 +1256,12 @@ describe('DesktopSessionList worktree sessions', () => {
     expect(screen.getByText('Handed off')).toBeInTheDocument();
   });
 
+  it('marks a session whose worktree was archived instead of handed off', () => {
+    render(DesktopSessionList, { sessions: [{ ...worktreeChild, access: { mode: 'read_only', reason: 'workspace_archived', ownerSessionId: null } }], catalogComplete: true });
+    expect(screen.getByTestId('worktree-archived-badge')).toHaveTextContent('Archived');
+    expect(screen.queryByText('Handed off')).not.toBeInTheDocument();
+  });
+
   it('shows no worktree markers for plain sessions', () => {
     render(DesktopSessionList, { sessions, catalogComplete: true });
     expect(screen.queryByTestId('worktree-branch-badge')).not.toBeInTheDocument();

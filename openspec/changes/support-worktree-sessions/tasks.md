@@ -37,6 +37,8 @@ Depends on the amended agent change `add-git-worktree-isolation` (sibling `query
 
 - [x] 6.1 For a read-only session, replace the composer with a notice linking to the owner, and hide undo and fork.
 
+- [x] 6.2 Treat `sessionAccess.reason = "workspace_archived"` (agent change `add-git-worktree-isolation`, section 25.12) and `workspace_archived` prompt failures as read-only: reason-specific notice without an owner link, *Archived* list badge, archive/remove error messages. Verify in `session-workspace.test.ts`, `DesktopSessionList.test.ts` and `agents.svelte.test.ts`.
+
 ## 7. Checks
 
 - [x] 7.1 `npm run check`, `npm run test:ui` (only pre-existing failures allowed), `openspec validate support-worktree-sessions --strict`.

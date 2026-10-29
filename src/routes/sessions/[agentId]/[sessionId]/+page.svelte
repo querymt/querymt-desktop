@@ -15,7 +15,7 @@
   import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
   import SessionUndoDialog from '$lib/components/session/SessionUndoDialog.svelte';
   import WorktreeSessionDialog from '$lib/components/session/WorktreeSessionDialog.svelte';
-  import type { WorktreeCreateOptions, WorktreeHandoffOptions } from '$lib/domain/session-workspace';
+  import { describeSessionAccess, type WorktreeCreateOptions, type WorktreeHandoffOptions } from '$lib/domain/session-workspace';
   import {
     createFollowScrollScheduler,
     getDistanceFromBottom,
@@ -681,9 +681,7 @@
       {#if readOnlyAccess}
         <div class="session-read-only-notice" role="status" data-testid="read-only-notice"
           style={dockAlignLeft != null && dockAlignWidth != null ? `left:${dockAlignLeft}px;width:${dockAlignWidth}px;` : ''}>
-          <span>
-            This worktree was handed off, so this conversation is read-only.
-          </span>
+          <span>{describeSessionAccess(readOnlyAccess)}</span>
           {#if readOnlyOwnerId}
             <a class="action-btn" href={`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(readOnlyOwnerId)}`}>Open current session</a>
           {/if}

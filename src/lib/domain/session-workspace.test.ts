@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { RequestError } from '@agentclientprotocol/sdk';
 import {
   buildSessionWorkspaceRequest,
+  describeSessionAccess,
   describeWorktreeError,
+  isReadOnlyErrorCode,
+  isWorkspaceArchivedAccess,
   isWorkspaceUsable,
   parseWorktreeSessionResult,
   readSessionAccess,
@@ -70,6 +73,36 @@ describe('readSessionAccess', () => {
       .toEqual({ mode: 'read_only', reason: 'owner_transferred', ownerSessionId: 'new' });
     expect(readSessionAccess({ querymt: { sessionAccess: { mode: 'read_only' } } }))
       .toEqual({ mode: 'read_only', reason: null, ownerSessionId: null });
+  });
+});
+
+describe('archived read-only access', () => {
+  it('parses workspace_archived access without an owner', () => {
+    const access = readSessionAccess({ querymt: { sessionAccess: { mode: 'read_only', reason: 'workspace_archived', workspaceId: 'ws_1' } } });
+    expect(access).toEqual({ mode: 'read_only', reason: 'workspace_archived', ownerSessionId: null });
+    expect(isWorkspaceArchivedAccess(access)).toBe(true);
+    expect(isWorkspaceArchivedAccess({ mode: 'read_only', reason: 'owner_transferred', ownerSessionId: 'n' })).toBe(false);
+    expect(isWorkspaceArchivedAccess(null)).toBe(false);
+  });
+
+  it('recognises both read-only error codes', () => {
+    expect(isReadOnlyErrorCode('owner_transferred')).toBe(true);
+    expect(isReadOnlyErrorCode('workspace_archived')).toBe(true);
+    expect(isReadOnlyErrorCode('owner_active')).toBe(false);
+    expect(isReadOnlyErrorCode(null)).toBe(false);
+  });
+
+  it('words the notice per reason and keeps unknown reasons generic', () => {
+    expect(describeSessionAccess({ mode: 'read_only', reason: 'workspace_archived', ownerSessionId: null })).toContain('archived');
+    expect(describeSessionAccess({ mode: 'read_only', reason: 'owner_transferred', ownerSessionId: 'n' })).toContain('handed off');
+    expect(describeSessionAccess({ mode: 'read_only', reason: null, ownerSessionId: 'n' })).toContain('handed off');
+    expect(describeSessionAccess({ mode: 'read_only', reason: 'future_reason', ownerSessionId: null })).toBe('This conversation is read-only.');
+  });
+
+  it('maps the archive and removal codes', () => {
+    for (const code of ['workspace_archived', 'workspace_not_archived', 'unpreserved_content', 'unpreserved_commits']) {
+      expect(describeWorktreeError(new RequestError(-32602, 'x', { code, message: 'agent says' }))).not.toBe('agent says');
+    }
   });
 });
 

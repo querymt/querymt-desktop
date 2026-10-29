@@ -32,7 +32,9 @@ All additions are additive `_meta` or QueryMT extension methods; the desktop tre
    - carries `_meta.querymt.sessionWorkspace` (disclosure, as in item 2);
    - for a previous owner after handoff, also carries `_meta.querymt.sessionAccess = { mode: "read_only", reason: "owner_transferred", ownerSessionId }`.
 
-   Prompting such a session fails with code `owner_transferred`.
+   A session whose workspace was archived (from any session, see agent change section 25) is also read-only: `_meta.querymt.sessionAccess = { mode: "read_only", reason: "workspace_archived", workspaceId }`, without `ownerSessionId`.
+
+   Prompting a read-only session fails with the matching code (`owner_transferred` or `workspace_archived`).
 
 ## Decisions
 
@@ -71,12 +73,13 @@ On the launcher, the composer's *Workspace* option maps to `sessionWorkspace` on
 ### 6. Read-only presentation is agent-authoritative
 The store records `sessionAccess` from the load response (`activeSessionAccess`).
 - When read-only: the session page replaces the composer with a banner linking to `ownerSessionId`, and hides undo, fork, and handoff actions.
-- An `owner_transferred` prompt error, from a race with a handoff elsewhere, puts the session into the same state.
+- An `owner_transferred` or `workspace_archived` prompt error, from a race with a handoff or archive elsewhere, puts the session into the same state.
+- The notice wording depends on `sessionAccess.reason`; the owner link is shown only when the agent supplies an owner. Archived sessions get an *Archived* list badge instead of *Handed off*. Unknown reasons fall back to a generic read-only notice.
 
 The desktop never infers read-only from list metadata alone. The list badge is informational only.
 
 ### 7. Errors
-`describeWorktreeError(error)` maps the stable codes in `RequestError.data.code` to short, actionable messages. Example: `owner_active` → "Stop the running turn (and any shared delegates) before handing off." Unknown codes fall back to the agent message.
+`describeWorktreeError(error)` maps the stable codes in `RequestError.data.code` to short, actionable messages. Example: `owner_active` → "Stop the running turn, queued input and any shared delegates before changing this worktree." The archive/remove codes `workspace_archived`, `workspace_not_archived`, `unpreserved_content` and `unpreserved_commits` are mapped too, although the desktop does not yet offer archive or remove actions (they stay available through the agent's `/worktree` commands). Unknown codes fall back to the agent message.
 
 ## Risks / Trade-offs
 

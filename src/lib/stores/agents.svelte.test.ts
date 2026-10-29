@@ -9475,6 +9475,29 @@ describe('AgentsStore worktree sessions', () => {
     expect(store.activeSession.runState).not.toBe('failed');
   });
 
+  it('records archived read-only access from the load response', async () => {
+    const store = await connectedStore();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: { querymt: {
+      sessionAccess: { mode: 'read_only', reason: 'workspace_archived', workspaceId: 'ws_1' }
+    } } }, replay: [] });
+    await store.loadSession('agent-1', 's1');
+    expect(store.activeSessionAccess).toEqual({ mode: 'read_only', reason: 'workspace_archived', ownerSessionId: null });
+    expect(store.isSessionReadOnly('agent-1', 's1')).toBe(true);
+  });
+
+  it('switches to read-only without an owner when a prompt is rejected with workspace_archived', async () => {
+    mockClient.sendPrompt.mockRejectedValueOnce(new RequestError(-32600, 'x', { code: 'workspace_archived' }));
+    const store = await connectedStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 's1';
+    store.composerPrompt = 'keep me';
+    await store.sendPromptToActiveSession();
+    expect(store.activeSessionAccess).toEqual({ mode: 'read_only', reason: 'workspace_archived', ownerSessionId: null });
+    expect(store.promptFailure).toBeNull();
+    expect(store.activeSession.runState).not.toBe('failed');
+    expect(store.composerPrompt).toBe('keep me');
+  });
+
   it('applies the workspace choice for the launcher agent even when no composer agent is set', async () => {
     const store = await connectedStore();
     store.setComposerAgent(null);

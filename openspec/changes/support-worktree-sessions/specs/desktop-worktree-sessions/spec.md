@@ -87,8 +87,8 @@ A session row with forks or worktree children SHALL offer an expand control. The
 - **WHEN** the children response contains sessions with a different parent
 - **THEN** those sessions are not shown under the expanded row
 
-### Requirement: Handed-off sessions are read-only
-When the agent reports a loaded session as read-only because its worktree was handed off, the desktop SHALL show the session's history, SHALL replace the composer with a notice linking to the current owner session, and SHALL hide actions that would run or change the session (prompt, undo, fork, handoff, new worktree session). A prompt rejected with `owner_transferred` SHALL put the session into the same state.
+### Requirement: Handed-off and archived sessions are read-only
+When the agent reports a loaded session as read-only (`owner_transferred` or `workspace_archived`), the desktop SHALL show its history, replace the composer with a notice worded for the reason, and hide actions that would run or change the session. A prompt rejected with either code SHALL put the session into the same state.
 
 #### Scenario: Open a previous owner
 - **WHEN** the user opens a session whose load response has `sessionAccess.mode = "read_only"`
@@ -97,3 +97,15 @@ When the agent reports a loaded session as read-only because its worktree was ha
 #### Scenario: Handoff happens elsewhere
 - **WHEN** a prompt fails with code `owner_transferred`
 - **THEN** the session switches to the read-only presentation without losing the transcript
+
+#### Scenario: Open a session whose worktree was archived
+- **WHEN** the user opens a session whose load response has `sessionAccess = { mode: "read_only", reason: "workspace_archived" }`
+- **THEN** the transcript is shown, no composer is shown, the notice says the worktree was archived, no owner link is offered, and the list row shows an *Archived* badge instead of *Handed off*
+
+#### Scenario: Unknown read-only reason
+- **WHEN** the load response has `sessionAccess.mode = "read_only"` with a reason the desktop does not know
+- **THEN** the read-only presentation is kept with a generic notice
+
+#### Scenario: Archive happens elsewhere
+- **WHEN** a prompt fails with code `workspace_archived`
+- **THEN** the session switches to the read-only presentation without losing the transcript or the rejected prompt text

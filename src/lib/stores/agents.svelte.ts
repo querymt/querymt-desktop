@@ -14,6 +14,7 @@ import { tick } from 'svelte';
 import {
   buildSessionWorkspaceRequest,
   describeWorktreeError,
+  isReadOnlyErrorCode,
   readSessionAccess,
   readSessionWorkspace,
   readDisclosedSessionCwd,
@@ -3315,10 +3316,16 @@ export class AgentsStore {
     } catch (error) {
       if (!ownsAction()) return;
       endSessionWork(this.activeSession);
-      if (readWorktreeErrorCode(error) === 'owner_transferred') {
-        // A handoff elsewhere won the race: keep the transcript, drop the composer.
+      const readOnlyCode = readWorktreeErrorCode(error);
+      if (isReadOnlyErrorCode(readOnlyCode)) {
+        // A handoff or archive elsewhere won the race: keep the transcript, drop the composer.
         const previous = this.findSessionSummary(agentId, sessionId);
-        this.activeSessionAccess = { mode: 'read_only', reason: 'owner_transferred', ownerSessionId: previous?.workspace?.handedOffTo ?? null };
+        const transferred = readOnlyCode === 'owner_transferred';
+        this.activeSessionAccess = {
+          mode: 'read_only',
+          reason: readOnlyCode,
+          ownerSessionId: transferred ? previous?.workspace?.handedOffTo ?? null : null
+        };
         this.activeSession.runState = 'idle';
         this.activeSession.activityLabel = null;
         this.error = describeWorktreeError(error);

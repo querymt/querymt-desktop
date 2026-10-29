@@ -11,7 +11,7 @@
   import SessionLifecycleBadges from '$lib/components/primitives/SessionLifecycleBadges.svelte';
   import { createSessionBrowserState, SESSION_LIFECYCLE_VIEWS, RECENT_SESSION_GROUP_KEY, PINNED_SESSION_GROUP_KEY, compareSessionsByPin, getSessionKey, getSessionWorkspaceName, isRootSession, sessionMatchesLifecycle, compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import Identicon from '$lib/components/primitives/Identicon.svelte';
-  import { isWorkspaceUsable, worktreeTooltip } from '$lib/domain/session-workspace';
+  import { isWorkspaceArchivedAccess, isWorkspaceUsable, worktreeTooltip } from '$lib/domain/session-workspace';
   import type { DesktopSessionSummary, ExcludedSessionAgent, SessionBrowserState, SessionLifecyclePatch, SessionLifecycleView, SessionStatus } from '$lib/domain/types';
 
   let {
@@ -470,7 +470,8 @@
                    {@const canDelete = canDeleteSession?.(session) ?? false}
                    {@const expandable = hasExpandableChildren(session)}
                    {@const expanded = !!expandedRows[sessionKey]}
-                   {@const handedOff = !!session.workspace?.handedOffTo || session.access?.mode === 'read_only'}
+                   {@const archivedReadOnly = isWorkspaceArchivedAccess(session.access)}
+                   {@const handedOff = !archivedReadOnly && (!!session.workspace?.handedOffTo || session.access?.mode === 'read_only')}
                    <div class="model-picker-row session-row" class:session-row-nested={depth > 0} style={depth > 0 ? `margin-left: ${depth * 1.1}rem` : undefined} data-depth={depth}>
                     <button
                       class="session-row-navigation"
@@ -516,7 +517,9 @@
                             {#if usable}<GitBranch size={11} />{:else}<AlertTriangle size={11} />{/if}{session.workspace.branch ?? 'worktree'}{#if !usable} · {session.workspace.lifecycle}{/if}
                           </span>
                         {/if}
-                        {#if handedOff}
+                        {#if archivedReadOnly}
+                          <span class="session-relationship-badge session-relationship-badge-handoff" title="This worktree was archived; the session is read-only" data-testid="worktree-archived-badge">Archived</span>
+                        {:else if handedOff}
                           <span class="session-relationship-badge session-relationship-badge-handoff" title="This worktree was handed off to another session">Handed off</span>
                         {/if}
                         {#if (session.forkCount ?? 0) > 0}
