@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionNotification } from '@agentclientprotocol/sdk';
 import type { AccountingSnapshot } from '$lib/querymt/generated/types';
+import { activeSessionFromLoadResponse } from './session-snapshot';
+import { SessionRuntimePhase, DelegationUpdateState } from '$lib/querymt/generated/types';
 import {
   applyDelegationChildSession,
   applySessionNotification,
@@ -9,7 +11,8 @@ import {
   createEmptyActiveSession,
   endSessionWork,
   getNextConversationEventIndex,
-  mergeMissingSessionUsage
+  mergeMissingSessionUsage,
+  projectSessionRuntime
 } from './session-updates';
 
 function notification(update: SessionNotification['update']): SessionNotification {
@@ -34,6 +37,20 @@ const incompleteAccounting = accounting({
 });
 
 describe('conversation event ordering', () => {
+  it('F2: preserves run outcome and dependency evidence across harmless notification cloning', () => {
+    const loaded = activeSessionFromLoadResponse('session-1', { _meta: { 'querymt/sessionLoadSnapshot.v1': {
+      audit: { events: [{ seq: 1, kind: { type: 'run_started', data: { run_id: 'run-a' } } },
+        { seq: 2, kind: { type: 'run_completed', data: { run_id: 'run-a', outcome: 'cancelled' } } }] }
+    } } });
+    loaded.delegations = [{ version: 1, sessionId: 'session-1', delegationId: 'd1', state: DelegationUpdateState.Forked,
+      targetAgentId: 'coder', objective: '', requestedAt: 1, updatedAt: 1, activity: 'live', stage: 'verifying' }];
+    loaded.dependencyLabel = 'Verifying delegate result';
+    const next = applySessionNotification(loaded, notification({ sessionUpdate: 'usage_update', used: 1, size: 100 }));
+    projectSessionRuntime(next, { phase: SessionRuntimePhase.Idle, steerable: false, pending_steering_count: 0, queued_input_count: 0 });
+    expect(next).toMatchObject({ runId: 'run-a', lastRunOutcome: { runId: 'run-a', outcome: 'cancelled' },
+      activityLabel: 'Turn cancelled.', dependencyLabel: 'Verifying delegate result', delegations: loaded.delegations });
+    expect(loaded.lastRunOutcome?.outcome).toBe('cancelled');
+  });
   it('continues after sparse persisted indexes instead of using the debug event count', () => {
     const session = createEmptyActiveSession();
     session.transcript = [
@@ -334,6 +351,31 @@ describe('mergeMissingSessionUsage', () => {
 });
 
 describe('applySessionNotification tool calls', () => {
+  it.each(['completed', 'failed'] as const)('keeps a parallel shell active when a quick tool is %s in live and replay reducers', (status) => {
+    const updates = [
+      notification({ sessionUpdate: 'tool_call', toolCallId: 'shell', title: 'Long shell', status: 'in_progress' }),
+      notification({ sessionUpdate: 'tool_call', toolCallId: 'read', title: 'Quick read', status: 'in_progress' }),
+      notification({ sessionUpdate: 'tool_call_update', toolCallId: 'read', status })
+    ];
+    const live = updates.reduce((session, update) => applySessionNotification(session, update), createEmptyActiveSession());
+    const replay = appendSessionReplay(createEmptyActiveSession(), updates);
+    for (const session of [live, replay]) {
+      expect(session.toolCalls.find((tool) => tool.id === 'read')?.status).toBe(status);
+      expect(session.toolCalls.find((tool) => tool.id === 'shell')?.status).toBe('in_progress');
+      expect(session.runState).toBe('tool-running');
+      expect(session.activeToolCallId).toBe('shell');
+      expect(session.lastError).toBeNull();
+    }
+  });
+
+  it('does not treat the last tool failure as a terminal run failure', () => {
+    const session = applySessionNotification(createEmptyActiveSession(), notification({
+      sessionUpdate: 'tool_call_update', toolCallId: 'read', status: 'failed'
+    }));
+    expect(session.toolCalls[0].status).toBe('failed');
+    expect(session.runState).toBe('streaming');
+    expect(session.lastError).toBeNull();
+  });
   it('merges repeated tool starts by tool call ID', () => {
     const start = notification({
       sessionUpdate: 'tool_call',

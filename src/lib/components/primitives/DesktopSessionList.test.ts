@@ -172,6 +172,11 @@ describe('DesktopSessionList recent sessions', () => {
 });
 
 describe('DesktopSessionList', () => {
+  it('does not label unknown execution as Idle', () => {
+    render(DesktopSessionList, { sessions: [{ ...sessions[0], status: 'unknown' }] });
+    expect(screen.getByLabelText('Status: Status unavailable')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Status: Idle')).not.toBeInTheDocument();
+  });
   it('delays loading chrome while keeping the pending state distinct from an empty catalog', async () => {
     vi.useFakeTimers();
     const { container } = render(DesktopSessionList, { loading: true });

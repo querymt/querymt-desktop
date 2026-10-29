@@ -1209,6 +1209,10 @@ export interface DelegationUpdateNotification {
 	delegationId: string;
 	toolCallId?: string;
 	state: DelegationUpdateState;
+	stage?: 'queued' | 'executing' | 'verifying' | 'finalizing' | 'cancel_requested';
+	activity?: 'live' | 'historical';
+	sessionSeq?: number;
+	sourceEpoch?: string;
 	targetAgentId: string;
 	objective: string;
 	childSessionId?: string;
@@ -1804,6 +1808,7 @@ export interface SessionLoadSnapshot {
 	accounting: AccountingSnapshot;
 	delegationUpdates: DelegationUpdateNotification[];
 	userPrompts?: UserPromptRecord[];
+	runtimeStatus?: SessionRuntimeStatus;
 }
 
 export enum SessionRuntimePhase {
@@ -1814,16 +1819,24 @@ export enum SessionRuntimePhase {
 	Waiting = "waiting",
 	Closing = "closing",
 	CancelRequested = "cancel_requested",
+	Unknown = "unknown",
 }
 
 /** High-level runtime state for stop/resume and steering orchestration. */
 export interface SessionRuntimeStatus {
 	phase: SessionRuntimePhase;
-	active_run_id?: string;
+	active_run_id?: string | null;
 	steerable: boolean;
 	pending_steering_count: number;
 	queued_input_count: number;
-	run_started_at_ms?: number;
+	run_started_at_ms?: number | null;
+	observation?: {
+		availability: 'live' | 'inactive' | 'unavailable';
+		epoch?: string;
+		revision?: number;
+		reason?: string;
+	};
+	delegation_activity?: DelegationUpdateNotification[];
 }
 
 export interface SessionMeta {

@@ -379,6 +379,8 @@
 
   function getStatusLabel(status: SessionStatus): string {
     switch (status) {
+      case 'unknown':
+        return 'Status unavailable';
       case 'thinking':
         return 'Thinking';
       case 'waiting':
@@ -399,6 +401,7 @@
       case 'cancelling':
         return 'running';
       case 'waiting':
+      case 'unknown':
         return 'warning';
       case 'completed':
         return 'success';

@@ -148,6 +148,13 @@ export interface QuerymtWorktreeHandoffRequest {
 }
 export const QMT_NOTIFICATION_SESSION_PINS_CHANGED = 'querymt/session/pinsChanged';
 export const QMT_NOTIFICATION_SESSION_INPUT_STATE = 'querymt/session/inputState';
+export const QMT_NOTIFICATION_SESSION_RUNTIME_CHANGED = 'querymt/session/runtimeChanged';
+
+export interface SessionRuntimeChangedNotification {
+  version: number;
+  session_id: string;
+  runtime: SessionRuntimeStatus;
+}
 
 export interface QuerymtProfileInfo {
   id: string;

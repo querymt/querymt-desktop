@@ -221,22 +221,27 @@ export function readSessionLifecycle(namespace: unknown, sessionId: string): Ses
 export function inferSessionStatus(session: SessionInfo): SessionStatus {
   const meta = readOperationalSessionMeta(session);
   if (!meta) {
-    return 'idle';
+    return 'unknown';
   }
 
-  switch (meta.runtimeStatus.phase) {
+  return runtimeSessionStatus(meta.runtimeStatus, meta.userMessageCount > 0);
+}
+
+export function runtimeSessionStatus(runtime: QuerymtSessionMeta['runtimeStatus'], hasHistory = true): SessionStatus {
+  if (runtime.observation?.availability === 'unavailable') return 'unknown';
+  switch (runtime.phase) {
     case QuerymtSessionRuntimePhase.Starting:
     case QuerymtSessionRuntimePhase.Model:
     case QuerymtSessionRuntimePhase.Tools:
-      return 'thinking';
+    case QuerymtSessionRuntimePhase.Closing:
     case QuerymtSessionRuntimePhase.Waiting:
-      return 'waiting';
+      return 'thinking';
     case QuerymtSessionRuntimePhase.CancelRequested:
       return 'cancelling';
     case QuerymtSessionRuntimePhase.Idle:
-    case QuerymtSessionRuntimePhase.Closing:
+      return hasHistory ? 'completed' : 'idle';
     default:
-      return meta.userMessageCount > 0 ? 'completed' : 'idle';
+      return 'unknown';
   }
 }
 

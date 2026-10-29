@@ -1,4 +1,5 @@
 import type { SessionNotification } from '@agentclientprotocol/sdk';
+import type { DelegationUpdateNotification, SessionRuntimeStatus } from '$lib/querymt/generated/types';
 import { readAccountingMeta, readUsageBreakdown } from '$lib/domain/session-usage';
 import type {
   ActiveSessionViewModel,
@@ -193,7 +194,7 @@ function applySessionNotificationInPlace(
         target.kind = update.kind ?? target.kind;
         target.messageId = target.messageId ?? readMessageId(update);
         target.arguments = stringifyOptional(update.rawInput) ?? target.arguments;
-        target.result = stringifyToolContent(update.rawOutput ?? update.content) ?? target.result;
+        mergeToolResult(target, incomingStatus, update.rawOutput ?? update.content);
         target.eventIndex = target.eventIndex ?? conversationEventIndex;
       } else {
         session.toolCalls.push({
@@ -208,15 +209,7 @@ function applySessionNotificationInPlace(
         });
         session.toolCalls = session.toolCalls.slice();
       }
-      const current = session.toolCalls.find((tool) => tool.id === update.toolCallId);
-      if (current && isTerminalToolStatus(current.status)) {
-        if (session.activeToolCallId === update.toolCallId) session.activeToolCallId = null;
-      } else {
-        session.runState = 'tool-running';
-        session.activeToolCallId = update.toolCallId;
-        session.activityLabel = `Running tool: ${update.title}`;
-        session.lastError = null;
-      }
+      updateToolActivity(session);
       break;
     }
     case 'tool_call_update': {
@@ -226,7 +219,7 @@ function applySessionNotificationInPlace(
         target.status = mergeToolStatus(target.status, update.status ?? target.status);
         target.kind = update.kind ?? target.kind;
         target.messageId = target.messageId ?? readMessageId(update);
-        target.result = stringifyToolContent(update.rawOutput ?? update.content) ?? target.result;
+        mergeToolResult(target, update.status ?? undefined, update.rawOutput ?? update.content);
         target.eventIndex = target.eventIndex ?? conversationEventIndex;
       } else {
         target = {
@@ -241,21 +234,7 @@ function applySessionNotificationInPlace(
         session.toolCalls.push(target);
         session.toolCalls = session.toolCalls.slice();
       }
-      if (target.status === 'completed') {
-        session.runState = 'streaming';
-        session.activeToolCallId = null;
-        session.activityLabel = 'Tool finished. Continuing reply\u2026';
-        session.lastError = null;
-      } else if (target.status === 'failed') {
-        session.runState = 'failed';
-        session.activeToolCallId = update.toolCallId;
-        session.lastError = update.title ? `${update.title} failed.` : 'Tool call failed.';
-        session.activityLabel = session.lastError;
-      } else {
-        session.runState = 'tool-running';
-        session.activeToolCallId = update.toolCallId;
-        session.activityLabel = `Running ${update.title ?? 'tool'}\u2026`;
-      }
+      updateToolActivity(session);
       break;
     }
     case 'plan':
@@ -307,18 +286,14 @@ const STREAM_CHUNK_KINDS = new Set(['agent_message_chunk', 'agent_thought_chunk'
 
 function cloneSession(current: ActiveSessionViewModel): ActiveSessionViewModel {
   return {
-    sessionId: current.sessionId,
+    ...current,
     transcript: current.transcript.map((item) => ({ ...item, blocks: item.blocks?.map((block) => ({ ...block })) })),
     toolCalls: current.toolCalls.map((item) => ({ ...item })),
     plans: current.plans.map((item) => ({ ...item })),
     events: current.events.map((item) => ({ ...item })),
     configOptions: current.configOptions.map((item) => ({ ...item })),
-    runState: current.runState,
-    runStateFromLifecycle: current.runStateFromLifecycle,
-    activityLabel: current.activityLabel,
-    activeToolCallId: current.activeToolCallId,
-    lastStopReason: current.lastStopReason,
-    lastError: current.lastError,
+    lastRunOutcome: current.lastRunOutcome ? { ...current.lastRunOutcome } : undefined,
+    delegations: current.delegations?.map((item) => ({ ...item })),
     usage: { ...current.usage },
     undo: {
       ...current.undo,
@@ -474,7 +449,7 @@ export function applySessionNotification(
         target.kind = update.kind ?? target.kind;
         target.messageId = target.messageId ?? readMessageId(update);
         target.arguments = stringifyOptional(update.rawInput) ?? target.arguments;
-        target.result = stringifyToolContent(update.rawOutput ?? update.content) ?? target.result;
+        mergeToolResult(target, incomingStatus, update.rawOutput ?? update.content);
         target.eventIndex = target.eventIndex ?? conversationEventIndex;
       } else {
         next.toolCalls.push({
@@ -488,15 +463,7 @@ export function applySessionNotification(
           eventIndex: conversationEventIndex
         });
       }
-      const current = next.toolCalls.find((tool) => tool.id === update.toolCallId);
-      if (current && isTerminalToolStatus(current.status)) {
-        if (next.activeToolCallId === update.toolCallId) next.activeToolCallId = null;
-      } else {
-        next.runState = 'tool-running';
-        next.activeToolCallId = update.toolCallId;
-        next.activityLabel = `Running tool: ${update.title}`;
-        next.lastError = null;
-      }
+      updateToolActivity(next);
       break;
     }
     case 'tool_call_update': {
@@ -506,7 +473,7 @@ export function applySessionNotification(
         target.status = mergeToolStatus(target.status, update.status ?? target.status);
         target.kind = update.kind ?? target.kind;
         target.messageId = target.messageId ?? readMessageId(update);
-        target.result = stringifyToolContent(update.rawOutput ?? update.content) ?? target.result;
+        mergeToolResult(target, update.status ?? undefined, update.rawOutput ?? update.content);
         target.eventIndex = target.eventIndex ?? conversationEventIndex;
       } else {
         target = {
@@ -520,21 +487,7 @@ export function applySessionNotification(
         };
         next.toolCalls.push(target);
       }
-      if (target.status === 'completed') {
-        next.runState = 'streaming';
-        next.activeToolCallId = null;
-        next.activityLabel = 'Tool finished. Continuing reply…';
-        next.lastError = null;
-      } else if (target.status === 'failed') {
-        next.runState = 'failed';
-        next.activeToolCallId = update.toolCallId;
-        next.lastError = update.title ? `${update.title} failed.` : 'Tool call failed.';
-        next.activityLabel = next.lastError;
-      } else {
-        next.runState = 'tool-running';
-        next.activeToolCallId = update.toolCallId;
-        next.activityLabel = `Running ${update.title ?? 'tool'}…`;
-      }
+      updateToolActivity(next);
       break;
     }
     case 'plan':
@@ -574,6 +527,92 @@ export function applySessionNotification(
   return next;
 }
 
+export function getActiveSessionTools(session: ActiveSessionViewModel): SessionToolCallItem[] {
+  return session.toolCalls.filter((tool) =>
+    (tool.status === 'pending' || tool.status === 'in_progress') &&
+    (!session.runId || !tool.runId || tool.runId === session.runId));
+}
+
+export function projectSessionRuntime(session: ActiveSessionViewModel, runtime: SessionRuntimeStatus): void {
+  const previousRunId = session.runId;
+  if (runtime.active_run_id) session.runId = runtime.active_run_id;
+  session.activeToolCallId = null;
+  if (runtime.phase === 'unknown' || runtime.observation?.availability === 'unavailable') {
+    session.runState = 'unknown';
+    session.activityLabel = 'Execution status unavailable';
+    endSessionWork(session);
+    return;
+  }
+  if (runtime.phase === 'idle') {
+    session.toolCalls = session.toolCalls.map((tool) =>
+      (tool.status === 'pending' || tool.status === 'in_progress') && (!tool.runId || tool.runId === previousRunId)
+        ? { ...tool, status: 'failed', isError: true, result: tool.result ?? 'Execution ended without a recorded tool result.' }
+        : tool);
+    const outcome = session.lastRunOutcome;
+    const matches = outcome && (!previousRunId || !outcome.runId || outcome.runId === previousRunId);
+    const failed = matches ? outcome.outcome === 'failed' : session.runState === 'failed';
+    session.runState = failed ? 'failed' : 'completed';
+    session.activityLabel = failed ? 'Turn failed.' : matches && outcome.outcome === 'cancelled' ? 'Turn cancelled.' : 'Turn completed.';
+    if (!failed) session.lastError = null;
+    endSessionWork(session);
+    return;
+  }
+  beginSessionWork(session);
+  session.lastError = null;
+  const responding = runtime.phase === 'model' && session.runState === 'streaming' && previousRunId === session.runId;
+  session.runState = runtime.phase === 'tools' ? 'tool-running' : responding ? 'streaming' : 'thinking';
+  const active = getActiveSessionTools(session);
+  if (runtime.phase === 'tools') session.activeToolCallId = active[0]?.id ?? null;
+  session.activityLabel = runtime.phase === 'cancel_requested' ? 'Cancelling turn...'
+    : runtime.phase === 'closing' ? 'Finishing turn...'
+    : runtime.phase === 'waiting' ? 'Waiting for delegates'
+    : runtime.phase === 'tools' ? active.length > 1 ? `Running ${active.length} tools`
+      : active[0] ? `Running tool: ${active[0].title}` : 'Running tools...'
+    : runtime.phase === 'starting' ? 'Starting turn...' : 'Agent is working...';
+}
+
+export function mergeDelegationActivity(
+  current: DelegationUpdateNotification[],
+  incoming: readonly DelegationUpdateNotification[],
+  complete = false,
+  allowNewSource = false
+): DelegationUpdateNotification[] {
+  const items = new Map(current.map((item) => [item.delegationId, item]));
+  for (const update of incoming) {
+    const previous = items.get(update.delegationId);
+    if (previous?.sourceEpoch && previous.sourceEpoch !== update.sourceEpoch && !allowNewSource) continue;
+    if (previous?.sourceEpoch === update.sourceEpoch && previous?.sessionSeq !== undefined &&
+      (update.sessionSeq === undefined || update.sessionSeq <= previous.sessionSeq)) continue;
+    if (previous?.activity === 'live' && update.activity !== 'live' && update.sessionSeq === undefined) continue;
+    items.set(update.delegationId, { ...previous, ...update });
+  }
+  if (complete) {
+    const liveIds = new Set(incoming.filter((item) => item.activity === 'live').map((item) => item.delegationId));
+    for (const [id, item] of items) {
+      if (item.activity === 'live' && !liveIds.has(id)) items.set(id, { ...item, activity: 'historical' });
+    }
+  }
+  const merged = [...items.values()];
+  return merged.length === current.length && merged.every((item, index) => item === current[index]) ? current : merged;
+}
+
+export function projectDelegationActivity(session: ActiveSessionViewModel): void {
+  const live = (session.delegations ?? []).filter((item) => item.activity === 'live');
+  session.dependencyLabel = live.some((item) => item.stage === 'verifying') ? 'Verifying delegate result'
+    : live.some((item) => item.stage === 'finalizing') ? 'Finalizing delegate result'
+    : live.some((item) => item.stage === 'cancel_requested') ? 'Delegate cancellation requested'
+    : live.length ? `${live.length} delegate${live.length === 1 ? '' : 's'} active` : null;
+}
+
+function updateToolActivity(session: ActiveSessionViewModel): void {
+  const active = getActiveSessionTools(session);
+  session.activeToolCallId = active[0]?.id ?? null;
+  session.runState = active.length ? 'tool-running' : 'streaming';
+  session.activityLabel = active.length > 1 ? `Running ${active.length} tools`
+    : active[0] ? `Running tool: ${active[0].title}` : 'Continuing reply...';
+  session.lastError = null;
+}
+
 function canonicalizeToolCall(toolCalls: SessionToolCallItem[], toolCallId: string): SessionToolCallItem | null {
   const matches = toolCalls.filter((tool) => tool.id === toolCallId);
   if (matches.length === 0) return null;
@@ -599,6 +638,13 @@ function canonicalizeToolCall(toolCalls: SessionToolCallItem[], toolCallId: stri
     toolCalls.splice(0, toolCalls.length, ...toolCalls.filter((tool, index) => tool.id !== toolCallId || index === firstIndex));
   }
   return canonical;
+}
+
+function mergeToolResult(tool: SessionToolCallItem, status: SessionToolCallItem['status'] | undefined, output: unknown): void {
+  const terminal = status !== undefined && isTerminalToolStatus(status);
+  // A real terminal result supersedes a provisional interruption error.
+  tool.result = stringifyToolContent(output) ?? (terminal && tool.isError ? null : tool.result);
+  if (terminal) tool.isError = status === 'failed';
 }
 
 function mergeToolStatus(
@@ -823,13 +869,22 @@ export function applyDelegationChildSession(
     child_session_id?: string | null;
     state?: SessionToolCallItem['delegationState'];
     updatedAt?: number;
+    delegationId?: string;
+    stage?: DelegationUpdateNotification['stage'];
+    activity?: DelegationUpdateNotification['activity'];
+    sessionSeq?: number;
+    sourceEpoch?: string;
   }
 ): ActiveSessionViewModel {
   const sessionId = readNonEmptyString(update.sessionId) ?? readNonEmptyString(update.session_id);
   const toolCallId = readNonEmptyString(update.toolCallId) ?? readNonEmptyString(update.tool_call_id);
   const childSessionId = readNonEmptyString(update.childSessionId) ?? readNonEmptyString(update.child_session_id);
-  if (!toolCallId) return current;
   if (sessionId && current.sessionId && sessionId !== current.sessionId) return current;
+  if (update.delegationId) {
+    current = { ...current, delegations: mergeDelegationActivity(current.delegations ?? [], [update as DelegationUpdateNotification]) };
+    projectDelegationActivity(current);
+  }
+  if (!toolCallId) return current;
 
   const target = current.toolCalls.find((tool) => tool.id === toolCallId);
   if (!target) return current;

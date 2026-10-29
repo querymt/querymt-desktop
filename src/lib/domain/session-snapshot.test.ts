@@ -825,7 +825,7 @@ describe('activeSessionFromLoadResponse', () => {
     });
   });
 
-  it('marks orphaned historical tool starts as completed after later terminal session events in snapshots', () => {
+  it('does not infer tool completion from stored assistant content or a model request ending', () => {
     const session = activeSessionFromLoadResponse('session-1', {
       _meta: {
         'querymt/sessionLoadSnapshot.v1': {
@@ -859,11 +859,11 @@ describe('activeSessionFromLoadResponse', () => {
     expect(session.toolCalls).toHaveLength(1);
     expect(session.toolCalls[0]).toMatchObject({
       id: 't-orphan',
-      status: 'completed',
+      status: 'in_progress',
       arguments: '{"path":"README.md"}'
     });
-    expect(session.runState).toBe('completed');
-    expect(session.activeToolCallId).toBeNull();
+    expect(session.runState).toBe('tool-running');
+    expect(session.activeToolCallId).toBe('t-orphan');
   });
 
   it.each([
@@ -898,7 +898,7 @@ describe('activeSessionFromLoadResponse', () => {
     expect(normalizeHistoricalSession(session, { loadCompleted: true }).runState).toBe(runState);
   });
 
-  it('finalizes orphaned tools without overwriting explicit lifecycle state', () => {
+  it('marks interrupted tools failed only when terminal lifecycle is known', () => {
     const session: ActiveSessionViewModel = {
       sessionId: 'session-lifecycle',
       transcript: [],
@@ -943,10 +943,10 @@ describe('activeSessionFromLoadResponse', () => {
     expect(normalized.activityLabel).toBe('Turn failed.');
     expect(normalized.activeToolCallId).toBeNull();
     expect(normalized.lastError).toBe('tool failed');
-    expect(normalized.toolCalls[0]).toMatchObject({ id: 't-orphan', status: 'completed' });
+    expect(normalized.toolCalls[0]).toMatchObject({ id: 't-orphan', status: 'failed' });
   });
 
-  it('uses successful session/load completion as the terminal state for replayed history', () => {
+  it('does not use history load completion to finish an active tool', () => {
     const session: ActiveSessionViewModel = {
       sessionId: 'session-1',
       transcript: [],
@@ -986,12 +986,12 @@ describe('activeSessionFromLoadResponse', () => {
 
     const normalized = normalizeHistoricalSession(session, { loadCompleted: true });
 
-    expect(normalized.runState).toBe('completed');
-    expect(normalized.activityLabel).toBe('Loaded from session history.');
-    expect(normalized.activeToolCallId).toBeNull();
+    expect(normalized.runState).toBe('tool-running');
+    expect(normalized.activityLabel).toBe('Running tool: Run shell');
+    expect(normalized.activeToolCallId).toBe('t-orphan');
     expect(normalized.toolCalls[0]).toMatchObject({
       id: 't-orphan',
-      status: 'completed',
+      status: 'in_progress',
       arguments: '{"command":"echo hi"}'
     });
   });

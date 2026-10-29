@@ -17,8 +17,8 @@
       session.runState === 'streaming' ||
       session.runState === 'tool-running'
   );
-  const isBusy = $derived(session.undo.pendingOperation !== null || forkPending || agentBusy);
-  const isVisible = $derived(isBusy || session.runState === 'failed' || session.runState === 'waiting-input');
+  const isBusy = $derived(session.undo.pendingOperation !== null || forkPending || agentBusy || !!session.dependencyLabel);
+  const isVisible = $derived(isBusy || session.runState === 'failed' || session.runState === 'waiting-input' || session.runState === 'unknown');
   const activeTool = $derived(session.toolCalls.find((tool) => tool.id === session.activeToolCallId) ?? null);
   const activeToolPresentation = $derived(activeTool ? getSessionToolPresentation(activeTool) : null);
 
@@ -28,12 +28,16 @@
     if (session.undo.pendingOperation === 'redo') return 'Restoring workspace changes…';
     if (session.runState === 'failed') return session.lastError ? `Failed: ${session.lastError}` : 'Session failed';
     if (session.runState === 'waiting-input') return 'Input needed';
+    if (session.runState === 'unknown') return session.activityLabel ?? 'Execution status unavailable';
+    if (session.dependencyLabel && !agentBusy) return `Own turn idle - ${session.dependencyLabel}`;
+    if (session.activityLabel?.startsWith('Cancelling') || session.activityLabel?.startsWith('Finishing')) return session.activityLabel;
     if (session.runState === 'tool-running' && activeToolPresentation) {
-      return `${activeToolPresentation.label}${activeToolPresentation.preview ? ` · ${activeToolPresentation.preview}` : ''}`;
+      const count = session.toolCalls.filter((tool) => (tool.status === 'pending' || tool.status === 'in_progress') && (!session.runId || !tool.runId || tool.runId === session.runId)).length;
+      return `${activeToolPresentation.label}${activeToolPresentation.preview ? ` · ${activeToolPresentation.preview}` : ''}${count > 1 ? ` (+${count - 1} active)` : ''}`;
     }
     if (session.runState === 'tool-running') return session.activityLabel ?? 'Running tool…';
     if (session.runState === 'streaming') return 'Responding…';
-    if (session.runState === 'thinking') return session.activityLabel ?? 'Thinking…';
+    if (session.runState === 'thinking') return `${session.activityLabel ?? 'Thinking...'}${session.dependencyLabel ? ` - ${session.dependencyLabel}` : ''}`;
     if (session.runState === 'submitting') return 'Sending prompt…';
     return '';
   });
@@ -59,7 +63,7 @@
       <span class="session-activity-meta">Review the error, update the prompt, or refresh.</span>
     {:else if session.runState === 'waiting-input'}
       <span class="session-activity-meta">Respond below to continue.</span>
-    {:else if !session.undo.pendingOperation && !forkPending}
+    {:else if agentBusy && !session.undo.pendingOperation && !forkPending}
       <span class="session-activity-meta">Double Esc to cancel</span>
     {/if}
   </section>
