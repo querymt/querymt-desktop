@@ -126,7 +126,7 @@ jobs:
             asset_suffix: macos-aarch64
           - name: macOS Intel
             runtime: wry
-            platform: macos-latest
+            platform: macos-26-intel
             target: x86_64-apple-darwin
             qmtcode_asset_glob: qmtcode-*-x86_64-apple-darwin.tar.gz
             tauri_args: --target x86_64-apple-darwin --bundles dmg
