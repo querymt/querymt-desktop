@@ -51,26 +51,18 @@
     }
   });
 
+  // Both launch buttons open the session view immediately under a temporary id;
+  // the store keeps creating the session (and sends the prompt) in the background.
   async function startSessionFromLauncher() {
     if (!primaryAgentId) {
       return;
     }
 
-    const sessionId = await agentsStore.startSessionWithPrompt(primaryAgentId);
-    if (sessionId) {
-      await goto(`/sessions/${encodeURIComponent(primaryAgentId)}/${encodeURIComponent(sessionId)}`);
-    }
-  }
-
-  async function startBlankSessionFromLauncher() {
-    if (!primaryAgentId) {
-      return;
-    }
-
-    const agentId = primaryAgentId;
-    const sessionId = await agentsStore.createSession(agentId);
-    if (sessionId) {
-      await goto(`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}`);
+    const launchId = agentsStore.beginLaunch(primaryAgentId);
+    if (launchId) {
+      // A launch already running belongs to its own agent, which may not be the one shown now.
+      const agentId = agentsStore.pendingLaunches[launchId]?.agentId ?? primaryAgentId;
+      await goto(`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(launchId)}`);
     }
   }
 </script>
@@ -86,6 +78,22 @@
       </p>
     </div>
 
+    {#each agentsStore.abandonedLaunches as launch (launch.id)}
+      <section class="session-prompt-error" role="alert" data-testid="abandoned-launch">
+        <div class="session-prompt-error-mark" aria-hidden="true">!</div>
+        <div class="session-prompt-error-body">
+          <header class="session-prompt-error-heading"><strong>A session could not be started</strong></header>
+          <p>{launch.error ?? 'Failed to create session.'}</p>
+          {#if launch.prompt}<p class="truncate text-[var(--muted)]">{launch.prompt}</p>{/if}
+          <div class="session-prompt-error-actions">
+            <button class="action-btn" type="button" disabled={agentsStore.launching}
+              onclick={() => { agentsStore.retryLaunch(launch.id); void goto(`/sessions/${encodeURIComponent(launch.agentId)}/${encodeURIComponent(launch.id)}`); }}>Retry</button>
+            <button class="action-btn" type="button" onclick={() => agentsStore.discardLaunch(launch.id)}>Restore prompt</button>
+          </div>
+        </div>
+      </section>
+    {/each}
+
     <SessionComposer
       compact={true}
       minimal={true}
@@ -93,7 +101,8 @@
       sendShortcut={chatPreferencesStore.sendShortcut}
       cwd={agentsStore.composerCwd}
       prompt={agentsStore.composerPrompt}
-      loading={agentsStore.loading}
+      loading={agentsStore.loading || agentsStore.launching}
+      starting={agentsStore.launching}
       error={agentsStore.error ?? agentsStore.getLaunchProfileError(primaryAgentId)}
       activeSessionId={null}
       promptFocusToken={agentsStore.promptFocusToken}
@@ -130,7 +139,7 @@
       onLaunchModeChange={(modeId) => agentsStore.setComposerMode(modeId)}
       onLaunchReasoningChange={(reasoningId) => agentsStore.setComposerReasoning(reasoningId)}
       onTargetChange={(targetId) => agentsStore.setComposerTarget(targetId)}
-      onCreateSession={() => startBlankSessionFromLauncher()}
+      onCreateSession={() => startSessionFromLauncher()}
       onDismissError={() => {
         agentsStore.clearError();
         agentsStore.clearLaunchProfileError(primaryAgentId);

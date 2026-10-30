@@ -5898,6 +5898,11 @@ describe('AgentsStore prompt session start', () => {
       return { response, replay: capture.notifications, finishReplay: () => browser.completeSessionReplay(capture) };
     });
     try {
+      // First call: the route's own load of the just-created session. It is skipped, so it neither
+      // bumps the selection generation (which would drop the in-flight prompt) nor races it.
+      await store.loadSession('agent-1', 'session-1');
+      expect(mockClient.loadSession).not.toHaveBeenCalled();
+      // A refresh while the prompt is still running loads history over the optimistic turn.
       await store.loadSession('agent-1', 'session-1');
       if (delivery === 'live') await browser.sessionUpdate(echo);
       expect(store.activeSession.toolCalls).toHaveLength(1);
@@ -9601,5 +9606,358 @@ describe('AgentsStore worktree sessions', () => {
     store.sessionChildrenByParent = { 'agent-1:s1': [] };
     (store as unknown as { invalidateSessionCatalogCache(): void }).invalidateSessionCatalogCache();
     expect(store.sessionChildrenByParent).toEqual({});
+  });
+});
+
+describe('AgentsStore pending launches', () => {
+  it('sends only one session/new while a launch is creating, for prompt and blank starts', async () => {
+    const store = createStore();
+    let finish!: (response: { sessionId: string; configOptions: SessionConfigOption[] }) => void;
+    mockClient.createSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+
+    const first = store.beginLaunch('agent-1');
+    const second = store.beginLaunch('agent-1');
+    store.composerPrompt = '';
+    const blank = store.beginLaunch('agent-1');
+
+    expect(first).toMatch(/^pending-launch-/);
+    expect(second).toBe(first);
+    expect(blank).toBe(first);
+    expect(store.launching).toBe(true);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(mockClient.createSession).toHaveBeenCalledOnce();
+    finish({ sessionId: 'session-1', configOptions: [] });
+    await vi.waitFor(() => expect(store.launching).toBe(false));
+  });
+
+  it('shows the prompt and progress at once and clears the composer', async () => {
+    const store = createStore();
+    mockClient.createSession.mockImplementationOnce(() => new Promise(() => {}));
+
+    const launchId = store.beginLaunch('agent-1')!;
+
+    expect(store.composerPrompt).toBe('');
+    expect(store.activeSessionId).toBe(launchId);
+    expect(store.activeSession.transcript.map((item) => item.text)).toEqual(['Fix the failing tests']);
+    expect(store.activeSession.activityLabel).toBe('Creating session…');
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it.each(['local', 'remote'] as const)('still sends the first prompt when the route loads the %s session while setup is in flight', async (kind) => {
+    const store = createStore();
+    let finishConfig!: () => void;
+    let finishPrompt!: (response: PromptResponse) => void;
+    store.setComposerMode('plan');
+    if (kind === 'remote') {
+      store.setComposerTarget('node-1');
+      mockClient.createRemoteSession.mockResolvedValueOnce({ session_id: 'remote-1', node_id: 'node-1', attached: true, config_options: modeOnly('build'), snapshot: { audit: { events: [] } } });
+    } else {
+      mockClient.createSession.mockResolvedValueOnce({ sessionId: 'session-1', configOptions: modeOnly('build') });
+    }
+    const sessionId = kind === 'remote' ? 'remote-1' : 'session-1';
+    mockClient.setSessionConfigOption.mockImplementationOnce(() => new Promise((resolve) => {
+      finishConfig = () => resolve(modeOnly('plan'));
+    }));
+    mockClient.sendPrompt.mockImplementationOnce(() => new Promise((resolve) => { finishPrompt = resolve; }));
+    const launchId = store.beginLaunch('agent-1')!;
+    // Setup is provably still running: the config write is pending and nothing was sent.
+    await vi.waitFor(() => expect(finishConfig).toBeTypeOf('function'));
+    expect(store.pendingLaunches[launchId].sessionId).toBe(sessionId);
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+
+    // What the session route does as soon as the URL carries the real id.
+    await store.loadSession('agent-1', sessionId);
+    finishConfig();
+
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    expect(mockClient.sendPrompt.mock.calls[0][0]).toBe(sessionId);
+    expect(mockClient.sendPrompt.mock.calls[0][1]).toBe('Fix the failing tests');
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
+    expect(store.promptFailure).toBeNull();
+    finishPrompt({ stopReason: 'end_turn' });
+  });
+
+  it('keeps creating and sends the prompt after the user navigates away', async () => {
+    const store = createStore();
+    let finish!: (response: { sessionId: string; configOptions: SessionConfigOption[] }) => void;
+    mockClient.createSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    store.beginLaunch('agent-1');
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'other-session';
+    finish({ sessionId: 'session-1', configOptions: [] });
+
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    expect(mockClient.sendPrompt).toHaveBeenCalledWith('session-1', 'Fix the failing tests', [], expect.anything());
+    expect(store.activeSessionId).toBe('other-session');
+    expect(store.launching).toBe(false);
+  });
+
+  it('ignores later composer edits and uses the settings captured at click time', async () => {
+    const store = createStore();
+    let finish!: (response: { sessionId: string; configOptions: SessionConfigOption[] }) => void;
+    mockClient.createSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    store.setComposerProfile('coding');
+    store.beginLaunch('agent-1');
+    store.setComposerProfile('other');
+    store.setComposerPrompt('Something else');
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    finish({ sessionId: 'session-1', configOptions: [] });
+
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    expect(mockClient.createSession).toHaveBeenCalledWith('/tmp/work', 'coding');
+    expect(mockClient.sendPrompt.mock.calls[0][1]).toBe('Fix the failing tests');
+    expect(store.composerPrompt).toBe('Something else');
+  });
+
+  it('keeps a failed launch on screen for retry, then hands the input back on discard', async () => {
+    const store = createStore();
+    mockClient.createSession.mockRejectedValueOnce(new Error('node unreachable'));
+
+    const launchId = store.beginLaunch('agent-1')!;
+    await vi.waitFor(() => expect(store.pendingLaunches[launchId]?.status).toBe('failed'));
+
+    expect(store.pendingLaunches[launchId].error).toBe('node unreachable');
+    expect(store.launching).toBe(false);
+    expect(store.composerPrompt).toBe('');
+
+    store.retryLaunch(launchId);
+    expect(store.pendingLaunches[launchId].status).toBe('creating');
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    expect(mockClient.createSession).toHaveBeenCalledTimes(2);
+
+    mockClient.createSession.mockRejectedValueOnce(new Error('again'));
+    store.composerPrompt = 'Next';
+    const second = store.beginLaunch('agent-1')!;
+    await vi.waitFor(() => expect(store.pendingLaunches[second]?.status).toBe('failed'));
+    store.discardLaunch(second);
+    expect(store.composerPrompt).toBe('Next');
+    expect(store.pendingLaunches[second]).toBeUndefined();
+  });
+
+  const modeOnly = (mode: string): SessionConfigOption[] => [{
+    id: 'mode', name: 'Mode', type: 'select', currentValue: mode,
+    options: [{ value: 'build', name: 'Build' }, { value: 'plan', name: 'Plan' }]
+  }];
+
+  it('sends the first prompt even when the runtime status read fails or the user leaves mid-send', async () => {
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'steering');
+    mockClient.getSessionRuntimeStatus.mockRejectedValue(new Error('runtime unavailable'));
+    const store = createStore();
+
+    store.beginLaunch('agent-1');
+
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    expect(mockClient.sendPrompt.mock.calls[0][1]).toBe('Fix the failing tests');
+    expect(store.promptFailure).toBeNull();
+  });
+
+  it('delivers the first prompt in the background when the user leaves while the agent connects', async () => {
+    const store = createStore();
+    let finishConfig!: () => void;
+    mockClient.createSession.mockResolvedValueOnce({ sessionId: 'session-1', configOptions: modeOnly('build') });
+    store.setComposerMode('plan');
+    mockClient.setSessionConfigOption.mockImplementationOnce(() => new Promise((resolve) => {
+      finishConfig = () => resolve(modeOnly('plan'));
+    }));
+    const launchId = store.beginLaunch('agent-1')!;
+    await vi.waitFor(() => expect(finishConfig).toBeTypeOf('function'));
+
+    // Mid-setup the user opens another session.
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'other-session';
+    finishConfig();
+
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    expect(mockClient.sendPrompt.mock.calls[0][0]).toBe('session-1');
+    expect(store.activeSessionId).toBe('other-session');
+    await vi.waitFor(() => expect(store.pendingLaunches[launchId].status).toBe('ready'));
+    expect(store.pendingLaunches[launchId].attachments).toEqual([]);
+  });
+
+  it('blocks sends and cancel on the new session until the first prompt has left', async () => {
+    const store = createStore();
+    let finishConfig!: () => void;
+    store.setComposerMode('plan');
+    mockClient.createSession.mockResolvedValueOnce({ sessionId: 'session-1', configOptions: modeOnly('build') });
+    mockClient.setSessionConfigOption.mockImplementationOnce(() => new Promise((resolve) => {
+      finishConfig = () => resolve(modeOnly('plan'));
+    }));
+    const launchId = store.beginLaunch('agent-1')!;
+    await vi.waitFor(() => expect(finishConfig).toBeTypeOf('function'));
+
+    // The URL already carries the real id, but the first prompt has not left.
+    expect(store.activeSessionId).toBe('session-1');
+    expect(store.isLaunchSettingUp('agent-1', 'session-1')).toBe(true);
+    expect(store.isLaunchSettingUp('agent-1', launchId)).toBe(true);
+    store.composerPrompt = 'Second message';
+    await store.sendPromptToActiveSession();
+    await store.cancelActiveSession();
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    expect(mockClient.cancelSession).not.toHaveBeenCalled();
+    expect(store.composerPrompt).toBe('Second message');
+
+    finishConfig();
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    expect(mockClient.sendPrompt.mock.calls[0][1]).toBe('Fix the failing tests');
+    expect(store.isLaunchSettingUp('agent-1', 'session-1')).toBe(false);
+  });
+
+  it('keeps a background launch failure away from the composer and error of the session on screen', async () => {
+    const store = createStore();
+    let fail!: (error: Error) => void;
+    mockClient.createSession.mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
+    const launchId = store.beginLaunch('agent-1')!;
+    await vi.waitFor(() => expect(fail).toBeTypeOf('function'));
+
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'other-session';
+    store.composerPrompt = 'Draft for the other session';
+    store.error = null;
+    fail(new Error('node unreachable'));
+
+    await vi.waitFor(() => expect(store.pendingLaunches[launchId]?.status).toBe('failed'));
+    expect(store.composerPrompt).toBe('Draft for the other session');
+    expect(store.error).toBeNull();
+    expect(store.abandonedLaunches.map((launch) => launch.id)).toEqual([launchId]);
+
+    store.discardLaunch(launchId);
+    expect(store.composerPrompt).toContain('Fix the failing tests');
+    expect(store.composerPrompt).toContain('Draft for the other session');
+    expect(store.abandonedLaunches).toEqual([]);
+  });
+
+  it('does not clear the error shown to the user when a background launch starts or fails', async () => {
+    const store = createStore();
+    mockClient.createSession.mockRejectedValueOnce(new Error('boom'));
+    store.error = 'Something the user is reading';
+    // beginLaunch itself resets the launcher error; a later background failure must not set it.
+    const launchId = store.beginLaunch('agent-1')!;
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'other-session';
+    await vi.waitFor(() => expect(store.pendingLaunches[launchId]?.status).toBe('failed'));
+    expect(store.error).toBeNull();
+  });
+
+  it('fails the launch instead of sending the prompt to a replaced agent endpoint', async () => {
+    const store = createStore();
+    let finish!: (response: { sessionId: string; configOptions: SessionConfigOption[] }) => void;
+    mockClient.createSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const launchId = store.beginLaunch('agent-1')!;
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+
+    store.updateConfig('agent-1', { commandLine: 'other-agent' });
+    finish({ sessionId: 'old-session', configOptions: [] });
+
+    await vi.waitFor(() => expect(store.pendingLaunches[launchId]?.status).toBe('failed'));
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    expect(store.pendingLaunches[launchId].error).toContain('connection changed');
+    expect(store.pendingLaunches[launchId].prompt).toBe('Fix the failing tests');
+  });
+
+  it('retrying after an endpoint change creates a new session on the new endpoint', async () => {
+    const store = createStore();
+    let finish!: (response: { sessionId: string; configOptions: SessionConfigOption[] }) => void;
+    mockClient.createSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const launchId = store.beginLaunch('agent-1')!;
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    store.updateConfig('agent-1', { commandLine: 'other-agent' });
+    finish({ sessionId: 'old-session', configOptions: [] });
+    await vi.waitFor(() => expect(store.pendingLaunches[launchId]?.status).toBe('failed'));
+
+    store.retryLaunch(launchId);
+
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    expect(mockClient.createSession).toHaveBeenCalledTimes(2);
+    expect(mockClient.sendPrompt.mock.calls[0][0]).toBe('session-1');
+  });
+
+  it('retrying a launch whose session exists resends only the prompt, never a second session/new', async () => {
+    const store = createStore();
+    mockClient.sendPrompt.mockRejectedValueOnce(new Error('send failed'));
+    const launchId = store.beginLaunch('agent-1')!;
+    // The user leaves right away, so the first prompt is delivered without the session view.
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'other-session';
+    await vi.waitFor(() => expect(store.pendingLaunches[launchId]?.status).toBe('failed'));
+    expect(store.pendingLaunches[launchId].sessionId).toBe('session-1');
+    expect(store.pendingLaunches[launchId].prompt).toBe('Fix the failing tests');
+    mockClient.createSession.mockClear();
+
+    store.retryLaunch(launchId);
+
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledTimes(2));
+    expect(mockClient.createSession).not.toHaveBeenCalled();
+    expect(mockClient.sendPrompt.mock.calls[1][0]).toBe('session-1');
+    await vi.waitFor(() => expect(store.pendingLaunches[launchId].status).toBe('ready'));
+  });
+
+  it('publishes a remote launch session even when the user left before it was created', async () => {
+    const store = createStore();
+    store.setComposerTarget('node-1');
+    let confirm!: () => void;
+    mockClient.createRemoteSession.mockImplementationOnce(() => new Promise((resolve) => {
+      confirm = () => resolve({ session_id: 'remote-1', node_id: 'node-1', attached: true, config_options: [], snapshot: { audit: { events: [] } } });
+    }));
+    store.beginLaunch('agent-1');
+    await vi.waitFor(() => expect(confirm).toBeTypeOf('function'));
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'other-session';
+    store.activeSession.sessionId = 'other-session';
+    confirm();
+
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    expect(mockClient.sendPrompt.mock.calls[0][0]).toBe('remote-1');
+    expect(store.activeSessionId).toBe('other-session');
+    expect(store.sessionsByAgent['agent-1']?.some((session) => session.sessionId === 'remote-1' && session.location === 'remote')).toBe(true);
+  });
+
+  it('drops attachment payloads once the prompt has been handed to the session', async () => {
+    const store = createStore();
+    store.promptAttachments = [{ id: 'a1', name: 'note.txt', mimeType: 'text/plain', size: 3, data: 'YWJj' }];
+    const launchId = store.beginLaunch('agent-1')!;
+    expect(store.pendingLaunches[launchId].attachments).toHaveLength(1);
+
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    expect(mockClient.sendPrompt.mock.calls[0][2]).toHaveLength(1);
+    await vi.waitFor(() => expect(store.pendingLaunches[launchId].attachments).toEqual([]));
+    expect(store.pendingLaunches[launchId].status).toBe('ready');
+  });
+
+  it('shows the setup state as submitting so it is never mistaken for a finished turn', async () => {
+    const store = createStore();
+    let finishConfig!: () => void;
+    let finishPrompt!: (response: PromptResponse) => void;
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'steering');
+    store.setComposerMode('plan');
+    mockClient.createSession.mockResolvedValueOnce({ sessionId: 'session-1', configOptions: modeOnly('build') });
+    mockClient.setSessionConfigOption.mockImplementationOnce(() => new Promise((resolve) => {
+      finishConfig = () => resolve(modeOnly('plan'));
+    }));
+    mockClient.sendPrompt.mockImplementationOnce(() => new Promise((resolve) => { finishPrompt = resolve; }));
+    store.beginLaunch('agent-1');
+    await vi.waitFor(() => expect(finishConfig).toBeTypeOf('function'));
+
+    expect(store.activeSession.runState).toBe('submitting');
+    expect(store.activeSession.activityLabel).toBe('Setting up session…');
+    finishConfig();
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    // No "Turn completed." flash between setup and the running turn, and no runtime read to cause it.
+    expect(store.activeSession.runState).toBe('thinking');
+    expect(mockClient.getSessionRuntimeStatus).not.toHaveBeenCalled();
+    finishPrompt({ stopReason: 'end_turn' });
+  });
+
+  it('never queries the server for a placeholder session', async () => {
+    const store = createStore();
+    mockClient.createSession.mockImplementationOnce(() => new Promise(() => {}));
+    const launchId = store.beginLaunch('agent-1')!;
+
+    await store.loadSession('agent-1', launchId);
+    expect(await store.refreshSessionRuntime('agent-1', launchId)).toBeNull();
+    await store.cancelActiveSession();
+
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
   });
 });

@@ -29,6 +29,14 @@ import {
   type WorktreeHandoffOptions
 } from '$lib/domain/session-workspace';
 import { normalizePromptError, type PromptFailure } from '$lib/domain/prompt-errors';
+import {
+  createPendingLaunchId,
+  isPendingLaunchId,
+  type LaunchSettings,
+  type PendingLaunch,
+  type PromptSendInput,
+  type SessionCreateOptions
+} from '$lib/domain/session-launch';
 import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
 import {
@@ -314,6 +322,9 @@ export class AgentsStore {
   private workspaceDiscoveryPromises = new Map<string, { scopeKey: string; promise: Promise<void> }>();
   private sessionListRefreshChain = new Map<string, Promise<void>>();
   private hydratedRemoteSessionKeys = new Set<string>();
+  // Sessions this client just created and already selected; their first load is redundant.
+  private freshlyCreatedSessionKeys = new Set<string>();
+  private launchRuns = new Map<string, Promise<string | null>>();
   private snapshotUserMessageIds = new Set<string>();
   private sessionSelectionGeneration = 0;
   private unlistenAgentLogs: UnlistenFn | null = null;
@@ -446,6 +457,11 @@ export class AgentsStore {
   sessionChildrenByParent = $state<Record<string, DesktopSessionSummary[]>>({});
   worktreePending = $state(false);
   composerAgentId = $state<string | null>(null);
+  /** Launches whose `session/new` is in flight or failed, keyed by their temporary session id. */
+  pendingLaunches = $state<Record<string, PendingLaunch>>({});
+  get launching(): boolean {
+    return Object.values(this.pendingLaunches).some((launch) => launch.status === 'creating');
+  }
   get sessionConfigPending(): Record<string, boolean> {
     const key = this.activeAgentId && this.activeSessionId
       ? buildSessionKey(this.activeAgentId, this.activeSessionId)
@@ -936,7 +952,7 @@ export class AgentsStore {
   }
 
   private selectedRuntimeNeeded(): boolean {
-    if (!this.activeAgentId || !this.activeSessionId) return false;
+    if (!this.activeAgentId || !this.activeSessionId || isPendingLaunchId(this.activeSessionId)) return false;
     const runtime = this.sessionRuntimeBySession[buildSessionKey(this.activeAgentId, this.activeSessionId)];
     return (runtime != null && runtime.phase !== 'idle') || PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) ||
       this.activeSession.runState === 'submitting' || this.activePendingInputs.length > 0;
@@ -3116,23 +3132,46 @@ export class AgentsStore {
     return response;
   }
 
-  async createSession(agentId: string): Promise<string | null> {
-    const isCurrentSource = this.sessionMutationScope(agentId);
-    this.error = null;
-    const config = this.configs.find((candidate) => candidate.id === agentId);
-    const cwd = this.composerCwd.trim();
-    if (!config || !cwd) {
-      this.error = 'Working directory is required to create a session.';
-      return null;
-    }
-
-    const launch = {
+  private captureLaunchSettings(agentId: string): LaunchSettings {
+    return {
       targetId: this.composerTargetId,
       workspaceMode: this.composerTargetId === 'local' ? this.composerWorkspaceMode : 'local' as ComposerWorkspaceMode,
       profileId: this.composerProfileId,
       modeId: this.composerModeId,
       reasoningId: this.composerReasoningId,
       modelId: this.getLaunchModelId(agentId)
+    };
+  }
+
+  /**
+   * Creates and configures a session. Without `launchId` the composer drives it
+   * and the new session is always selected. With `launchId` the session is only
+   * selected while that pending launch is still on screen; otherwise it is
+   * created and configured in the background.
+   */
+  async createSession(agentId: string, options: SessionCreateOptions = {}): Promise<string | null> {
+    const isCurrentSource = this.sessionMutationScope(agentId);
+    const launchId = options.launchId;
+    // A launch is background work: its failures never touch the shared composer error.
+    const fail = (message: string) => {
+      if (launchId) options.onError?.(message);
+      else this.error = message;
+    };
+    if (!launchId) this.error = null;
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    const cwd = (options.cwd ?? this.composerCwd).trim();
+    if (!config || !cwd) {
+      fail('Working directory is required to create a session.');
+      return null;
+    }
+
+    const launch = options.settings ?? this.captureLaunchSettings(agentId);
+    const canSelect = () => !launchId || this.isSelectedSession(agentId, launchId);
+    let announced = false;
+    const announceSelected = (sessionId: string) => {
+      if (announced) return;
+      announced = true;
+      options.onSelected?.(sessionId);
     };
     try {
       if (launch.targetId !== 'local') {
@@ -3146,8 +3185,12 @@ export class AgentsStore {
             throw new Error('Selected profile is not available on the session owner. Choose an owner profile.');
           }
         }
-        const sessionId = await this.createAttachedRemoteSession(agentId, launch.targetId, cwd, profileId);
-        if (!isCurrentSource() || !this.isSelectedSession(agentId, sessionId)) return sessionId;
+        const sessionId = await this.createAttachedRemoteSession(
+          agentId, launch.targetId, cwd, profileId, launchId ? canSelect : undefined
+        );
+        const selected = this.isSelectedSession(agentId, sessionId);
+        if (!isCurrentSource() || (!selected && !launchId)) return sessionId;
+        if (selected) announceSelected(sessionId);
         await this.applyComposerLaunchConfig(agentId, sessionId, launch);
         await this.applySelectedModelToSession(agentId, sessionId, launch.modelId);
         this.captureLaunchSessionPreference(agentId, sessionId, launch);
@@ -3158,17 +3201,25 @@ export class AgentsStore {
       const response = await this.createBackgroundSession(agentId, cwd, launch.profileId, launch.workspaceMode);
       const sessionId = response.sessionId;
       if (!isCurrentSource()) return sessionId;
-      this.resetActiveSession(agentId, sessionId);
-      this.activeSession.configOptions = response.configOptions ?? [];
+      const selected = canSelect();
+      if (selected) {
+        this.resetActiveSession(agentId, sessionId);
+        this.activeSession.configOptions = response.configOptions ?? [];
+        if (launchId) {
+          // The launch already knows this session; loading it again would only race the first prompt.
+          this.freshlyCreatedSessionKeys.add(buildSessionKey(agentId, sessionId));
+          announceSelected(sessionId);
+        }
+      }
       await this.applyComposerLaunchConfig(agentId, sessionId, launch);
       await this.applySelectedModelToSession(agentId, sessionId, launch.modelId);
       this.captureLaunchSessionPreference(agentId, sessionId, launch);
-      await this.drainQueuedSessionUpdates(agentId, sessionId);
+      if (selected) await this.drainQueuedSessionUpdates(agentId, sessionId);
       await this.hydrateModelInfo(agentId, this.modelsByAgent[agentId] ?? []);
       this.rememberRecentSession(agentId, sessionId);
       return sessionId;
     } catch (error) {
-      this.error = error instanceof Error ? error.message : `Failed to create session for ${config.name}.`;
+      fail(error instanceof Error ? error.message : `Failed to create session for ${config.name}.`);
       return null;
     }
   }
@@ -3193,23 +3244,308 @@ export class AgentsStore {
     });
   }
 
+  /** Starts a launch and resolves with the created session id once it is configured (the prompt may still be running). */
   async startSessionWithPrompt(agentId: string): Promise<string | null> {
-    const sessionId = await this.createSession(agentId);
-    if (sessionId && this.isSelectedSession(agentId, sessionId) && (this.composerPrompt.trim() || this.promptAttachments.length > 0)) {
-      void this.sendPromptToActiveSession();
-    }
-    return sessionId;
+    const launchId = this.beginLaunch(agentId);
+    if (!launchId) return null;
+    return (await this.launchRuns.get(launchId)) ?? null;
   }
 
-  async sendPromptToActiveSession(retryFailure: PromptFailure | null = null) {
+  /**
+   * Captures the composer (prompt, attachments, launch settings), clears it and
+   * starts creating the session in the background, so the caller can open the
+   * session view at once under the returned temporary id. While a launch is
+   * creating, a second call returns that launch instead of sending another
+   * `session/new`. The first prompt is sent even if the user navigates away.
+   */
+  beginLaunch(agentId: string): string | null {
+    const running = Object.values(this.pendingLaunches).find((launch) => launch.status === 'creating');
+    if (running) return running.id;
+
+    this.error = null;
+    const config = this.configs.find((candidate) => candidate.id === agentId);
+    const cwd = this.composerCwd.trim();
+    if (!config || !cwd) {
+      this.error = 'Working directory is required to create a session.';
+      return null;
+    }
+
+    const settings = this.captureLaunchSettings(agentId);
+    const launch: PendingLaunch = {
+      id: createPendingLaunchId(),
+      agentId,
+      cwd,
+      status: 'creating',
+      error: null,
+      prompt: this.composerPrompt.trim(),
+      attachments: this.promptAttachments.map((attachment) => ({ ...attachment })),
+      clientPromptId: createClientPromptId(),
+      settings,
+      targetLabel: settings.targetId === 'local' ? null
+        : this.meshNodesByAgent[agentId]?.nodes.find((node) => node.id === settings.targetId)?.label ?? settings.targetId,
+      sessionId: null
+    };
+    // Finished launches only existed to redirect a stale placeholder URL.
+    const kept = Object.fromEntries(Object.entries(this.pendingLaunches).filter(([, entry]) => entry.status !== 'ready'));
+    this.pendingLaunches = { ...kept, [launch.id]: launch };
+    this.composerPrompt = '';
+    this.clearPromptAttachments();
+    this.showLaunchProgress(launch, true);
+    void this.runLaunch(launch.id);
+    return launch.id;
+  }
+
+  /** Selects a launch's placeholder view (again, after the user left it) and shows its progress. */
+  showPendingLaunch(launchId: string) {
+    const launch = this.pendingLaunches[launchId];
+    if (!launch || launch.sessionId || this.isSelectedSession(launch.agentId, launchId)) return;
+    this.showLaunchProgress(launch, true);
+    if (launch.status === 'failed') {
+      this.activeSession.runState = 'idle';
+      this.activeSession.activityLabel = null;
+    }
+  }
+
+  private showLaunchProgress(launch: PendingLaunch, reset: boolean) {
+    if (reset) {
+      this.resetActiveSession(launch.agentId, launch.id);
+      if (launch.prompt || launch.attachments.length > 0) {
+        this.addOptimisticUserPrompt(launch.id, launch.prompt, launch.attachments, launch.clientPromptId);
+      }
+    }
+    this.activeSession.runState = 'thinking';
+    this.activeSession.activityLabel = launch.targetLabel
+      ? `Creating session on ${launch.targetLabel}…` : 'Creating session…';
+  }
+
+  retryLaunch(launchId: string) {
+    const launch = this.pendingLaunches[launchId];
+    if (!launch || launch.status !== 'failed' || this.launching) return;
+    this.error = null;
+    this.patchLaunch(launchId, { status: 'creating', error: null });
+    if (launch.sessionId) {
+      // The session exists: only the first prompt is outstanding. Never create a second session.
+      void this.sendPromptToActiveSession(null, this.launchPromptInput(launch, launch.sessionId));
+      return;
+    }
+    this.showLaunchProgress({ ...launch, status: 'creating' }, !this.isSelectedSession(launch.agentId, launchId));
+    void this.runLaunch(launchId);
+  }
+
+  private launchPromptInput(launch: PendingLaunch, sessionId: string, turnEventIndex?: number): PromptSendInput {
+    return {
+      launchId: launch.id,
+      agentId: launch.agentId,
+      sessionId,
+      prompt: launch.prompt,
+      attachments: launch.attachments.map((attachment) => ({ ...attachment })),
+      clientPromptId: launch.clientPromptId,
+      turnEventIndex,
+      isCurrentSource: this.sessionMutationScope(launch.agentId)
+    };
+  }
+
+  /** Abandons a failed launch and gives its prompt and attachments back to the launcher composer. */
+  discardLaunch(launchId: string) {
+    const launch = this.pendingLaunches[launchId];
+    if (!launch || launch.status === 'creating') return;
+    this.restoreLaunchInput(launch);
+    const { [launchId]: _removed, ...rest } = this.pendingLaunches;
+    this.pendingLaunches = rest;
+    if (this.isSelectedSession(launch.agentId, launchId)) {
+      this.activeAgentId = null;
+      this.activeSessionId = null;
+      this.activeSession = createEmptyActiveSession();
+    }
+  }
+
+  /** Failed launches the user is not looking at; the launcher offers to restore their prompts. */
+  get abandonedLaunches(): PendingLaunch[] {
+    return Object.values(this.pendingLaunches)
+      .filter((launch) => launch.status === 'failed' && this.activeSessionId !== launch.id);
+  }
+
+  /**
+   * True from `session/new` until the first prompt has left. The session is
+   * selectable by then, but anything the user sends now could overtake that prompt
+   * or run with the wrong configuration.
+   */
+  isLaunchSettingUp(agentId: string | null, sessionId: string | null): boolean {
+    if (!agentId || !sessionId) return false;
+    return Object.values(this.pendingLaunches).some((launch) =>
+      launch.status === 'creating' && launch.agentId === agentId && (launch.id === sessionId || launch.sessionId === sessionId));
+  }
+
+  private patchLaunch(launchId: string, patch: Partial<PendingLaunch>) {
+    const launch = this.pendingLaunches[launchId];
+    if (launch) this.pendingLaunches = { ...this.pendingLaunches, [launchId]: { ...launch, ...patch } };
+  }
+
+  /** `dropInput`: the session now owns the prompt (its own failure/retry UI), so the launch keeps no copy. */
+  private markLaunchDispatched(launchId: string, dropInput = false) {
+    const launch = this.pendingLaunches[launchId];
+    if (launch?.status === 'creating') this.patchLaunch(launchId, dropInput ? { status: 'ready', attachments: [] } : { status: 'ready' });
+  }
+
+  /** Once the prompt is the session's responsibility, a finished launch must not keep attachment payloads. */
+  private dropLaunchInput(launchId: string) {
+    this.patchLaunch(launchId, { attachments: [] });
+  }
+
+  /** Merges (never overwrites) the launch input into the launcher composer. */
+  private restoreLaunchInput(launch: PendingLaunch) {
+    const existing = this.composerPrompt.trim();
+    if (launch.prompt && existing !== launch.prompt) {
+      this.composerPrompt = existing ? `${launch.prompt}\n\n${existing}` : launch.prompt;
+    }
+    if (launch.attachments.length > 0) this.addPromptAttachments(launch.attachments.map((attachment) => ({ ...attachment })));
+  }
+
+  /**
+   * Records a launch failure without touching the shared composer or error unless
+   * the user is looking at the very session whose input is affected.
+   */
+  private failLaunch(launchId: string, message: string) {
+    const launch = this.pendingLaunches[launchId];
+    if (!launch) return;
+    const sessionOnScreen = !!launch.sessionId && this.isSelectedSession(launch.agentId, launch.sessionId);
+    if (launch.status !== 'creating') {
+      // The prompt already left; nothing to hand back. Only the session on screen may show the error.
+      if (sessionOnScreen) this.error = message;
+      else console.warn('Launch prompt failed after dispatch', { launchId, message });
+      return;
+    }
+    if (sessionOnScreen) {
+      // The composer on screen belongs to this very session: hand the input back there.
+      this.error = message;
+      this.removeOptimisticPrompt(launch.clientPromptId);
+      this.restoreLaunchInput(launch);
+      this.activeSession.runState = 'idle';
+      this.activeSession.activityLabel = null;
+      this.patchLaunch(launchId, { status: 'ready', attachments: [], error: message });
+      return;
+    }
+    if (this.isSelectedSession(launch.agentId, launchId)) {
+      this.activeSession.runState = 'idle';
+      this.activeSession.activityLabel = null;
+    }
+    this.patchLaunch(launchId, { status: 'failed', error: message });
+  }
+
+  /**
+   * Fails a launch whose session setup did not complete. A still-failed launch must
+   * not keep the half-configured (or stale-source) session id, or a retry would send
+   * the first prompt there instead of creating a fresh session. The id is cleared
+   * only after `failLaunch`, which uses it to find the on-screen session.
+   */
+  private failLaunchAndForgetSession(launchId: string, message: string) {
+    this.failLaunch(launchId, message);
+    if (this.pendingLaunches[launchId]?.status === 'failed') this.patchLaunch(launchId, { sessionId: null });
+  }
+
+  private removeOptimisticPrompt(clientPromptId: string) {
+    const removed = new Set(this.activeSession.transcript
+      .filter((item) => item.clientPromptId === clientPromptId).map((item) => item.id));
+    if (removed.size === 0) return;
+    this.activeSession.transcript = this.activeSession.transcript.filter((item) => !removed.has(item.id));
+    this.activeSession.events = this.activeSession.events.filter((event) => !removed.has(event.id.replace(/-event$/, '')));
+  }
+
+  private runLaunch(launchId: string): Promise<string | null> {
+    const run = (async () => {
+      const launch = this.pendingLaunches[launchId];
+      if (!launch) return null;
+      const { agentId } = launch;
+      const isCurrentSource = this.sessionMutationScope(agentId);
+      const hasInput = launch.prompt.length > 0 || launch.attachments.length > 0;
+      let turnEventIndex: number | undefined;
+      let failure: string | null = null;
+      const sessionId = await this.createSession(agentId, {
+        launchId,
+        cwd: launch.cwd,
+        settings: { ...launch.settings },
+        onError: (message) => { failure = message; },
+        onSelected: (id) => {
+          this.patchLaunch(launchId, { sessionId: id });
+          if (!hasInput) return;
+          turnEventIndex = this.addOptimisticUserPrompt(id, launch.prompt, launch.attachments, launch.clientPromptId);
+          this.activeSession.runState = 'submitting';
+          this.activeSession.activityLabel = 'Setting up session\u2026';
+        }
+      });
+      if (!sessionId) {
+        this.failLaunchAndForgetSession(launchId, failure ?? 'Failed to create session.');
+        return null;
+      }
+      if (!isCurrentSource()) {
+        this.failLaunchAndForgetSession(launchId, 'The agent connection changed while the session was being created.');
+        return null;
+      }
+      this.patchLaunch(launchId, { sessionId });
+      if (!hasInput) {
+        this.markLaunchDispatched(launchId);
+        return sessionId;
+      }
+      void this.sendPromptToActiveSession(null, { ...this.launchPromptInput(launch, sessionId, turnEventIndex), isCurrentSource });
+      return sessionId;
+    })().finally(() => { this.launchRuns.delete(launchId); });
+    this.launchRuns.set(launchId, run);
+    return run;
+  }
+
+  /**
+   * Delivers a launch's first prompt without the session view: used when the user
+   * moved on, or when the in-view send could not take it. Never drops the prompt
+   * silently; a failure leaves the launch `failed` with its input intact.
+   */
+  private async deliverLaunchPrompt(input: PromptSendInput) {
+    const { launchId, agentId, sessionId } = input;
+    try {
+      if (!input.isCurrentSource()) throw new Error('The agent connection changed before the first prompt was sent.');
+      const record = await this.connectInitializedRecord(agentId);
+      if (!record) throw new Error('Failed to connect to the agent.');
+      if (!input.isCurrentSource()) throw new Error('The agent connection changed before the first prompt was sent.');
+      this.markLaunchDispatched(launchId);
+      this.scheduleSessionRuntimeRefresh(agentId, sessionId, record.client);
+      await record.client.sendPrompt(sessionId, input.prompt, input.attachments, {
+        imageMode: chatPreferencesStore.imageSendMode,
+        clientPromptId: input.clientPromptId
+      });
+      this.dropLaunchInput(launchId);
+    } catch (error) {
+      const message = normalizePromptError(error).message;
+      if (this.pendingLaunches[launchId]?.status === 'creating') this.failLaunch(launchId, message);
+      else {
+        // Already dispatched: keep the prompt with the launch so Retry can resend it to this session.
+        this.patchLaunch(launchId, { status: 'failed', error: message });
+        if (this.isSelectedSession(agentId, sessionId)) this.error = message;
+      }
+    } finally {
+      await this.refreshSessionsForAgent(agentId).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Sends the composer's prompt. `explicit` supplies the input instead (a launch's
+   * first prompt, whose composer was already cleared) and leaves the composer alone.
+   */
+  async sendPromptToActiveSession(retryFailure: PromptFailure | null = null, explicit: PromptSendInput | null = null) {
+    // A launch prompt for a session nobody is looking at is delivered without the session view.
+    if (explicit && !this.isSelectedSession(explicit.agentId, explicit.sessionId)) {
+      await this.deliverLaunchPrompt(explicit);
+      return;
+    }
+    // Anything sent before the launch's own first prompt could overtake it.
+    if (!explicit && this.isLaunchSettingUp(this.activeAgentId, this.activeSessionId)) return;
     this.error = null;
     this.promptFailure = null;
     if (this.activeSessionAccess) {
       this.error = 'This session is read-only.';
+      if (explicit) this.failLaunch(explicit.launchId, this.error);
       return;
     }
-    const prompt = (retryFailure?.prompt ?? this.composerPrompt).trim();
-    const attachments = (retryFailure?.attachments ?? this.promptAttachments).map((attachment) => ({ ...attachment }));
+    const prompt = (retryFailure?.prompt ?? explicit?.prompt ?? this.composerPrompt).trim();
+    const attachments = (retryFailure?.attachments ?? explicit?.attachments ?? this.promptAttachments).map((attachment) => ({ ...attachment }));
     if (!prompt && attachments.length === 0) {
       this.error = 'Enter a message or attach at least one file.';
       return;
@@ -3227,20 +3563,37 @@ export class AgentsStore {
     const ownsAction = () => !this.pollingDisposed && selection === this.sessionSelectionGeneration &&
       this.isSelectedSession(agentId, sessionId) && (!owner || this.clients.get(agentId) === owner);
     const imageMode = chatPreferencesStore.imageSendMode;
-    const clientPromptId = retryFailure?.clientPromptId ?? createClientPromptId();
-    let turnEventIndex = retryFailure?.turnEventIndex;
+    const clientPromptId = retryFailure?.clientPromptId ?? explicit?.clientPromptId ?? createClientPromptId();
+    let turnEventIndex = retryFailure?.turnEventIndex ?? explicit?.turnEventIndex;
+    // A launch prompt always has its turn on screen, so a failure can offer Retry instead of vanishing.
+    if (explicit && turnEventIndex === undefined) {
+      turnEventIndex = this.addOptimisticUserPrompt(sessionId, prompt, attachments, clientPromptId);
+    }
 
     try {
       const record = await this.connectInitializedRecord(agentId);
       if (!record) throw new Error('Failed to connect to the agent.');
       owner = record;
-      if (!ownsAction()) return;
+      if (explicit && !explicit.isCurrentSource()) {
+        this.failLaunch(explicit.launchId, 'The agent connection changed before the first prompt was sent.');
+        return;
+      }
+      if (!ownsAction()) {
+        // The user moved on before the prompt left: a launch's prompt must still be delivered.
+        if (explicit) await this.deliverLaunchPrompt(explicit);
+        return;
+      }
 
       const canControlRun = this.canControlSessionInput(record.client);
-      const runtime = canControlRun
+      // A session this launch just created has no run to steer or queue behind.
+      const runtime = canControlRun && !explicit
         ? await this.refreshSessionRuntime(agentId, sessionId, record.client, true)
         : null;
-      if (!ownsAction() || (canControlRun && !runtime)) return;
+      if (!ownsAction()) {
+        if (explicit) await this.deliverLaunchPrompt(explicit);
+        return;
+      }
+      if (canControlRun && !runtime && !explicit) return;
       if (runtime && runtime.phase !== 'idle') {
         const delivery = this.inputDeliveryForSession(agentId, sessionId, runtime, prompt);
         await this.submitInputToActiveSession(
@@ -3281,10 +3634,12 @@ export class AgentsStore {
       this.activeSession.activityLabel = 'Waiting for the agent to respond…';
       beginSessionWork(this.activeSession);
       this.activeSession.lastError = null;
-      if (!retryFailure) {
+      if (!retryFailure && !explicit) {
         this.composerPrompt = '';
         this.clearPromptAttachments();
       }
+      // From here the session's own failure/retry UI owns the prompt.
+      if (explicit) this.markLaunchDispatched(explicit.launchId, true);
       const promptResponse = record.client.sendPrompt(sessionId, prompt, attachments, {
         imageMode,
         clientPromptId
@@ -3314,7 +3669,13 @@ export class AgentsStore {
       await this.refreshSessionsForAgent(agentId);
       if (canControlRun) void this.refreshSessionRuntime(agentId, sessionId, record.client);
     } catch (error) {
-      if (!ownsAction()) return;
+      if (!ownsAction()) {
+        if (explicit && this.pendingLaunches[explicit.launchId]?.status === 'creating') {
+          this.failLaunch(explicit.launchId, normalizePromptError(error).message);
+        }
+        return;
+      }
+      if (explicit) this.markLaunchDispatched(explicit.launchId, true);
       endSessionWork(this.activeSession);
       const readOnlyCode = readWorktreeErrorCode(error);
       if (isReadOnlyErrorCode(readOnlyCode)) {
@@ -3561,7 +3922,7 @@ export class AgentsStore {
     client?: DesktopAcpClient,
     fresh = false
   ): Promise<SessionRuntimeStatus | null> {
-    if (!agentId || !sessionId || this.pollingDisposed) return null;
+    if (!agentId || !sessionId || isPendingLaunchId(sessionId) || this.pollingDisposed) return null;
     const record = client ? this.clients.get(agentId) : await this.connectInitializedRecord(agentId);
     if (!record || (client && record.client !== client)) return null;
     const resolvedClient = record.client;
@@ -3675,6 +4036,8 @@ export class AgentsStore {
       this.error = 'No active session selected.';
       return;
     }
+    // Nothing to cancel until `session/new` has answered, and the first prompt has not left yet.
+    if (isPendingLaunchId(this.activeSessionId) || this.isLaunchSettingUp(this.activeAgentId, this.activeSessionId)) return;
 
     if (!PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) && this.activeSession.runState !== 'submitting') {
       return;
@@ -3700,20 +4063,24 @@ export class AgentsStore {
 
   /** Load history only while this selection generation still owns the view. */
   async loadSession(agentId: string, sessionId: string, pendingOperation: 'undo' | 'redo' | null = null) {
+    // A launch placeholder has no server-side session to load.
+    if (isPendingLaunchId(sessionId)) return;
+    const sessionKey = buildSessionKey(agentId, sessionId);
+    // Already-hydrated sessions must not bump the selection generation: a first
+    // prompt may be in flight for this very session and would otherwise be dropped.
+    if (pendingOperation === null) {
+      const hydrated = this.hydratedRemoteSessionKeys.delete(sessionKey);
+      const fresh = this.freshlyCreatedSessionKeys.delete(sessionKey);
+      if ((hydrated || fresh) && this.isSelectedSession(agentId, sessionId)) {
+        this.acknowledgeSession(agentId, sessionId);
+        this.rememberRecentSession(agentId, sessionId);
+        await this.refreshDelegateAssignments(agentId, sessionId);
+        return;
+      }
+    }
     const selectionGeneration = ++this.sessionSelectionGeneration;
     const isCurrentLoad = () => selectionGeneration === this.sessionSelectionGeneration &&
       this.isSelectedSession(agentId, sessionId);
-    const sessionKey = buildSessionKey(agentId, sessionId);
-    if (
-      pendingOperation === null &&
-      this.hydratedRemoteSessionKeys.delete(sessionKey) &&
-      this.isSelectedSession(agentId, sessionId)
-    ) {
-      this.acknowledgeSession(agentId, sessionId);
-      this.rememberRecentSession(agentId, sessionId);
-      await this.refreshDelegateAssignments(agentId, sessionId);
-      return;
-    }
 
     // A deep link may arrive before catalog discovery. Do not create a local
     // placeholder or scan every peer before the backend checks the bookmark.
@@ -4422,7 +4789,7 @@ export class AgentsStore {
   }
 
   async refreshDelegateAssignments(agentId = this.activeAgentId, sessionId = this.activeSessionId) {
-    if (!agentId || !sessionId) return;
+    if (!agentId || !sessionId || isPendingLaunchId(sessionId)) return;
     const key = buildSessionKey(agentId, sessionId);
     const record = this.ensureClientRecord(agentId);
     if (!record.client.supportsQuerymtMethod(QMT_METHOD_SESSION_DELEGATE_MODELS)) {
@@ -5102,7 +5469,14 @@ export class AgentsStore {
     return result;
   }
 
-  private async createAttachedRemoteSession(agentId: string, node_id: string, cwd: string, profileId?: string): Promise<string> {
+  /** `canSelect` lets a launch publish the session without selecting it once the user has moved on. */
+  private async createAttachedRemoteSession(
+    agentId: string,
+    node_id: string,
+    cwd: string,
+    profileId?: string,
+    canSelect?: () => boolean
+  ): Promise<string> {
     const isCurrentSource = this.sessionMutationScope(agentId);
     const record = await this.connectInitializedRecord(agentId);
     const result = await this.createRemoteSessionAttach(agentId, node_id, cwd, profileId);
@@ -5112,7 +5486,7 @@ export class AgentsStore {
       node_id,
       cwd,
       updated_at: new Date().toISOString()
-    });
+    }, false, !canSelect || canSelect());
   }
 
   private async createRemoteSessionAttach(agentId: string, node_id: string, cwd?: string, profileId?: string) {
@@ -5193,24 +5567,28 @@ export class AgentsStore {
     result: RemoteSessionAttachInfo,
     remoteSession: { id: string; node_id: string; title?: string; cwd?: string; updated_at?: string;
       profile_id?: string | null; profile_label?: string | null },
-    preserveSelectionGeneration = false
+    preserveSelectionGeneration = false,
+    /** False publishes the session (catalog, model, preferences) without taking over the view. */
+    select = true
   ): Promise<string> {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) throw new Error(`Unable to locate agent ${agentId}.`);
 
     const sessionId = result.session_id;
-    this.resetActiveSession(agentId, sessionId, preserveSelectionGeneration);
     const configOptions = result.config_options ?? [];
-    const snapshot = activeSessionFromLoadResponse(sessionId, {
-      _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
-    });
-    snapshot.configOptions = configOptions;
-    this.activeSession = normalizeHistoricalSession(snapshot, { loadCompleted: true });
-    this.rememberSnapshotUserMessages(snapshot);
-    this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
-    this.reconcileInputStatesFromSnapshot(agentId, sessionId, {
-      _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
-    });
+    if (select) {
+      this.resetActiveSession(agentId, sessionId, preserveSelectionGeneration);
+      const snapshot = activeSessionFromLoadResponse(sessionId, {
+        _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
+      });
+      snapshot.configOptions = configOptions;
+      this.activeSession = normalizeHistoricalSession(snapshot, { loadCompleted: true });
+      this.rememberSnapshotUserMessages(snapshot);
+      this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
+      this.reconcileInputStatesFromSnapshot(agentId, sessionId, {
+        _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
+      });
+    }
     this.applySessionConfigOptionsSnapshot(agentId, sessionId, configOptions);
     const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
     const summary: DesktopSessionSummary = {
@@ -5244,7 +5622,7 @@ export class AgentsStore {
     });
     this.seedSessionModePreferenceFromLoad(agentId, sessionId);
     this.updateWorkspaceDiscovery(config, [summary], false);
-    this.hydratedRemoteSessionKeys.add(buildSessionKey(agentId, sessionId));
+    if (select) this.hydratedRemoteSessionKeys.add(buildSessionKey(agentId, sessionId));
     this.rememberRecentSession(agentId, sessionId);
     // Attachment is committed; a retryable catalog refresh must not fail its load.
     await this.refreshRemoteSessionsForAgent(agentId, nodeId).catch((error) => {
@@ -5804,6 +6182,8 @@ export class AgentsStore {
     this.snapshotUserMessageIds.clear();
     this.sessionHistoryLoading = false;
     this.promptFailure = null;
+    // Only the session selected next may skip its first load.
+    this.freshlyCreatedSessionKeys.clear();
 
     const record = this.ensureClientRecord(agentId);
     record.recentSessionUpdateKeys = [];
