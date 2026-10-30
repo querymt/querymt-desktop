@@ -145,6 +145,7 @@ export function mapAcpSessionsToDesktopSessions(
     remoteConnectionState: session._meta?.connectionState === 'disconnected' ? 'disconnected' :
       session._meta?.connectionState === 'available' ? 'available' : undefined,
     status: inferSessionStatus(session),
+    hasUserHistory: readOperationalSessionMeta(session)?.hasUserHistory,
     lifecycle: readSessionLifecycle(session._meta?.querymt, session.sessionId),
     pin: readSessionPin(session._meta?.querymt, session.sessionId),
     // Disconnected bookmark fallbacks do not carry owner-sourced parentage.
@@ -221,42 +222,45 @@ export function readSessionLifecycle(namespace: unknown, sessionId: string): Ses
 export function inferSessionStatus(session: SessionInfo): SessionStatus {
   const meta = readOperationalSessionMeta(session);
   if (!meta) {
-    return 'idle';
+    return 'unknown';
   }
 
-  switch (meta.runtimeStatus.phase) {
+  return runtimeSessionStatus(meta.runtimeStatus, meta.hasUserHistory);
+}
+
+export function runtimeSessionStatus(runtime: QuerymtSessionMeta['runtimeStatus'], hasHistory = false): SessionStatus {
+  if (runtime.observation?.availability === 'unavailable') return 'unknown';
+  switch (runtime.phase) {
     case QuerymtSessionRuntimePhase.Starting:
     case QuerymtSessionRuntimePhase.Model:
     case QuerymtSessionRuntimePhase.Tools:
-      return 'thinking';
+    case QuerymtSessionRuntimePhase.Closing:
     case QuerymtSessionRuntimePhase.Waiting:
-      return 'waiting';
+      return 'thinking';
     case QuerymtSessionRuntimePhase.CancelRequested:
       return 'cancelling';
     case QuerymtSessionRuntimePhase.Idle:
-    case QuerymtSessionRuntimePhase.Closing:
+      return hasHistory ? 'completed' : 'idle';
     default:
-      return meta.userMessageCount > 0 ? 'completed' : 'idle';
+      return 'unknown';
   }
 }
 
-function readOperationalSessionMeta(session: SessionInfo): QuerymtSessionMeta | null {
+function readOperationalSessionMeta(session: SessionInfo): { runtimeStatus: QuerymtSessionMeta['runtimeStatus']; hasUserHistory?: boolean } | null {
   const meta = session._meta;
   if (!meta || typeof meta !== 'object') {
     return null;
   }
 
   const candidate = meta as Partial<QuerymtSessionMeta>;
-  if (
-    typeof candidate.messageCount !== 'number' ||
-    typeof candidate.userMessageCount !== 'number' ||
-    typeof candidate.hasErrors !== 'boolean' ||
-    typeof candidate.runtimeStatus?.phase !== 'string'
-  ) {
-    return null;
-  }
+  if (typeof candidate.runtimeStatus?.phase !== 'string') return null;
 
-  return candidate as QuerymtSessionMeta;
+  // Remote rows can have authoritative runtime without owner history statistics.
+  const count = candidate.userMessageCount;
+  return {
+    runtimeStatus: candidate.runtimeStatus,
+    hasUserHistory: typeof count === 'number' && Number.isFinite(count) && count >= 0 ? count > 0 : undefined
+  };
 }
 
 export function readSessionRelationshipMeta(session: Pick<SessionInfo, '_meta'>): SessionRelationshipMeta {

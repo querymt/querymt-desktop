@@ -185,7 +185,7 @@ describe('session relationship metadata', () => {
       { agentId: 'agent-1', agentName: 'QueryMT' }
     );
 
-    expect(session.status).toBe('idle');
+    expect(session.status).toBe('unknown');
     expect(session).toMatchObject({
       parentSessionId: 'parent-1',
       forkOrigin: 'delegation',
@@ -279,20 +279,41 @@ describe('workspace location', () => {
 });
 
 describe('inferSessionStatus', () => {
-  it('maps active runtime phases to thinking', () => {
+  it.each([
+    ['tools', 'thinking'], ['waiting', 'thinking'], ['cancel_requested', 'cancelling'],
+    ['idle', 'idle'], ['unknown', 'unknown']
+  ] as const)('accepts remote runtime-only %s independently of absent statistics', (phase, status) => {
+    const lifecycle = { session_id: 'session-1', resolved: false, archived: false, resolved_at: null, archived_at: null };
+    const listed = createSession({
+      location: 'remote', nodeId: 'node-1', nodeLabel: 'Owner', profileId: 'coder', profileLabel: 'Coder',
+      connectionState: 'available', parentSessionId: 'parent', forkOrigin: 'delegation', sessionKind: 'delegate',
+      querymt: { lifecycle }, runtimeStatus: { ...runtimeMeta(phase), observation: { availability: phase === 'unknown' ? 'unavailable' : 'live' } }
+    });
+    expect(inferSessionStatus(listed)).toBe(status);
+    expect(mapAcpSessionsToDesktopSessions([listed], { agentId: 'agent-1', agentName: 'Agent' })[0]).toMatchObject({
+      status, location: 'remote', remoteNodeId: 'node-1', remoteNodeLabel: 'Owner',
+      remoteProfileId: 'coder', remoteProfileLabel: 'Coder', remoteConnectionState: 'available', lifecycle,
+      parentSessionId: 'parent', forkOrigin: 'delegation', sessionKind: 'delegate', relationshipKnown: true
+    });
+    expect(listed._meta).not.toHaveProperty('messageCount');
+    expect(listed._meta).not.toHaveProperty('userMessageCount');
+    expect(listed._meta).not.toHaveProperty('hasErrors');
+  });
+
+  it.each(['model', 'tools', 'closing'] as const)('maps active %s runtime to thinking, including closing', (phase) => {
     expect(
       inferSessionStatus(
         createSession({
           messageCount: 2,
           userMessageCount: 1,
           hasErrors: false,
-          runtimeStatus: runtimeMeta('model')
+runtimeStatus: runtimeMeta(phase)
         })
       )
     ).toBe('thinking');
   });
 
-  it('maps waiting runtimeStatus to waiting', () => {
+  it('maps native waiting execution to active, not human input needed', () => {
     expect(
       inferSessionStatus(
         createSession({
@@ -302,7 +323,7 @@ describe('inferSessionStatus', () => {
           runtimeStatus: runtimeMeta('waiting')
         })
       )
-    ).toBe('waiting');
+    ).toBe('thinking');
   });
 
   it('maps cancel_requested runtimeStatus to cancelling', () => {
@@ -344,8 +365,8 @@ describe('inferSessionStatus', () => {
     ).toBe('idle');
   });
 
-  it('falls back to idle when session meta is missing', () => {
-    expect(inferSessionStatus(createSession())).toBe('idle');
+  it('reports unknown when session meta is missing', () => {
+    expect(inferSessionStatus(createSession())).toBe('unknown');
   });
 });
 

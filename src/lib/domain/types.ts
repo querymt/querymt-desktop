@@ -1,9 +1,10 @@
 import type { SessionConfigOption } from '@agentclientprotocol/sdk';
-import type { AccountingSnapshot, DelegationUpdateState } from '$lib/querymt/generated/types';
+import type { AccountingSnapshot, DelegationUpdateNotification, DelegationUpdateState } from '$lib/querymt/generated/types';
 
 export type RuntimeStatus = 'running' | 'starting' | 'degraded' | 'stopped';
-export type SessionStatus = 'idle' | 'thinking' | 'waiting' | 'completed' | 'cancelling';
+export type SessionStatus = 'unknown' | 'idle' | 'thinking' | 'waiting' | 'completed' | 'cancelling';
 export type SessionRunState =
+  | 'unknown'
   | 'idle'
   | 'submitting'
   | 'thinking'
@@ -141,6 +142,8 @@ export interface DesktopSessionSummary {
   remoteProfileLabel?: string;
   remoteConnectionState?: 'available' | 'disconnected';
   status: SessionStatus;
+  /** Undefined when the owner has not supplied user-history evidence. */
+  hasUserHistory?: boolean;
   lifecycle?: SessionLifecycle | null;
   pin?: SessionPin | null;
   /** False when load/bookmark metadata does not establish parentage. */
@@ -317,6 +320,7 @@ export interface SessionTranscriptGroup {
 
 export interface SessionToolCallItem {
   id: string;
+  runId?: string | null;
   title: string;
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   kind: string | null;
@@ -329,6 +333,8 @@ export interface SessionToolCallItem {
   // The dispatch tool can finish before its delegated task does.
   delegationState?: `${DelegationUpdateState}`;
   delegationUpdatedAt?: number;
+  /** Internal join provenance; never a new wire field or a dispatch outcome. */
+  delegationObservation?: DelegationUpdateNotification;
 }
 
 export interface SessionPlanEntry {
@@ -386,6 +392,10 @@ export interface ActiveSessionViewModel {
   configOptions: SessionConfigOption[];
   runState: SessionRunState;
   runStateFromLifecycle?: boolean;
+  runId?: string | null;
+  lastRunOutcome?: { runId: string | null; outcome: string };
+  delegations?: DelegationUpdateNotification[];
+  dependencyLabel?: string | null;
   activityLabel: string | null;
   activeToolCallId: string | null;
   lastStopReason: string | null;

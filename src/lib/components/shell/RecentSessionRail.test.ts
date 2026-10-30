@@ -140,6 +140,11 @@ describe('RecentSessionRail pinned sessions', () => {
 });
 
 describe('RecentSessionRail navigation', () => {
+  it('keeps unknown execution explicit in existing rail status labels', () => {
+    render(RecentSessionRail, { current: 'Sessions', sessions: [{ ...activeSession, status: 'unknown' }] });
+    expect(screen.getByRole('link', { name: /^Waiting session, Status unavailable/ })).toBeInTheDocument();
+    expect(screen.getByText('work · Status unavailable')).toBeInTheDocument();
+  });
   it('defaults to a labeled sidebar with grouped navigation and readable sessions', () => {
     render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
 

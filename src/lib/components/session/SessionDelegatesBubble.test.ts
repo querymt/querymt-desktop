@@ -305,7 +305,8 @@ describe('SessionDelegatesBubble', () => {
     expect(screen.queryByRole('region', { name: 'Waiting messages' })).toBeNull();
     expect(screen.getByRole('region', { name: 'Delegates in this turn' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '1 waiting message' })).toHaveTextContent(/^1$/);
-    expect(screen.getByRole('status')).toHaveTextContent('Double Esc to cancel');
+    expect(screen.getByRole('status')).not.toHaveTextContent('Double Esc to cancel');
+    expect(screen.getByRole('status')).toHaveAttribute('data-tooltip-trigger');
   });
 
   it('keeps both counts in the same activity row without making the composer own them', () => {

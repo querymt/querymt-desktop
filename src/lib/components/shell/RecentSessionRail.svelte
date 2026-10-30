@@ -279,7 +279,7 @@
   }
 
   function getStatusLabel(status: SessionStatus, item: SessionRailItem): string {
-    const activity = status === 'thinking' ? 'Active' : status === 'waiting' ? 'Waiting' : status === 'cancelling' ? 'Cancelling' : item.requiresAttention ? null : 'Recent';
+    const activity = status === 'unknown' ? 'Status unavailable' : status === 'thinking' ? 'Active' : status === 'waiting' ? 'Waiting' : status === 'cancelling' ? 'Cancelling' : item.requiresAttention ? null : 'Recent';
     if (item.requiresAttention) return activity ? `${activity}, action required` : 'Action required';
     return activity ?? 'Recent';
   }

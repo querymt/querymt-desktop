@@ -1,7 +1,7 @@
 import { applyDelegationChildSession, createEmptyActiveSession, normalizeContentBlocks, stringifyOptional, summarizeContentBlocks } from '$lib/domain/session-updates';
 import type { ActiveSessionViewModel, PromptAttachment, SessionContentBlock, SessionToolCallItem, SessionTranscriptItem } from '$lib/domain/types';
 import { appendHistoricalUsage, readAccountingSnapshot } from '$lib/domain/session-usage';
-import type { DelegationUpdateNotification } from '$lib/querymt/generated/types';
+import type { DelegationUpdateNotification, SessionRuntimeStatus } from '$lib/querymt/generated/types';
 
 type SnapshotEvent = {
   seq?: number;
@@ -38,6 +38,7 @@ type IndexedStructuredPrompt = {
 type SessionLoadSnapshot = {
   /** Authoritative reducer-backed accounting at the snapshot cursor. */
   accounting?: unknown;
+  runtimeStatus?: SessionRuntimeStatus;
   delegationUpdates?: DelegationUpdateNotification[];
   audit?: {
     events?: SnapshotEvent[];
@@ -72,7 +73,6 @@ export interface SnapshotInputState {
   createdAt?: number;
 }
 
-const TOOL_TERMINAL_EVENT_TYPES = new Set(['assistant_message_stored', 'llm_request_end']);
 
 export function activeSessionFromLoadResponse(sessionId: string, response: unknown): ActiveSessionViewModel {
   const session = createEmptyActiveSession();
@@ -87,6 +87,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
   session.usage.accounting = readAccountingSnapshot(snapshot.accounting);
 
   const toolCallsById = new Map<string, SessionToolCallItem>();
+  const supersededRunIds = new Set<string>();
   const pendingDelegationToolCalls = new Map<string, string>();
   const pendingChildSessionsByDelegation = new Map<string, string>();
   const structuredPrompts = indexStructuredPrompts(snapshot);
@@ -131,6 +132,9 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
     }
 
     if (kind === 'run_started') {
+      const runId = readString(data.run_id) ?? null;
+      if (session.runId && runId && session.runId !== runId) supersededRunIds.add(session.runId);
+      session.runId = runId;
       session.runState = 'thinking';
       session.runStateFromLifecycle = true;
       session.activityLabel = 'Agent is working…';
@@ -139,6 +143,10 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
 
     if (kind === 'run_completed') {
       const outcome = readString(data.outcome);
+      const runId = readString(data.run_id) ?? null;
+      if (session.runId && runId && session.runId !== runId) continue;
+      session.runId = runId ?? session.runId;
+      session.lastRunOutcome = { runId: session.runId ?? null, outcome: outcome ?? 'completed' };
       session.runState = outcome === 'failed' ? 'failed' : 'completed';
       session.runStateFromLifecycle = true;
       session.activityLabel = outcome === 'cancelled'
@@ -252,6 +260,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
       mergeHistoricalToolCall(toolCallsById, toolCallId, {
         title: readString(data.tool_name),
         status: 'in_progress',
+        runId: session.runId,
         kind: readString(data.tool_name) ?? null,
         messageId,
         arguments: stringifyOptional(data.arguments ?? data.input),
@@ -299,8 +308,16 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
 
   restoreUnmatchedPrompts(session, snapshot, structuredPrompts, restoredStructuredPrompts, toolCallsById);
 
-  session.toolCalls = finalizeHistoricalToolCalls(Array.from(toolCallsById.values()), snapshot.audit?.events ?? []);
+  // A later own run proves the earlier run ended, but not that its tools succeeded.
+  session.toolCalls = Array.from(toolCallsById.values(), (tool) =>
+    tool.runId && supersededRunIds.has(tool.runId) && (tool.status === 'pending' || tool.status === 'in_progress')
+      ? { ...tool, status: 'failed' as const, isError: true, result: tool.result ?? 'Run ended before a tool result was recorded.' }
+      : tool);
   return (snapshot.delegationUpdates ?? []).reduce(applyDelegationChildSession, normalizeHistoricalSession(session));
+}
+
+export function getSnapshotRuntimeStatus(response: unknown): SessionRuntimeStatus | null {
+  return readSnapshot(response)?.runtimeStatus ?? null;
 }
 
 export function getSnapshotInputStates(response: unknown): SnapshotInputState[] {
@@ -393,42 +410,31 @@ export function getSnapshotProviderChange(response: unknown): SnapshotProviderCh
 
 export function normalizeHistoricalSession(
   session: ActiveSessionViewModel,
-  options: { loadCompleted?: boolean } = {}
+  _options: { loadCompleted?: boolean } = {}
 ): ActiveSessionViewModel {
-  if (session.runStateFromLifecycle && !options.loadCompleted) return session;
-
-  const hasActiveTool = session.toolCalls.some((tool) => tool.status === 'in_progress' || tool.status === 'pending');
-  if (hasActiveTool && !options.loadCompleted) {
-    const activeTool = session.toolCalls.find((tool) => tool.status === 'in_progress' || tool.status === 'pending') ?? null;
-    session.runState = 'tool-running';
-    session.activeToolCallId = activeTool?.id ?? null;
-    session.activityLabel = activeTool ? `Running tool: ${activeTool.title}` : 'Running tool…';
-    session.lastError = null;
-    return session;
-  }
-
-  if (options.loadCompleted) {
-    session.toolCalls = session.toolCalls.map((tool) =>
-      tool.status === 'in_progress' || tool.status === 'pending'
-        ? { ...tool, status: tool.isError ? 'failed' : 'completed' }
-        : tool
-    );
+  // Loading history is not evidence that execution or a pending tool ended.
+  if (session.runStateFromLifecycle && (session.runState === 'completed' || session.runState === 'failed')) {
     session.activeToolCallId = null;
-    if (!session.runStateFromLifecycle) {
-      session.runState = 'completed';
-      session.activityLabel = 'Loaded from session history.';
-      session.lastError = null;
-    }
+    session.toolCalls = session.toolCalls.map((tool) =>
+      (tool.status === 'pending' || tool.status === 'in_progress') && (!tool.runId || tool.runId === session.runId)
+        ? { ...tool, status: 'failed', isError: true, result: tool.result ?? 'Run ended before a tool result was recorded.' }
+        : tool);
     return session;
   }
-
-  if (session.transcript.some((item) => item.kind === 'agent_message_chunk' || item.kind === 'agent_thought_chunk')) {
+  const activeTool = session.toolCalls.find((tool) =>
+    (tool.status === 'in_progress' || tool.status === 'pending') &&
+    (!session.runId || !tool.runId || tool.runId === session.runId));
+  if (activeTool) {
+    session.runState = 'tool-running';
+    session.activeToolCallId = activeTool.id;
+    session.activityLabel = `Running tool: ${activeTool.title}`;
+    session.lastError = null;
+  } else if (!session.runStateFromLifecycle && session.transcript.some((item) => item.kind !== 'user_message_chunk')) {
     session.runState = 'completed';
     session.activeToolCallId = null;
     session.activityLabel = 'Loaded from session history.';
     session.lastError = null;
   }
-
   return session;
 }
 
@@ -644,40 +650,13 @@ function mergeHistoricalToolCall(
     arguments: update.arguments ?? existing?.arguments ?? null,
     result: update.result ?? existing?.result ?? null,
     isError: update.isError ?? existing?.isError,
+    runId: update.runId ?? existing?.runId ?? null,
     eventIndex: mergeEventIndex(existing?.eventIndex, update.eventIndex),
     childSessionId: update.childSessionId ?? existing?.childSessionId ?? null
   });
 }
 
-function finalizeHistoricalToolCalls(tools: SessionToolCallItem[], events: SnapshotEvent[]): SessionToolCallItem[] {
-  const terminalEventIndexes = events
-    .filter((event) => TOOL_TERMINAL_EVENT_TYPES.has(event.kind?.type ?? '') && typeof event.seq === 'number')
-    .map((event) => event.seq as number);
 
-  return tools.map((tool) => {
-    if (tool.status !== 'in_progress' && tool.status !== 'pending') {
-      return tool;
-    }
-
-    if (tool.result) {
-      return {
-        ...tool,
-        status: tool.isError ? 'failed' : 'completed'
-      };
-    }
-
-    const toolEventIndex = tool.eventIndex ?? Number.MAX_SAFE_INTEGER;
-    const hasLaterTerminalEvent = terminalEventIndexes.some((seq) => seq > toolEventIndex);
-    if (!hasLaterTerminalEvent) {
-      return tool;
-    }
-
-    return {
-      ...tool,
-      status: tool.isError ? 'failed' : 'completed'
-    };
-  });
-}
 
 function mergeToolStatus(
   current: SessionToolCallItem['status'] | undefined,

@@ -69,17 +69,21 @@
     if (forkPending) return { label: 'Creating fork', tone: 'running', busy: true };
     if (session.undo.pendingOperation === 'undo') return { label: 'Undoing', tone: 'running', busy: true };
     if (session.undo.pendingOperation === 'redo') return { label: 'Restoring', tone: 'running', busy: true };
+    if (session.runState === 'unknown' || (summaryStatus === 'unknown' && (!session.sessionId || ['idle', 'completed'].includes(session.runState)))) return { label: 'Status unavailable', tone: 'warning', busy: false };
     if (session.runState === 'failed') return { label: 'Failed', tone: 'danger', busy: false };
-    if (session.runState === 'waiting-input' || summaryStatus === 'waiting') {
+    if (session.dependencyLabel && !['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState)) {
+      return { label: `Own turn idle - ${session.dependencyLabel}`, tone: 'running', busy: true };
+    }
+    if (session.runState === 'waiting-input' || (!session.sessionId && summaryStatus === 'waiting')) {
       return { label: 'Input needed', tone: 'warning', busy: false };
     }
     if (
       ['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState) ||
-      ['thinking', 'cancelling'].includes(summaryStatus)
+      (!session.sessionId && ['thinking', 'cancelling'].includes(summaryStatus))
     ) {
-      return { label: summaryStatus === 'cancelling' ? 'Cancelling' : 'Working', tone: 'running', busy: true };
+      return { label: session.activityLabel?.startsWith('Cancelling') ? 'Cancelling' : session.activityLabel?.startsWith('Finishing') ? 'Finishing' : session.activityLabel?.startsWith('Waiting for delegates') ? 'Waiting for delegates' : 'Working', tone: 'running', busy: true };
     }
-    if (session.runState === 'completed' || summaryStatus === 'completed') {
+    if (session.runState === 'completed' || (!session.sessionId && summaryStatus === 'completed')) {
       return { label: 'Turn complete', tone: 'muted', busy: false };
     }
     return { label: 'Ready', tone: 'muted', busy: false };

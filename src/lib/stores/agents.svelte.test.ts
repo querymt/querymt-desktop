@@ -2,6 +2,11 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
+import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelte';
+import SessionToolBlock from '$lib/components/session/SessionToolBlock.svelte';
+import SessionDelegatesBubble from '$lib/components/session/SessionDelegatesBubble.svelte';
+import { getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
+import SessionHeader from '$lib/components/session/SessionHeader.svelte';
 import { RequestError, type InitializeResponse, type ListSessionsRequest, type PromptResponse, type SessionConfigOption, type SessionInfo, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
 import type { AgentConfig, DesktopSessionSummary, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { findModeConfigOption, findReasoningConfigOption, getModelSelectionKey } from '$lib/querymt/config-options';
@@ -9,6 +14,7 @@ import { QMT_METHOD_MESH_NODES, QMT_METHOD_MESH_STATUS } from '$lib/querymt/quer
 import { RemoteNodeUpgradeRequiredError } from '$lib/domain/remote-errors';
 import {
   DelegateAssignmentSource,
+  DelegationUpdateState,
   DelegateReasoningEffort,
   type AuthProviderStatus,
   type DelegateAssignmentsInfo,
@@ -495,6 +501,218 @@ afterEach(() => {
   }
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe('AgentsStore explicit remote attach runtime consistency', () => {
+  const id = 'remote-session-1';
+  const key = `agent-1:${id}`;
+  const verifier = { version: 1, sessionId: id, delegationId: 'verify-1', targetAgentId: 'coder',
+    state: DelegationUpdateState.Forked, objective: 'Check result', requestedAt: 1, updatedAt: 2,
+    activity: 'live', stage: 'verifying', sourceEpoch: 'workflow-1', sessionSeq: 17 } as const;
+  const runtime = (phase = SessionRuntimePhase.Tools, revision = 4, extra: Partial<SessionRuntimeStatus> = {}): SessionRuntimeStatus => ({
+    phase, active_run_id: phase === SessionRuntimePhase.Idle || phase === SessionRuntimePhase.Unknown ? null : 'remote-run',
+    steerable: phase === SessionRuntimePhase.Tools, pending_steering_count: 0, queued_input_count: 0,
+    observation: { availability: 'live', epoch: 'remote-epoch', revision }, delegation_activity: [], ...extra
+  });
+  const attached = (runtimeStatus?: SessionRuntimeStatus): RemoteSessionAttachInfo => ({
+    session_id: id, node_id: 'node-1', attached: true, profile_id: 'owner-profile', profile_label: 'Owner', config_options: [],
+    snapshot: { cursor: { sessionSeq: 10 }, runtimeStatus, delegationUpdates: runtimeStatus?.delegation_activity ?? [],
+      audit: { events: [{ seq: 1, timestamp: 1, kind: { type: 'prompt_received', data: { message_id: 'owner-message', content: 'Owner history' } } }] } }
+  });
+  async function storeOnSessionRoute() {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1'; store.activeSessionId = 'old-session'; store.activeSession.sessionId = 'old-session';
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle));
+    store.setRuntimePollingEnabled(true);
+    await vi.advanceTimersByTimeAsync(0);
+    mockClient.getSessionRuntimeStatus.mockClear();
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'steering');
+    return store;
+  }
+  beforeEach(() => { vi.useFakeTimers(); Object.defineProperty(document, 'hidden', { configurable: true, value: false }); });
+  afterEach(() => { delete (document as { hidden?: boolean }).hidden; });
+
+  it('hydrates silent Tools immediately and keeps fresh reads/polling through the same-route shortcut', async () => {
+    const store = await storeOnSessionRoute();
+    let first!: (value: SessionRuntimeStatus) => void;
+    let second!: (value: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus
+      .mockImplementationOnce(() => new Promise((resolve) => { first = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { second = resolve; }));
+    mockClient.attachRemoteSession.mockResolvedValueOnce(attached(runtime()));
+    await store.attachRemoteSession('agent-1', 'node-1', id);
+    expect(store.activeSessionRuntime).toMatchObject(runtime());
+    expect(store.activeSession).toMatchObject({ runId: 'remote-run', runState: 'tool-running' });
+    expect(store.activeRunBusy).toBe(true);
+    expect(store.canControlActiveRun).toBe(true);
+    store.setActiveComposerInputDelivery('steer');
+    expect(store.activeInputDelivery).toBe('steer');
+    expect(store.sessionsByAgent['agent-1'].find((item) => item.sessionId === id)).toMatchObject({
+      status: 'thinking', location: 'remote', remoteNodeId: 'node-1', remoteProfileId: 'owner-profile'
+    });
+    expect(store.activeSession.transcript[0]?.text).toBe('Owner history');
+    expect(first).toBeDefined();
+    await store.loadSession('agent-1', id);
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
+    expect(second).toBeDefined();
+    first(runtime(SessionRuntimePhase.Idle, 3));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.activeSessionRuntime?.phase).toBe(SessionRuntimePhase.Tools);
+    second(runtime(SessionRuntimePhase.Tools, 5));
+    await vi.advanceTimersByTimeAsync(0);
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle, 6));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(3);
+    expect(store.activeRunBusy).toBe(false);
+  });
+
+  it('seeds idle verifier cache, polls work, retains unavailable-empty and clears healthy-empty', async () => {
+    const store = await storeOnSessionRoute();
+    let verify!: (value: SessionRuntimeStatus) => void;
+    const idle = runtime(SessionRuntimePhase.Idle, 4, { delegation_activity: [verifier] });
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { verify = resolve; }));
+    mockClient.attachRemoteSession.mockResolvedValueOnce(attached(idle));
+    await store.attachRemoteSession('agent-1', 'node-1', id);
+    expect(store.activeSessionRuntime).toMatchObject(idle);
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    expect(store.activeRunBusy).toBe(false);
+    expect(mockClient.cancelSession).not.toHaveBeenCalled();
+    verify(runtime(SessionRuntimePhase.Unknown, 4, { observation: { availability: 'unavailable' } }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.activeSession.runState).toBe('unknown');
+    expect(store.sessionRuntimeBySession[key]?.delegation_activity).toEqual([verifier]);
+    mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(idle);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    expect(store.activeRunBusy).toBe(false);
+    mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(runtime(SessionRuntimePhase.Idle, 4));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(store.activeSession.dependencyLabel).toBeNull();
+    expect(store.sessionRuntimeBySession[key]?.delegation_activity).toEqual([]);
+    const calls = mockClient.getSessionRuntimeStatus.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(calls);
+  });
+
+  it.each(['unavailable', 'missing-runtime', 'missing-observation'] as const)('does not invent Idle for %s attach evidence', async (kind) => {
+    const store = await storeOnSessionRoute();
+    const observed = kind === 'unavailable' ? runtime(SessionRuntimePhase.Unknown, 1, { observation: { availability: 'unavailable' } })
+      : kind === 'missing-runtime' ? undefined : runtime(SessionRuntimePhase.Idle, 1, { observation: undefined });
+    mockClient.attachRemoteSession.mockResolvedValueOnce(attached(observed));
+    mockClient.supportsQuerymtMethod.mockReturnValue(false);
+    await store.attachRemoteSession('agent-1', 'node-1', id);
+    expect(store.activeSession.runState).toBe('unknown');
+    expect(store.activeSessionRuntime?.observation?.availability).toBe('unavailable');
+    expect(store.activeRunBusy).toBe(false);
+    expect(store.sessionsByAgent['agent-1'].find((item) => item.sessionId === id)?.status).toBe('unknown');
+    expect(mockClient.getSessionRuntimeStatus).not.toHaveBeenCalled();
+  });
+
+  it('preserves newer live incarnation/workflow and captured tool against an older attach snapshot', async () => {
+    const store = await storeOnSessionRoute();
+    let finish!: (value: RemoteSessionAttachInfo) => void;
+    mockClient.attachRemoteSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    mockClient.getSessionRuntimeStatus.mockImplementation(() => new Promise(() => {}));
+    const attaching = store.attachRemoteSession('agent-1', 'node-1', id);
+    await vi.advanceTimersByTimeAsync(0);
+    const newer = runtime(SessionRuntimePhase.Tools, 1, { active_run_id: 'run-b',
+      observation: { availability: 'live', epoch: 'epoch-b', revision: 1 },
+      delegation_activity: [{ ...verifier, sourceEpoch: 'workflow-b', stage: 'finalizing', sessionSeq: 20 }] });
+    mockClient.emitExtensionNotification({ method: 'querymt/session/runtimeChanged', params: { version: 1, session_id: id, runtime: newer } });
+    mockClient.emitSessionUpdate({ sessionId: id, update: { sessionUpdate: 'tool_call_update', toolCallId: 'tool-b', title: 'Live B', status: 'in_progress' } });
+    const old = attached(runtime(SessionRuntimePhase.Idle, 99, { delegation_activity: [verifier] }));
+    old.snapshot.audit.events.push(
+      { seq: 2, kind: { type: 'run_started', data: { run_id: 'run-a' } } },
+      { seq: 3, kind: { type: 'run_completed', data: { run_id: 'run-a', outcome: 'completed' } } }
+    );
+    finish(old);
+    await attaching;
+    expect(store.activeSessionRuntime).toMatchObject(newer);
+    expect(store.sessionsByAgent['agent-1'].find((item) => item.sessionId === id)?.status).toBe('thinking');
+    expect(store.activeSession).toMatchObject({ runId: 'run-b', runState: 'tool-running', dependencyLabel: 'Finalizing delegate result' });
+    expect(store.activeSession.toolCalls).toContainEqual(expect.objectContaining({ id: 'tool-b', status: 'in_progress', runId: 'run-b' }));
+    expect(store.activeRunBusy).toBe(true);
+  });
+
+  it('rejects an attach response from a replaced client even with unchanged selection generation', async () => {
+    const store = await storeOnSessionRoute();
+    let finish!: (value: RemoteSessionAttachInfo) => void;
+    mockClient.attachRemoteSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const attaching = store.attachRemoteSession('agent-1', 'node-1', id);
+    await vi.advanceTimersByTimeAsync(0);
+    await store.connectAgent('agent-1', true);
+    const selected = store.activeSession;
+    finish(attached(runtime()));
+    await attaching;
+    expect(store.activeSessionId).toBe('old-session');
+    expect(store.activeSession).toBe(selected);
+    expect(store.lastRemoteAttachByAgent['agent-1']).toBeUndefined();
+  });
+
+  it('supersedes a pre-attach cache read without waiting for or accepting its old result', async () => {
+    const store = await storeOnSessionRoute();
+    let oldRead!: (value: SessionRuntimeStatus) => void;
+    let freshRead!: (value: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus
+      .mockImplementationOnce(() => new Promise((resolve) => { oldRead = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { freshRead = resolve; }));
+    const old = store.refreshSessionRuntime('agent-1', id);
+    await vi.advanceTimersByTimeAsync(0);
+    mockClient.attachRemoteSession.mockResolvedValueOnce(attached(runtime()));
+    await store.attachRemoteSession('agent-1', 'node-1', id);
+    expect(freshRead).toBeDefined();
+    oldRead(runtime(SessionRuntimePhase.Idle, 99));
+    expect(await old).toBeNull();
+    expect(store.activeSessionRuntime?.phase).toBe(SessionRuntimePhase.Tools);
+    freshRead(runtime(SessionRuntimePhase.Tools, 5));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.activeSessionRuntime?.observation?.revision).toBe(5);
+  });
+
+  it.each(['selection', 'client'] as const)('fences a delayed attach catalog refresh after %s replacement', async (boundary) => {
+    const store = await storeOnSessionRoute();
+    let catalog!: (value: Awaited<ReturnType<typeof mockClient.listRemoteSessions>>) => void;
+    mockClient.listRemoteSessions.mockImplementationOnce(() => new Promise((resolve) => { catalog = resolve; }));
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime());
+    mockClient.attachRemoteSession.mockResolvedValueOnce(attached(runtime()));
+    const attaching = store.attachRemoteSession('agent-1', 'node-1', id);
+    await vi.advanceTimersByTimeAsync(0);
+    if (boundary === 'client') await store.connectAgent('agent-1', true);
+    else {
+      mockClient.attachRemoteSession.mockResolvedValueOnce({ ...attached(runtime()), session_id: 'new-session' });
+      await store.attachRemoteSession('agent-1', 'node-1', 'new-session');
+    }
+    const selected = store.activeSession;
+    const before = store.remoteSessionsByAgent;
+    catalog({ node_id: 'node-1', total_count: 0, sessions: [] });
+    await attaching;
+    expect(store.remoteSessionsByAgent).toBe(before);
+    expect(store.activeSession).toBe(selected);
+  });
+
+  it('keeps ordinary remote load snapshot truth while its independent runtime read is pending', async () => {
+    const store = await storeOnSessionRoute();
+    const source = attached(runtime());
+    let verify!: (value: SessionRuntimeStatus) => void;
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      location: 'remote', nodeId: 'node-1', profileId: 'owner-profile', parentSessionId: 'parent', forkOrigin: 'delegation',
+      'querymt/sessionLoadSnapshot.v1': source.snapshot
+    } }, replay: [] });
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { verify = resolve; }));
+    const loading = store.loadSession('agent-1', id);
+    await vi.waitFor(() => expect(verify).toBeDefined());
+    expect(store.activeSessionRuntime).toMatchObject(runtime());
+    expect(store.activeSession.runState).toBe('tool-running');
+    expect(store.activeSession.transcript[0]?.text).toBe('Owner history');
+    expect(store.sessionsByAgent['agent-1'].find((item) => item.sessionId === id)).toMatchObject({
+      remoteNodeId: 'node-1', remoteProfileId: 'owner-profile', parentSessionId: 'parent', forkOrigin: 'delegation'
+    });
+    verify(runtime(SessionRuntimePhase.Tools, 5));
+    await vi.advanceTimersByTimeAsync(100);
+    await loading;
+    expect(store.activeRunBusy).toBe(true);
+  });
 });
 
 describe('AgentsStore visibility-aware polling', () => {
@@ -2569,7 +2787,7 @@ describe('AgentsStore connections', () => {
     await store.loadSession('agent-1', 'session-1');
 
     expect(mockClient.getUndoStack).toHaveBeenCalledWith('session-1');
-    expect(store.activeSession.runState).toBe('completed');
+    expect(store.activeSession.runState).toBe('unknown');
     expect(store.activeSession.lastError).toBeNull();
     expect(store.error).toBeNull();
   });
@@ -5865,6 +6083,876 @@ describe('AgentsStore mesh node availability', () => {
   });
 });
 
+describe('AgentsStore delegation lifecycle row reconciliation', () => {
+  afterEach(cleanup);
+  const lifecycle = (state = DelegationUpdateState.Forked, seq = 2, extra: Record<string, unknown> = {}) => ({
+    version: 1, sessionId: 'session-1', delegationId: 'delegation-1', toolCallId: 'delegate-1',
+    childSessionId: 'child-1', targetAgentId: 'coder', objective: 'Check result', requestedAt: 1, updatedAt: seq,
+    state, activity: state === DelegationUpdateState.Forked ? 'live' : 'historical',
+    sourceEpoch: 'workflow-1', sessionSeq: seq, ...extra
+  });
+  const emit = (params: ReturnType<typeof lifecycle>) => mockClient.emitExtensionNotification({
+    method: 'querymt/session/delegationUpdate', params
+  });
+  const dispatch = () => mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+    sessionUpdate: 'tool_call', toolCallId: 'delegate-1', title: 'Run delegate', status: 'completed',
+    rawInput: { target_agent_id: 'coder' }, rawOutput: { status: 'queued' }
+  } });
+  const idle = (updates: ReturnType<typeof lifecycle>[] = [], revision = 1): SessionRuntimeStatus => ({
+    phase: SessionRuntimePhase.Idle, active_run_id: null, steerable: false, pending_steering_count: 0, queued_input_count: 0,
+    observation: { availability: 'live', epoch: 'actor-1', revision },
+    delegation_activity: updates as SessionRuntimeStatus['delegation_activity']
+  });
+  const announce = (updates: ReturnType<typeof lifecycle>[], revision = 1) => mockClient.emitExtensionNotification({
+    method: 'querymt/session/runtimeChanged', params: { version: 1, session_id: 'session-1', runtime: idle(updates, revision) }
+  });
+  async function selected() {
+    const store = createStore(); await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1'; store.activeSessionId = 'session-1'; store.activeSession.sessionId = 'session-1';
+    return store;
+  }
+  function snapshot(state = DelegationUpdateState.Forked) {
+    return { audit: { events: [
+      { seq: 1, kind: { type: 'tool_call_start', data: { tool_call_id: 'delegate-1', tool_name: 'delegate' } } },
+      { seq: 2, kind: { type: 'tool_call_end', data: { tool_call_id: 'delegate-1', result: 'queued' } } }
+    ] }, delegationUpdates: [lifecycle(state, 2)] };
+  }
+
+  it.each([DelegationUpdateState.Forked, DelegationUpdateState.Completed])('joins serialized %s before tool creation into transcript and turn delegates', async (state) => {
+    const store = await selected();
+    emit(JSON.parse(JSON.stringify(lifecycle(state)))); dispatch();
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ status: 'completed', childSessionId: 'child-1', delegationState: state });
+    const view = render(SessionToolBlock, { tool: store.activeSession.toolCalls[0] });
+    const expected = state === DelegationUpdateState.Forked ? 'in_progress' : 'completed';
+    expect(view.container.querySelector(`.session-tool-status-${expected}`)).not.toBeNull();
+    render(SessionDelegatesBubble, { agentId: 'agent-1', variant: 'turn', turn: buildSessionConversation(store.activeSession)[0] });
+    await fireEvent.click(screen.getByRole('button', { name: '1 delegate in this turn' }));
+    expect(screen.getByRole('img', { name: state === DelegationUpdateState.Forked ? 'Running' : 'Completed' })).toBeInTheDocument();
+    expect(screen.getByRole('link')).toHaveAttribute('href', '/sessions/agent-1/child-1');
+  });
+
+  it('joins runtime terminal truth, ignores stale extensions, and invalidates the settled projection', async () => {
+    const store = await selected(); dispatch(); emit(lifecycle()); announce([], 1);
+    const before = buildSessionConversation(store.activeSession);
+    const view = render(SessionToolBlock, { tool: store.activeSession.toolCalls[0] });
+    announce([lifecycle(DelegationUpdateState.Completed, 3)], 2);
+    emit(lifecycle(DelegationUpdateState.Failed, 1));
+    expect(store.activeSession.toolCalls[0].delegationState).toBe('completed');
+    expect(store.activeSession.delegations?.[0].state).toBe('completed');
+    const after = buildSessionConversation(store.activeSession); expect(after).not.toBe(before);
+    const tool = after[0].content.find((item) => item.type === 'tool')!.tool;
+    await view.rerender({ tool });
+    expect(view.container.querySelector('.session-tool-status-completed .lucide-check')).not.toBeNull();
+    expect(view.container.querySelector('.animate-spin')).toBeNull();
+    expect(store.activeRunBusy).toBe(false);
+  });
+
+  it('accepts source-seeded fork and terminal facts at the retained stage watermark without changing stage liveness', async () => {
+    const store = await selected(); dispatch();
+    emit(lifecycle(DelegationUpdateState.Requested, 50, { childSessionId: undefined, stage: 'verifying', activity: 'live' }));
+    emit(lifecycle(DelegationUpdateState.Forked, 50, { forkedAt: 2, updatedAt: 50, stage: undefined, activity: 'historical' }));
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'forked', childSessionId: 'child-1' });
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    emit(lifecycle(DelegationUpdateState.Completed, 50, { finishedAt: 3, updatedAt: 50, stage: undefined }));
+    expect(store.activeSession.toolCalls[0].delegationState).toBe('completed');
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'completed', stage: 'verifying', activity: 'live', sessionSeq: 50 });
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    // A lower-order terminal cannot replace the recovered outcome or its current stage.
+    emit(lifecycle(DelegationUpdateState.Failed, 49, { finishedAt: 4, updatedAt: 60 }));
+    expect(store.activeSession.toolCalls[0].delegationState).toBe('completed');
+  });
+
+  it('heals cached Forked50 from same-owner Completed50 idempotently before any future stage', async () => {
+    const store = await selected(); dispatch(); emit(lifecycle(DelegationUpdateState.Forked, 50, { stage: 'verifying' }));
+    const recovered = lifecycle(DelegationUpdateState.Completed, 50, { stage: 'verifying', activity: 'live' });
+    emit(JSON.parse(JSON.stringify(recovered)));
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'completed', childSessionId: 'child-1' });
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'completed', sessionSeq: 50, stage: 'verifying', activity: 'live' });
+    const rows = store.activeSession.toolCalls; const observation = store.activeSession.delegations?.[0];
+    emit(JSON.parse(JSON.stringify(recovered)));
+    expect(store.activeSession.toolCalls).toEqual(rows); expect(store.activeSession.delegations?.[0]).toEqual(observation);
+    expect(store.activeSession.toolCalls).toHaveLength(1);
+    emit(lifecycle(DelegationUpdateState.Requested, 50, { activity: 'historical', stage: undefined }));
+    emit(lifecycle(DelegationUpdateState.Failed, 50, { stage: undefined }));
+    emit(lifecycle(DelegationUpdateState.Failed, 49, { updatedAt: 100 }));
+    expect(store.activeSession.toolCalls).toEqual(rows);
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'completed', sourceEpoch: 'workflow-1', sessionSeq: 50, stage: 'verifying', activity: 'live' });
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+  });
+
+  it('uses accepted sequence order consistently instead of a second row timestamp gate', async () => {
+    const store = await selected(); dispatch(); emit(lifecycle(DelegationUpdateState.Forked, 5));
+    emit(lifecycle(DelegationUpdateState.Completed, 6, { updatedAt: 4 }));
+    expect(store.activeSession.delegations?.[0].state).toBe('completed');
+    expect(store.activeSession.toolCalls[0].delegationState).toBe('completed');
+  });
+
+  it.each(['completed', 'in_progress'] as const)('marks absence-only outcome unavailable without fabricating success or running (dispatch %s)', async (status) => {
+    const store = await selected(); dispatch(); store.activeSession.toolCalls[0].status = status; emit(lifecycle());
+    mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(idle([], 2));
+    await store.refreshSessionRuntime('agent-1', 'session-1');
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'forked', activity: 'historical' });
+    expect(getSessionToolPresentation(store.activeSession.toolCalls[0])).toMatchObject({ status: 'pending', statusLabel: 'Status unavailable' });
+    expect(store.activeSession.toolCalls[0].delegationState).not.toBe('completed');
+    expect(store.activeSession.dependencyLabel).toBeNull(); expect(store.activeRunBusy).toBe(false);
+    emit(lifecycle(DelegationUpdateState.Completed, 2, { activity: 'live', stage: 'finalizing' }));
+    expect(store.activeSession.toolCalls[0].delegationState).toBe('completed');
+    expect(store.activeSession.delegations?.[0].activity).toBe('historical');
+    expect(store.activeSession.dependencyLabel).toBeNull();
+  });
+
+  it('joins a healthy direct read terminal snapshot onto existing rows', async () => {
+    const store = await selected(); dispatch(); emit(lifecycle());
+    mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(idle([lifecycle(DelegationUpdateState.Completed, 3)]));
+    await store.refreshSessionRuntime('agent-1', 'session-1');
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'completed', childSessionId: 'child-1' });
+  });
+
+  it.each(['load', 'attach'] as const)('preserves nonselected cached terminal truth across %s snapshot replacement', async (operation) => {
+    const store = await selected(); store.activeSessionId = 'other-session'; store.activeSession.sessionId = 'other-session';
+    emit(lifecycle(DelegationUpdateState.Completed, 4));
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(idle());
+    if (operation === 'load') {
+      mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+        'querymt/sessionLoadSnapshot.v1': snapshot()
+      } }, replay: [] });
+      await store.loadSession('agent-1', 'session-1');
+    } else {
+      mockClient.attachRemoteSession.mockResolvedValueOnce({ session_id: 'session-1', node_id: 'node-1', attached: true,
+        config_options: [], snapshot: snapshot() } as unknown as RemoteSessionAttachInfo);
+      await store.attachRemoteSession('agent-1', 'node-1', 'session-1');
+    }
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'completed', childSessionId: 'child-1' });
+    expect(store.activeRunBusy).toBe(false);
+  });
+
+  it('retains lifecycle arriving during load when snapshot history replaces the live candidate', async () => {
+    const store = await selected(); dispatch(); emit(lifecycle());
+    let finish!: (value: Awaited<ReturnType<typeof mockClient.loadSession>>) => void;
+    mockClient.loadSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const loading = store.loadSession('agent-1', 'session-1');
+    await vi.waitFor(() => expect(finish).toBeDefined()); emit(lifecycle(DelegationUpdateState.Completed, 4));
+    finish({ response: { configOptions: [], _meta: { 'querymt/sessionLoadSnapshot.v1': snapshot() } }, replay: [] });
+    await loading;
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'completed', childSessionId: 'child-1' });
+  });
+
+  it('rejects wrong-session activity and old-epoch lifecycle without allowing the row to bypass the cache', async () => {
+    const store = await selected(); dispatch(); emit(lifecycle());
+    emit(lifecycle(DelegationUpdateState.Completed, 10, { sourceEpoch: 'old-workflow', childSessionId: 'wrong-child' }));
+    announce([lifecycle(DelegationUpdateState.Completed, 11, { sessionId: 'another-session' })]);
+    emit(lifecycle(DelegationUpdateState.Completed, 12, { toolCallId: 'unrelated-tool' }));
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'forked', childSessionId: 'child-1' });
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'forked', toolCallId: 'delegate-1' });
+  });
+});
+
+describe('AgentsStore status consistency', () => {
+  afterEach(cleanup);
+
+  it.each([
+    { sessionUpdate: 'config_option_update', configOptions: [] },
+    { sessionUpdate: 'current_mode_update', currentModeId: 'build' },
+    { sessionUpdate: 'usage_update', used: 4, size: 100 },
+    { sessionUpdate: 'available_commands_update', availableCommands: [] }
+  ] satisfies SessionNotification['update'][])('keeps observed-idle recency/order for $sessionUpdate while reconciling status', async (update) => {
+    const store = await selectedStore();
+    const oldStamp = '2020-01-01T00:00:00Z';
+    const otherStamp = '2021-01-01T00:00:00Z';
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [
+      { sessionId: 'session-1', title: 'Idle S', cwd: '/work', updatedAt: oldStamp, _meta: {
+        userMessageCount: 0, runtimeStatus: runtime(SessionRuntimePhase.Idle, 1)
+      } },
+      { sessionId: 'other-session', title: 'Newer T', cwd: '/work', updatedAt: otherStamp, _meta: {
+        userMessageCount: 0, runtimeStatus: runtime(SessionRuntimePhase.Idle, 1)
+      } }
+    ] });
+    await store.refreshSessionsForAgent('agent-1');
+    // A stale summary must still converge to cached runtime without inventing activity.
+    store.sessionsByAgent = { ...store.sessionsByAgent, 'agent-1': store.sessionsByAgent['agent-1'].map((item) =>
+      item.sessionId === 'session-1' ? { ...item, status: 'unknown' as const } : item) };
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update });
+    const own = () => store.sessionsByAgent['agent-1'].find((item) => item.sessionId === 'session-1');
+    expect(own()).toMatchObject({ status: 'idle', updatedAt: oldStamp, hasUserHistory: false });
+    expect(store.sessions.map((item) => item.sessionId)).toEqual(['other-session', 'session-1']);
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'session_info_update', title: 'Renamed S'
+    } });
+    expect(own()).toMatchObject({ title: 'Renamed S', updatedAt: oldStamp });
+    const explicitStamp = '2022-01-01T00:00:00Z';
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'session_info_update', updatedAt: explicitStamp
+    } });
+    expect(own()).toMatchObject({ title: 'Renamed S', updatedAt: explicitStamp, status: 'idle' });
+    expect(store.sessions.map((item) => item.sessionId)).toEqual(['session-1', 'other-session']);
+  });
+
+  it.each([
+    { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'New turn' } },
+    { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working' } },
+    { sessionUpdate: 'tool_call', toolCallId: 'shell-new', title: 'Shell', status: 'in_progress' }
+  ] satisfies SessionNotification['update'][])('still bumps genuine $sessionUpdate activity with observed runtime', async (update) => {
+    const store = await selectedStore();
+    const oldStamp = '2020-01-01T00:00:00Z';
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [
+      { sessionId: 'session-1', cwd: '/work', updatedAt: oldStamp, _meta: {
+        userMessageCount: 0, runtimeStatus: runtime(SessionRuntimePhase.Idle, 1)
+      } },
+      { sessionId: 'other-session', cwd: '/work', updatedAt: '2021-01-01T00:00:00Z' }
+    ] });
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update });
+    const own = store.sessionsByAgent['agent-1'].find((item) => item.sessionId === 'session-1')!;
+    expect(own.updatedAt! > '2021-01-01T00:00:00Z').toBe(true);
+    expect(store.sessions.map((item) => item.sessionId)).toEqual(['session-1', 'other-session']);
+    expect(own.hasUserHistory).toBe(update.sessionUpdate === 'user_message_chunk');
+    expect(own.status).toBe(update.sessionUpdate === 'user_message_chunk' ? 'completed' : 'idle');
+  });
+
+  it('retains positive user-history evidence accumulated within one summary batch', async () => {
+    const store = await selectedStore();
+    const listed = (revision: number): SessionInfo => ({ sessionId: 'session-1', cwd: '/work', _meta: {
+      messageCount: 0, userMessageCount: 0, hasErrors: false, runtimeStatus: runtime(SessionRuntimePhase.Idle, revision)
+    } });
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed(1)] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(store.sessionsByAgent['agent-1'][0].hasUserHistory).toBe(false);
+    const notifications: SessionNotification[] = [
+      { sessionId: 'session-1', update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'New turn' } } },
+      { sessionId: 'session-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Working' } } },
+      { sessionId: 'session-1', update: { sessionUpdate: 'tool_call', toolCallId: 'new-shell', title: 'Shell', status: 'in_progress' } }
+    ];
+    (store as unknown as { applySessionSummaryUpdates(updates: Array<{ agentId: string; notification: SessionNotification }>): void })
+      .applySessionSummaryUpdates(notifications.map((notification) => ({ agentId: 'agent-1', notification })));
+    expect(store.sessionsByAgent['agent-1'][0].hasUserHistory).toBe(true);
+    announce(runtime(SessionRuntimePhase.Idle, 2));
+    expect(store.sessionsByAgent['agent-1'][0].status).toBe('completed');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed(3)] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(store.sessionsByAgent['agent-1'][0]).toMatchObject({ status: 'idle', hasUserHistory: false });
+  });
+
+  it.each(['tool_call', 'tool_call_update'] as const)('keeps new B %s progress and Stop when cached Idle A predates it', async (sessionUpdate) => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Tools, 1, { active_run_id: 'run-a' }));
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'tool_call', toolCallId: 'shell-a', title: 'Shell A', status: 'in_progress'
+    } });
+    announce(runtime(SessionRuntimePhase.Idle, 2));
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate, toolCallId: 'shell-b', title: 'Long shell B', status: 'in_progress'
+    } });
+    const toolB = () => store.activeSession.toolCalls.find((tool) => tool.id === 'shell-b');
+    expect(toolB()).toMatchObject({ status: 'in_progress' });
+    expect(toolB()?.runId).not.toBe('run-a');
+    expect(store.activeRunBusy).toBe(true);
+    expect(store.activeSession.activeToolCallId).toBe('shell-b');
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'usage_update', used: 4, size: 100
+    } });
+    expect(toolB()?.status).toBe('in_progress');
+    expect(store.activeRunBusy).toBe(true);
+    announce(runtime(SessionRuntimePhase.Tools, 3, { active_run_id: 'run-b' }));
+    expect(toolB()).toMatchObject({ runId: 'run-b', status: 'in_progress' });
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'shell-a', status: 'completed', rawOutput: 'Late real A result'
+    } });
+    expect(toolB()).toMatchObject({ runId: 'run-b', status: 'in_progress' });
+    expect(store.activeSession).toMatchObject({ runId: 'run-b', activeToolCallId: 'shell-b' });
+    expect(store.activeRunBusy).toBe(true);
+  });
+
+  it.each(['unsupported', 'unavailable'] as const)('keeps actual loaded history unavailable in the header when execution is %s', async (mode) => {
+    const store = createStore();
+    mockClient.supportsQuerymtMethod.mockReturnValue(mode !== 'unsupported');
+    mockClient.listSessions.mockResolvedValue({ sessions: [{ sessionId: 'session-1', cwd: '/tmp/work' }] });
+    await store.connectAgent('agent-1', true);
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [] }, replay: [{ sessionId: 'session-1', update: {
+      sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Stored answer' }
+    } }] });
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Unknown, 0, {
+      observation: { availability: 'unavailable' }
+    }));
+    await store.loadSession('agent-1', 'session-1');
+    const summary = store.sessionsByAgent['agent-1'].find((item) => item.sessionId === 'session-1');
+    expect(summary?.status).toBe('unknown');
+    render(SessionHeader, { session: store.activeSession, summaryStatus: summary!.status,
+      title: 'History', workspace: 'work', updatedAt: 'Now' });
+    expect(screen.getByLabelText('Status: Status unavailable')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Status: Turn complete')).not.toBeInTheDocument();
+    if (mode === 'unsupported') expect(mockClient.getSessionRuntimeStatus).not.toHaveBeenCalled();
+  });
+
+  it('keeps an actual failed own outcome visible with a live verifier without exposing own Stop', async () => {
+    const store = await selectedStore();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+        { seq: 1, kind: { type: 'run_started', data: { run_id: 'run-a' } } },
+        { seq: 2, kind: { type: 'run_completed', data: { run_id: 'run-a', outcome: 'failed' } } }
+      ] } }
+    } }, replay: [] });
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle, 2, { delegation_activity: [verifier] }));
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.activeSession.runState).toBe('failed');
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    expect(store.activeRunBusy).toBe(false);
+    render(SessionHeader, { session: store.activeSession, title: 'Failed own turn', workspace: 'work', updatedAt: 'Now' });
+    expect(screen.getByLabelText('Status: Failed')).toBeInTheDocument();
+    expect(mockClient.cancelSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [SessionRuntimePhase.Tools, 'thinking'], [SessionRuntimePhase.Waiting, 'thinking'],
+    [SessionRuntimePhase.CancelRequested, 'cancelling'], [SessionRuntimePhase.Idle, 'idle'],
+    [SessionRuntimePhase.Unknown, 'unknown']
+  ] as const)('accepts remote runtime-only %s without inventing history or dropping owner metadata', async (phase, status) => {
+    const store = await selectedStore();
+    const runtimeStatus = runtime(phase, 1, { observation: { availability: phase === SessionRuntimePhase.Unknown ? 'unavailable' : 'live', epoch: 'remote-e1', revision: 1 } });
+    const lifecycle = { session_id: 'remote-s', resolved: false, archived: false, resolved_at: null, archived_at: null };
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [{ sessionId: 'remote-s', cwd: '/remote/work', _meta: {
+      location: 'remote', nodeId: 'remote-node', nodeLabel: 'Owner', profileId: 'coder', profileLabel: 'Coder',
+      connectionState: 'available', parentSessionId: 'parent', forkOrigin: 'delegation', sessionKind: 'delegate',
+      querymt: { lifecycle }, runtimeStatus
+    } }] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(store.sessionsByAgent['agent-1'].find((item) => item.sessionId === 'remote-s')).toMatchObject({
+      status, location: 'remote', remoteNodeId: 'remote-node', remoteNodeLabel: 'Owner',
+      remoteProfileId: 'coder', remoteProfileLabel: 'Coder', remoteConnectionState: 'available',
+      lifecycle, parentSessionId: 'parent', forkOrigin: 'delegation', sessionKind: 'delegate', relationshipKnown: true
+    });
+  });
+
+  it('preserves zero, known and unavailable history evidence through list/runtime/notification summary paths', async () => {
+    const store = await selectedStore();
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [
+      { sessionId: 'empty', cwd: '/work', _meta: { messageCount: 0, userMessageCount: 0, hasErrors: false, runtimeStatus: runtime(SessionRuntimePhase.Idle, 1) } },
+      { sessionId: 'used', cwd: '/work', _meta: { messageCount: 2, userMessageCount: 1, hasErrors: false, runtimeStatus: runtime(SessionRuntimePhase.Idle, 1) } },
+      { sessionId: 'runtime-only', cwd: '/remote', _meta: { runtimeStatus: runtime(SessionRuntimePhase.Idle, 1) } }
+    ] });
+    await store.refreshSessionsForAgent('agent-1');
+    const check = () => expect(Object.fromEntries(store.sessionsByAgent['agent-1'].filter((item) => ['empty', 'used', 'runtime-only'].includes(item.sessionId))
+      .map((item) => [item.sessionId, item.status]))).toEqual({ empty: 'idle', used: 'completed', 'runtime-only': 'idle' });
+    check();
+    for (const sessionId of ['empty', 'used', 'runtime-only']) {
+      mockClient.emitExtensionNotification({ method: 'querymt/session/runtimeChanged', params: {
+        version: 1, session_id: sessionId, runtime: runtime(SessionRuntimePhase.Tools, 2)
+      } });
+      mockClient.emitExtensionNotification({ method: 'querymt/session/runtimeChanged', params: {
+        version: 1, session_id: sessionId, runtime: runtime(SessionRuntimePhase.Idle, 3)
+      } });
+      mockClient.emitSessionUpdate({ sessionId, update: { sessionUpdate: 'config_option_update', configOptions: [] } });
+    }
+    check();
+  });
+
+  it.each([SessionRuntimePhase.Tools, SessionRuntimePhase.Idle])('F1: rejects stale runtime errors after newer healthy %s', async (phase) => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Model, 5, { active_run_id: 'run-a' }));
+    let rejectOld!: (error: Error) => void;
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject; }));
+    const pending = store.refreshSessionRuntime().catch(() => null);
+    await vi.waitFor(() => expect(rejectOld).toBeDefined());
+    announce(runtime(phase, 6));
+    rejectOld(new Error('Obsolete request failed'));
+    await pending;
+    expect(store.activeSessionRuntime).toMatchObject({ phase, observation: { availability: 'live', revision: 6 } });
+    expect(store.activeRunBusy).toBe(phase === SessionRuntimePhase.Tools);
+    if (phase === SessionRuntimePhase.Tools) expect(store.activeSession.runId).toBe('run-b');
+  });
+
+  it.each(['connection', 'epoch'] as const)('F1: ignores an old error across %s replacement', async (boundary) => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Model, 5, { active_run_id: 'run-a' }));
+    let rejectOld!: (error: Error) => void;
+    const replacement = runtime(SessionRuntimePhase.Tools, 1, { observation: { availability: 'live', epoch: 'actor-2', revision: 1 } });
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject; }))
+      .mockResolvedValue(replacement);
+    const pending = store.refreshSessionRuntime().catch(() => null);
+    await vi.waitFor(() => expect(rejectOld).toBeDefined());
+    if (boundary === 'connection') await store.connectAgent('agent-1', true);
+    announce(replacement);
+    rejectOld(new Error('Old owner read failed'));
+    await pending;
+    await vi.waitFor(() => expect(store.activeSessionRuntime?.observation?.epoch).toBe('actor-2'));
+    expect(store.activeSessionRuntime).toMatchObject({ phase: SessionRuntimePhase.Tools, observation: { availability: 'live' } });
+    expect(store.activeRunBusy).toBe(true);
+  });
+
+  it('F3: automatically verifies a nonselected changed incarnation and fences an old E1 response', async () => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Idle, 9));
+    await store.loadSession('agent-1', 'other-session');
+    mockClient.getSessionRuntimeStatus.mockClear();
+    let finishOld!: (value: SessionRuntimeStatus) => void;
+    let verify!: (value: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { verify = resolve; }));
+    const oldRead = store.refreshSessionRuntime('agent-1', 'session-1');
+    await vi.waitFor(() => expect(finishOld).toBeDefined());
+    const changed = runtime(SessionRuntimePhase.Tools, 1, { observation: { availability: 'live', epoch: 'actor-2', revision: 1 } });
+    const listed = (sessionId: string, runtimeStatus: SessionRuntimeStatus) => ({ sessionId, cwd: '/tmp/work', _meta: {
+      messageCount: 2, userMessageCount: 1, hasErrors: false, runtimeStatus
+    } });
+    mockClient.listSessions.mockResolvedValue({ sessions: [listed('session-1', changed),
+      ...Array.from({ length: 20 }, (_, index) => listed(`uncached-${index}`, runtime(SessionRuntimePhase.Idle, 1)))] });
+    await store.refreshSessionsForAgent('agent-1');
+    await vi.waitFor(() => expect(verify).toBeDefined());
+    const summary = () => store.sessionsByAgent['agent-1'].find((item) => item.sessionId === 'session-1');
+    expect(summary()?.status).toBe('unknown');
+    await store.refreshSessionsForAgent('agent-1');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('session-1', runtime(SessionRuntimePhase.Idle, 10))] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(summary()?.status).toBe('unknown');
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenNthCalledWith(1, 'session-1');
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenNthCalledWith(2, 'session-1');
+    finishOld(runtime(SessionRuntimePhase.Idle, 10));
+    expect(await oldRead).toBeNull();
+    expect(summary()?.status).toBe('unknown');
+    expect(store.sessionRuntimeBySession['agent-1:session-1']?.observation?.availability).toBe('unavailable');
+    verify(changed);
+    await vi.waitFor(() => expect(summary()?.status).toBe('thinking'));
+    expect(store.sessionRuntimeBySession['agent-1:session-1']).toMatchObject({ phase: SessionRuntimePhase.Tools,
+      observation: { availability: 'live', epoch: 'actor-2', revision: 1 } });
+    expect(store.activeSessionId).toBe('other-session');
+    await store.refreshSessionsForAgent('agent-1');
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2);
+    expect(mockClient.loadSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('F3: caps changed-incarnation verification at two cached sessions per list', async () => {
+    const store = await selectedStore();
+    await store.loadSession('agent-1', 'other-session');
+    store.sessionRuntimeBySession = Object.fromEntries(Array.from({ length: 5 }, (_, index) =>
+      [`agent-1:cached-${index}`, runtime(SessionRuntimePhase.Idle, 9)]));
+    mockClient.getSessionRuntimeStatus.mockClear();
+    mockClient.getSessionRuntimeStatus.mockImplementation(() => new Promise(() => {}));
+    mockClient.listSessions.mockResolvedValue({ sessions: Array.from({ length: 5 }, (_, index) => ({
+      sessionId: `cached-${index}`, cwd: '/tmp/work', _meta: { runtimeStatus: runtime(SessionRuntimePhase.Tools, 1,
+        { observation: { availability: 'live', epoch: 'actor-2', revision: 1 } }) }
+    })) });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenNthCalledWith(1, 'cached-0');
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenNthCalledWith(2, 'cached-1');
+    expect(store.sessionsByAgent['agent-1'].filter((item) => item.sessionId.startsWith('cached-')).map((item) => item.status))
+      .toEqual(Array(5).fill('unknown'));
+  });
+
+  it.each([
+    { delivery: 'queue', boundary: 'selection', failure: false },
+    { delivery: 'steer', boundary: 'connection', failure: false },
+    { delivery: 'queue', boundary: 'selection', failure: true },
+    { delivery: 'steer', boundary: 'connection', failure: true }
+  ] as const)('F4: fences $delivery visible effects after $boundary replacement (failure=$failure) but retains receipts', async ({ delivery, boundary, failure }) => {
+    const store = await selectedStore();
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'steering');
+    store.setActiveComposerInputDelivery(delivery);
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Model, 1));
+    let resolve!: (result: SubmitInputResult) => void;
+    let reject!: (error: Error) => void;
+    const deferred = new Promise<SubmitInputResult>((yes, no) => { resolve = yes; reject = no; });
+    if (delivery === 'queue') mockClient.queueSession.mockImplementationOnce(() => deferred);
+    else mockClient.steerSession.mockImplementationOnce(() => deferred);
+    const submitting = store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(store.activePendingInputs).toHaveLength(1));
+    const inputId = store.activePendingInputs[0].inputId;
+    const acceptedBeforeFailure = delivery === 'steer' && failure;
+    if (acceptedBeforeFailure) mockClient.emitExtensionNotification({ method: 'querymt/session/inputState', params: {
+      version: 1, session_id: 'session-1', input_id: inputId, delivery: SessionInputDelivery.Steer,
+      state: SessionInputState.Accepted, run_id: 'run-b'
+    } });
+    if (boundary === 'selection') {
+      mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle, 3));
+      await store.loadSession('agent-1', 'other-session');
+      await store.loadSession('agent-1', 'session-1');
+    } else {
+      await store.connectAgent('agent-1', true);
+      announce(runtime(SessionRuntimePhase.Idle, 3));
+    }
+    const draft = store.composerPrompt;
+    store.error = 'Latest view error';
+    store.activeSession.lastError = 'Latest execution detail';
+    if (failure) reject(new Error('Obsolete submission failure'));
+    else resolve(delivery === 'queue' ? { status: 'queued', data: { input_id: inputId, position: 1 } }
+      : { status: 'steered', data: { input_id: inputId, run_id: 'run-b', position: 1 } });
+    await submitting;
+    expect(store.composerPrompt).toBe(draft);
+    expect(store.error).toBe('Latest view error');
+    expect(store.activeSession.runState).toBe('completed');
+    expect(store.activeSession.lastError).toBe('Latest execution detail');
+    expect(store.pendingInputsBySession['agent-1:session-1'].find((item) => item.inputId === inputId)?.state)
+      .toBe(acceptedBeforeFailure ? 'accepted' : failure ? 'failed' : delivery === 'queue' ? 'queued' : 'accepted');
+  });
+
+  it('F5: fails closed on unavailable Send without silently queueing or losing the draft', async () => {
+    const store = await selectedStore();
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'steering');
+    const draft = store.composerPrompt;
+    const attachments = [{ id: 'notes', name: 'notes.txt', mimeType: 'text/plain', size: 1, data: 'eA==' }];
+    store.promptAttachments = attachments;
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Unknown, 1, {
+      active_run_id: null, steerable: false, observation: { availability: 'unavailable' }
+    }));
+    await store.sendPromptToActiveSession();
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    expect(mockClient.steerSession).not.toHaveBeenCalled();
+    expect(mockClient.queueSession).not.toHaveBeenCalled();
+    expect(store.composerPrompt).toBe(draft);
+    expect(store.promptAttachments).toEqual(attachments);
+    expect(store.activeSession.transcript).toHaveLength(0);
+    expect(store.error).toMatch(/status unavailable/i);
+  });
+
+  it('retains a same-run initiating cancellation outcome with versioned runtime', async () => {
+    const store = await selectedStore();
+    let finish!: (response: PromptResponse) => void;
+    mockClient.sendPrompt.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const sending = store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    announce(runtime(SessionRuntimePhase.Model, 1, { active_run_id: 'run-a' }));
+    announce(runtime(SessionRuntimePhase.Idle, 2));
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle, 2));
+    finish({ stopReason: 'cancelled' });
+    await sending;
+    expect(store.activeSession).toMatchObject({ runId: 'run-a', runState: 'completed', lastStopReason: 'cancelled',
+      lastRunOutcome: { runId: 'run-a', outcome: 'cancelled' }, activityLabel: 'Turn cancelled.' });
+  });
+  function runtime(phase: SessionRuntimePhase, revision: number, extra: Partial<SessionRuntimeStatus> = {}): SessionRuntimeStatus {
+    return { phase, active_run_id: phase === SessionRuntimePhase.Idle ? undefined : 'run-b',
+      steerable: phase !== SessionRuntimePhase.Closing, pending_steering_count: 0, queued_input_count: 0,
+      observation: { availability: 'live', epoch: 'actor-1', revision }, delegation_activity: [], ...extra };
+  }
+
+  async function selectedStore() {
+    const store = createStore();
+    await store.connectAgent('agent-1', true);
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    return store;
+  }
+
+  function announce(value: SessionRuntimeStatus) {
+    mockClient.emitExtensionNotification({ method: 'querymt/session/runtimeChanged',
+      params: { version: 1, session_id: 'session-1', runtime: value } });
+  }
+
+  const verifier = { version: 1, sessionId: 'session-1', delegationId: 'delegate-1',
+    state: DelegationUpdateState.Forked, targetAgentId: 'coder', objective: '', requestedAt: 1, updatedAt: 2,
+    stage: 'verifying', activity: 'live', sourceEpoch: 'workflow-1', sessionSeq: 10 } as const;
+
+  it('merges independently ordered stages and empty authoritative activity at equal self revision', async () => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Idle, 5, { delegation_activity: [verifier] }));
+    expect(store.activeRunBusy).toBe(false);
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle, 5, {
+      delegation_activity: [{ ...verifier, stage: 'finalizing', sessionSeq: 11 }]
+    }));
+    await store.refreshSessionRuntime();
+    expect(store.activeSession.dependencyLabel).toBe('Finalizing delegate result');
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle, 5));
+    await store.refreshSessionRuntime();
+    expect(store.activeSession.dependencyLabel).toBeNull();
+    // An old live observation cannot resurrect a workflow removed by a newer query.
+    announce(runtime(SessionRuntimePhase.Idle, 5, { delegation_activity: [verifier] }));
+    expect(store.activeSession.dependencyLabel).toBeNull();
+  });
+
+  it('retains a live verifier through unavailable empty runtime and same-sequence recovery until healthy cleanup', async () => {
+    const store = await selectedStore();
+    const liveVerifier = { ...verifier, delegationId: 'verifier-b', sessionSeq: 17 };
+    announce(runtime(SessionRuntimePhase.Idle, 5, { delegation_activity: [liveVerifier] }));
+    expect(store.activeRunBusy).toBe(false);
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+
+    mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(runtime(SessionRuntimePhase.Unknown, 0, {
+      active_run_id: null, steerable: false, observation: { availability: 'unavailable', reason: 'owner_unavailable' }
+    }));
+    await store.refreshSessionRuntime();
+    expect(store.activeSessionRuntime).toMatchObject({ phase: SessionRuntimePhase.Unknown,
+      observation: { availability: 'unavailable' } });
+    expect(store.activeSession.runState).toBe('unknown');
+    expect.soft(store.activeSession.delegations).toContainEqual(liveVerifier);
+    expect.soft(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+
+    mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(runtime(SessionRuntimePhase.Idle, 5, {
+      delegation_activity: [liveVerifier]
+    }));
+    await store.refreshSessionRuntime();
+    expect(store.activeSessionRuntime?.phase).toBe(SessionRuntimePhase.Idle);
+    expect(store.activeRunBusy).toBe(false);
+    expect(store.activeSession.delegations).toContainEqual(liveVerifier);
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+
+    mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(runtime(SessionRuntimePhase.Idle, 5));
+    await store.refreshSessionRuntime();
+    expect(store.activeSession.dependencyLabel).toBeNull();
+    expect(store.activeSession.delegations).toContainEqual({ ...liveVerifier, activity: 'historical' });
+    expect(store.activeSessionRuntime?.delegation_activity).toEqual([]);
+  });
+
+  it('does not erase a newer live workflow with an older in-flight empty activity response', async () => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Idle, 5));
+    let finish!: (value: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const pending = store.refreshSessionRuntime();
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    mockClient.emitExtensionNotification({ method: 'querymt/session/delegationUpdate', params: verifier });
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    finish(runtime(SessionRuntimePhase.Idle, 5));
+    await pending;
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle, 5));
+    await store.refreshSessionRuntime();
+    expect(store.activeSession.dependencyLabel).toBeNull();
+  });
+
+  it('accepts newer list run B instead of blindly preferring cached idle A', async () => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Idle, 1));
+    mockClient.listSessions.mockResolvedValue({ sessions: [{ sessionId: 'session-1', cwd: '/tmp/work', _meta: {
+      messageCount: 2, userMessageCount: 1, hasErrors: false, runtimeStatus: runtime(SessionRuntimePhase.Tools, 2)
+    } }] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(store.activeSessionRuntime?.active_run_id).toBe('run-b');
+    expect(store.activeRunBusy).toBe(true);
+    expect(store.sessionsByAgent['agent-1'][0].status).toBe('thinking');
+    mockClient.listSessions.mockResolvedValue({ sessions: [{ sessionId: 'session-1', cwd: '/tmp/work', _meta: {
+      messageCount: 2, userMessageCount: 1, hasErrors: false, runtimeStatus: runtime(SessionRuntimePhase.Idle, 1)
+    } }] });
+    await store.refreshSessionsForAgent('agent-1');
+    expect(store.activeSessionRuntime?.active_run_id).toBe('run-b');
+  });
+
+  it('converges observer-only start/completion and ignores equal/older execution revisions', async () => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Tools, 2));
+    expect(store.activeRunBusy).toBe(true);
+    store.activeSession.activityLabel = 'Detail retained';
+    announce(runtime(SessionRuntimePhase.Tools, 2));
+    expect(store.activeSession.activityLabel).toBe('Detail retained');
+    announce(runtime(SessionRuntimePhase.Idle, 1));
+    expect(store.activeRunBusy).toBe(true);
+    announce(runtime(SessionRuntimePhase.Idle, 3));
+    expect(store.activeRunBusy).toBe(false);
+    expect(store.activeSession.runState).toBe('completed');
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it.each(['tool_call', 'tool_call_update'] as const)('does not let completed snapshot A clobber captured live shell run B (%s)', async (captureKind) => {
+    const store = await selectedStore();
+    mockClient.loadSession.mockImplementationOnce(async () => {
+      announce(runtime(SessionRuntimePhase.Tools, 3));
+      return { response: { configOptions: [], _meta: { 'querymt/sessionLoadSnapshot.v1': {
+        runtimeStatus: runtime(SessionRuntimePhase.Idle, 2), audit: { events: [
+          { seq: 1, kind: { type: 'run_started', data: { run_id: 'run-a' } } },
+          { seq: 2, kind: { type: 'assistant_message_stored', data: { message_id: 'answer-a', content: 'Done A' } } },
+          { seq: 3, kind: { type: 'run_completed', data: { run_id: 'run-a', outcome: 'completed' } } }
+        ] }
+      } } }, replay: [{ sessionId: 'session-1', update: {
+        sessionUpdate: captureKind, toolCallId: 'shell-b', title: 'Long shell B', status: 'in_progress'
+      } }] };
+    });
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Tools, 3));
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.activeSession).toMatchObject({ runId: 'run-b', runState: 'tool-running', activeToolCallId: 'shell-b' });
+    expect(store.activeSession.toolCalls[0].status).toBe('in_progress');
+    render(SessionActivityBar, { session: store.activeSession });
+    expect(screen.getByRole('status')).toHaveTextContent(/Long shell B/i);
+    cleanup();
+  });
+
+  it('accepts the actual tool result when runtime idle arrives ahead of the terminal tool update', async () => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Tools, 1));
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'tool_call', toolCallId: 'late-shell', title: 'Shell', status: 'in_progress'
+    } });
+    announce(runtime(SessionRuntimePhase.Idle, 2));
+    mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'late-shell', status: 'completed', rawOutput: 'Actual result'
+    } });
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ status: 'completed', result: 'Actual result' });
+    expect(store.activeSession.toolCalls[0].isError).not.toBe(true);
+    expect(store.activeRunBusy).toBe(false);
+  });
+
+  it('does not let a run A Stop failure erase newer healthy run B', async () => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Tools, 1, { active_run_id: 'run-a' }));
+    let rejectCancel!: (error: Error) => void;
+    mockClient.cancelSession.mockImplementationOnce(() => new Promise((_, reject) => { rejectCancel = reject; }));
+    const stopping = store.cancelActiveSession();
+    await vi.waitFor(() => expect(rejectCancel).toBeDefined());
+    announce(runtime(SessionRuntimePhase.Tools, 3));
+    store.error = 'Latest view error';
+    rejectCancel(new Error('Old cancel send failed'));
+    await stopping;
+    expect(store.activeSession).toMatchObject({ runId: 'run-b', runState: 'tool-running' });
+    expect(store.activeRunBusy).toBe(true);
+    expect(store.error).toBe('Latest view error');
+  });
+
+  it('distinguishes native waiting self execution from own-idle managed verification and historical rows', async () => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Waiting, 1, { delegation_activity: [{ ...verifier, stage: 'executing' }] }));
+    expect(store.activeRunBusy).toBe(true);
+    const view = render(SessionActivityBar, { session: store.activeSession });
+    expect(screen.getByRole('status')).toHaveTextContent('Waiting for delegates');
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.CancelRequested, 2));
+    await store.cancelActiveSession();
+    expect(mockClient.cancelSession).toHaveBeenCalledWith('session-1');
+    expect(mockClient.discardQueuedInput).not.toHaveBeenCalled();
+    announce(runtime(SessionRuntimePhase.Idle, 3, { delegation_activity: [{ ...verifier, sessionSeq: 11 }] }));
+    expect(store.activeRunBusy).toBe(false);
+    await view.rerender({ session: store.activeSession });
+    expect(screen.getByRole('status')).toHaveTextContent('Own turn idle - Verifying delegate result');
+    expect(screen.getByRole('status')).not.toHaveTextContent('Double Esc');
+    await store.cancelActiveSession();
+    expect(mockClient.cancelSession).toHaveBeenCalledTimes(1);
+    mockClient.emitExtensionNotification({ method: 'querymt/session/delegationUpdate', params: {
+      ...verifier, state: DelegationUpdateState.Completed, stage: undefined, activity: 'historical', sessionSeq: 12
+    } });
+    expect(store.activeSession.dependencyLabel).toBeNull();
+    mockClient.emitExtensionNotification({ method: 'querymt/session/delegationUpdate', params: {
+      ...verifier, activity: 'historical', sourceEpoch: 'old-source', sessionSeq: 999
+    } });
+    expect(store.activeSession.dependencyLabel).toBeNull();
+    cleanup();
+  });
+
+  it.each([false, true])('does not let run A prompt completion erase new queued run B (B completed=%s)', async (bCompleted) => {
+    const store = await selectedStore();
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle, 0));
+    let finish!: (value: PromptResponse) => void;
+    mockClient.sendPrompt.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const sending = store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    announce(runtime(SessionRuntimePhase.Model, 1, { active_run_id: 'run-a' }));
+    announce(runtime(SessionRuntimePhase.Tools, 3));
+    store.pendingInputsBySession = { 'agent-1:session-1': [{ inputId: 'queued-c', delivery: 'queue', state: 'queued',
+      prompt: 'Next', attachments: [], createdAt: 1 }] };
+    if (bCompleted) announce(runtime(SessionRuntimePhase.Idle, 4));
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(bCompleted ? SessionRuntimePhase.Idle : SessionRuntimePhase.Tools, bCompleted ? 4 : 3));
+    finish({ stopReason: 'cancelled' });
+    await sending;
+    expect(store.activeSession).toMatchObject({ runId: 'run-b', runState: bCompleted ? 'completed' : 'tool-running', lastStopReason: null });
+    expect(store.activeSession.activityLabel).not.toContain('cancelled');
+    expect(store.activePendingInputs.map((item) => item.inputId)).toEqual(['queued-c']);
+    expect(mockClient.discardQueuedInput).not.toHaveBeenCalled();
+  });
+
+  it('rejects a pre-selection A read across A -> B -> A and restores the new A execution', async () => {
+    const store = await selectedStore();
+    let finishOld!: (value: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockResolvedValueOnce(runtime(SessionRuntimePhase.Idle, 1))
+      .mockResolvedValueOnce(runtime(SessionRuntimePhase.Tools, 5));
+    const oldRead = store.refreshSessionRuntime();
+    await vi.waitFor(() => expect(finishOld).toBeDefined());
+    await store.loadSession('agent-1', 'session-other');
+    const returning = store.loadSession('agent-1', 'session-1');
+    finishOld(runtime(SessionRuntimePhase.Idle, 2));
+    expect(await oldRead).toBeNull();
+    await returning;
+    expect(store.activeSession).toMatchObject({ sessionId: 'session-1', runId: 'run-b', runState: 'tool-running' });
+  });
+
+  it('requires a fresh read for an incarnation change and rejects a pre-change response', async () => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Tools, 5));
+    let finishOld!: (value: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockResolvedValueOnce(runtime(SessionRuntimePhase.Waiting, 1, { observation: { availability: 'live', epoch: 'actor-2', revision: 1 } }));
+    const oldRead = store.refreshSessionRuntime();
+    await vi.waitFor(() => expect(finishOld).toBeDefined());
+    announce(runtime(SessionRuntimePhase.Waiting, 1, { observation: { availability: 'live', epoch: 'actor-2', revision: 1 } }));
+    finishOld(runtime(SessionRuntimePhase.Idle, 6));
+    expect(await oldRead).toBeNull();
+    await vi.waitFor(() => expect(store.activeSessionRuntime?.observation?.epoch).toBe('actor-2'));
+    expect(store.activeSession.activityLabel).toBe('Waiting for delegates');
+    expect(store.activeRunBusy).toBe(true);
+  });
+
+  it.each(['idle', 'tools'] as const)('reconciles %s runtime into the visible execution view', async (phase) => {
+    const store = createStore();
+    await store.connectAgent('agent-1', true);
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.runState = phase === 'idle' ? 'thinking' : 'completed';
+    store.activeSession.activityLabel = phase === 'idle' ? 'Cancelling turn...' : 'Turn completed.';
+    mockClient.getSessionRuntimeStatus.mockResolvedValue({
+      phase: phase === 'idle' ? SessionRuntimePhase.Idle : SessionRuntimePhase.Tools,
+      active_run_id: phase === 'tools' ? 'run-b' : undefined,
+      steerable: phase === 'tools', pending_steering_count: 0, queued_input_count: 0
+    });
+    await store.refreshSessionRuntime();
+    expect(store.activeSession.runState).toBe(phase === 'idle' ? 'completed' : 'tool-running');
+    if (phase === 'idle') expect(store.activeSession.activityLabel).not.toContain('Cancelling');
+    else {
+      await store.cancelActiveSession();
+      expect(mockClient.cancelSession).toHaveBeenCalledWith('session-1');
+    }
+  });
+
+  it('restores legacy replay-only tools and does not promote historical delegate rows to live work', async () => {
+    const store = await selectedStore();
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      'querymt/sessionLoadSnapshot.v1': { delegationUpdates: [{ ...verifier, activity: 'historical' }] }
+    } }, replay: [{ sessionId: 'session-1', update: {
+      sessionUpdate: 'tool_call', toolCallId: 'legacy-shell', title: 'Legacy shell', status: 'in_progress'
+    } }] });
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Tools, 1));
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.activeSession).toMatchObject({ runState: 'tool-running', activeToolCallId: 'legacy-shell', dependencyLabel: null });
+    expect(store.activeSession.toolCalls[0].status).toBe('in_progress');
+    expect(store.activeSession.delegations?.[0].activity).toBe('historical');
+  });
+
+  it('keeps closing active, visible and non-steerable while unknown is not idle', async () => {
+    const store = await selectedStore();
+    announce(runtime(SessionRuntimePhase.Closing, 1));
+    expect(store.activeRunBusy).toBe(true);
+    expect(store.activeInputDelivery).toBe('queue');
+    const view = render(SessionActivityBar, { session: store.activeSession });
+    expect(screen.getByRole('status')).toHaveTextContent('Finishing turn');
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Unknown, 2, {
+      active_run_id: undefined, observation: { availability: 'unavailable', epoch: 'actor-1', revision: 2 }
+    }));
+    await store.refreshSessionRuntime();
+    await view.rerender({ session: store.activeSession });
+    expect(store.activeSession.runState).toBe('unknown');
+    expect(store.activeRunBusy).toBe(false);
+    expect(screen.getByRole('status')).toHaveTextContent('Execution status unavailable');
+    expect(screen.getByRole('status')).not.toHaveTextContent('Double Esc');
+  });
+
+  it('preserves a running shell through the real load path', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValue({ response: { configOptions: [], _meta: {
+      'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+        { seq: 1, kind: { type: 'run_started', data: { run_id: 'run-b' } } },
+        { seq: 2, kind: { type: 'tool_call_start', data: { tool_call_id: 'shell', tool_name: 'shell' } } }
+      ] } }
+    } }, replay: [] });
+    mockClient.getSessionRuntimeStatus.mockResolvedValue({
+      phase: SessionRuntimePhase.Tools, active_run_id: 'run-b', steerable: true,
+      pending_steering_count: 0, queued_input_count: 0, run_started_at_ms: 1
+    });
+    const loadingAt = Date.now();
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ id: 'shell', status: 'in_progress' });
+    expect(store.activeSession.runState).toBe('tool-running');
+    expect(store.activeSession.activeToolCallId).toBe('shell');
+    expect(store.activeSession.usage.activeWorkStartedAt).toBeGreaterThanOrEqual(loadingAt);
+  });
+});
+
 describe('AgentsStore prompt session start', () => {
   it.each(['capture', 'live', 'drain'] as const)('keeps one first prompt when navigation overlaps a snapshot with its %s echo', async (delivery) => {
     const store = createStore();
@@ -7374,7 +8462,9 @@ describe('AgentsStore prompt session start', () => {
 
     await store.cancelActiveSession();
 
-    expect(store.activeSession.activityLabel).toBe('Cancelling turn…');
+    expect(store.activeSession.activityLabel).toBe('Turn completed.');
+    expect(store.activeSession.runState).toBe('completed');
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledWith('session-1');
     expect(store.activeSession.lastError).toBe(null);
     expect(mockClient.cancelSession).toHaveBeenCalledWith('session-1');
   });
@@ -9674,6 +10764,39 @@ describe('AgentsStore pending launches', () => {
     expect(mockClient.sendPrompt.mock.calls[0][1]).toBe('Fix the failing tests');
     expect(mockClient.loadSession).not.toHaveBeenCalled();
     expect(store.promptFailure).toBeNull();
+    finishPrompt({ stopReason: 'end_turn' });
+  });
+
+  it.each(['unavailable', 'unsupported', 'pending'] as const)('sends a confirmed fresh remote launch once without waiting for %s runtime evidence', async (observation) => {
+    const store = createStore();
+    store.setComposerTarget('node-1'); store.setComposerMode('plan');
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'steering');
+    if (observation === 'unsupported') mockClient.supportsQuerymtMethod.mockImplementation((method?: string) => method !== 'querymt/session/runtimeState');
+    mockClient.getSessionRuntimeStatus.mockImplementation(() => observation === 'pending' ? new Promise(() => {}) : Promise.resolve({
+      phase: SessionRuntimePhase.Unknown, active_run_id: null, steerable: false, pending_steering_count: 0, queued_input_count: 0,
+      observation: { availability: 'unavailable' }
+    }));
+    mockClient.createRemoteSession.mockResolvedValueOnce({ session_id: 'remote-1', node_id: 'node-1', attached: true,
+      config_options: modeOnly('build'), snapshot: { audit: { events: [] } } });
+    let finishConfig!: () => void;
+    let finishPrompt!: (response: PromptResponse) => void;
+    mockClient.setSessionConfigOption.mockImplementationOnce(() => new Promise((resolve) => { finishConfig = () => resolve(modeOnly('plan')); }));
+    mockClient.sendPrompt.mockImplementationOnce(() => new Promise((resolve) => { finishPrompt = resolve; }));
+    const launchId = store.beginLaunch('agent-1')!;
+    await vi.waitFor(() => expect(finishConfig).toBeTypeOf('function'));
+    expect(store.pendingLaunches[launchId]).toMatchObject({ sessionId: 'remote-1', status: 'creating' });
+    expect(store.activeSessionRuntime).toMatchObject({ phase: 'unknown', observation: { availability: 'unavailable' } });
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    const initialReads = mockClient.getSessionRuntimeStatus.mock.calls.length;
+    finishConfig();
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    expect(mockClient.sendPrompt).toHaveBeenCalledWith('remote-1', 'Fix the failing tests', [], expect.anything());
+    expect(mockClient.createRemoteSession).toHaveBeenCalledOnce();
+    expect(store.pendingLaunches[launchId].status).toBe('ready');
+    expect(store.isLaunchSettingUp('agent-1', 'remote-1')).toBe(false);
+    expect(store.activeSessionRuntime?.phase).toBe('unknown'); // No fabricated Idle observation.
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(initialReads);
+    expect(mockClient.steerSession).not.toHaveBeenCalled(); expect(mockClient.queueSession).not.toHaveBeenCalled();
     finishPrompt({ stopReason: 'end_turn' });
   });
 

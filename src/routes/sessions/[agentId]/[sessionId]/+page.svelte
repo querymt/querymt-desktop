@@ -130,12 +130,7 @@
   });
   const composerCollapsed = $derived(chatPresentationState === 'fixed-free-compact');
   const followPinClass = $derived(sessionFollowPinClass(scrollMode));
-  const agentRunActive = $derived(
-    !agentsStore.sessionHistoryLoading &&
-      ((agentsStore.activeSessionRuntime != null &&
-        agentsStore.activeSessionRuntime.phase !== 'idle') ||
-        ['submitting', 'thinking', 'streaming', 'tool-running'].includes(agentsStore.activeSession?.runState ?? 'idle'))
-  );
+  const agentRunActive = $derived(agentsStore.activeRunBusy);
   // The agent name in the header only disambiguates between sessions when more
   // than one agent is actively connected.
   const activeAgentCount = $derived(

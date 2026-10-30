@@ -37,10 +37,13 @@ import {
   type PromptSendInput,
   type SessionCreateOptions
 } from '$lib/domain/session-launch';
-import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotRuntimeStatus, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
 import {
   createEmptyActiveSession,
+  projectSessionRuntime,
+  projectDelegationActivity,
+  mergeDelegationActivity,
   appendSessionReplay,
   applySessionNotification,
   applyDelegationChildSession,
@@ -71,6 +74,7 @@ import {
   getWorkspaceRemoteMachines,
   isActiveSessionStatus,
   mapAcpSessionsToDesktopSessions,
+  runtimeSessionStatus,
   readSessionRelationshipMeta,
   newestTimestamp,
   type WorkspaceSessionGroup,
@@ -123,6 +127,7 @@ import type {
   ScheduleListInfo,
   SessionInputStateNotification,
   SessionRuntimeStatus,
+  DelegationUpdateNotification,
   SetDelegateModelResponse,
   SubmitInputResult
 } from '$lib/querymt/generated/types';
@@ -160,6 +165,8 @@ import {
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK,
   QMT_NOTIFICATION_SESSION_INPUT_STATE,
+  QMT_NOTIFICATION_SESSION_RUNTIME_CHANGED,
+  type SessionRuntimeChangedNotification,
   QMT_NOTIFICATION_SESSION_PINS_CHANGED
 } from '$lib/querymt/querymt-extensions';
 import { sendDesktopNotification } from '$lib/querymt/notifications';
@@ -214,6 +221,7 @@ const WEBSOCKET_RECONNECT_MAX_DELAY_MS = 8_000;
 const WORKSPACE_SESSION_PAGE_SIZE = 10;
 export const SESSION_SUMMARY_POLL_MS = 30_000;
 export const SESSION_RUNTIME_POLL_MS = 2_000;
+const MAX_LIST_INCARNATION_VERIFICATIONS = 2;
 const MAX_AGENT_LOG_ENTRIES = 200;
 const PROMPT_ACTIVE_RUN_STATES = new Set<SessionRunState>(['thinking', 'streaming', 'tool-running']);
 
@@ -309,9 +317,15 @@ export class AgentsStore {
   private runtimePollingEnabled = false;
   private unlistenPollingVisibility: (() => void) | null = null;
   private routineSessionRefreshes = new Map<string, Promise<void>>();
+  private sessionDelegations = new Map<string, DelegationUpdateNotification[]>();
   private sessionRuntimeRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private sessionRuntimeRefreshGenerations = new Map<string, number>();
-  private sessionRuntimeRefreshPromises = new Map<string, { record: AgentClientRecord; selection: number; promise: Promise<SessionRuntimeStatus | null> }>();
+  private sessionRuntimeRefreshPromises = new Map<string, {
+    record: AgentClientRecord; selection: number; generation: number; verificationEpoch?: string;
+    promise: Promise<SessionRuntimeStatus | null>;
+  }>();
+  // Request-scoped identities only; the runtime cache remains execution authority.
+  private pendingPromptRuns = new Map<string, Set<{ runId: string | null }>>();
   private inputSubmissionsBySession = new Map<string, number>();
   private inputNotificationsDuringSubmit = new Map<string, SessionInputStateNotification>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -502,6 +516,10 @@ export class AgentsStore {
     return this.sessionRuntimeBySession[buildSessionKey(this.activeAgentId, this.activeSessionId)] ?? null;
   }
 
+  get activeRunBusy(): boolean {
+    return !this.sessionHistoryLoading && (PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) || this.activeSession.runState === 'submitting');
+  }
+
   get activePendingInputs(): PendingSessionInput[] {
     if (!this.activeAgentId || !this.activeSessionId) return [];
     return this.pendingInputsBySession[buildSessionKey(this.activeAgentId, this.activeSessionId)] ?? [];
@@ -594,7 +612,41 @@ export class AgentsStore {
   }
 
   private mapSessionSummaries(sessions: SessionInfo[], agent: { agentId: string; agentName: string }): DesktopSessionSummary[] {
-    const incoming = mapAcpSessionsToDesktopSessions(sessions, agent);
+    let incarnationVerifications = 0;
+    const record = this.clients.get(agent.agentId);
+    for (const info of sessions) {
+      const runtime = info._meta?.runtimeStatus as SessionRuntimeStatus | undefined;
+      if (runtime?.observation) {
+        const key = buildSessionKey(agent.agentId, info.sessionId);
+        const pending = this.sessionRuntimeRefreshPromises.get(key);
+        const verifying = pending?.verificationEpoch && pending.record === record &&
+          pending.selection === this.sessionSelectionGeneration &&
+          pending.generation === this.sessionRuntimeRefreshGenerations.get(key);
+        // List evidence cannot end a pending incarnation verification, even if an old list arrives.
+        const accepted = !verifying && this.reconcileSessionRuntime(agent.agentId, info.sessionId, runtime);
+        const observed = this.sessionRuntimeBySession[key];
+        if (!accepted && observed?.observation?.epoch !== runtime.observation.epoch) {
+          if (this.isSelectedSession(agent.agentId, info.sessionId)) {
+            if (record) void this.refreshSessionRuntime(agent.agentId, info.sessionId, record.client, true).catch(() => null);
+          } else {
+            this.markSessionRuntimeUnavailable(agent.agentId, info.sessionId);
+            if (!verifying || pending.verificationEpoch !== runtime.observation.epoch) {
+              // Fence pre-change reads before starting a bounded, deduplicated replacement.
+              this.sessionRuntimeRefreshGenerations.set(key, (this.sessionRuntimeRefreshGenerations.get(key) ?? 0) + 1);
+              if (record && runtime.observation.epoch && incarnationVerifications < MAX_LIST_INCARNATION_VERIFICATIONS) {
+                incarnationVerifications++;
+                void this.refreshSessionRuntime(agent.agentId, info.sessionId, record.client, false, runtime.observation.epoch).catch(() => null);
+              }
+            }
+          }
+        }
+      }
+    }
+    const incoming = mapAcpSessionsToDesktopSessions(sessions, agent).map((summary) => {
+      const runtime = this.sessionRuntimeBySession[buildSessionKey(agent.agentId, summary.sessionId)];
+      const hasUserHistory = summary.hasUserHistory ?? getSessionById(this.sessionsByAgent[agent.agentId] ?? [], summary.sessionId)?.hasUserHistory;
+      return runtime?.observation ? { ...summary, hasUserHistory, status: runtimeSessionStatus(runtime, hasUserHistory) } : summary;
+    });
     const incomingKeys = new Set(incoming.map(getSessionKey));
     const summaries = mergeSessions(this.sessionsByAgent[agent.agentId] ?? [], incoming)
       .filter((session) => incomingKeys.has(getSessionKey(session)));
@@ -954,12 +1006,13 @@ export class AgentsStore {
   private selectedRuntimeNeeded(): boolean {
     if (!this.activeAgentId || !this.activeSessionId || isPendingLaunchId(this.activeSessionId)) return false;
     const runtime = this.sessionRuntimeBySession[buildSessionKey(this.activeAgentId, this.activeSessionId)];
-    return (runtime != null && runtime.phase !== 'idle') || PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) ||
+    const dependencies = this.sessionDelegations.get(buildSessionKey(this.activeAgentId, this.activeSessionId));
+    return (runtime != null && runtime.phase !== 'idle') || dependencies?.some((item) => item.activity === 'live') === true || PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) ||
       this.activeSession.runState === 'submitting' || this.activePendingInputs.length > 0;
   }
 
   private resumeSelectedRuntime() {
-    if (!this.runtimePollingEnabled || !this.pollingIsVisible() || !this.selectedRuntimeNeeded()) return;
+    if (!this.runtimePollingEnabled || !this.pollingIsVisible() || !this.activeSessionId) return;
     const agentId = this.activeAgentId!;
     const record = this.initializedClientRecord(agentId);
     if (record) void this.refreshSessionRuntime(agentId, this.activeSessionId, record.client).catch(() => null);
@@ -3569,6 +3622,7 @@ export class AgentsStore {
     if (explicit && turnEventIndex === undefined) {
       turnEventIndex = this.addOptimisticUserPrompt(sessionId, prompt, attachments, clientPromptId);
     }
+    let promptRun: { runId: string | null } | null = null;
 
     try {
       const record = await this.connectInitializedRecord(agentId);
@@ -3594,6 +3648,11 @@ export class AgentsStore {
         return;
       }
       if (canControlRun && !runtime && !explicit) return;
+      const observation = runtime ?? this.activeSessionRuntime;
+      if (!explicit && (observation?.phase === 'unknown' || observation?.observation?.availability === 'unavailable')) {
+        this.error = 'Execution status unavailable. Reconnect or refresh before sending.';
+        return;
+      }
       if (runtime && runtime.phase !== 'idle') {
         const delivery = this.inputDeliveryForSession(agentId, sessionId, runtime, prompt);
         await this.submitInputToActiveSession(
@@ -3605,7 +3664,8 @@ export class AgentsStore {
           prompt,
           attachments,
           clientPromptId,
-          imageMode
+          imageMode,
+          ownsAction
         );
         return;
       }
@@ -3640,13 +3700,18 @@ export class AgentsStore {
       }
       // From here the session's own failure/retry UI owns the prompt.
       if (explicit) this.markLaunchDispatched(explicit.launchId, true);
+      promptRun = { runId: null };
+      const promptKey = buildSessionKey(agentId, sessionId);
+      const pendingRuns = this.pendingPromptRuns.get(promptKey) ?? new Set<{ runId: string | null }>();
+      pendingRuns.add(promptRun);
+      this.pendingPromptRuns.set(promptKey, pendingRuns);
       const promptResponse = record.client.sendPrompt(sessionId, prompt, attachments, {
         imageMode,
         clientPromptId
       });
       this.scheduleSessionRuntimeRefresh(agentId, sessionId, record.client);
       const response = await promptResponse;
-      if (!this.isSelectedSession(agentId, sessionId)) {
+      if (!ownsAction()) {
         await this.refreshSessionsForAgent(agentId);
         if (canControlRun) void this.refreshSessionRuntime(agentId, sessionId, record.client);
         return;
@@ -3656,18 +3721,25 @@ export class AgentsStore {
         this.composerPrompt = '';
         this.clearPromptAttachments();
       }
-      this.activeSession.lastStopReason = response.stopReason ?? null;
-      endSessionWork(this.activeSession);
       await this.drainQueuedSessionUpdates(agentId, sessionId);
-      if (!this.isSelectedSession(agentId, sessionId)) return;
-      if (PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState)) {
+      if (!ownsAction()) return;
+      const versionedRuntime = this.activeSessionRuntime?.observation;
+      if (versionedRuntime && promptRun.runId && this.activeSession.runId === promptRun.runId) {
+        this.activeSession.lastStopReason = response.stopReason ?? null;
+        this.activeSession.lastRunOutcome = { runId: promptRun.runId, outcome: response.stopReason === 'cancelled' ? 'cancelled' : 'completed' };
+        this.projectSelectedExecution(agentId, sessionId);
+      }
+      if (!versionedRuntime && PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState)) {
+        this.activeSession.lastStopReason = response.stopReason ?? null;
+        this.activeSession.lastRunOutcome = { runId: this.activeSession.runId ?? null, outcome: response.stopReason === 'cancelled' ? 'cancelled' : 'completed' };
+        endSessionWork(this.activeSession);
         this.activeSession.runState = 'completed';
         this.activeSession.activeToolCallId = null;
         this.activeSession.activityLabel =
           response.stopReason === 'cancelled' ? 'Turn cancelled.' : 'Turn completed.';
       }
       await this.refreshSessionsForAgent(agentId);
-      if (canControlRun) void this.refreshSessionRuntime(agentId, sessionId, record.client);
+      if (record.client.supportsQuerymtMethod(QMT_METHOD_SESSION_RUNTIME_STATE)) await this.refreshSessionRuntime(agentId, sessionId, record.client, true).catch(() => null);
     } catch (error) {
       if (!ownsAction()) {
         if (explicit && this.pendingLaunches[explicit.launchId]?.status === 'creating') {
@@ -3724,6 +3796,12 @@ export class AgentsStore {
       };
       this.activeSession.lastError = normalizedError.message;
       this.activeSession.activityLabel = normalizedError.title;
+      if (this.activeSessionRuntime?.observation) this.projectSelectedExecution(agentId, sessionId);
+    } finally {
+      const key = buildSessionKey(agentId, sessionId);
+      const pendingRuns = this.pendingPromptRuns.get(key);
+      if (promptRun) pendingRuns?.delete(promptRun);
+      if (pendingRuns?.size === 0) this.pendingPromptRuns.delete(key);
     }
   }
 
@@ -3736,9 +3814,10 @@ export class AgentsStore {
     prompt: string,
     attachments: PromptAttachment[],
     clientInputId: string,
-    imageMode: 'image' | 'resource'
+    imageMode: 'image' | 'resource',
+    ownsAction: () => boolean
   ) {
-    if (!this.isSelectedSession(agentId, sessionId)) return;
+    if (!ownsAction()) return;
     const key = buildSessionKey(agentId, sessionId);
     const pending: PendingSessionInput = {
       inputId: clientInputId,
@@ -3746,7 +3825,7 @@ export class AgentsStore {
       state: 'sending',
       prompt,
       attachments,
-      runId: delivery === 'steer' ? runtime.active_run_id : undefined,
+      runId: delivery === 'steer' ? runtime.active_run_id ?? undefined : undefined,
       createdAt: Date.now()
     };
     this.pendingInputsBySession = {
@@ -3758,11 +3837,11 @@ export class AgentsStore {
     this.inputSubmissionsBySession.set(key, (this.inputSubmissionsBySession.get(key) ?? 0) + 1);
     try {
       const result = delivery === 'steer'
-        ? await client.steerSession(sessionId, prompt, attachments, clientInputId, runtime.active_run_id, imageMode)
+        ? await client.steerSession(sessionId, prompt, attachments, clientInputId, runtime.active_run_id ?? undefined, imageMode)
         : await client.queueSession(sessionId, prompt, attachments, clientInputId, imageMode);
       this.applySubmitInputResult(agentId, sessionId, pending, result);
-      if (!this.isSelectedSession(agentId, sessionId)) return;
-      if (result.status === 'started') {
+      if (!ownsAction()) return;
+      if (result.status === 'started' && !this.activeSessionRuntime?.observation) {
         this.activeSession.runState = 'thinking';
         this.activeSession.activityLabel = 'Waiting for the agent to respond…';
         beginSessionWork(this.activeSession);
@@ -3776,14 +3855,15 @@ export class AgentsStore {
       this.inputNotificationsDuringSubmit.delete(
         sessionInputNotificationKey(agentId, sessionId, clientInputId)
       );
-      this.updatePendingSessionInput(agentId, sessionId, clientInputId, {
+      const pendingInput = this.pendingInputsBySession[key]?.find((input) => input.inputId === clientInputId);
+      if (pendingInput?.state === 'sending') this.updatePendingSessionInput(agentId, sessionId, clientInputId, {
         state: 'failed',
         reason: error instanceof Error ? error.message : 'Input submission failed.'
       });
-      if (this.isSelectedSession(agentId, sessionId)) {
+      if (ownsAction()) {
         this.error = error instanceof Error ? error.message : 'Failed to submit input.';
+        await this.refreshSessionRuntime(agentId, sessionId, client).catch(() => null);
       }
-      await this.refreshSessionRuntime(agentId, sessionId, client).catch(() => null);
     } finally {
       const remainingSubmissions = (this.inputSubmissionsBySession.get(key) ?? 1) - 1;
       if (remainingSubmissions > 0) {
@@ -3791,7 +3871,7 @@ export class AgentsStore {
       } else {
         this.inputSubmissionsBySession.delete(key);
       }
-      if (this.inputSubmitOwner === key) {
+      if (this.inputSubmitOwner === key && remainingSubmissions === 0) {
         this.inputSubmitOwner = null;
         this.inputSubmitPending = false;
       }
@@ -3916,11 +3996,82 @@ export class AgentsStore {
     }
   }
 
+  private markSessionRuntimeUnavailable(agentId: string, sessionId: string) {
+    const current = this.sessionRuntimeBySession[buildSessionKey(agentId, sessionId)];
+    if (current) this.reconcileSessionRuntime(agentId, sessionId, {
+      ...current, phase: 'unknown' as SessionRuntimeStatus['phase'], active_run_id: null, steerable: false,
+      observation: { ...current.observation, availability: 'unavailable' }
+    }, true);
+  }
+
+  private reconcileManagedActivity(agentId: string, sessionId: string, updates: DelegationUpdateNotification[], complete = false, allowNewSource = false) {
+    const key = buildSessionKey(agentId, sessionId);
+    const matching = updates.filter((item) => item.sessionId === sessionId);
+    const merged = mergeDelegationActivity(this.sessionDelegations.get(key) ?? [], matching,
+      complete && matching.length === updates.length, allowNewSource);
+    this.sessionDelegations.set(key, merged);
+    const runtime = this.sessionRuntimeBySession[key];
+    if (runtime) this.sessionRuntimeBySession = { ...this.sessionRuntimeBySession, [key]: {
+      ...runtime, delegation_activity: merged.filter((item) => item.activity === 'live')
+    } };
+    if (this.isSelectedSession(agentId, sessionId)) {
+      this.activeSession.delegations = merged;
+      projectDelegationActivity(this.activeSession);
+    }
+  }
+
+  private reconcileSessionRuntime(agentId: string, sessionId: string, runtime: SessionRuntimeStatus, authoritative = false, completeActivity = false): boolean {
+    const key = buildSessionKey(agentId, sessionId);
+    const current = this.sessionRuntimeBySession[key];
+    const before = current?.observation;
+    const after = runtime.observation;
+    // Managed workflows have their own sequence domain, including while self is idle.
+    const complete = completeActivity && runtime.phase !== 'unknown' &&
+      (after?.availability === 'live' || after?.availability === 'inactive');
+    if (runtime.delegation_activity) this.reconcileManagedActivity(agentId, sessionId, runtime.delegation_activity, complete, authoritative);
+    if (before?.epoch && after?.epoch) {
+      if (before.epoch !== after.epoch && !authoritative) return false;
+      if (before.epoch === after.epoch && before.revision !== undefined &&
+        (after.revision === undefined || after.revision < before.revision ||
+          (after.revision === before.revision && before.availability === after.availability))) return false;
+    } else if (before?.epoch && !authoritative) return false;
+    if (runtime.active_run_id && runtime.phase !== 'unknown' && runtime.observation?.availability !== 'unavailable') {
+      for (const pending of this.pendingPromptRuns.get(key) ?? []) pending.runId ??= runtime.active_run_id;
+    }
+    this.sessionRuntimeBySession = { ...this.sessionRuntimeBySession, [key]: {
+      ...runtime, delegation_activity: this.sessionDelegations.get(key)?.filter((item) => item.activity === 'live') ?? runtime.delegation_activity
+    } };
+    this.projectSelectedExecution(agentId, sessionId, runtime);
+    const patch = (session: DesktopSessionSummary) => session.agentId === agentId && session.sessionId === sessionId
+      ? { ...session, status: runtimeSessionStatus(runtime, session.hasUserHistory) } : session;
+    this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: (this.sessionsByAgent[agentId] ?? []).map(patch) };
+    this.sessionCatalog = this.sessionCatalog.map(patch);
+    this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: (this.pinnedSessionsByAgent[agentId] ?? []).map(patch) };
+    for (const source of Object.values(this.workspaceSessionSources[agentId] ?? {})) source.sessions = source.sessions.map(patch);
+    return true;
+  }
+
+  private projectSelectedExecution(agentId: string, sessionId: string, runtime = this.sessionRuntimeBySession[buildSessionKey(agentId, sessionId)]) {
+    if (!this.isSelectedSession(agentId, sessionId)) return;
+    const key = buildSessionKey(agentId, sessionId);
+    this.activeSession.delegations = this.sessionDelegations.get(key) ?? this.activeSession.delegations;
+    projectDelegationActivity(this.activeSession);
+    if (!runtime) return;
+    if (runtime.active_run_id && runtime.phase !== 'idle' && runtime.phase !== 'unknown' && runtime.observation?.availability !== 'unavailable') {
+      for (const tool of this.activeSession.toolCalls) {
+        if (tool.runId === null && (tool.status === 'pending' || tool.status === 'in_progress')) tool.runId = runtime.active_run_id;
+      }
+    }
+    projectSessionRuntime(this.activeSession, runtime);
+    projectDelegationActivity(this.activeSession);
+  }
+
   async refreshSessionRuntime(
     agentId = this.activeAgentId,
     sessionId = this.activeSessionId,
     client?: DesktopAcpClient,
-    fresh = false
+    fresh = false,
+    verificationEpoch?: string
   ): Promise<SessionRuntimeStatus | null> {
     if (!agentId || !sessionId || isPendingLaunchId(sessionId) || this.pollingDisposed) return null;
     const record = client ? this.clients.get(agentId) : await this.connectInitializedRecord(agentId);
@@ -3931,13 +4082,13 @@ export class AgentsStore {
     const selection = this.sessionSelectionGeneration;
     const selected = this.isSelectedSession(agentId, sessionId);
     const existing = this.sessionRuntimeRefreshPromises.get(key);
-    if (existing?.record === record) {
+    if (existing?.record === record && existing.generation === this.sessionRuntimeRefreshGenerations.get(key)) {
       if (!fresh && existing.selection === selection) return existing.promise;
       // Actions require a read started after any earlier polling request has settled.
       await existing.promise.catch(() => null);
       if (this.pollingDisposed || this.clients.get(agentId) !== record || selection !== this.sessionSelectionGeneration ||
         (selected && !this.isSelectedSession(agentId, sessionId))) return null;
-      return this.refreshSessionRuntime(agentId, sessionId, resolvedClient, true);
+      return this.refreshSessionRuntime(agentId, sessionId, resolvedClient, true, verificationEpoch);
     }
     this.cancelSessionRuntimeRefresh(key);
     const generation = (this.sessionRuntimeRefreshGenerations.get(key) ?? 0) + 1;
@@ -3945,17 +4096,38 @@ export class AgentsStore {
     const isCurrent = () => !this.pollingDisposed && this.clients.get(agentId) === record &&
       selection === this.sessionSelectionGeneration && (!selected || this.isSelectedSession(agentId, sessionId)) &&
       this.sessionRuntimeRefreshGenerations.get(key) === generation;
+    const initialRuntime = this.sessionRuntimeBySession[key];
+    const initialEpoch = initialRuntime?.observation?.epoch;
+    // This nonreactive collection identity detects workflow updates during the read.
+    const initialActivity = this.sessionDelegations.get(key);
     const promise = resolvedClient.getSessionRuntimeStatus(sessionId).then((runtime) => {
       if (!isCurrent()) return null;
-      this.sessionRuntimeBySession = { ...this.sessionRuntimeBySession, [key]: runtime };
-      if (runtime.phase !== 'idle') this.scheduleSessionRuntimeRefresh(agentId, sessionId, resolvedClient);
+      const current = this.sessionRuntimeBySession[key];
+      if (current?.observation?.epoch !== initialEpoch && current?.observation?.epoch !== runtime.observation?.epoch) {
+        this.scheduleSessionRuntimeRefresh(agentId, sessionId, resolvedClient);
+        return current ?? null;
+      }
+      this.reconcileSessionRuntime(agentId, sessionId, runtime, true, this.sessionDelegations.get(key) === initialActivity);
+      const accepted = this.sessionRuntimeBySession[key] ?? runtime;
+      if (accepted.phase !== 'idle' || this.sessionDelegations.get(key)?.some((item) => item.activity === 'live')) this.scheduleSessionRuntimeRefresh(agentId, sessionId, resolvedClient);
       else this.cancelSessionRuntimeRefresh(key);
-      return runtime;
+      return accepted;
     }).catch((error) => {
-      if (isCurrent() && this.selectedRuntimeNeeded()) this.scheduleSessionRuntimeRefresh(agentId, sessionId, resolvedClient);
+      if (!isCurrent()) return null;
+      const latest = this.sessionRuntimeBySession[key];
+      if (latest?.observation?.epoch !== initialEpoch ||
+        latest?.observation?.revision !== initialRuntime?.observation?.revision ||
+        latest?.observation?.availability !== initialRuntime?.observation?.availability ||
+        latest?.phase !== initialRuntime?.phase || latest?.active_run_id !== initialRuntime?.active_run_id) return latest ?? null;
+      this.reconcileSessionRuntime(agentId, sessionId, {
+        phase: 'unknown' as SessionRuntimeStatus['phase'], steerable: false,
+        pending_steering_count: 0, queued_input_count: 0,
+        observation: { ...initialRuntime?.observation, availability: 'unavailable' }
+      }, true);
+      if (this.selectedRuntimeNeeded()) this.scheduleSessionRuntimeRefresh(agentId, sessionId, resolvedClient);
       throw error;
     });
-    const flight = { record, selection, promise };
+    const flight = { record, selection, generation, verificationEpoch, promise };
     this.sessionRuntimeRefreshPromises.set(key, flight);
     try {
       return await promise;
@@ -4038,26 +4210,38 @@ export class AgentsStore {
     }
     // Nothing to cancel until `session/new` has answered, and the first prompt has not left yet.
     if (isPendingLaunchId(this.activeSessionId) || this.isLaunchSettingUp(this.activeAgentId, this.activeSessionId)) return;
-
-    if (!PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) && this.activeSession.runState !== 'submitting') {
-      return;
-    }
-
+    if (!this.activeRunBusy) return;
+    const agentId = this.activeAgentId;
+    const sessionId = this.activeSessionId;
+    const selection = this.sessionSelectionGeneration;
+    const runId = this.activeSessionRuntime?.active_run_id ?? this.activeSession.runId;
+    let owner: AgentClientRecord | undefined;
+    const ownsView = () => selection === this.sessionSelectionGeneration && this.isSelectedSession(agentId, sessionId) &&
+      (!owner || this.clients.get(agentId) === owner);
     try {
       this.error = null;
-      this.activeSession.activityLabel = 'Cancelling turn…';
-      this.activeSession.lastError = null;
-      const record = await this.connectInitializedRecord(this.activeAgentId);
-      if (!record) {
-        throw new Error('Failed to cancel ACP prompt.');
-      }
-      await record.client.cancelSession(this.activeSessionId);
+      const record = await this.connectInitializedRecord(agentId);
+      if (!record) throw new Error('Failed to cancel ACP prompt.');
+      owner = record;
+      if (!ownsView() || (runId && this.activeSessionRuntime?.active_run_id && this.activeSessionRuntime.active_run_id !== runId)) return;
+      this.activeSession.activityLabel = 'Cancelling turn...';
+      await record.client.cancelSession(sessionId);
+      // ACP cancel acknowledges sending only. Reconcile self execution, not the tree or queue.
+      await this.refreshSessionRuntime(agentId, sessionId, record.client, true);
     } catch (error) {
+      if (!ownsView()) return;
+      const currentRunId = this.activeSessionRuntime?.active_run_id ?? this.activeSession.runId;
+      if (currentRunId && currentRunId !== runId) return;
       const message = error instanceof Error ? error.message : 'Failed to cancel ACP prompt.';
-      this.activeSession.runState = 'failed';
-      this.activeSession.lastError = message;
-      this.activeSession.activityLabel = message;
       this.error = message;
+      if (this.activeSessionRuntime && this.activeSessionRuntime.phase !== 'unknown' &&
+        this.activeSessionRuntime.observation?.availability !== 'unavailable') {
+        this.projectSelectedExecution(agentId, sessionId);
+        return;
+      }
+      this.activeSession.lastError = message;
+      this.activeSession.runState = 'unknown';
+      this.activeSession.activityLabel = 'Cancellation requested; execution status unavailable';
     }
   }
 
@@ -4074,13 +4258,24 @@ export class AgentsStore {
       if ((hydrated || fresh) && this.isSelectedSession(agentId, sessionId)) {
         this.acknowledgeSession(agentId, sessionId);
         this.rememberRecentSession(agentId, sessionId);
+        if (hydrated) {
+          const record = this.initializedClientRecord(agentId);
+          if (record) {
+            this.projectSelectedExecution(agentId, sessionId);
+            // Keep the hydrated handoff's fresh runtime query independent of the first-load shortcut.
+            this.cancelSessionRuntimeRefresh(sessionKey);
+            this.sessionRuntimeRefreshGenerations.set(sessionKey, (this.sessionRuntimeRefreshGenerations.get(sessionKey) ?? 0) + 1);
+            void this.refreshSessionRuntime(agentId, sessionId, record.client).catch(() => null);
+          }
+        }
         await this.refreshDelegateAssignments(agentId, sessionId);
         return;
       }
     }
     const selectionGeneration = ++this.sessionSelectionGeneration;
+    let loadOwner: AgentClientRecord | undefined;
     const isCurrentLoad = () => selectionGeneration === this.sessionSelectionGeneration &&
-      this.isSelectedSession(agentId, sessionId);
+      this.isSelectedSession(agentId, sessionId) && (!loadOwner || this.clients.get(agentId) === loadOwner);
 
     // A deep link may arrive before catalog discovery. Do not create a local
     // placeholder or scan every peer before the backend checks the bookmark.
@@ -4093,6 +4288,7 @@ export class AgentsStore {
       this.error = 'Failed to connect to the agent.';
       return;
     }
+    loadOwner = record;
     target ??= getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
 
     if (!record.initializeResponse?.agentCapabilities?.loadSession) {
@@ -4349,7 +4545,10 @@ export class AgentsStore {
       // the active mode's preference from it without issuing any config write
       // and without substituting a local model when metadata is missing.
       this.seedSessionModePreferenceFromLoad(agentId, sessionId);
-      if (snapshotLifecycle) {
+      const newerActivity = replay.some(({ update }) => update.sessionUpdate === 'user_message_chunk' ||
+        ((update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') &&
+          !snapshotSession.toolCalls.some((tool) => tool.id === update.toolCallId && (tool.status === 'completed' || tool.status === 'failed'))));
+      if (snapshotLifecycle && !newerActivity && drainedCount === 0) {
         this.activeSession.runState = snapshotLifecycle.runState;
         this.activeSession.runStateFromLifecycle = true;
         this.activeSession.activityLabel = snapshotLifecycle.activityLabel;
@@ -4357,6 +4556,11 @@ export class AgentsStore {
         this.activeSession.lastError = snapshotLifecycle.lastError;
       }
       this.activeSession = normalizeHistoricalSession(this.activeSession, { loadCompleted: true });
+      this.reconcileManagedActivity(agentId, sessionId, snapshotSession.delegations ?? []);
+      this.reconcileManagedActivity(agentId, sessionId, this.activeSession.delegations ?? []);
+      const snapshotRuntime = getSnapshotRuntimeStatus(loadedSession);
+      if (snapshotRuntime) this.reconcileSessionRuntime(agentId, sessionId, snapshotRuntime);
+      this.projectSelectedExecution(agentId, sessionId);
       this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
       checkpoint('frontend.normalize');
       this.activeSession.undo.pendingOperation = pendingOperation;
@@ -4374,7 +4578,7 @@ export class AgentsStore {
         telemetryStatus = 'cancelled';
         return;
       }
-      if (!sessionHasVisibleHistory(this.activeSession) && drainedCount === 0) {
+      if (!sessionHasVisibleHistory(this.activeSession) && drainedCount === 0 && !PROMPT_ACTIVE_RUN_STATES.has(this.activeSession.runState) && this.activeSession.runState !== 'unknown') {
         this.activeSession.activityLabel = 'Session loaded, but the agent returned no replayable history.';
       }
       this.hydrateLoadedSessionSummary(agentId, sessionId, replay);
@@ -5032,6 +5236,20 @@ export class AgentsStore {
       this.connectFlights.delete(agentId);
       flight.abort();
     }
+    for (const key of Object.keys(this.sessionRuntimeBySession)) {
+      if (key.startsWith(`${agentId}:`)) {
+        delete this.sessionRuntimeBySession[key];
+        this.sessionDelegations.delete(key);
+      }
+    }
+    for (const key of this.sessionDelegations.keys()) if (key.startsWith(`${agentId}:`)) this.sessionDelegations.delete(key);
+    for (const key of this.pendingPromptRuns.keys()) if (key.startsWith(`${agentId}:`)) this.pendingPromptRuns.delete(key);
+    if (this.activeAgentId === agentId && this.activeSessionId) {
+      this.activeSession.delegations = this.activeSession.delegations?.map((item) => ({ ...item, activity: 'historical' }));
+      this.activeSession.dependencyLabel = null;
+      this.activeSession.runState = 'unknown';
+      this.activeSession.activityLabel = 'Execution status unavailable';
+    }
     record.unsubscribeSessionUpdates?.();
     record.unsubscribeExtensionNotifications?.();
     record.unsubscribeConnectionLoss?.();
@@ -5062,6 +5280,21 @@ export class AgentsStore {
   private ensureExtensionNotificationSubscription(agentId: string, record: AgentClientRecord) {
     if (!record.unsubscribeExtensionNotifications) {
       record.unsubscribeExtensionNotifications = record.client.onExtensionNotification((notification) => {
+        if (this.pollingDisposed || this.clients.get(agentId) !== record) return;
+        if (notification.method === QMT_NOTIFICATION_SESSION_RUNTIME_CHANGED) {
+          const params = notification.params as SessionRuntimeChangedNotification;
+          if (params?.version !== 1 || !params.session_id || !params.runtime?.phase) return;
+          const accepted = this.reconcileSessionRuntime(agentId, params.session_id, params.runtime);
+          const observedEpoch = this.sessionRuntimeBySession[buildSessionKey(agentId, params.session_id)]?.observation?.epoch;
+          if ((!accepted && params.runtime.observation?.epoch !== observedEpoch) || params.runtime.phase === 'unknown') {
+            const key = buildSessionKey(agentId, params.session_id);
+            this.sessionRuntimeRefreshGenerations.set(key, (this.sessionRuntimeRefreshGenerations.get(key) ?? 0) + 1);
+            if (this.isSelectedSession(agentId, params.session_id)) void this.refreshSessionRuntime(agentId, params.session_id, record.client, true).catch(() => null);
+            else this.markSessionRuntimeUnavailable(agentId, params.session_id);
+          } else if (params.runtime.phase !== 'idle' || (params.runtime.delegation_activity?.length ?? 0) > 0) {
+            this.scheduleSessionRuntimeRefresh(agentId, params.session_id, record.client);
+          }
+        }
         if (notification.method === 'querymt/models/changed') {
           void this.loadInitialModelsForAgent(agentId, 1);
         }
@@ -5087,10 +5320,16 @@ export class AgentsStore {
           const params = (notification.params ?? {}) as Parameters<typeof applyDelegationChildSession>[1];
           const sessionId = params.sessionId ?? params.session_id;
           if (sessionId) {
-            this.rememberSessionChildren(agentId, sessionId, [params.childSessionId ?? params.child_session_id]);
-            if (this.isSelectedSession(agentId, sessionId)) {
-              this.activeSession = applyDelegationChildSession(this.activeSession, params);
+            if (params.delegationId) {
+              this.reconcileManagedActivity(agentId, sessionId, [params as DelegationUpdateNotification]);
+              const accepted = this.sessionDelegations.get(buildSessionKey(agentId, sessionId))
+                ?.find((item) => item.delegationId === params.delegationId);
+              this.rememberSessionChildren(agentId, sessionId, [accepted?.childSessionId]);
+            } else {
+              this.rememberSessionChildren(agentId, sessionId, [params.childSessionId ?? params.child_session_id]);
+              if (this.isSelectedSession(agentId, sessionId)) this.activeSession = applyDelegationChildSession(this.activeSession, params);
             }
+            this.projectSelectedExecution(agentId, sessionId);
           }
         }
         if (notification.method === 'querymt/schedules/changed') {
@@ -5114,7 +5353,7 @@ export class AgentsStore {
         if (notification.method === 'querymt/pluginUpdateStatus') {
           this.pluginUpdateStatusByAgent = {
             ...this.pluginUpdateStatusByAgent,
-            [agentId]: notification.params as NonNullable<typeof this.pluginUpdateStatusByAgent[string]>
+            [agentId]: notification.params as NonNullable<AgentsStore['pluginUpdateStatusByAgent'][string]>
           };
         }
         if (notification.method === 'querymt/pluginUpdateComplete') {
@@ -5446,12 +5685,13 @@ export class AgentsStore {
     return result;
   }
 
-  async refreshRemoteSessionsForAgent(agentId: string, node_id: string) {
+  async refreshRemoteSessionsForAgent(agentId: string, node_id: string, isCurrent = () => true) {
     const record = await this.connectInitializedRecord(agentId);
     if (!record) {
       throw new Error('Failed to connect to the agent.');
     }
     const result = await record.client.listRemoteSessions({ node_id });
+    if (!isCurrent() || this.clients.get(agentId) !== record) return result;
     this.remoteSessionsByAgent = {
       ...this.remoteSessionsByAgent,
       [agentId]: {
@@ -5529,35 +5769,41 @@ export class AgentsStore {
   async attachRemoteSession(agentId: string, node_id: string, session_id: string, expectedGeneration?: number) {
     const generation = expectedGeneration ?? ++this.sessionSelectionGeneration;
     const remoteSession = this.remoteSessionsByAgent[agentId]?.[node_id]?.sessions.find((session) => session.id === session_id);
-    let result: RemoteSessionAttachInfo;
+    let record: AgentClientRecord | undefined;
+    let unsubscribe = () => {};
     try {
-      const record = await this.connectInitializedRecord(agentId);
+      record = await this.connectInitializedRecord(agentId);
       if (generation !== this.sessionSelectionGeneration) return session_id;
-      if (!record) {
-        throw new Error('Failed to connect to the agent.');
-      }
-      result = await record.client.attachRemoteSession({ node_id, session_id });
-      if (generation !== this.sessionSelectionGeneration) return session_id;
+      if (!record) throw new Error('Failed to connect to the agent.');
+      const key = buildSessionKey(agentId, session_id);
+      this.sessionRuntimeRefreshGenerations.set(key, (this.sessionRuntimeRefreshGenerations.get(key) ?? 0) + 1);
+      const initialRuntime = this.sessionRuntimeBySession[key];
+      const initialActivity = this.sessionDelegations.get(key);
+      // Capture only this attach's session updates; extensions keep their normal ordered cache path.
+      const replay: SessionNotification[] = [];
+      unsubscribe = record.client.onSessionUpdate((notification) => {
+        if (notification.sessionId === session_id) replay.push(notification);
+      });
+      const result = await record.client.attachRemoteSession({ node_id, session_id });
+      unsubscribe();
+      if (generation !== this.sessionSelectionGeneration || this.clients.get(agentId) !== record) return session_id;
       if (result.session_id !== session_id || result.node_id !== node_id) {
         throw new Error('Remote attachment identity does not match the requested session.');
       }
+      this.lastRemoteAttachByAgent = { ...this.lastRemoteAttachByAgent, [agentId]: result };
+      const discovered = this.sessionsByAgent[agentId]?.find((session) => session.sessionId === session_id && session.remoteNodeId === node_id);
+      return await this.hydrateRemoteAttach(agentId, node_id, result, remoteSession ?? {
+        id: session_id, node_id, title: discovered?.title, cwd: discovered?.cwd, updated_at: discovered?.updatedAt ?? undefined,
+        profile_id: discovered?.remoteProfileId, profile_label: discovered?.remoteProfileLabel
+      }, true, true, { record, initialRuntime, initialActivity, replay });
     } catch (error) {
-      // A fallback load owns its cleanup; only an explicit attachment can
-      // inherit loading from the operation it superseded.
-      if (expectedGeneration === undefined && generation === this.sessionSelectionGeneration) {
-        this.sessionHistoryLoading = false;
-      }
+      // A fallback load owns its cleanup; only an explicit attachment can inherit loading.
+      if (expectedGeneration === undefined && generation === this.sessionSelectionGeneration &&
+        (!record || this.clients.get(agentId) === record)) this.sessionHistoryLoading = false;
       throw error;
+    } finally {
+      unsubscribe();
     }
-    this.lastRemoteAttachByAgent = {
-      ...this.lastRemoteAttachByAgent,
-      [agentId]: result
-    };
-    const discovered = this.sessionsByAgent[agentId]?.find((session) => session.sessionId === session_id && session.remoteNodeId === node_id);
-    return this.hydrateRemoteAttach(agentId, node_id, result, remoteSession ?? {
-      id: session_id, node_id, title: discovered?.title, cwd: discovered?.cwd, updated_at: discovered?.updatedAt ?? undefined,
-      profile_id: discovered?.remoteProfileId, profile_label: discovered?.remoteProfileLabel
-    }, true);
   }
 
   /** Publish the owner's snapshot and metadata after attachment validation. */
@@ -5569,33 +5815,53 @@ export class AgentsStore {
       profile_id?: string | null; profile_label?: string | null },
     preserveSelectionGeneration = false,
     /** False publishes the session (catalog, model, preferences) without taking over the view. */
-    select = true
+    select = true,
+    request?: {
+      record: AgentClientRecord;
+      initialRuntime: SessionRuntimeStatus | null | undefined;
+      initialActivity: DelegationUpdateNotification[] | undefined;
+      replay: SessionNotification[];
+    }
   ): Promise<string> {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) throw new Error(`Unable to locate agent ${agentId}.`);
 
     const sessionId = result.session_id;
+    const key = buildSessionKey(agentId, sessionId);
+    const record = request?.record ?? this.initializedClientRecord(agentId);
+    const snapshotIsCurrent = this.sessionRuntimeBySession[key] === request?.initialRuntime &&
+      this.sessionDelegations.get(key) === request?.initialActivity;
+    if (select) this.resetActiveSession(agentId, sessionId, preserveSelectionGeneration);
+    const generation = this.sessionSelectionGeneration;
+    const isCurrent = () => (!select || (generation === this.sessionSelectionGeneration && this.isSelectedSession(agentId, sessionId))) &&
+      (!record || this.clients.get(agentId) === record);
+    const response = { _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot } };
     const configOptions = result.config_options ?? [];
+    const snapshot = activeSessionFromLoadResponse(sessionId, response);
+    snapshot.configOptions = configOptions;
     if (select) {
-      this.resetActiveSession(agentId, sessionId, preserveSelectionGeneration);
-      const snapshot = activeSessionFromLoadResponse(sessionId, {
-        _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
-      });
-      snapshot.configOptions = configOptions;
-      this.activeSession = normalizeHistoricalSession(snapshot, { loadCompleted: true });
       this.rememberSnapshotUserMessages(snapshot);
+      const replay = (request?.replay ?? []).filter((notification) => !this.isSnapshotUserEcho(notification));
+      this.activeSession = appendSessionReplay(snapshot, replay);
+      for (const { update } of replay) {
+        if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') continue;
+        const tool = this.activeSession.toolCalls.find((item) => item.id === update.toolCallId);
+        if (tool && tool.runId === undefined && (tool.status === 'pending' || tool.status === 'in_progress')) tool.runId = null;
+      }
+      if (record) record.recentSessionUpdateKeys = replay.map(getSessionNotificationKey).slice(-200);
       this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
-      this.reconcileInputStatesFromSnapshot(agentId, sessionId, {
-        _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
-      });
+      this.reconcileInputStatesFromSnapshot(agentId, sessionId, response);
     }
     this.applySessionConfigOptionsSnapshot(agentId, sessionId, configOptions);
     const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    const hasUserHistory = snapshot.transcript.some((item) => item.kind === 'user_message_chunk') ? true : current?.hasUserHistory;
+    const cachedRuntime = this.sessionRuntimeBySession[key];
     const summary: DesktopSessionSummary = {
       ...current,
       agentId,
       agentName: config.name,
       sessionId,
+      hasUserHistory,
       relationshipKnown: current?.relationshipKnown ?? false,
       title: remoteSession.title?.trim() || sessionId,
       cwd: remoteSession.cwd ?? '',
@@ -5610,12 +5876,20 @@ export class AgentsStore {
       remoteProfileLabel: result.profile_label === undefined &&
         (result.profile_id === undefined || result.profile_id === remoteSession.profile_id)
         ? remoteSession.profile_label ?? undefined : result.profile_label ?? undefined,
-      status: 'idle'
+      status: cachedRuntime?.observation ? runtimeSessionStatus(cachedRuntime, hasUserHistory) : 'unknown'
     };
     this.sessionsByAgent = {
       ...this.sessionsByAgent,
       [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [summary])
     };
+    this.reconcileManagedActivity(agentId, sessionId, snapshot.delegations ?? [], false, snapshotIsCurrent);
+    const snapshotRuntime = getSnapshotRuntimeStatus(response);
+    this.reconcileSessionRuntime(agentId, sessionId, snapshotRuntime?.observation ? snapshotRuntime : {
+      phase: 'unknown' as SessionRuntimeStatus['phase'], active_run_id: null, steerable: false,
+      pending_steering_count: 0, queued_input_count: 0, observation: { availability: 'unavailable' }
+    }, snapshotIsCurrent, snapshotIsCurrent);
+    this.projectSelectedExecution(agentId, sessionId);
+    if (select && record) void this.refreshSessionRuntime(agentId, sessionId, record.client).catch(() => null);
     // Resolve owner-local model identities only after publishing the owner node.
     this.restoreSessionModel(agentId, sessionId, configOptions, {
       _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
@@ -5625,8 +5899,8 @@ export class AgentsStore {
     if (select) this.hydratedRemoteSessionKeys.add(buildSessionKey(agentId, sessionId));
     this.rememberRecentSession(agentId, sessionId);
     // Attachment is committed; a retryable catalog refresh must not fail its load.
-    await this.refreshRemoteSessionsForAgent(agentId, nodeId).catch((error) => {
-      console.warn('Remote session attached, but catalog refresh failed', error);
+    await this.refreshRemoteSessionsForAgent(agentId, nodeId, isCurrent).catch((error) => {
+      if (isCurrent()) console.warn('Remote session attached, but catalog refresh failed', error);
     });
     return sessionId;
   }
@@ -6346,15 +6620,20 @@ export class AgentsStore {
     const activityUpdatedAt = new Date().toISOString();
     for (const { agentId, notification } of notifications) {
       const update = notification.update;
-      const status = inferSessionStatusFromNotification(update);
+      const runtime = this.sessionRuntimeBySession[buildSessionKey(agentId, notification.sessionId)];
       const summaryInfo = sessionInfoChangesSummary(update);
-      if (!status && !summaryInfo) continue;
       let agentPatches = patches.get(agentId);
       if (!agentPatches) patches.set(agentId, agentPatches = new Map());
       const patch = agentPatches.get(notification.sessionId) ?? {};
+      const hasUserHistory = update.sessionUpdate === 'user_message_chunk' ? true
+        : patch.hasUserHistory ?? getSessionById(this.sessionsByAgent[agentId] ?? [], notification.sessionId)?.hasUserHistory;
+      const activityStatus = inferSessionStatusFromNotification(update);
+      const status = runtime?.observation ? runtimeSessionStatus(runtime, hasUserHistory) : activityStatus;
+      if (!status && !summaryInfo) continue;
+      if (hasUserHistory !== undefined) patch.hasUserHistory = hasUserHistory;
       if (status) {
         patch.status = status;
-        patch.updatedAt = newestTimestamp(patch.updatedAt, activityUpdatedAt);
+        if (activityStatus) patch.updatedAt = newestTimestamp(patch.updatedAt, activityUpdatedAt);
       }
       if (summaryInfo && update.sessionUpdate === 'session_info_update') {
         if (update.title !== undefined) patch.title = update.title ?? 'Untitled session';
@@ -6371,18 +6650,18 @@ export class AgentsStore {
         const patch = agentPatches.get(session.sessionId);
         if (!patch) return session;
         const next = { ...session, ...patch, updatedAt: newestTimestamp(session.updatedAt, patch.updatedAt) };
-        if (next.title === session.title && next.status === session.status && next.updatedAt === session.updatedAt) return session;
+        if (next.title === session.title && next.status === session.status && next.updatedAt === session.updatedAt && next.hasUserHistory === session.hasUserHistory) return session;
         // Streaming activity bumps updatedAt on every notification; rebuilding every derived
         // session list that often is the dominant cost with several busy sessions. Coalesce
         // activity-only bumps to at most once per ACTIVITY_SUMMARY_THROTTLE_MS per session.
-        if (next.title === session.title && next.status === session.status && patch.updatedAt === activityUpdatedAt) {
+        if (next.title === session.title && next.status === session.status && next.hasUserHistory === session.hasUserHistory && patch.updatedAt === activityUpdatedAt) {
           const previous = Date.parse(session.updatedAt ?? '');
           if (Number.isFinite(previous) && Math.abs(activityNow - previous) < ACTIVITY_SUMMARY_THROTTLE_MS) return session;
         }
         const key = getSessionKey(next);
         updated.set(key, next);
         const write = this.catalogWrites.get(key);
-        if (write?.session) write.session = { ...write.session, title: next.title, updatedAt: next.updatedAt, status: next.status };
+        if (write?.session) write.session = { ...write.session, title: next.title, updatedAt: next.updatedAt, status: next.status, hasUserHistory: next.hasUserHistory };
         changes.push(next);
         return next;
       });
@@ -6393,7 +6672,7 @@ export class AgentsStore {
     if (!updated.size) return;
     const updateKnown = (session: DesktopSessionSummary) => {
       const next = updated.get(getSessionKey(session));
-      return next ? { ...session, title: next.title, updatedAt: next.updatedAt, status: next.status } : session;
+      return next ? { ...session, title: next.title, updatedAt: next.updatedAt, status: next.status, hasUserHistory: next.hasUserHistory } : session;
     };
     this.sessionCatalog = this.sessionCatalog.map(updateKnown);
     if (notifications.some(({ notification }) => sessionInfoChangesSummary(notification.update))) {
@@ -6499,6 +6778,18 @@ export class AgentsStore {
     const optimisticEventIndex = this.reconcileOptimisticUserPrompt(notification);
     const beforeEvents = this.activeSession.events.length;
     this.activeSession = applySessionNotification(this.activeSession, notification, optimisticEventIndex);
+    const observed = this.sessionRuntimeBySession[buildSessionKey(agentId, notification.sessionId)];
+    if (notification.update.sessionUpdate === 'tool_call' || notification.update.sessionUpdate === 'tool_call_update') {
+      const toolCallId = notification.update.toolCallId;
+      const tool = this.activeSession.toolCalls.find((item) => item.id === toolCallId);
+      // New live tools after idle have no observed owner yet; never inherit the ended run.
+      if (tool && tool.runId === undefined) tool.runId = observed?.phase === 'idle' ? null : observed?.active_run_id ?? null;
+    }
+    const unobservedTool = this.activeSession.toolCalls.some((tool) =>
+      tool.runId === null && (tool.status === 'pending' || tool.status === 'in_progress'));
+    if (observed?.observation && !(observed.phase === 'idle' && unobservedTool)) {
+      this.projectSelectedExecution(agentId, notification.sessionId, observed);
+    }
     if (notification.update.sessionUpdate === 'config_option_update') {
       const key = buildSessionKey(agentId, notification.sessionId);
       // Authoritative updates may carry only the options relevant to the
@@ -7057,6 +7348,7 @@ function mergeSessions(current: DesktopSessionSummary[], incoming: DesktopSessio
       // A list that lacks worktree metadata must not erase what a richer list/load established.
       workspace: session.workspace ?? existing.workspace ?? null,
       access: session.access ?? existing.access ?? null,
+      hasUserHistory: session.hasUserHistory ?? existing.hasUserHistory,
       relationshipKnown: existing.relationshipKnown === true ? true : session.relationshipKnown ?? existing.relationshipKnown,
       updatedAt: newestTimestamp(existing.updatedAt, session.updatedAt)
     } : session);
