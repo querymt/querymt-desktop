@@ -51,26 +51,17 @@
     }
   });
 
+  // Both launch buttons open the session view immediately under a temporary id;
+  // the store keeps creating the session (and sends the prompt) in the background.
   async function startSessionFromLauncher() {
     if (!primaryAgentId) {
       return;
     }
 
-    const sessionId = await agentsStore.startSessionWithPrompt(primaryAgentId);
-    if (sessionId) {
-      await goto(`/sessions/${encodeURIComponent(primaryAgentId)}/${encodeURIComponent(sessionId)}`);
-    }
-  }
-
-  async function startBlankSessionFromLauncher() {
-    if (!primaryAgentId) {
-      return;
-    }
-
     const agentId = primaryAgentId;
-    const sessionId = await agentsStore.createSession(agentId);
-    if (sessionId) {
-      await goto(`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(sessionId)}`);
+    const launchId = agentsStore.beginLaunch(agentId);
+    if (launchId) {
+      await goto(`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(launchId)}`);
     }
   }
 </script>
@@ -93,7 +84,7 @@
       sendShortcut={chatPreferencesStore.sendShortcut}
       cwd={agentsStore.composerCwd}
       prompt={agentsStore.composerPrompt}
-      loading={agentsStore.loading}
+      loading={agentsStore.loading || agentsStore.launching}
       error={agentsStore.error ?? agentsStore.getLaunchProfileError(primaryAgentId)}
       activeSessionId={null}
       promptFocusToken={agentsStore.promptFocusToken}
@@ -130,7 +121,7 @@
       onLaunchModeChange={(modeId) => agentsStore.setComposerMode(modeId)}
       onLaunchReasoningChange={(reasoningId) => agentsStore.setComposerReasoning(reasoningId)}
       onTargetChange={(targetId) => agentsStore.setComposerTarget(targetId)}
-      onCreateSession={() => startBlankSessionFromLauncher()}
+      onCreateSession={() => startSessionFromLauncher()}
       onDismissError={() => {
         agentsStore.clearError();
         agentsStore.clearLaunchProfileError(primaryAgentId);

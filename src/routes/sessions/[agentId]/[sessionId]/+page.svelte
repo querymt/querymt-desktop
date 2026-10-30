@@ -26,6 +26,7 @@
     type SessionScrollMode
   } from '$lib/domain/session-scroll';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
+  import { isPendingLaunchId } from '$lib/domain/session-launch';
   import { formatSessionTimestamp, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
   import {
     findReasoningConfigOption,
@@ -42,6 +43,22 @@
   const agentId = $derived(decodeURIComponent(page.params.agentId ?? ''));
   const sessionId = $derived(decodeURIComponent(page.params.sessionId ?? ''));
   const selectedSession = $derived(getSessionById(agentsStore.sessionsByAgent[agentId] ?? [], sessionId, agentId));
+  // A launch whose `session/new` is still in flight (or failed) lives under a temporary id.
+  const pendingLaunch = $derived(isPendingLaunchId(sessionId) ? agentsStore.pendingLaunches[sessionId] ?? null : null);
+  let redirectedLaunchId: string | null = null;
+  $effect(() => {
+    if (!isPendingLaunchId(sessionId)) return;
+    const launch = pendingLaunch;
+    const launchId = sessionId;
+    if (launch && !launch.sessionId) return;
+    if (redirectedLaunchId === launchId) return;
+    redirectedLaunchId = launchId;
+    // Same route, so the view stays mounted; replace the URL so Back skips the placeholder.
+    const target = launch?.sessionId
+      ? `/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(launch.sessionId)}`
+      : '/';
+    untrack(() => { void goto(target, { replaceState: true }); });
+  });
   const lifecycleReadSessionId = $derived(selectedSession?.sessionId);
   $effect(() => {
     const owner = agentId;
@@ -211,6 +228,12 @@
 
     lastRequestedSessionKey = sessionKey;
     untrack(() => {
+      if (isPendingLaunchId(nextSessionId)) {
+        syncDockAlign();
+        setScrollMode('following');
+        agentsStore.showPendingLaunch(nextSessionId);
+        return;
+      }
       void loadCurrentSession(nextAgentId, nextSessionId);
     });
   });
@@ -525,6 +548,7 @@
   }
 
   async function refreshSession() {
+    if (isPendingLaunchId(sessionId)) return;
     await Promise.all([agentsStore.refreshSessionsForAgent(agentId), agentsStore.refreshSessionLifecycle(agentId, sessionId)]);
     lastRequestedSessionKey = null;
     await loadCurrentSession(agentId, sessionId);
@@ -578,14 +602,14 @@
     pinPending={agentsStore.sessionPinPending[`${agentId}:${sessionId}`]}
     pinError={agentsStore.sessionPinErrors[`${agentId}:${sessionId}`]}
     onSetPinned={selectedSession ? (pinned) => agentsStore.setSessionPinned(selectedSession!, pinned) : null}
-    canManageLifecycle={agentsStore.canSetSessionLifecycle(agentId) && selectedSession?.remoteConnectionState !== 'disconnected'}
+    canManageLifecycle={!pendingLaunch && agentsStore.canSetSessionLifecycle(agentId) && selectedSession?.remoteConnectionState !== 'disconnected'}
     lifecyclePending={agentsStore.sessionLifecyclePending[`${agentId}:${sessionId}`]}
     lifecycleError={agentsStore.sessionLifecycleErrors[`${agentId}:${sessionId}`]}
     onSetLifecycle={(patch) => agentsStore.setSessionLifecycle(agentId, sessionId, patch)}
-    title={selectedSession?.title ?? 'Session'}
-    workspace={selectedSession ? getSessionWorkspaceName(selectedSession.cwd) : 'Unknown workspace'}
-    workspacePath={selectedSession?.cwd ?? null}
-    remoteHost={selectedSession?.location === 'remote' ? (selectedSession.remoteNodeLabel?.trim() || selectedSession.remoteNodeId || 'remote host') : null}
+    title={pendingLaunch ? 'New session' : selectedSession?.title ?? 'Session'}
+    workspace={pendingLaunch ? getSessionWorkspaceName(pendingLaunch.cwd) : selectedSession ? getSessionWorkspaceName(selectedSession.cwd) : 'Unknown workspace'}
+    workspacePath={pendingLaunch?.cwd ?? selectedSession?.cwd ?? null}
+    remoteHost={pendingLaunch ? pendingLaunch.targetLabel : selectedSession?.location === 'remote' ? (selectedSession.remoteNodeLabel?.trim() || selectedSession.remoteNodeId || 'remote host') : null}
     agentName={activeAgentCount > 1 ? (selectedSession?.agentName ?? 'Unknown agent') : undefined}
     profileLabel={sessionProfileLabel}
     updatedAt={selectedSession ? formatSessionTimestamp(selectedSession.updatedAt, relativeTimeNow) : 'Not loaded'}
@@ -646,7 +670,7 @@
       </section>
     {/if}
 
-    {#if selectedSession}
+    {#if selectedSession && !pendingLaunch}
       {#if latestVisible}
         <SessionScrollToBottomPill
           visible={true}
@@ -735,6 +759,27 @@
         onDismissError={() => agentsStore.clearError()}
         onSendPrompt={() => sendPrompt()}
       />
+      {/if}
+    {:else if pendingLaunch}
+      {#if pendingLaunch.status === 'failed'}
+        <section class="session-prompt-error" role="alert" aria-live="polite" data-testid="launch-error">
+          <div class="session-prompt-error-mark" aria-hidden="true">!</div>
+          <div class="session-prompt-error-body">
+            <header class="session-prompt-error-heading"><strong>Could not start the session</strong></header>
+            <p>{pendingLaunch.error ?? 'Failed to create session.'}</p>
+            <div class="session-prompt-error-actions">
+              <button class="action-btn" type="button" onclick={() => agentsStore.retryLaunch(pendingLaunch.id)}>Retry</button>
+              <button class="action-btn" type="button" onclick={() => { agentsStore.discardLaunch(pendingLaunch.id); void goto('/'); }}>Back to launcher</button>
+            </div>
+          </div>
+        </section>
+      {:else}
+        <div
+          class="session-activity-bar-dock"
+          style={dockAlignLeft != null && dockAlignWidth != null ? `left:${dockAlignLeft}px;width:${dockAlignWidth}px;transform:none;` : ''}
+        >
+          <SessionActivityBar session={agentsStore.activeSession} />
+        </div>
       {/if}
     {/if}
 

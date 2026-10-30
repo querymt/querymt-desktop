@@ -130,6 +130,8 @@ function createAgentsStore() {
     deleteSession: vi.fn(),
     createSession: vi.fn(async (): Promise<string | null> => 'session-1'),
     startSessionWithPrompt: vi.fn(async () => 'session-1'),
+    beginLaunch: vi.fn((): string | null => 'pending-launch-1'),
+    launching: false,
     getRecentModels: vi.fn((): ModelEntry[] => []),
     getRecentWorkspaces: vi.fn(() => []),
     getProfileOptions: vi.fn(() => []),
@@ -250,8 +252,8 @@ describe('Landing page session start', () => {
     expect(agentsStore.activeSessionId).toBe('previous-session');
   });
 
-  it('opens the new session as soon as session creation resolves', async () => {
-    agentsStore.startSessionWithPrompt.mockResolvedValue('session-1');
+  it('opens the session view immediately under a temporary id without waiting for session/new', async () => {
+    agentsStore.beginLaunch.mockReturnValue('pending-launch-1');
     agentsStore.composerPrompt = 'Draft prompt';
 
     render(LandingPage);
@@ -261,10 +263,11 @@ describe('Landing page session start', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
 
     expect(agentsStore.setComposerPrompt).toHaveBeenCalledWith('Fix the failing tests');
-    expect(agentsStore.startSessionWithPrompt).toHaveBeenCalledWith('agent-1');
+    expect(agentsStore.beginLaunch).toHaveBeenCalledWith('agent-1');
     await waitFor(() => {
-      expect(goto).toHaveBeenCalledWith('/sessions/agent-1/session-1');
+      expect(goto).toHaveBeenCalledWith('/sessions/agent-1/pending-launch-1');
     });
+    expect(agentsStore.startSessionWithPrompt).not.toHaveBeenCalled();
   });
 
   it('dismisses the selected owner profile error as well as the general error', async () => {
@@ -282,18 +285,27 @@ describe('Landing page session start', () => {
     await waitFor(() => expect(screen.queryByText('Owner profiles unavailable')).not.toBeInTheDocument());
   });
 
-  it.each([null, 'new-session'])('uses only a successful blank-session callback result for navigation (%s)', async (created) => {
+  it.each([null, 'pending-launch-2'])('navigates from the blank-session callback only when a launch began (%s)', async (launchId) => {
     agentsStore.activeAgentId = 'previous-agent';
     agentsStore.activeSessionId = 'previous-session';
-    agentsStore.createSession.mockResolvedValueOnce(created);
+    agentsStore.beginLaunch.mockReturnValueOnce(launchId);
     render(LandingPage);
     // Launch mode hides this secondary action; exercise the supplied callback directly.
     const onCreateSession = vi.mocked(SessionComposer).mock.calls.at(-1)![1].onCreateSession!;
     await onCreateSession();
 
-    expect(agentsStore.createSession).toHaveBeenCalledWith('agent-1');
-    if (created) expect(goto).toHaveBeenCalledExactlyOnceWith('/sessions/agent-1/new-session');
+    expect(agentsStore.beginLaunch).toHaveBeenCalledWith('agent-1');
+    expect(agentsStore.createSession).not.toHaveBeenCalled();
+    if (launchId) expect(goto).toHaveBeenCalledExactlyOnceWith('/sessions/agent-1/pending-launch-2');
     else expect(goto).not.toHaveBeenCalled();
+  });
+
+  it('disables the launcher while a launch is creating its session', async () => {
+    agentsStore.launching = true;
+    agentsStore.composerPrompt = 'Draft prompt';
+    render(LandingPage);
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeDisabled();
+    expect(vi.mocked(SessionComposer).mock.calls.at(-1)![1].loading).toBe(true);
   });
 
   it('offers the Workspace choice for the launcher agent even when no composer agent is set', async () => {
@@ -314,9 +326,9 @@ describe('Landing page session start', () => {
     expect(screen.getByRole('button', { name: 'Start session' })).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
 
-    expect(agentsStore.startSessionWithPrompt).toHaveBeenCalledWith('agent-1');
+    expect(agentsStore.beginLaunch).toHaveBeenCalledWith('agent-1');
     expect(agentsStore.promptAttachments).toHaveLength(1);
-    await waitFor(() => expect(goto).toHaveBeenCalledWith('/sessions/agent-1/session-1'));
+    await waitFor(() => expect(goto).toHaveBeenCalledWith('/sessions/agent-1/pending-launch-1'));
   });
 
   it('preselects the owning remote host and agent when creating from a remote workspace', async () => {
@@ -343,7 +355,7 @@ describe('Landing page session start', () => {
     await fireEvent.click(screen.getByLabelText('Session options'));
     expect(screen.getByRole('button', { name: 'Session target' })).toHaveTextContent('Laptop');
     await fireEvent.click(screen.getByRole('button', { name: 'Start blank session' }));
-    expect(agentsStore.startSessionWithPrompt).toHaveBeenCalledWith('agent-2');
+    expect(agentsStore.beginLaunch).toHaveBeenCalledWith('agent-2');
   });
 
   it('closes the delete dialog after confirmation without waiting for a catalog refresh', async () => {
