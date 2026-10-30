@@ -3649,7 +3649,7 @@ export class AgentsStore {
       }
       if (canControlRun && !runtime && !explicit) return;
       const observation = runtime ?? this.activeSessionRuntime;
-      if (observation?.phase === 'unknown' || observation?.observation?.availability === 'unavailable') {
+      if (!explicit && (observation?.phase === 'unknown' || observation?.observation?.availability === 'unavailable')) {
         this.error = 'Execution status unavailable. Reconnect or refresh before sending.';
         return;
       }

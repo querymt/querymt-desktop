@@ -10767,6 +10767,39 @@ describe('AgentsStore pending launches', () => {
     finishPrompt({ stopReason: 'end_turn' });
   });
 
+  it.each(['unavailable', 'unsupported', 'pending'] as const)('sends a confirmed fresh remote launch once without waiting for %s runtime evidence', async (observation) => {
+    const store = createStore();
+    store.setComposerTarget('node-1'); store.setComposerMode('plan');
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'steering');
+    if (observation === 'unsupported') mockClient.supportsQuerymtMethod.mockImplementation((method?: string) => method !== 'querymt/session/runtimeState');
+    mockClient.getSessionRuntimeStatus.mockImplementation(() => observation === 'pending' ? new Promise(() => {}) : Promise.resolve({
+      phase: SessionRuntimePhase.Unknown, active_run_id: null, steerable: false, pending_steering_count: 0, queued_input_count: 0,
+      observation: { availability: 'unavailable' }
+    }));
+    mockClient.createRemoteSession.mockResolvedValueOnce({ session_id: 'remote-1', node_id: 'node-1', attached: true,
+      config_options: modeOnly('build'), snapshot: { audit: { events: [] } } });
+    let finishConfig!: () => void;
+    let finishPrompt!: (response: PromptResponse) => void;
+    mockClient.setSessionConfigOption.mockImplementationOnce(() => new Promise((resolve) => { finishConfig = () => resolve(modeOnly('plan')); }));
+    mockClient.sendPrompt.mockImplementationOnce(() => new Promise((resolve) => { finishPrompt = resolve; }));
+    const launchId = store.beginLaunch('agent-1')!;
+    await vi.waitFor(() => expect(finishConfig).toBeTypeOf('function'));
+    expect(store.pendingLaunches[launchId]).toMatchObject({ sessionId: 'remote-1', status: 'creating' });
+    expect(store.activeSessionRuntime).toMatchObject({ phase: 'unknown', observation: { availability: 'unavailable' } });
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    const initialReads = mockClient.getSessionRuntimeStatus.mock.calls.length;
+    finishConfig();
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalledOnce());
+    expect(mockClient.sendPrompt).toHaveBeenCalledWith('remote-1', 'Fix the failing tests', [], expect.anything());
+    expect(mockClient.createRemoteSession).toHaveBeenCalledOnce();
+    expect(store.pendingLaunches[launchId].status).toBe('ready');
+    expect(store.isLaunchSettingUp('agent-1', 'remote-1')).toBe(false);
+    expect(store.activeSessionRuntime?.phase).toBe('unknown'); // No fabricated Idle observation.
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(initialReads);
+    expect(mockClient.steerSession).not.toHaveBeenCalled(); expect(mockClient.queueSession).not.toHaveBeenCalled();
+    finishPrompt({ stopReason: 'end_turn' });
+  });
+
   it('keeps creating and sends the prompt after the user navigates away', async () => {
     const store = createStore();
     let finish!: (response: { sessionId: string; configOptions: SessionConfigOption[] }) => void;
