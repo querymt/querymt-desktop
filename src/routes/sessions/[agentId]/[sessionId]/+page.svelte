@@ -55,10 +55,12 @@
     redirectedLaunchId = launchId;
     // Same route, so the view stays mounted; replace the URL so Back skips the placeholder.
     const target = launch?.sessionId
-      ? `/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(launch.sessionId)}`
+      ? `/sessions/${encodeURIComponent(launch.agentId)}/${encodeURIComponent(launch.sessionId)}`
       : '/';
     untrack(() => { void goto(target, { replaceState: true }); });
   });
+  // From `session/new` until the first prompt has left, anything sent here could overtake it.
+  const launchSettingUp = $derived(agentsStore.isLaunchSettingUp(agentId, sessionId));
   const lifecycleReadSessionId = $derived(selectedSession?.sessionId);
   $effect(() => {
     const owner = agentId;
@@ -727,7 +729,7 @@
         onStopPrompt={() => agentsStore.cancelActiveSession()}
         sendShortcut={chatPreferencesStore.sendShortcut}
         prompt={agentsStore.composerPrompt}
-        loading={agentsStore.loading || agentsStore.inputSubmitPending}
+        loading={agentsStore.loading || agentsStore.inputSubmitPending || launchSettingUp}
         error={agentsStore.error}
         activeSessionId={agentsStore.activeSessionId}
         promptFocusToken={agentsStore.promptFocusToken}

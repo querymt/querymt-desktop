@@ -37,6 +37,7 @@
     compact = false,
     minimal = false,
     launch = false,
+    starting = false,
     activeSessionId = null,
     promptFocusToken = 0,
     sessionOnly = false,
@@ -100,6 +101,8 @@
     compact?: boolean;
     minimal?: boolean;
     launch?: boolean;
+    /** Launcher only: a session is being created, so the start button shows progress. */
+    starting?: boolean;
     activeSessionId?: string | null;
     promptFocusToken?: number;
     sessionOnly?: boolean;
@@ -866,7 +869,7 @@
             <span class="composer-action-morph-state composer-action-morph-send" aria-hidden={creatingBlankSession}>
               <SendHorizontal size={16} />
               {#if minimal || launch}
-                <span>Start session</span>
+                <span>{starting ? 'Starting\u2026' : 'Start session'}</span>
               {/if}
             </span>
           </span>

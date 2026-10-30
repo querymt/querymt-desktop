@@ -58,9 +58,10 @@
       return;
     }
 
-    const agentId = primaryAgentId;
-    const launchId = agentsStore.beginLaunch(agentId);
+    const launchId = agentsStore.beginLaunch(primaryAgentId);
     if (launchId) {
+      // A launch already running belongs to its own agent, which may not be the one shown now.
+      const agentId = agentsStore.pendingLaunches[launchId]?.agentId ?? primaryAgentId;
       await goto(`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(launchId)}`);
     }
   }
@@ -77,6 +78,22 @@
       </p>
     </div>
 
+    {#each agentsStore.abandonedLaunches as launch (launch.id)}
+      <section class="session-prompt-error" role="alert" data-testid="abandoned-launch">
+        <div class="session-prompt-error-mark" aria-hidden="true">!</div>
+        <div class="session-prompt-error-body">
+          <header class="session-prompt-error-heading"><strong>A session could not be started</strong></header>
+          <p>{launch.error ?? 'Failed to create session.'}</p>
+          {#if launch.prompt}<p class="truncate text-[var(--muted)]">{launch.prompt}</p>{/if}
+          <div class="session-prompt-error-actions">
+            <button class="action-btn" type="button" disabled={agentsStore.launching}
+              onclick={() => { agentsStore.retryLaunch(launch.id); void goto(`/sessions/${encodeURIComponent(launch.agentId)}/${encodeURIComponent(launch.id)}`); }}>Retry</button>
+            <button class="action-btn" type="button" onclick={() => agentsStore.discardLaunch(launch.id)}>Restore prompt</button>
+          </div>
+        </div>
+      </section>
+    {/each}
+
     <SessionComposer
       compact={true}
       minimal={true}
@@ -85,6 +102,7 @@
       cwd={agentsStore.composerCwd}
       prompt={agentsStore.composerPrompt}
       loading={agentsStore.loading || agentsStore.launching}
+      starting={agentsStore.launching}
       error={agentsStore.error ?? agentsStore.getLaunchProfileError(primaryAgentId)}
       activeSessionId={null}
       promptFocusToken={agentsStore.promptFocusToken}

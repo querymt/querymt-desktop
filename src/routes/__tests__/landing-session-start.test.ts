@@ -132,6 +132,10 @@ function createAgentsStore() {
     startSessionWithPrompt: vi.fn(async () => 'session-1'),
     beginLaunch: vi.fn((): string | null => 'pending-launch-1'),
     launching: false,
+    pendingLaunches: {} as Record<string, { agentId: string }>,
+    abandonedLaunches: [] as Array<{ id: string; agentId: string; prompt: string; error: string | null }>,
+    retryLaunch: vi.fn(),
+    discardLaunch: vi.fn(),
     getRecentModels: vi.fn((): ModelEntry[] => []),
     getRecentWorkspaces: vi.fn(() => []),
     getProfileOptions: vi.fn(() => []),
@@ -306,6 +310,42 @@ describe('Landing page session start', () => {
     render(LandingPage);
     expect(screen.getByRole('button', { name: 'Start session' })).toBeDisabled();
     expect(vi.mocked(SessionComposer).mock.calls.at(-1)![1].loading).toBe(true);
+  });
+
+  it('labels the start button "Starting…" while a launch is creating', async () => {
+    agentsStore.launching = true;
+    agentsStore.composerPrompt = 'Draft prompt';
+    render(LandingPage);
+    expect(vi.mocked(SessionComposer).mock.calls.at(-1)![1].starting).toBe(true);
+    expect(screen.getByRole('button', { name: 'Start session' })).toHaveTextContent('Starting…');
+  });
+
+  it('navigates to the running launch agent, not the agent currently shown', async () => {
+    agentsStore.composerPrompt = 'Draft prompt';
+    agentsStore.beginLaunch.mockReturnValueOnce('pending-launch-9');
+    agentsStore.pendingLaunches = { 'pending-launch-9': { agentId: 'agent-2' } };
+    render(LandingPage);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Start session' }));
+
+    await waitFor(() => expect(goto).toHaveBeenCalledWith('/sessions/agent-2/pending-launch-9'));
+  });
+
+  it('offers retry and restore for a launch that failed in the background', async () => {
+    agentsStore.abandonedLaunches = [{ id: 'pending-launch-3', agentId: 'agent-1', prompt: 'Lost prompt', error: 'node unreachable' }];
+    render(LandingPage);
+
+    const notice = screen.getByTestId('abandoned-launch');
+    expect(notice).toHaveTextContent('node unreachable');
+    expect(notice).toHaveTextContent('Lost prompt');
+
+    await fireEvent.click(within(notice).getByRole('button', { name: 'Restore prompt' }));
+    expect(agentsStore.discardLaunch).toHaveBeenCalledWith('pending-launch-3');
+    expect(goto).not.toHaveBeenCalled();
+
+    await fireEvent.click(within(notice).getByRole('button', { name: 'Retry' }));
+    expect(agentsStore.retryLaunch).toHaveBeenCalledWith('pending-launch-3');
+    expect(goto).toHaveBeenCalledWith('/sessions/agent-1/pending-launch-3');
   });
 
   it('offers the Workspace choice for the launcher agent even when no composer agent is set', async () => {

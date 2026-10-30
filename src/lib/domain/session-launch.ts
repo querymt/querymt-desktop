@@ -29,6 +29,11 @@ export interface LaunchSettings {
   modelId: string;
 }
 
+/**
+ * `creating`: `session/new`, launch config writes or the first prompt dispatch are still running.
+ * `failed`: the launch needs the user (retry, review or restore the prompt).
+ * `ready`: the first prompt was handed to the agent.
+ */
 export type PendingLaunchStatus = 'creating' | 'failed' | 'ready';
 
 export interface PendingLaunch {
@@ -43,7 +48,7 @@ export interface PendingLaunch {
   settings: LaunchSettings;
   /** Human label of the remote owner, when launching on a mesh node. */
   targetLabel: string | null;
-  /** Real session id, set once the session is created and configured. */
+  /** Real session id, set as soon as `session/new` has been answered and the session is selected. */
   sessionId: string | null;
 }
 
@@ -54,16 +59,26 @@ export interface SessionCreateOptions {
   settings?: LaunchSettings;
   /** Called once the new session is the selected one, before launch config writes. */
   onSelected?: (sessionId: string) => void;
+  /**
+   * Launch creations are background work: failures go here and never touch the
+   * shared composer error, which belongs to whatever the user is looking at.
+   */
+  onError?: (message: string) => void;
 }
 
 /**
- * An explicit prompt to send, instead of reading the composer. Used by launches
- * (the composer was already cleared) and by retries of a failed prompt.
+ * The first prompt of a launch, sent explicitly because the composer was already
+ * cleared when the launch began.
  */
 export interface PromptSendInput {
+  launchId: string;
+  agentId: string;
+  sessionId: string;
   prompt: string;
   attachments: PromptAttachment[];
-  clientPromptId?: string;
+  clientPromptId: string;
   /** Set when the optimistic user turn is already in the transcript. */
   turnEventIndex?: number;
+  /** False once the agent endpoint was replaced; the prompt must not go to the new one. */
+  isCurrentSource: () => boolean;
 }
