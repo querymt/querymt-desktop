@@ -54,7 +54,7 @@ beforeEach(() => {
     sessionPinPending: {}, sessionPinErrors: {}, sessionLifecyclePending: {}, sessionLifecycleErrors: {},
     sessionConfigPending: {}, promptAttachments: [], composerPrompt: '', error: null, promptFailure: null,
     sessionHistoryLoading: false, forkPending: false, loading: false, inputSubmitPending: false,
-    promptRetryPending: false, worktreePending: false, activeSessionAccess: null, activeSessionRuntime: null,
+    promptRetryPending: false, worktreePending: false, activeSessionAccess: null, activeSessionRuntime: null, activeRunBusy: false,
     activeInputDelivery: 'steer', activeRecentDelegateModels: {}, activeDelegateAssignments: null,
     activeDelegateAssignmentsLoading: false, activeDelegateAssignmentsError: null,
     activeDelegateAssignmentPending: {}, activeDelegateAssignmentConflict: false, promptFocusToken: 0
