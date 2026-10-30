@@ -333,6 +333,8 @@ export interface SessionToolCallItem {
   // The dispatch tool can finish before its delegated task does.
   delegationState?: `${DelegationUpdateState}`;
   delegationUpdatedAt?: number;
+  /** Internal join provenance; never a new wire field or a dispatch outcome. */
+  delegationObservation?: DelegationUpdateNotification;
 }
 
 export interface SessionPlanEntry {

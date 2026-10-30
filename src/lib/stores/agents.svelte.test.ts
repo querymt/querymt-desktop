@@ -3,6 +3,9 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
 import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelte';
+import SessionToolBlock from '$lib/components/session/SessionToolBlock.svelte';
+import SessionDelegatesBubble from '$lib/components/session/SessionDelegatesBubble.svelte';
+import { getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
 import SessionHeader from '$lib/components/session/SessionHeader.svelte';
 import { RequestError, type InitializeResponse, type ListSessionsRequest, type PromptResponse, type SessionConfigOption, type SessionInfo, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
 import type { AgentConfig, DesktopSessionSummary, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
@@ -6077,6 +6080,170 @@ describe('AgentsStore mesh node availability', () => {
     // The automatic failure is absorbed and never surfaces as a store error.
     expect(store.error).toBeNull();
     expect(store.agentErrors['agent-1']).toBeNull();
+  });
+});
+
+describe('AgentsStore delegation lifecycle row reconciliation', () => {
+  afterEach(cleanup);
+  const lifecycle = (state = DelegationUpdateState.Forked, seq = 2, extra: Record<string, unknown> = {}) => ({
+    version: 1, sessionId: 'session-1', delegationId: 'delegation-1', toolCallId: 'delegate-1',
+    childSessionId: 'child-1', targetAgentId: 'coder', objective: 'Check result', requestedAt: 1, updatedAt: seq,
+    state, activity: state === DelegationUpdateState.Forked ? 'live' : 'historical',
+    sourceEpoch: 'workflow-1', sessionSeq: seq, ...extra
+  });
+  const emit = (params: ReturnType<typeof lifecycle>) => mockClient.emitExtensionNotification({
+    method: 'querymt/session/delegationUpdate', params
+  });
+  const dispatch = () => mockClient.emitSessionUpdate({ sessionId: 'session-1', update: {
+    sessionUpdate: 'tool_call', toolCallId: 'delegate-1', title: 'Run delegate', status: 'completed',
+    rawInput: { target_agent_id: 'coder' }, rawOutput: { status: 'queued' }
+  } });
+  const idle = (updates: ReturnType<typeof lifecycle>[] = [], revision = 1): SessionRuntimeStatus => ({
+    phase: SessionRuntimePhase.Idle, active_run_id: null, steerable: false, pending_steering_count: 0, queued_input_count: 0,
+    observation: { availability: 'live', epoch: 'actor-1', revision },
+    delegation_activity: updates as SessionRuntimeStatus['delegation_activity']
+  });
+  const announce = (updates: ReturnType<typeof lifecycle>[], revision = 1) => mockClient.emitExtensionNotification({
+    method: 'querymt/session/runtimeChanged', params: { version: 1, session_id: 'session-1', runtime: idle(updates, revision) }
+  });
+  async function selected() {
+    const store = createStore(); await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1'; store.activeSessionId = 'session-1'; store.activeSession.sessionId = 'session-1';
+    return store;
+  }
+  function snapshot(state = DelegationUpdateState.Forked) {
+    return { audit: { events: [
+      { seq: 1, kind: { type: 'tool_call_start', data: { tool_call_id: 'delegate-1', tool_name: 'delegate' } } },
+      { seq: 2, kind: { type: 'tool_call_end', data: { tool_call_id: 'delegate-1', result: 'queued' } } }
+    ] }, delegationUpdates: [lifecycle(state, 2)] };
+  }
+
+  it.each([DelegationUpdateState.Forked, DelegationUpdateState.Completed])('joins serialized %s before tool creation into transcript and turn delegates', async (state) => {
+    const store = await selected();
+    emit(JSON.parse(JSON.stringify(lifecycle(state)))); dispatch();
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ status: 'completed', childSessionId: 'child-1', delegationState: state });
+    const view = render(SessionToolBlock, { tool: store.activeSession.toolCalls[0] });
+    const expected = state === DelegationUpdateState.Forked ? 'in_progress' : 'completed';
+    expect(view.container.querySelector(`.session-tool-status-${expected}`)).not.toBeNull();
+    render(SessionDelegatesBubble, { agentId: 'agent-1', variant: 'turn', turn: buildSessionConversation(store.activeSession)[0] });
+    await fireEvent.click(screen.getByRole('button', { name: '1 delegate in this turn' }));
+    expect(screen.getByRole('img', { name: state === DelegationUpdateState.Forked ? 'Running' : 'Completed' })).toBeInTheDocument();
+    expect(screen.getByRole('link')).toHaveAttribute('href', '/sessions/agent-1/child-1');
+  });
+
+  it('joins runtime terminal truth, ignores stale extensions, and invalidates the settled projection', async () => {
+    const store = await selected(); dispatch(); emit(lifecycle()); announce([], 1);
+    const before = buildSessionConversation(store.activeSession);
+    const view = render(SessionToolBlock, { tool: store.activeSession.toolCalls[0] });
+    announce([lifecycle(DelegationUpdateState.Completed, 3)], 2);
+    emit(lifecycle(DelegationUpdateState.Failed, 1));
+    expect(store.activeSession.toolCalls[0].delegationState).toBe('completed');
+    expect(store.activeSession.delegations?.[0].state).toBe('completed');
+    const after = buildSessionConversation(store.activeSession); expect(after).not.toBe(before);
+    const tool = after[0].content.find((item) => item.type === 'tool')!.tool;
+    await view.rerender({ tool });
+    expect(view.container.querySelector('.session-tool-status-completed .lucide-check')).not.toBeNull();
+    expect(view.container.querySelector('.animate-spin')).toBeNull();
+    expect(store.activeRunBusy).toBe(false);
+  });
+
+  it('accepts source-seeded fork and terminal facts at the retained stage watermark without changing stage liveness', async () => {
+    const store = await selected(); dispatch();
+    emit(lifecycle(DelegationUpdateState.Requested, 50, { childSessionId: undefined, stage: 'verifying', activity: 'live' }));
+    emit(lifecycle(DelegationUpdateState.Forked, 50, { forkedAt: 2, updatedAt: 50, stage: undefined, activity: 'historical' }));
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'forked', childSessionId: 'child-1' });
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    emit(lifecycle(DelegationUpdateState.Completed, 50, { finishedAt: 3, updatedAt: 50, stage: undefined }));
+    expect(store.activeSession.toolCalls[0].delegationState).toBe('completed');
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'completed', stage: 'verifying', activity: 'live', sessionSeq: 50 });
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    // A lower-order terminal cannot replace the recovered outcome or its current stage.
+    emit(lifecycle(DelegationUpdateState.Failed, 49, { finishedAt: 4, updatedAt: 60 }));
+    expect(store.activeSession.toolCalls[0].delegationState).toBe('completed');
+  });
+
+  it('heals cached Forked50 from same-owner Completed50 idempotently before any future stage', async () => {
+    const store = await selected(); dispatch(); emit(lifecycle(DelegationUpdateState.Forked, 50, { stage: 'verifying' }));
+    const recovered = lifecycle(DelegationUpdateState.Completed, 50, { stage: 'verifying', activity: 'live' });
+    emit(JSON.parse(JSON.stringify(recovered)));
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'completed', childSessionId: 'child-1' });
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'completed', sessionSeq: 50, stage: 'verifying', activity: 'live' });
+    const rows = store.activeSession.toolCalls; const observation = store.activeSession.delegations?.[0];
+    emit(JSON.parse(JSON.stringify(recovered)));
+    expect(store.activeSession.toolCalls).toEqual(rows); expect(store.activeSession.delegations?.[0]).toEqual(observation);
+    expect(store.activeSession.toolCalls).toHaveLength(1);
+    emit(lifecycle(DelegationUpdateState.Requested, 50, { activity: 'historical', stage: undefined }));
+    emit(lifecycle(DelegationUpdateState.Failed, 50, { stage: undefined }));
+    emit(lifecycle(DelegationUpdateState.Failed, 49, { updatedAt: 100 }));
+    expect(store.activeSession.toolCalls).toEqual(rows);
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'completed', sourceEpoch: 'workflow-1', sessionSeq: 50, stage: 'verifying', activity: 'live' });
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+  });
+
+  it('uses accepted sequence order consistently instead of a second row timestamp gate', async () => {
+    const store = await selected(); dispatch(); emit(lifecycle(DelegationUpdateState.Forked, 5));
+    emit(lifecycle(DelegationUpdateState.Completed, 6, { updatedAt: 4 }));
+    expect(store.activeSession.delegations?.[0].state).toBe('completed');
+    expect(store.activeSession.toolCalls[0].delegationState).toBe('completed');
+  });
+
+  it.each(['completed', 'in_progress'] as const)('marks absence-only outcome unavailable without fabricating success or running (dispatch %s)', async (status) => {
+    const store = await selected(); dispatch(); store.activeSession.toolCalls[0].status = status; emit(lifecycle());
+    mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(idle([], 2));
+    await store.refreshSessionRuntime('agent-1', 'session-1');
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'forked', activity: 'historical' });
+    expect(getSessionToolPresentation(store.activeSession.toolCalls[0])).toMatchObject({ status: 'pending', statusLabel: 'Status unavailable' });
+    expect(store.activeSession.toolCalls[0].delegationState).not.toBe('completed');
+    expect(store.activeSession.dependencyLabel).toBeNull(); expect(store.activeRunBusy).toBe(false);
+    emit(lifecycle(DelegationUpdateState.Completed, 2, { activity: 'live', stage: 'finalizing' }));
+    expect(store.activeSession.toolCalls[0].delegationState).toBe('completed');
+    expect(store.activeSession.delegations?.[0].activity).toBe('historical');
+    expect(store.activeSession.dependencyLabel).toBeNull();
+  });
+
+  it('joins a healthy direct read terminal snapshot onto existing rows', async () => {
+    const store = await selected(); dispatch(); emit(lifecycle());
+    mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(idle([lifecycle(DelegationUpdateState.Completed, 3)]));
+    await store.refreshSessionRuntime('agent-1', 'session-1');
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'completed', childSessionId: 'child-1' });
+  });
+
+  it.each(['load', 'attach'] as const)('preserves nonselected cached terminal truth across %s snapshot replacement', async (operation) => {
+    const store = await selected(); store.activeSessionId = 'other-session'; store.activeSession.sessionId = 'other-session';
+    emit(lifecycle(DelegationUpdateState.Completed, 4));
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(idle());
+    if (operation === 'load') {
+      mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+        'querymt/sessionLoadSnapshot.v1': snapshot()
+      } }, replay: [] });
+      await store.loadSession('agent-1', 'session-1');
+    } else {
+      mockClient.attachRemoteSession.mockResolvedValueOnce({ session_id: 'session-1', node_id: 'node-1', attached: true,
+        config_options: [], snapshot: snapshot() } as unknown as RemoteSessionAttachInfo);
+      await store.attachRemoteSession('agent-1', 'node-1', 'session-1');
+    }
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'completed', childSessionId: 'child-1' });
+    expect(store.activeRunBusy).toBe(false);
+  });
+
+  it('retains lifecycle arriving during load when snapshot history replaces the live candidate', async () => {
+    const store = await selected(); dispatch(); emit(lifecycle());
+    let finish!: (value: Awaited<ReturnType<typeof mockClient.loadSession>>) => void;
+    mockClient.loadSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const loading = store.loadSession('agent-1', 'session-1');
+    await vi.waitFor(() => expect(finish).toBeDefined()); emit(lifecycle(DelegationUpdateState.Completed, 4));
+    finish({ response: { configOptions: [], _meta: { 'querymt/sessionLoadSnapshot.v1': snapshot() } }, replay: [] });
+    await loading;
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'completed', childSessionId: 'child-1' });
+  });
+
+  it('rejects wrong-session activity and old-epoch lifecycle without allowing the row to bypass the cache', async () => {
+    const store = await selected(); dispatch(); emit(lifecycle());
+    emit(lifecycle(DelegationUpdateState.Completed, 10, { sourceEpoch: 'old-workflow', childSessionId: 'wrong-child' }));
+    announce([lifecycle(DelegationUpdateState.Completed, 11, { sessionId: 'another-session' })]);
+    emit(lifecycle(DelegationUpdateState.Completed, 12, { toolCallId: 'unrelated-tool' }));
+    expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'forked', childSessionId: 'child-1' });
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'forked', toolCallId: 'delegate-1' });
   });
 });
 

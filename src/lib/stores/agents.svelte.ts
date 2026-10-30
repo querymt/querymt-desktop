@@ -4006,7 +4006,9 @@ export class AgentsStore {
 
   private reconcileManagedActivity(agentId: string, sessionId: string, updates: DelegationUpdateNotification[], complete = false, allowNewSource = false) {
     const key = buildSessionKey(agentId, sessionId);
-    const merged = mergeDelegationActivity(this.sessionDelegations.get(key) ?? [], updates, complete, allowNewSource);
+    const matching = updates.filter((item) => item.sessionId === sessionId);
+    const merged = mergeDelegationActivity(this.sessionDelegations.get(key) ?? [], matching,
+      complete && matching.length === updates.length, allowNewSource);
     this.sessionDelegations.set(key, merged);
     const runtime = this.sessionRuntimeBySession[key];
     if (runtime) this.sessionRuntimeBySession = { ...this.sessionRuntimeBySession, [key]: {
@@ -4050,9 +4052,11 @@ export class AgentsStore {
   }
 
   private projectSelectedExecution(agentId: string, sessionId: string, runtime = this.sessionRuntimeBySession[buildSessionKey(agentId, sessionId)]) {
-    if (!runtime || !this.isSelectedSession(agentId, sessionId)) return;
+    if (!this.isSelectedSession(agentId, sessionId)) return;
     const key = buildSessionKey(agentId, sessionId);
     this.activeSession.delegations = this.sessionDelegations.get(key) ?? this.activeSession.delegations;
+    projectDelegationActivity(this.activeSession);
+    if (!runtime) return;
     if (runtime.active_run_id && runtime.phase !== 'idle' && runtime.phase !== 'unknown' && runtime.observation?.availability !== 'unavailable') {
       for (const tool of this.activeSession.toolCalls) {
         if (tool.runId === null && (tool.status === 'pending' || tool.status === 'in_progress')) tool.runId = runtime.active_run_id;
@@ -5316,12 +5320,16 @@ export class AgentsStore {
           const params = (notification.params ?? {}) as Parameters<typeof applyDelegationChildSession>[1];
           const sessionId = params.sessionId ?? params.session_id;
           if (sessionId) {
-            this.rememberSessionChildren(agentId, sessionId, [params.childSessionId ?? params.child_session_id]);
-            if (params.delegationId) this.reconcileManagedActivity(agentId, sessionId, [params as DelegationUpdateNotification]);
-            if (this.isSelectedSession(agentId, sessionId)) {
-              this.activeSession = applyDelegationChildSession(this.activeSession, params);
-              this.projectSelectedExecution(agentId, sessionId);
+            if (params.delegationId) {
+              this.reconcileManagedActivity(agentId, sessionId, [params as DelegationUpdateNotification]);
+              const accepted = this.sessionDelegations.get(buildSessionKey(agentId, sessionId))
+                ?.find((item) => item.delegationId === params.delegationId);
+              this.rememberSessionChildren(agentId, sessionId, [accepted?.childSessionId]);
+            } else {
+              this.rememberSessionChildren(agentId, sessionId, [params.childSessionId ?? params.child_session_id]);
+              if (this.isSelectedSession(agentId, sessionId)) this.activeSession = applyDelegationChildSession(this.activeSession, params);
             }
+            this.projectSelectedExecution(agentId, sessionId);
           }
         }
         if (notification.method === 'querymt/schedules/changed') {

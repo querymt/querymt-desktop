@@ -77,6 +77,7 @@ export function appendSessionReplay(
     nextEventIndex = currentConversationEventIndex(session);
   }
 
+  projectDelegationActivity(session);
   return session;
 }
 
@@ -524,6 +525,7 @@ export function applySessionNotification(
       break;
   }
 
+  projectDelegationActivity(next);
   return next;
 }
 
@@ -580,10 +582,37 @@ export function mergeDelegationActivity(
   const items = new Map(current.map((item) => [item.delegationId, item]));
   for (const update of incoming) {
     const previous = items.get(update.delegationId);
+    if (previous && (previous.sessionId !== update.sessionId ||
+      (previous.targetAgentId && update.targetAgentId && previous.targetAgentId !== update.targetAgentId) ||
+      (previous.toolCallId && update.toolCallId && previous.toolCallId !== update.toolCallId) ||
+      (previous.childSessionId && update.childSessionId && previous.childSessionId !== update.childSessionId))) continue;
     if (previous?.sourceEpoch && previous.sourceEpoch !== update.sourceEpoch && !allowNewSource) continue;
-    if (previous?.sourceEpoch === update.sourceEpoch && previous?.sessionSeq !== undefined &&
-      (update.sessionSeq === undefined || update.sessionSeq <= previous.sessionSeq)) continue;
-    if (previous?.activity === 'live' && update.activity !== 'live' && update.sessionSeq === undefined) continue;
+    const staleOrder = previous?.sourceEpoch === update.sourceEpoch && previous?.sessionSeq !== undefined &&
+      (update.sessionSeq === undefined || update.sessionSeq <= previous.sessionSeq);
+    const staleTime = previous && previous.sessionSeq === undefined && update.sessionSeq === undefined &&
+      (update.updatedAt < previous.updatedAt || (previous.state === 'forked' && update.state === 'requested'));
+    const terminalRegression = previous && isTerminalDelegation(previous.state) && update.state !== previous.state;
+    // History seeding can recover durable lifecycle facts behind an unchanged live stage watermark.
+    const seededFact = previous?.sourceEpoch && previous.sourceEpoch === update.sourceEpoch &&
+      previous.sessionSeq !== undefined && previous.sessionSeq === update.sessionSeq &&
+      previous.targetAgentId && previous.targetAgentId === update.targetAgentId && previous.requestedAt === update.requestedAt &&
+      ((previous.state === 'requested' && update.state === 'forked') ||
+       ((previous.state === 'requested' || previous.state === 'forked') && isTerminalDelegation(update.state)));
+    if (seededFact) {
+      items.set(update.delegationId, { ...previous, ...update, activity: previous.activity, stage: previous.stage,
+        updatedAt: Math.max(previous.updatedAt, update.updatedAt) });
+      continue;
+    }
+    if (staleOrder || staleTime || terminalRegression ||
+      (previous?.activity === 'live' && update.activity !== 'live' && update.sessionSeq === undefined)) {
+      // Late history can fill correlation metadata, never replace accepted lifecycle/order.
+      if (previous?.targetAgentId && previous.targetAgentId === update.targetAgentId &&
+        ((!previous.toolCallId && update.toolCallId) || (!previous.childSessionId && update.childSessionId))) {
+        items.set(update.delegationId, { ...previous, toolCallId: previous.toolCallId ?? update.toolCallId,
+          childSessionId: previous.childSessionId ?? update.childSessionId });
+      }
+      continue;
+    }
     items.set(update.delegationId, { ...previous, ...update });
   }
   if (complete) {
@@ -596,8 +625,59 @@ export function mergeDelegationActivity(
   return merged.length === current.length && merged.every((item, index) => item === current[index]) ? current : merged;
 }
 
+function isTerminalDelegation(state: string | undefined): boolean {
+  return state === 'completed' || state === 'failed' || state === 'cancelled';
+}
+
 export function projectDelegationActivity(session: ActiveSessionViewModel): void {
-  const live = (session.delegations ?? []).filter((item) => item.activity === 'live');
+  if (!session.delegations?.length) {
+    session.dependencyLabel = null;
+    return;
+  }
+  // One join for live, cached, replayed and snapshot observations. Dispatch completion is not child completion.
+  const byTool = new Map<string, DelegationUpdateNotification | null>();
+  for (const observation of session.delegations ?? []) {
+    if (observation.sessionId !== session.sessionId || !observation.toolCallId) continue;
+    const previous = byTool.get(observation.toolCallId);
+    byTool.set(observation.toolCallId, previous === undefined ? observation : null);
+  }
+  let joined: SessionToolCallItem[] | undefined;
+  for (const [index, tool] of session.toolCalls.entries()) {
+    const observation = byTool.get(tool.id);
+    if (!observation || tool.delegationObservation === observation ||
+      (tool.childSessionId && observation.childSessionId && tool.childSessionId !== observation.childSessionId)) continue;
+    const previous = tool.delegationObservation;
+    if (previous && (previous.delegationId !== observation.delegationId || previous.sessionId !== observation.sessionId ||
+      (previous.targetAgentId && observation.targetAgentId && previous.targetAgentId !== observation.targetAgentId))) continue;
+    if (tool.arguments && observation.targetAgentId) {
+      try {
+        const target = JSON.parse(tool.arguments)?.target_agent_id;
+        if (typeof target === 'string' && target !== observation.targetAgentId) continue;
+      } catch { /* Some providers deliver arguments as text rather than JSON. */ }
+    }
+    const terminal = isTerminalDelegation(tool.delegationState);
+    const observedTerminal = isTerminalDelegation(observation.state);
+    if (terminal && observedTerminal && tool.delegationState !== observation.state) {
+      // Only comparable retained truth can repair an older snapshot projection's terminal kind.
+      const newer = previous && previous.state === tool.delegationState && previous.sourceEpoch === observation.sourceEpoch &&
+        (previous.sessionSeq !== undefined && observation.sessionSeq !== undefined
+          ? observation.sessionSeq > previous.sessionSeq
+          : previous.sessionSeq === undefined && observation.sessionSeq === undefined && observation.updatedAt > previous.updatedAt);
+      if (!newer) continue;
+    }
+    const state = observedTerminal ? observation.state : terminal ? tool.delegationState
+      : observation.activity === 'historical' ? undefined : observation.state;
+    const childSessionId = tool.childSessionId ?? observation.childSessionId;
+    const updatedAt = terminal && !observedTerminal ? tool.delegationUpdatedAt : observation.updatedAt;
+    // Nonterminal metadata cannot establish ordering for an outcome it did not support.
+    const supporting = terminal && !observedTerminal ? previous : observation;
+    if (tool.delegationState === state && tool.childSessionId === childSessionId &&
+      tool.delegationUpdatedAt === updatedAt && tool.delegationObservation === supporting) continue;
+    joined ??= session.toolCalls.slice();
+    joined[index] = { ...tool, childSessionId, delegationState: state, delegationUpdatedAt: updatedAt, delegationObservation: supporting };
+  }
+  if (joined) session.toolCalls = joined;
+  const live = (session.delegations ?? []).filter((item) => item.sessionId === session.sessionId && item.activity === 'live');
   session.dependencyLabel = live.some((item) => item.stage === 'verifying') ? 'Verifying delegate result'
     : live.some((item) => item.stage === 'finalizing') ? 'Finalizing delegate result'
     : live.some((item) => item.stage === 'cancel_requested') ? 'Delegate cancellation requested'
@@ -881,10 +961,13 @@ export function applyDelegationChildSession(
   const childSessionId = readNonEmptyString(update.childSessionId) ?? readNonEmptyString(update.child_session_id);
   if (sessionId && current.sessionId && sessionId !== current.sessionId) return current;
   if (update.delegationId) {
-    current = { ...current, delegations: mergeDelegationActivity(current.delegations ?? [], [update as DelegationUpdateNotification]) };
-    projectDelegationActivity(current);
+    const next = { ...current, delegations: mergeDelegationActivity(current.delegations ?? [], [update as DelegationUpdateNotification]) };
+    projectDelegationActivity(next);
+    return next;
   }
   if (!toolCallId) return current;
+  // A partial/ID-only extension must not bypass a canonical observation's identity/order gates.
+  if (current.delegations?.some((item) => item.sessionId === current.sessionId && item.toolCallId === toolCallId)) return current;
 
   const target = current.toolCalls.find((tool) => tool.id === toolCallId);
   if (!target) return current;

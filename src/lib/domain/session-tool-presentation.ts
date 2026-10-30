@@ -54,8 +54,10 @@ export function getSessionToolPresentation(tool: SessionToolCallItem): SessionTo
   const resultText = formatTechnicalText(tool.result);
   const delegate = isDelegateToolName(name);
   const state = delegate ? tool.delegationState : undefined;
+  const unavailable = delegate && !state && tool.delegationObservation?.activity === 'historical';
   // A successful dispatch does not mean the delegated task has finished.
   const status = !delegate ? tool.status
+    : unavailable ? 'pending'
     : state === 'forked' ? 'in_progress'
     : state === 'completed' ? 'completed'
     : state === 'failed' || state === 'cancelled' || tool.status === 'failed' ? 'failed'
@@ -68,7 +70,7 @@ export function getSessionToolPresentation(tool: SessionToolCallItem): SessionTo
     icon: toolIcon(name),
     status,
     statusLabel: state === 'cancelled' ? 'Cancelled'
-      : delegate && !state && tool.status !== 'failed' ? 'Status unavailable'
+      : delegate && !state && (unavailable || tool.status !== 'failed') ? 'Status unavailable'
       : statusLabel(status),
     expandable: Boolean(argumentsText || resultText),
     argumentsText,

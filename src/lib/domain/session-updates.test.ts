@@ -12,7 +12,8 @@ import {
   endSessionWork,
   getNextConversationEventIndex,
   mergeMissingSessionUsage,
-  projectSessionRuntime
+  projectSessionRuntime,
+  projectDelegationActivity
 } from './session-updates';
 
 function notification(update: SessionNotification['update']): SessionNotification {
@@ -447,6 +448,72 @@ describe('applySessionNotification tool calls', () => {
 
     expect(next.toolCalls).toHaveLength(1);
     expect(next.toolCalls[0]).toMatchObject({ status: 'completed', arguments: '{}', result: 'Option B' });
+  });
+
+  it('joins retained lifecycle after bulk replay creates duplicate canonical tools', () => {
+    let session = createEmptyActiveSession(); session.sessionId = 'session-1';
+    session = applyDelegationChildSession(session, { sessionId: 'session-1', delegationId: 'd1', toolCallId: 'delegate-1',
+      state: 'completed', childSessionId: 'child-1', updatedAt: 3, sessionSeq: 3, sourceEpoch: 'workflow-1' });
+    session.toolCalls.push({ id: 'delegate-1', title: 'Run delegate', kind: 'delegate', status: 'completed' });
+    appendSessionReplay(session, [notification({ sessionUpdate: 'tool_call', toolCallId: 'delegate-1', title: 'Run delegate', status: 'completed' })]);
+    expect(session.toolCalls).toHaveLength(1);
+    expect(session.toolCalls[0]).toMatchObject({ delegationState: 'completed', childSessionId: 'child-1' });
+  });
+
+  it('keeps canonical terminal truth while enriching late missing tool and child identity', () => {
+    let session = createEmptyActiveSession(); session.sessionId = 'session-1';
+    const terminal = { sessionId: 'session-1', delegationId: 'd1', targetAgentId: 'coder', state: 'completed' as const, updatedAt: 3, sessionSeq: 3, sourceEpoch: 'workflow-1' };
+    session = applyDelegationChildSession(session, terminal);
+    session = applySessionNotification(session, notification({ sessionUpdate: 'tool_call', toolCallId: 'delegate-1', title: 'Run delegate', status: 'completed' }));
+    session = applyDelegationChildSession(session, { ...terminal, state: 'forked', updatedAt: 2, sessionSeq: 2,
+      toolCallId: 'delegate-1', childSessionId: 'child-1' });
+    expect(session.delegations?.[0]).toMatchObject({ state: 'completed', sessionSeq: 3, toolCallId: 'delegate-1' });
+    expect(session.toolCalls[0]).toMatchObject({ delegationState: 'completed', childSessionId: 'child-1' });
+    session = applyDelegationChildSession(session, { ...terminal, toolCallId: 'delegate-1', childSessionId: 'child-1', state: 'forked', sessionSeq: 4 });
+    expect(session.toolCalls[0].delegationState).toBe('completed');
+  });
+
+  it('preserves a terminal row without comparable provenance but repairs an older snapshot projection', () => {
+    let session = createEmptyActiveSession(); session.sessionId = 'session-1';
+    session.toolCalls = [{ id: 'delegate-1', title: 'Run delegate', kind: 'delegate', status: 'completed', delegationState: 'completed', delegationUpdatedAt: 9 }];
+    const update = { sessionId: 'session-1', delegationId: 'd1', toolCallId: 'delegate-1', targetAgentId: 'coder',
+      state: 'failed' as const, updatedAt: 3, sessionSeq: 3, sourceEpoch: 'workflow-1' };
+    session = applyDelegationChildSession(session, { ...update, state: 'forked', sessionSeq: 2, updatedAt: 2, childSessionId: 'child-1' });
+    expect(session.toolCalls[0]).toMatchObject({ delegationState: 'completed', delegationUpdatedAt: 9 });
+    session = applyDelegationChildSession(session, { ...update, childSessionId: 'child-1' });
+    expect(session.toolCalls[0]).toMatchObject({ delegationState: 'completed', delegationUpdatedAt: 9, childSessionId: 'child-1' });
+    expect(session.toolCalls[0].delegationObservation).toBeUndefined();
+    const snapshot = activeSessionFromLoadResponse('session-1', { _meta: { 'querymt/sessionLoadSnapshot.v1': {
+      audit: { events: [{ seq: 1, kind: { type: 'tool_call_start', data: { tool_call_id: 'delegate-1', tool_name: 'delegate' } } }] },
+      delegationUpdates: [update]
+    } } });
+    const newer = applyDelegationChildSession(createEmptyActiveSession(), { ...update, state: 'completed', sessionSeq: 4, updatedAt: 4 });
+    // A retained newer observation wins over an explicitly older projection of the same source/identity.
+    snapshot.delegations = newer.delegations;
+    projectDelegationActivity(snapshot);
+    expect(snapshot.toolCalls[0].delegationState).toBe('completed');
+    for (const state of ['forked', 'failed'] as const) {
+      snapshot.delegations = applyDelegationChildSession(createEmptyActiveSession(), {
+        ...update, state, sourceEpoch: 'another-workflow', sessionSeq: state === 'forked' ? 2 : 3
+      }).delegations;
+      projectDelegationActivity(snapshot);
+      expect(snapshot.toolCalls[0].delegationState).toBe('completed');
+      expect(snapshot.toolCalls[0].delegationObservation?.sourceEpoch).toBe('workflow-1');
+    }
+  });
+
+  it('does not join another session, conflicting child, or ambiguous delegation onto the same tool id', () => {
+    let session = createEmptyActiveSession(); session.sessionId = 'session-1';
+    session.toolCalls = [{ id: 'delegate-1', title: 'Run delegate', kind: 'delegate', status: 'completed', childSessionId: 'actual-child' }];
+    const update = { sessionId: 'other-session', delegationId: 'd1', toolCallId: 'delegate-1', childSessionId: 'wrong-child', state: 'completed' as const, updatedAt: 3 };
+    session = applyDelegationChildSession(session, update);
+    expect(session.delegations).toBeUndefined();
+    session = applyDelegationChildSession(session, { ...update, sessionId: 'session-1' });
+    expect(session.toolCalls[0]).toMatchObject({ childSessionId: 'actual-child' });
+    expect(session.toolCalls[0].delegationState).toBeUndefined();
+    session.toolCalls[0].childSessionId = undefined;
+    session = applyDelegationChildSession(session, { ...update, sessionId: 'session-1', delegationId: 'd2' });
+    expect(session.toolCalls[0].delegationState).toBeUndefined();
   });
 
   it('attaches a child session id from a live delegation update', () => {
