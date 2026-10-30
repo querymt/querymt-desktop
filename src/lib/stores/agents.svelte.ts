@@ -3432,6 +3432,17 @@ export class AgentsStore {
     this.patchLaunch(launchId, { status: 'failed', error: message });
   }
 
+  /**
+   * Fails a launch whose session setup did not complete. A still-failed launch must
+   * not keep the half-configured (or stale-source) session id, or a retry would send
+   * the first prompt there instead of creating a fresh session. The id is cleared
+   * only after `failLaunch`, which uses it to find the on-screen session.
+   */
+  private failLaunchAndForgetSession(launchId: string, message: string) {
+    this.failLaunch(launchId, message);
+    if (this.pendingLaunches[launchId]?.status === 'failed') this.patchLaunch(launchId, { sessionId: null });
+  }
+
   private removeOptimisticPrompt(clientPromptId: string) {
     const removed = new Set(this.activeSession.transcript
       .filter((item) => item.clientPromptId === clientPromptId).map((item) => item.id));
@@ -3463,11 +3474,11 @@ export class AgentsStore {
         }
       });
       if (!sessionId) {
-        this.failLaunch(launchId, failure ?? 'Failed to create session.');
+        this.failLaunchAndForgetSession(launchId, failure ?? 'Failed to create session.');
         return null;
       }
       if (!isCurrentSource()) {
-        this.failLaunch(launchId, 'The agent connection changed while the session was being created.');
+        this.failLaunchAndForgetSession(launchId, 'The agent connection changed while the session was being created.');
         return null;
       }
       this.patchLaunch(launchId, { sessionId });
