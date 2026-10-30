@@ -898,6 +898,36 @@ describe('activeSessionFromLoadResponse', () => {
     expect(normalizeHistoricalSession(session, { loadCompleted: true }).runState).toBe(runState);
   });
 
+  it.each([
+    { name: 'unfinished A while B is active', finishA: false, startBTool: false, finishB: false, lateA: false },
+    { name: 'unfinished A after B completes', finishA: false, startBTool: false, finishB: true, lateA: false },
+    { name: 'current B tool despite a late A terminal', finishA: false, startBTool: true, finishB: false, lateA: true },
+    { name: 'completed A and current B tool', finishA: true, startBTool: true, finishB: false, lateA: false }
+  ])('preserves historical tool run ownership: $name', ({ finishA, startBTool, finishB, lateA }) => {
+    const events = [
+      { kind: { type: 'run_started', data: { run_id: 'run-A' } } },
+      { kind: { type: 'tool_call_start', data: { tool_call_id: 'tool-A', tool_name: 'read_tool' } } },
+      ...(finishA ? [{ kind: { type: 'tool_call_end', data: { tool_call_id: 'tool-A', result: 'A finished', is_error: false } } }] : []),
+      { kind: { type: 'run_started', data: { run_id: 'run-B' } } },
+      ...(startBTool ? [{ kind: { type: 'tool_call_start', data: { tool_call_id: 'tool-B', tool_name: 'search_text' } } }] : []),
+      ...(lateA ? [{ kind: { type: 'run_completed', data: { run_id: 'run-A', outcome: 'completed' } } }] : []),
+      ...(finishB ? [{ kind: { type: 'run_completed', data: { run_id: 'run-B', outcome: 'completed' } } }] : [])
+    ].map((event, index) => ({ ...event, seq: index + 1 }));
+    const session = activeSessionFromLoadResponse('session-runs', {
+      _meta: { 'querymt/sessionLoadSnapshot.v1': { audit: { events } } }
+    });
+
+    expect(session.runId).toBe('run-B');
+    expect(session.runState).toBe(finishB ? 'completed' : startBTool ? 'tool-running' : 'thinking');
+    expect(session.activeToolCallId).toBe(startBTool ? 'tool-B' : null);
+    expect(session.toolCalls[0]).toMatchObject({
+      id: 'tool-A', runId: 'run-A', status: finishA ? 'completed' : 'failed',
+      result: finishA ? 'A finished' : 'Run ended before a tool result was recorded.'
+    });
+    if (!finishA) expect(session.toolCalls[0].isError).toBe(true);
+    if (startBTool) expect(session.toolCalls[1]).toMatchObject({ id: 'tool-B', runId: 'run-B', status: 'in_progress' });
+  });
+
   it('marks interrupted tools failed only when terminal lifecycle is known', () => {
     const session: ActiveSessionViewModel = {
       sessionId: 'session-lifecycle',

@@ -87,6 +87,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
   session.usage.accounting = readAccountingSnapshot(snapshot.accounting);
 
   const toolCallsById = new Map<string, SessionToolCallItem>();
+  const supersededRunIds = new Set<string>();
   const pendingDelegationToolCalls = new Map<string, string>();
   const pendingChildSessionsByDelegation = new Map<string, string>();
   const structuredPrompts = indexStructuredPrompts(snapshot);
@@ -131,7 +132,9 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
     }
 
     if (kind === 'run_started') {
-      session.runId = readString(data.run_id) ?? null;
+      const runId = readString(data.run_id) ?? null;
+      if (session.runId && runId && session.runId !== runId) supersededRunIds.add(session.runId);
+      session.runId = runId;
       session.runState = 'thinking';
       session.runStateFromLifecycle = true;
       session.activityLabel = 'Agent is working…';
@@ -305,7 +308,11 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
 
   restoreUnmatchedPrompts(session, snapshot, structuredPrompts, restoredStructuredPrompts, toolCallsById);
 
-  session.toolCalls = Array.from(toolCallsById.values());
+  // A later own run proves the earlier run ended, but not that its tools succeeded.
+  session.toolCalls = Array.from(toolCallsById.values(), (tool) =>
+    tool.runId && supersededRunIds.has(tool.runId) && (tool.status === 'pending' || tool.status === 'in_progress')
+      ? { ...tool, status: 'failed' as const, isError: true, result: tool.result ?? 'Run ended before a tool result was recorded.' }
+      : tool);
   return (snapshot.delegationUpdates ?? []).reduce(applyDelegationChildSession, normalizeHistoricalSession(session));
 }
 
@@ -414,7 +421,9 @@ export function normalizeHistoricalSession(
         : tool);
     return session;
   }
-  const activeTool = session.toolCalls.find((tool) => tool.status === 'in_progress' || tool.status === 'pending');
+  const activeTool = session.toolCalls.find((tool) =>
+    (tool.status === 'in_progress' || tool.status === 'pending') &&
+    (!session.runId || !tool.runId || tool.runId === session.runId));
   if (activeTool) {
     session.runState = 'tool-running';
     session.activeToolCallId = activeTool.id;
@@ -641,6 +650,7 @@ function mergeHistoricalToolCall(
     arguments: update.arguments ?? existing?.arguments ?? null,
     result: update.result ?? existing?.result ?? null,
     isError: update.isError ?? existing?.isError,
+    runId: update.runId ?? existing?.runId ?? null,
     eventIndex: mergeEventIndex(existing?.eventIndex, update.eventIndex),
     childSessionId: update.childSessionId ?? existing?.childSessionId ?? null
   });
