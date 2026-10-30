@@ -500,6 +500,218 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe('AgentsStore explicit remote attach runtime consistency', () => {
+  const id = 'remote-session-1';
+  const key = `agent-1:${id}`;
+  const verifier = { version: 1, sessionId: id, delegationId: 'verify-1', targetAgentId: 'coder',
+    state: DelegationUpdateState.Forked, objective: 'Check result', requestedAt: 1, updatedAt: 2,
+    activity: 'live', stage: 'verifying', sourceEpoch: 'workflow-1', sessionSeq: 17 } as const;
+  const runtime = (phase = SessionRuntimePhase.Tools, revision = 4, extra: Partial<SessionRuntimeStatus> = {}): SessionRuntimeStatus => ({
+    phase, active_run_id: phase === SessionRuntimePhase.Idle || phase === SessionRuntimePhase.Unknown ? null : 'remote-run',
+    steerable: phase === SessionRuntimePhase.Tools, pending_steering_count: 0, queued_input_count: 0,
+    observation: { availability: 'live', epoch: 'remote-epoch', revision }, delegation_activity: [], ...extra
+  });
+  const attached = (runtimeStatus?: SessionRuntimeStatus): RemoteSessionAttachInfo => ({
+    session_id: id, node_id: 'node-1', attached: true, profile_id: 'owner-profile', profile_label: 'Owner', config_options: [],
+    snapshot: { cursor: { sessionSeq: 10 }, runtimeStatus, delegationUpdates: runtimeStatus?.delegation_activity ?? [],
+      audit: { events: [{ seq: 1, timestamp: 1, kind: { type: 'prompt_received', data: { message_id: 'owner-message', content: 'Owner history' } } }] } }
+  });
+  async function storeOnSessionRoute() {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1'; store.activeSessionId = 'old-session'; store.activeSession.sessionId = 'old-session';
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle));
+    store.setRuntimePollingEnabled(true);
+    await vi.advanceTimersByTimeAsync(0);
+    mockClient.getSessionRuntimeStatus.mockClear();
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'steering');
+    return store;
+  }
+  beforeEach(() => { vi.useFakeTimers(); Object.defineProperty(document, 'hidden', { configurable: true, value: false }); });
+  afterEach(() => { delete (document as { hidden?: boolean }).hidden; });
+
+  it('hydrates silent Tools immediately and keeps fresh reads/polling through the same-route shortcut', async () => {
+    const store = await storeOnSessionRoute();
+    let first!: (value: SessionRuntimeStatus) => void;
+    let second!: (value: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus
+      .mockImplementationOnce(() => new Promise((resolve) => { first = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { second = resolve; }));
+    mockClient.attachRemoteSession.mockResolvedValueOnce(attached(runtime()));
+    await store.attachRemoteSession('agent-1', 'node-1', id);
+    expect(store.activeSessionRuntime).toMatchObject(runtime());
+    expect(store.activeSession).toMatchObject({ runId: 'remote-run', runState: 'tool-running' });
+    expect(store.activeRunBusy).toBe(true);
+    expect(store.canControlActiveRun).toBe(true);
+    store.setActiveComposerInputDelivery('steer');
+    expect(store.activeInputDelivery).toBe('steer');
+    expect(store.sessionsByAgent['agent-1'].find((item) => item.sessionId === id)).toMatchObject({
+      status: 'thinking', location: 'remote', remoteNodeId: 'node-1', remoteProfileId: 'owner-profile'
+    });
+    expect(store.activeSession.transcript[0]?.text).toBe('Owner history');
+    expect(first).toBeDefined();
+    await store.loadSession('agent-1', id);
+    expect(mockClient.loadSession).not.toHaveBeenCalled();
+    expect(second).toBeDefined();
+    first(runtime(SessionRuntimePhase.Idle, 3));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.activeSessionRuntime?.phase).toBe(SessionRuntimePhase.Tools);
+    second(runtime(SessionRuntimePhase.Tools, 5));
+    await vi.advanceTimersByTimeAsync(0);
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle, 6));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(3);
+    expect(store.activeRunBusy).toBe(false);
+  });
+
+  it('seeds idle verifier cache, polls work, retains unavailable-empty and clears healthy-empty', async () => {
+    const store = await storeOnSessionRoute();
+    let verify!: (value: SessionRuntimeStatus) => void;
+    const idle = runtime(SessionRuntimePhase.Idle, 4, { delegation_activity: [verifier] });
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { verify = resolve; }));
+    mockClient.attachRemoteSession.mockResolvedValueOnce(attached(idle));
+    await store.attachRemoteSession('agent-1', 'node-1', id);
+    expect(store.activeSessionRuntime).toMatchObject(idle);
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    expect(store.activeRunBusy).toBe(false);
+    expect(mockClient.cancelSession).not.toHaveBeenCalled();
+    verify(runtime(SessionRuntimePhase.Unknown, 4, { observation: { availability: 'unavailable' } }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.activeSession.runState).toBe('unknown');
+    expect(store.sessionRuntimeBySession[key]?.delegation_activity).toEqual([verifier]);
+    mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(idle);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
+    expect(store.activeRunBusy).toBe(false);
+    mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(runtime(SessionRuntimePhase.Idle, 4));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(store.activeSession.dependencyLabel).toBeNull();
+    expect(store.sessionRuntimeBySession[key]?.delegation_activity).toEqual([]);
+    const calls = mockClient.getSessionRuntimeStatus.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(calls);
+  });
+
+  it.each(['unavailable', 'missing-runtime', 'missing-observation'] as const)('does not invent Idle for %s attach evidence', async (kind) => {
+    const store = await storeOnSessionRoute();
+    const observed = kind === 'unavailable' ? runtime(SessionRuntimePhase.Unknown, 1, { observation: { availability: 'unavailable' } })
+      : kind === 'missing-runtime' ? undefined : runtime(SessionRuntimePhase.Idle, 1, { observation: undefined });
+    mockClient.attachRemoteSession.mockResolvedValueOnce(attached(observed));
+    mockClient.supportsQuerymtMethod.mockReturnValue(false);
+    await store.attachRemoteSession('agent-1', 'node-1', id);
+    expect(store.activeSession.runState).toBe('unknown');
+    expect(store.activeSessionRuntime?.observation?.availability).toBe('unavailable');
+    expect(store.activeRunBusy).toBe(false);
+    expect(store.sessionsByAgent['agent-1'].find((item) => item.sessionId === id)?.status).toBe('unknown');
+    expect(mockClient.getSessionRuntimeStatus).not.toHaveBeenCalled();
+  });
+
+  it('preserves newer live incarnation/workflow and captured tool against an older attach snapshot', async () => {
+    const store = await storeOnSessionRoute();
+    let finish!: (value: RemoteSessionAttachInfo) => void;
+    mockClient.attachRemoteSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    mockClient.getSessionRuntimeStatus.mockImplementation(() => new Promise(() => {}));
+    const attaching = store.attachRemoteSession('agent-1', 'node-1', id);
+    await vi.advanceTimersByTimeAsync(0);
+    const newer = runtime(SessionRuntimePhase.Tools, 1, { active_run_id: 'run-b',
+      observation: { availability: 'live', epoch: 'epoch-b', revision: 1 },
+      delegation_activity: [{ ...verifier, sourceEpoch: 'workflow-b', stage: 'finalizing', sessionSeq: 20 }] });
+    mockClient.emitExtensionNotification({ method: 'querymt/session/runtimeChanged', params: { version: 1, session_id: id, runtime: newer } });
+    mockClient.emitSessionUpdate({ sessionId: id, update: { sessionUpdate: 'tool_call_update', toolCallId: 'tool-b', title: 'Live B', status: 'in_progress' } });
+    const old = attached(runtime(SessionRuntimePhase.Idle, 99, { delegation_activity: [verifier] }));
+    old.snapshot.audit.events.push(
+      { seq: 2, kind: { type: 'run_started', data: { run_id: 'run-a' } } },
+      { seq: 3, kind: { type: 'run_completed', data: { run_id: 'run-a', outcome: 'completed' } } }
+    );
+    finish(old);
+    await attaching;
+    expect(store.activeSessionRuntime).toMatchObject(newer);
+    expect(store.sessionsByAgent['agent-1'].find((item) => item.sessionId === id)?.status).toBe('thinking');
+    expect(store.activeSession).toMatchObject({ runId: 'run-b', runState: 'tool-running', dependencyLabel: 'Finalizing delegate result' });
+    expect(store.activeSession.toolCalls).toContainEqual(expect.objectContaining({ id: 'tool-b', status: 'in_progress', runId: 'run-b' }));
+    expect(store.activeRunBusy).toBe(true);
+  });
+
+  it('rejects an attach response from a replaced client even with unchanged selection generation', async () => {
+    const store = await storeOnSessionRoute();
+    let finish!: (value: RemoteSessionAttachInfo) => void;
+    mockClient.attachRemoteSession.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const attaching = store.attachRemoteSession('agent-1', 'node-1', id);
+    await vi.advanceTimersByTimeAsync(0);
+    await store.connectAgent('agent-1', true);
+    const selected = store.activeSession;
+    finish(attached(runtime()));
+    await attaching;
+    expect(store.activeSessionId).toBe('old-session');
+    expect(store.activeSession).toBe(selected);
+    expect(store.lastRemoteAttachByAgent['agent-1']).toBeUndefined();
+  });
+
+  it('supersedes a pre-attach cache read without waiting for or accepting its old result', async () => {
+    const store = await storeOnSessionRoute();
+    let oldRead!: (value: SessionRuntimeStatus) => void;
+    let freshRead!: (value: SessionRuntimeStatus) => void;
+    mockClient.getSessionRuntimeStatus
+      .mockImplementationOnce(() => new Promise((resolve) => { oldRead = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { freshRead = resolve; }));
+    const old = store.refreshSessionRuntime('agent-1', id);
+    await vi.advanceTimersByTimeAsync(0);
+    mockClient.attachRemoteSession.mockResolvedValueOnce(attached(runtime()));
+    await store.attachRemoteSession('agent-1', 'node-1', id);
+    expect(freshRead).toBeDefined();
+    oldRead(runtime(SessionRuntimePhase.Idle, 99));
+    expect(await old).toBeNull();
+    expect(store.activeSessionRuntime?.phase).toBe(SessionRuntimePhase.Tools);
+    freshRead(runtime(SessionRuntimePhase.Tools, 5));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.activeSessionRuntime?.observation?.revision).toBe(5);
+  });
+
+  it.each(['selection', 'client'] as const)('fences a delayed attach catalog refresh after %s replacement', async (boundary) => {
+    const store = await storeOnSessionRoute();
+    let catalog!: (value: Awaited<ReturnType<typeof mockClient.listRemoteSessions>>) => void;
+    mockClient.listRemoteSessions.mockImplementationOnce(() => new Promise((resolve) => { catalog = resolve; }));
+    mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime());
+    mockClient.attachRemoteSession.mockResolvedValueOnce(attached(runtime()));
+    const attaching = store.attachRemoteSession('agent-1', 'node-1', id);
+    await vi.advanceTimersByTimeAsync(0);
+    if (boundary === 'client') await store.connectAgent('agent-1', true);
+    else {
+      mockClient.attachRemoteSession.mockResolvedValueOnce({ ...attached(runtime()), session_id: 'new-session' });
+      await store.attachRemoteSession('agent-1', 'node-1', 'new-session');
+    }
+    const selected = store.activeSession;
+    const before = store.remoteSessionsByAgent;
+    catalog({ node_id: 'node-1', total_count: 0, sessions: [] });
+    await attaching;
+    expect(store.remoteSessionsByAgent).toBe(before);
+    expect(store.activeSession).toBe(selected);
+  });
+
+  it('keeps ordinary remote load snapshot truth while its independent runtime read is pending', async () => {
+    const store = await storeOnSessionRoute();
+    const source = attached(runtime());
+    let verify!: (value: SessionRuntimeStatus) => void;
+    mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
+      location: 'remote', nodeId: 'node-1', profileId: 'owner-profile', parentSessionId: 'parent', forkOrigin: 'delegation',
+      'querymt/sessionLoadSnapshot.v1': source.snapshot
+    } }, replay: [] });
+    mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { verify = resolve; }));
+    const loading = store.loadSession('agent-1', id);
+    await vi.waitFor(() => expect(verify).toBeDefined());
+    expect(store.activeSessionRuntime).toMatchObject(runtime());
+    expect(store.activeSession.runState).toBe('tool-running');
+    expect(store.activeSession.transcript[0]?.text).toBe('Owner history');
+    expect(store.sessionsByAgent['agent-1'].find((item) => item.sessionId === id)).toMatchObject({
+      remoteNodeId: 'node-1', remoteProfileId: 'owner-profile', parentSessionId: 'parent', forkOrigin: 'delegation'
+    });
+    verify(runtime(SessionRuntimePhase.Tools, 5));
+    await vi.advanceTimersByTimeAsync(100);
+    await loading;
+    expect(store.activeRunBusy).toBe(true);
+  });
+});
+
 describe('AgentsStore visibility-aware polling', () => {
   const activeRuntime: SessionRuntimeStatus = { phase: SessionRuntimePhase.Model, active_run_id: 'run-1', steerable: true, pending_steering_count: 0, queued_input_count: 0 };
   const listed: SessionInfo = { sessionId: 'session-1', title: 'Task', cwd: '/tmp/work', updatedAt: '2026-10-20T20:00:00Z' };

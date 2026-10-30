@@ -4254,6 +4254,16 @@ export class AgentsStore {
       if ((hydrated || fresh) && this.isSelectedSession(agentId, sessionId)) {
         this.acknowledgeSession(agentId, sessionId);
         this.rememberRecentSession(agentId, sessionId);
+        if (hydrated) {
+          const record = this.initializedClientRecord(agentId);
+          if (record) {
+            this.projectSelectedExecution(agentId, sessionId);
+            // Keep the hydrated handoff's fresh runtime query independent of the first-load shortcut.
+            this.cancelSessionRuntimeRefresh(sessionKey);
+            this.sessionRuntimeRefreshGenerations.set(sessionKey, (this.sessionRuntimeRefreshGenerations.get(sessionKey) ?? 0) + 1);
+            void this.refreshSessionRuntime(agentId, sessionId, record.client).catch(() => null);
+          }
+        }
         await this.refreshDelegateAssignments(agentId, sessionId);
         return;
       }
@@ -5667,12 +5677,13 @@ export class AgentsStore {
     return result;
   }
 
-  async refreshRemoteSessionsForAgent(agentId: string, node_id: string) {
+  async refreshRemoteSessionsForAgent(agentId: string, node_id: string, isCurrent = () => true) {
     const record = await this.connectInitializedRecord(agentId);
     if (!record) {
       throw new Error('Failed to connect to the agent.');
     }
     const result = await record.client.listRemoteSessions({ node_id });
+    if (!isCurrent() || this.clients.get(agentId) !== record) return result;
     this.remoteSessionsByAgent = {
       ...this.remoteSessionsByAgent,
       [agentId]: {
@@ -5750,35 +5761,41 @@ export class AgentsStore {
   async attachRemoteSession(agentId: string, node_id: string, session_id: string, expectedGeneration?: number) {
     const generation = expectedGeneration ?? ++this.sessionSelectionGeneration;
     const remoteSession = this.remoteSessionsByAgent[agentId]?.[node_id]?.sessions.find((session) => session.id === session_id);
-    let result: RemoteSessionAttachInfo;
+    let record: AgentClientRecord | undefined;
+    let unsubscribe = () => {};
     try {
-      const record = await this.connectInitializedRecord(agentId);
+      record = await this.connectInitializedRecord(agentId);
       if (generation !== this.sessionSelectionGeneration) return session_id;
-      if (!record) {
-        throw new Error('Failed to connect to the agent.');
-      }
-      result = await record.client.attachRemoteSession({ node_id, session_id });
-      if (generation !== this.sessionSelectionGeneration) return session_id;
+      if (!record) throw new Error('Failed to connect to the agent.');
+      const key = buildSessionKey(agentId, session_id);
+      this.sessionRuntimeRefreshGenerations.set(key, (this.sessionRuntimeRefreshGenerations.get(key) ?? 0) + 1);
+      const initialRuntime = this.sessionRuntimeBySession[key];
+      const initialActivity = this.sessionDelegations.get(key);
+      // Capture only this attach's session updates; extensions keep their normal ordered cache path.
+      const replay: SessionNotification[] = [];
+      unsubscribe = record.client.onSessionUpdate((notification) => {
+        if (notification.sessionId === session_id) replay.push(notification);
+      });
+      const result = await record.client.attachRemoteSession({ node_id, session_id });
+      unsubscribe();
+      if (generation !== this.sessionSelectionGeneration || this.clients.get(agentId) !== record) return session_id;
       if (result.session_id !== session_id || result.node_id !== node_id) {
         throw new Error('Remote attachment identity does not match the requested session.');
       }
+      this.lastRemoteAttachByAgent = { ...this.lastRemoteAttachByAgent, [agentId]: result };
+      const discovered = this.sessionsByAgent[agentId]?.find((session) => session.sessionId === session_id && session.remoteNodeId === node_id);
+      return await this.hydrateRemoteAttach(agentId, node_id, result, remoteSession ?? {
+        id: session_id, node_id, title: discovered?.title, cwd: discovered?.cwd, updated_at: discovered?.updatedAt ?? undefined,
+        profile_id: discovered?.remoteProfileId, profile_label: discovered?.remoteProfileLabel
+      }, true, true, { record, initialRuntime, initialActivity, replay });
     } catch (error) {
-      // A fallback load owns its cleanup; only an explicit attachment can
-      // inherit loading from the operation it superseded.
-      if (expectedGeneration === undefined && generation === this.sessionSelectionGeneration) {
-        this.sessionHistoryLoading = false;
-      }
+      // A fallback load owns its cleanup; only an explicit attachment can inherit loading.
+      if (expectedGeneration === undefined && generation === this.sessionSelectionGeneration &&
+        (!record || this.clients.get(agentId) === record)) this.sessionHistoryLoading = false;
       throw error;
+    } finally {
+      unsubscribe();
     }
-    this.lastRemoteAttachByAgent = {
-      ...this.lastRemoteAttachByAgent,
-      [agentId]: result
-    };
-    const discovered = this.sessionsByAgent[agentId]?.find((session) => session.sessionId === session_id && session.remoteNodeId === node_id);
-    return this.hydrateRemoteAttach(agentId, node_id, result, remoteSession ?? {
-      id: session_id, node_id, title: discovered?.title, cwd: discovered?.cwd, updated_at: discovered?.updatedAt ?? undefined,
-      profile_id: discovered?.remoteProfileId, profile_label: discovered?.remoteProfileLabel
-    }, true);
   }
 
   /** Publish the owner's snapshot and metadata after attachment validation. */
@@ -5790,33 +5807,53 @@ export class AgentsStore {
       profile_id?: string | null; profile_label?: string | null },
     preserveSelectionGeneration = false,
     /** False publishes the session (catalog, model, preferences) without taking over the view. */
-    select = true
+    select = true,
+    request?: {
+      record: AgentClientRecord;
+      initialRuntime: SessionRuntimeStatus | null | undefined;
+      initialActivity: DelegationUpdateNotification[] | undefined;
+      replay: SessionNotification[];
+    }
   ): Promise<string> {
     const config = this.configs.find((candidate) => candidate.id === agentId);
     if (!config) throw new Error(`Unable to locate agent ${agentId}.`);
 
     const sessionId = result.session_id;
+    const key = buildSessionKey(agentId, sessionId);
+    const record = request?.record ?? this.initializedClientRecord(agentId);
+    const snapshotIsCurrent = this.sessionRuntimeBySession[key] === request?.initialRuntime &&
+      this.sessionDelegations.get(key) === request?.initialActivity;
+    if (select) this.resetActiveSession(agentId, sessionId, preserveSelectionGeneration);
+    const generation = this.sessionSelectionGeneration;
+    const isCurrent = () => (!select || (generation === this.sessionSelectionGeneration && this.isSelectedSession(agentId, sessionId))) &&
+      (!record || this.clients.get(agentId) === record);
+    const response = { _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot } };
     const configOptions = result.config_options ?? [];
+    const snapshot = activeSessionFromLoadResponse(sessionId, response);
+    snapshot.configOptions = configOptions;
     if (select) {
-      this.resetActiveSession(agentId, sessionId, preserveSelectionGeneration);
-      const snapshot = activeSessionFromLoadResponse(sessionId, {
-        _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
-      });
-      snapshot.configOptions = configOptions;
-      this.activeSession = normalizeHistoricalSession(snapshot, { loadCompleted: true });
       this.rememberSnapshotUserMessages(snapshot);
+      const replay = (request?.replay ?? []).filter((notification) => !this.isSnapshotUserEcho(notification));
+      this.activeSession = appendSessionReplay(snapshot, replay);
+      for (const { update } of replay) {
+        if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') continue;
+        const tool = this.activeSession.toolCalls.find((item) => item.id === update.toolCallId);
+        if (tool && tool.runId === undefined && (tool.status === 'pending' || tool.status === 'in_progress')) tool.runId = null;
+      }
+      if (record) record.recentSessionUpdateKeys = replay.map(getSessionNotificationKey).slice(-200);
       this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
-      this.reconcileInputStatesFromSnapshot(agentId, sessionId, {
-        _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
-      });
+      this.reconcileInputStatesFromSnapshot(agentId, sessionId, response);
     }
     this.applySessionConfigOptionsSnapshot(agentId, sessionId, configOptions);
     const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
+    const hasUserHistory = snapshot.transcript.some((item) => item.kind === 'user_message_chunk') ? true : current?.hasUserHistory;
+    const cachedRuntime = this.sessionRuntimeBySession[key];
     const summary: DesktopSessionSummary = {
       ...current,
       agentId,
       agentName: config.name,
       sessionId,
+      hasUserHistory,
       relationshipKnown: current?.relationshipKnown ?? false,
       title: remoteSession.title?.trim() || sessionId,
       cwd: remoteSession.cwd ?? '',
@@ -5831,12 +5868,20 @@ export class AgentsStore {
       remoteProfileLabel: result.profile_label === undefined &&
         (result.profile_id === undefined || result.profile_id === remoteSession.profile_id)
         ? remoteSession.profile_label ?? undefined : result.profile_label ?? undefined,
-      status: 'idle'
+      status: cachedRuntime?.observation ? runtimeSessionStatus(cachedRuntime, hasUserHistory) : 'unknown'
     };
     this.sessionsByAgent = {
       ...this.sessionsByAgent,
       [agentId]: mergeSessions(this.sessionsByAgent[agentId] ?? [], [summary])
     };
+    this.reconcileManagedActivity(agentId, sessionId, snapshot.delegations ?? [], false, snapshotIsCurrent);
+    const snapshotRuntime = getSnapshotRuntimeStatus(response);
+    this.reconcileSessionRuntime(agentId, sessionId, snapshotRuntime?.observation ? snapshotRuntime : {
+      phase: 'unknown' as SessionRuntimeStatus['phase'], active_run_id: null, steerable: false,
+      pending_steering_count: 0, queued_input_count: 0, observation: { availability: 'unavailable' }
+    }, snapshotIsCurrent, snapshotIsCurrent);
+    this.projectSelectedExecution(agentId, sessionId);
+    if (select && record) void this.refreshSessionRuntime(agentId, sessionId, record.client).catch(() => null);
     // Resolve owner-local model identities only after publishing the owner node.
     this.restoreSessionModel(agentId, sessionId, configOptions, {
       _meta: { 'querymt/sessionLoadSnapshot.v1': result.snapshot }
@@ -5846,8 +5891,8 @@ export class AgentsStore {
     if (select) this.hydratedRemoteSessionKeys.add(buildSessionKey(agentId, sessionId));
     this.rememberRecentSession(agentId, sessionId);
     // Attachment is committed; a retryable catalog refresh must not fail its load.
-    await this.refreshRemoteSessionsForAgent(agentId, nodeId).catch((error) => {
-      console.warn('Remote session attached, but catalog refresh failed', error);
+    await this.refreshRemoteSessionsForAgent(agentId, nodeId, isCurrent).catch((error) => {
+      if (isCurrent()) console.warn('Remote session attached, but catalog refresh failed', error);
     });
     return sessionId;
   }
