@@ -14,7 +14,7 @@ export function session(overrides: Partial<ActiveSessionViewModel> = {}): Active
     activeToolCallId: null,
     lastStopReason: null,
     lastError: null,
-    usage: { contextUsed: null, contextLimit: null, cumulativeCostUsd: null, activeWorkMs: 0, activeWorkStartedAt: null },
+    usage: { contextUsed: null, contextLimit: null, standardCostUsd: null, activeWorkMs: 0, activeWorkStartedAt: null },
     undo: { stack: [], pendingOperation: null, lastRevertedFiles: [], lastMessage: null },
     ...overrides
   };

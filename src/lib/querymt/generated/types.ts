@@ -3,12 +3,90 @@
 */
 
 /**
+ * Budget valuation of a cycle. It uses manual rates where configured, so it
+ * is reported separately from API spend and never replaces it.
+ */
+export interface AccountingBudgetSnapshot {
+	knownSubtotalUsd: number;
+	completeTotalUsd: number | null;
+	/**
+	 * Settled reasons the budget valuation is incomplete. In-flight attempts
+	 * are not a reason.
+	 */
+	reasons: Array<Record<string, unknown>>;
+	incompleteAttempts: number;
+	/** The cap is enforced against the known subtotal only. */
+	bestEffort: boolean;
+}
+
+/** Which kinds of billing a scope contains. */
+export enum AccountingBillingScope {
+	/** No settled attempt yet. */
+	Empty = "empty",
+	/** Only metered (or explicitly zero-priced) API attempts. */
+	Metered = "metered",
+	/**
+	 * Only attempts excluded from API cost (subscription/OAuth). Never a
+	 * known zero-dollar invoice.
+	 */
+	Excluded = "excluded",
+	/**
+	 * Metered attempts alongside excluded ones; amounts cover the metered
+	 * attempts only.
+	 */
+	Mixed = "mixed",
+}
+
+/** API-spend accounting for one scope (session or cycle). */
+export interface AccountingScopeSnapshot {
+	/** Supported charges that are individually known. */
+	knownSubtotalUsd: number;
+	/** Complete supported estimate, or an explicit `null`. */
+	completeTotalUsd: number | null;
+	/** Whether `complete_total_usd` is available. */
+	complete: boolean;
+	billing: AccountingBillingScope;
+	/** Why a complete total is unavailable (unresolved attempts first). */
+	reasons: Array<Record<string, unknown>>;
+	pricedAttempts: number;
+	excludedAttempts: number;
+	unresolvedAttempts: number;
+	incompleteAttempts: number;
+	/** Retained local generation with no accounting basis (legacy history). */
+	unaccountedGenerations: number;
+}
+
+/** The active execution cycle's accounting. */
+export interface AccountingCycleSnapshot {
+	cycleId: string;
+	scope: AccountingScopeSnapshot;
+	budget: AccountingBudgetSnapshot;
+}
+
+/** Versioned replacement accounting state. */
+export interface AccountingSnapshot {
+	version: number;
+	/** Session-lifetime API spend. */
+	session: AccountingScopeSnapshot;
+	/**
+	 * The cycle of the most recent main-response attempt, or an explicit
+	 * `null` when none has been recorded. It is never inferred from
+	 * whichever auxiliary attempt settled last.
+	 */
+	cycle: AccountingCycleSnapshot | null;
+}
+
+/**
  * All agent event kinds.
  * Typeshare-annotated: generated for TypeScript and Swift.
  * Uses adjacently tagged serde (`tag = "type", content = "data"`) for typeshare compatibility.
  */
 export type AgentEventKind = 
 	| { type: "session_created", data?: undefined }
+	| { type: "session_workspace_bound", data: {
+	workspace: SessionWorkspaceView;
+	cwd?: string;
+}}
 	| { type: "prompt_received", data: {
 	content: string;
 	message_id?: string;
@@ -38,6 +116,10 @@ export type AgentEventKind =
 	| { type: "run_completed", data: {
 	run_id: string;
 	outcome: string;
+	/** Why the run stopped; set only when `outcome` is `"stopped"`. */
+	stop_type?: StopType;
+	/** Human-readable stop reason; set only when `outcome` is `"stopped"`. */
+	reason?: string;
 }}
 	| { type: "steering_accepted", data: {
 	run_id: string;
@@ -191,6 +273,11 @@ export type AgentEventKind =
 	context_tokens: number;
 	/** Execution progress metrics (steps/turns) */
 	metrics: ExecutionMetrics;
+	/**
+	 * Operation/attempt identities and known subtotal behind `cost_usd`.
+	 * Absent on events written before accounting records existed.
+	 */
+	accounting?: RequestAccounting;
 }}
 	| { type: "provider_changed", data: {
 	provider: string;
@@ -265,6 +352,25 @@ export type AgentEventKind =
 	/** Execution metrics at time of stop */
 	metrics: ExecutionMetrics;
 }}
+	/**
+	 * A reply was cut off by the output-token limit and the agent recovered
+	 * instead of stopping. Emitted once per escalation or continuation.
+	 */
+	| { type: "output_limit_recovery", data: {
+	/** Turn the recovery belongs to (conversation turn count at the time). */
+	turn: number;
+	/** 1-based attempt number within the turn, per action. */
+	attempt: number;
+	action: OutputLimitRecoveryAction;
+	/** Output-token cap of the request that was cut off, when known. */
+	from_max_tokens?: number;
+	/** Output-token cap requested next, when the recovery changes it. */
+	to_max_tokens?: number;
+	/** The cut-off reply carried only reasoning. */
+	thinking_only?: boolean;
+	/** Streamed message that was discarded; clients should drop it. */
+	discarded_message_id?: string;
+}}
 	/** Emitted when a prompt is queued because another operation is executing */
 	| { type: "session_queued", data: {
 	/** Reason for queueing (e.g., "waiting for previous operation to complete") */
@@ -311,9 +417,42 @@ export type AgentEventKind =
 	| { type: "delegate_models_changed", data: {
 	revision?: number;
 }}
+	/**
+	 * Output of a native `/worktree` command, delivered to the issuing
+	 * session as an agent message. Transient: the authoritative state lives in
+	 * the workspace registry, so it is neither journaled nor replayed.
+	 */
+	| { type: "worktree_command_output", data: {
+	text: string;
+}}
+	/**
+	 * Ownership of the session's managed checkout moved to a successor
+	 * session. Emitted on the previous owner's stream and replayed on load.
+	 */
+	| { type: "worktree_ownership_transferred", data: {
+	workspace_id: string;
+	successor_session_id: string;
+	summary_seeded: boolean;
+}}
+	/**
+	 * The session's managed workspace was archived: the session is now
+	 * read-only. Emitted on the owner's stream and replayed on load.
+	 */
+	| { type: "worktree_archived", data: {
+	workspace_id: string;
+	/** The session that issued the archive, when known. */
+	by_session_id?: string;
+}}
 	| { type: "delegation_requested", data: {
 	delegation: Delegation;
+	batch_id?: string;
 	tool_call_id?: string;
+	/**
+	 * Parent execution cycle that requested the delegation. Auxiliary
+	 * generation (the planning summary) is charged to this cycle even if
+	 * it settles after a newer cycle began. Absent on older events.
+	 */
+	cycle_id?: string;
 }}
 	| { type: "delegation_completed", data: {
 	delegation_id: string;
@@ -543,6 +682,17 @@ export type AgentEventKind =
 	scope: string;
 	consolidation_public_id: string;
 	source_count: number;
+}}
+	/**
+	 * A provider attempt is about to be dispatched. An unmatched start is
+	 * unresolved spend, not proof of a charge.
+	 */
+	| { type: "llm_attempt_started", data: {
+	start: AttemptStart;
+}}
+	/** Accounting for a dispatched attempt (identified by `attempt_id`). */
+	| { type: "llm_attempt_settled", data: {
+	settlement: AttemptSettlement;
 }};
 
 /**
@@ -611,6 +761,135 @@ export interface AttachPendingElicitationSessionResponse {
 export interface AttachRemoteSessionRequest {
 	node_id: string;
 	session_id: string;
+}
+
+/** Why an attempt was dispatched. */
+export enum AttemptPurpose {
+	/** The main assistant response for a prompt. */
+	MainResponse = "main_response",
+	/** A context-compaction summary. */
+	Compaction = "compaction",
+	/** A delegation summary generated for a parent. */
+	DelegationSummary = "delegation_summary",
+}
+
+/**
+ * Identity and ownership of one attempt, shared by start and settlement.
+ * 
+ * `attempt_id` is the idempotency key: it is unique per dispatched attempt,
+ * stable across settlement re-appends, and distinct for each retry.
+ * `operation_id` groups the attempts of one logical operation.
+ */
+export interface AttemptRef {
+	operation_id: string;
+	attempt_id: string;
+	/** Zero-based position of this attempt within its operation. */
+	attempt_index: number;
+	/** Session that initiated (and is charged for) the attempt. */
+	session_id: string;
+	/**
+	 * Execution cycle that initiated the attempt. Retained even if the
+	 * attempt settles after a newer cycle has begun.
+	 */
+	cycle_id: string;
+	purpose: AttemptPurpose;
+}
+
+/** What is known about the usage reported for an attempt. */
+export enum UsageDisposition {
+	/** The provider reported its final usage. */
+	Final = "final",
+	/** The attempt was interrupted; the usage is what had arrived. */
+	Partial = "partial",
+	/** Dispatched, but no usage is available and billing is unknown. */
+	Unavailable = "unavailable",
+	/** The provider confirmed a rejection that is not billed. */
+	NotBillable = "not_billable",
+	/** Abandoned before any network dispatch. */
+	NotSent = "not_sent",
+}
+
+/** How the attempt ended. */
+export enum AttemptOutcome {
+	Succeeded = "succeeded",
+	Cancelled = "cancelled",
+	ProviderRejected = "provider_rejected",
+	TransportFailure = "transport_failure",
+	/**
+	 * The provider responded, but the output failed validation (for example
+	 * an empty or refused summary). Its usage is still accountable.
+	 */
+	OutputRejected = "output_rejected",
+	/** Rejected locally before anything was sent to the provider. */
+	LocalFailure = "local_failure",
+}
+
+/** Which pricing the catalog valuation used. */
+export enum PricingApplicability {
+	/** The pricing bound at dispatch applied. */
+	Selected = "selected",
+	/**
+	 * The provider reported a different effective model and a trustworthy
+	 * applicable pricing basis was bound instead.
+	 */
+	Rebound = "rebound",
+	/**
+	 * The reported effective model makes the selected pricing inapplicable
+	 * and no other basis is available; the valuation is incomplete.
+	 */
+	Inapplicable = "inapplicable",
+}
+
+/** Appended durably once the attempt's accounting is known. */
+export interface AttemptSettlement {
+	attempt: AttemptRef;
+	disposition: UsageDisposition;
+	outcome: AttemptOutcome;
+	/** Usage as reported; `None` when unavailable. Never fabricated. */
+	usage?: any;
+	/**
+	 * Effective provider/model reported by provenance, when it differs from
+	 * or confirms the request.
+	 */
+	effective_provider?: string;
+	effective_model?: string;
+	pricing_applicability: PricingApplicability;
+	/**
+	 * The pricing the catalog valuation actually used (differs from the
+	 * start snapshot only when `Rebound`).
+	 */
+	pricing?: any;
+	/** Catalog/API-spend valuation, recorded so replay never reprices. */
+	valuation: any;
+	/** Manual budget valuation using the start's budget snapshot, if any. */
+	budget_valuation?: any;
+}
+
+/** How the attempt was dispatched. */
+export enum DispatchMode {
+	Streaming = "streaming",
+	NonStreaming = "non_streaming",
+}
+
+/** Appended durably before the attempt is dispatched. */
+export interface AttemptStart {
+	attempt: AttemptRef;
+	mode: DispatchMode;
+	/** Requested provider. */
+	provider: string;
+	/** Requested model. */
+	model: string;
+	/** Scheme and host of the endpoint, when known. See [`non_secret_route`]. */
+	route?: string;
+	/**
+	 * Billing class bound at dispatch. `Excluded` attempts (subscription or
+	 * OAuth-backed) never acquire catalog charges.
+	 */
+	billing: string;
+	/** Catalog/API pricing snapshot bound at dispatch, if any. */
+	pricing?: any;
+	/** Separate manual budget pricing snapshot, when configured. */
+	budget_pricing?: any;
 }
 
 /** Task kind determines lifecycle and completion semantics */
@@ -714,6 +993,13 @@ export interface Delegation {
 	verification_spec?: any;
 	/** AI-generated summary of parent planning conversation for coder context */
 	planning_summary?: string;
+	/**
+	 * Execution isolation for this delegate. Requested policy from the
+	 * delegate tool/request, persisted as the resolved policy (`shared` or
+	 * `isolated`) once the parent's execution mode is known. Legacy rows
+	 * without the column deserialize as `inherit`.
+	 */
+	isolation?: string;
 	status: DelegationStatus;
 	/** Number of retry attempts for this objective */
 	retry_count: number;
@@ -765,6 +1051,23 @@ export interface AuthProviderStatus {
 	env_var_name?: string;
 	supports_oauth: boolean;
 	preferred_method?: string;
+}
+
+/**
+ * Returned cache-write duration breakdown.
+ * 
+ * Tiers *partition* [`Usage::cache_write`]: they are a breakdown of the
+ * aggregate, never additional tokens, and no total (context, telemetry,
+ * billing) may add them on top of it. `None` is *absent* (the provider did
+ * not say), which is distinct from an explicit `Some(0)`. Tier counts that
+ * disagree with the aggregate are inconsistent; valuation reports that as
+ * uncertainty instead of choosing one side.
+ */
+export interface CacheWriteTiers {
+	/** Tokens written with a five-minute lifetime. */
+	five_minute?: number;
+	/** Tokens written with a one-hour lifetime. */
+	one_hour?: number;
 }
 
 export interface ControlAgentInfo {
@@ -1306,6 +1609,27 @@ export interface RemoteSessionsRequest {
 	limit?: number;
 }
 
+/**
+ * Accounting detail accompanying a derived `LlmRequestEnd`.
+ * 
+ * `LlmRequestEnd.cost_usd` is a presentation figure: the complete supported
+ * cost of the whole logical operation (every attempt, retries included), or
+ * `None`. This record carries the identifiers consumers need to deduplicate
+ * against the durable attempt records, and the known subtotal and
+ * completeness when the complete figure is unavailable. It is never an
+ * additional ledger entry.
+ */
+export interface RequestAccounting {
+	operation_id: string;
+	/** Every attempt of the operation, in dispatch order. */
+	attempt_ids: string[];
+	/** Known charges across the operation's attempts. */
+	known_subtotal_usd: number;
+	/** True only when `LlmRequestEnd.cost_usd` is a complete total. */
+	complete: boolean;
+	reasons: any;
+}
+
 export interface RevokeMeshInviteRequest {
 	invite_id: string;
 }
@@ -1366,6 +1690,28 @@ export enum RemoteSessionConnectionState {
 	Disconnected = "disconnected",
 }
 
+/** Durable managed-workspace provenance; execution cwd stays on the session item. */
+export interface SessionWorkspaceView {
+	workspace_id: string;
+	repository_id: string;
+	/**
+	 * Project grouping key: the cwd this workspace was created from.
+	 * Stable across archive and removal.
+	 */
+	source_cwd?: string;
+	project_name: string;
+	checkout_path: string;
+	branch: string;
+	baseline_mode: string;
+	baseline_commit?: string;
+	lifecycle: string;
+	last_error?: string;
+	/** Session that currently owns (writes in) the checkout. */
+	owner_session_id?: string;
+	/** Session ownership was handed off to, once handoff exists. */
+	handed_off_to?: string;
+}
+
 export interface SessionSummary {
 	session_id: string;
 	name?: string;
@@ -1383,6 +1729,8 @@ export interface SessionSummary {
 	attached?: boolean;
 	connection_state?: RemoteSessionConnectionState;
 	runtime_state?: string;
+	/** Managed-workspace view; absent for local sessions. */
+	workspace?: SessionWorkspaceView;
 }
 
 export interface SessionGroup {
@@ -1448,6 +1796,12 @@ export interface UserPromptRecord {
 export interface SessionLoadSnapshot {
 	audit: AuditView;
 	cursor: StreamCursor;
+	/**
+	 * Authoritative replacement accounting at `cursor`, reduced from the same
+	 * audit events by the shared accounting reducer. Present even when
+	 * historical replay is skipped or the context limit is unknown.
+	 */
+	accounting: AccountingSnapshot;
 	delegationUpdates: DelegationUpdateNotification[];
 	userPrompts?: UserPromptRecord[];
 }
@@ -1529,7 +1883,15 @@ export interface UndoStackResponse {
 	undo_stack: UndoStackFrameResponse[];
 }
 
-/** Represents the usage of tokens in a tool call, supporting multiple JSON formats. */
+/**
+ * Represents the usage of tokens in a tool call, supporting multiple JSON formats.
+ * 
+ * The five token counters are mutually exclusive categories: each token of an
+ * attempt appears in exactly one of `input_tokens` (uncached input),
+ * `output_tokens` (non-reasoning output), `reasoning_tokens`, `cache_read`, or
+ * `cache_write`. Totals add all five once; [`Usage::cache_write_tiers`] is
+ * detail about `cache_write` and is never added.
+ */
 export interface Usage {
 	/** Number of input tokens. */
 	input_tokens?: number;
@@ -1541,6 +1903,11 @@ export interface Usage {
 	cache_read?: number;
 	/** Tokens used to create a new cache entry. */
 	cache_write?: number;
+	/**
+	 * Optional duration breakdown of `cache_write` (see [`CacheWriteTiers`]).
+	 * `None` means the provider reported no breakdown.
+	 */
+	cache_write_tiers?: CacheWriteTiers;
 }
 
 /**
@@ -1596,12 +1963,28 @@ export type EventEnvelope =
 export enum ForkOrigin {
 	User = "user",
 	Delegation = "delegation",
+	/**
+	 * A sibling started from a source session with no history copied
+	 * (`/worktree create` children and handoff successors).
+	 */
+	Worktree = "worktree",
 }
 
 /** Fork point type */
 export enum ForkPointType {
 	MessageIndex = "message_index",
 	ProgressEntry = "progress_entry",
+}
+
+/**
+ * What an output-limit recovery step did.
+ * Typeshare-annotated: generated for TypeScript and Swift.
+ */
+export enum OutputLimitRecoveryAction {
+	/** The cut-off reply was discarded and the request retried at the model's output ceiling. */
+	Escalate = "escalate",
+	/** The run continued with an instruction to resume without recap. */
+	Continue = "continue",
 }
 
 export enum SessionScope {

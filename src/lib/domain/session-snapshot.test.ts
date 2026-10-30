@@ -5,6 +5,15 @@ import { applySessionNotification } from './session-updates';
 import { buildSessionToolDiffs } from './session-tool-diff';
 import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession } from './session-snapshot';
 
+const snapshotAccounting = {
+  version: 1,
+  session: {
+    knownSubtotalUsd: 0.125, completeTotalUsd: 0.125, complete: true, billing: 'metered', reasons: [],
+    pricedAttempts: 1, excludedAttempts: 0, unresolvedAttempts: 0, incompleteAttempts: 0, unaccountedGenerations: 0
+  },
+  cycle: null
+};
+
 describe('getSnapshotProviderChange', () => {
   it('returns the last valid provider change including its mesh node', () => {
     const change = getSnapshotProviderChange({
@@ -426,10 +435,11 @@ describe('activeSessionFromLoadResponse', () => {
     });
   });
 
-  it('restores context, cumulative cost, and completed active work from QueryMT snapshots', () => {
+  it('restores context, authoritative accounting, and completed active work from QueryMT snapshots', () => {
     const session = activeSessionFromLoadResponse('session-usage', {
       _meta: {
         'querymt/sessionLoadSnapshot.v1': {
+          accounting: snapshotAccounting,
           audit: {
             events: [
               {
@@ -460,10 +470,26 @@ describe('activeSessionFromLoadResponse', () => {
     expect(session.usage).toEqual({
       contextUsed: 48_000,
       contextLimit: 200_000,
-      cumulativeCostUsd: 0.125,
+      standardCostUsd: null,
+      accounting: snapshotAccounting,
       activeWorkMs: 23_000,
       activeWorkStartedAt: null
     });
+  });
+
+  it('never derives money from request-end cumulative costs', () => {
+    const session = activeSessionFromLoadResponse('session-usage', { _meta: { 'querymt/sessionLoadSnapshot.v1': { audit: { events: [
+      { seq: 1, kind: { type: 'llm_request_end', data: { context_tokens: 10, cumulative_cost_usd: 0.9 } } }
+    ] } } } });
+    expect(session.usage.accounting).toBeUndefined();
+  });
+
+  it('hydrates accounting without historical events or a context limit', () => {
+    const accounting = { ...snapshotAccounting, session: { ...snapshotAccounting.session, completeTotalUsd: null, complete: false,
+      unresolvedAttempts: 1, reasons: [{ kind: 'unresolved_attempt' }] } };
+    const session = activeSessionFromLoadResponse('session-usage', { _meta: { 'querymt/sessionLoadSnapshot.v1': { accounting, audit: { events: [] } } } });
+    expect(session.usage.contextLimit).toBeNull();
+    expect(session.usage.accounting?.session).toMatchObject({ completeTotalUsd: null, unresolvedAttempts: 1 });
   });
 
   it('does not count incomplete historical work spans as wall-clock session age', () => {
@@ -899,7 +925,7 @@ describe('activeSessionFromLoadResponse', () => {
       usage: {
         contextUsed: null,
         contextLimit: null,
-        cumulativeCostUsd: null,
+        standardCostUsd: null,
         activeWorkMs: 0,
         activeWorkStartedAt: null
       },
@@ -946,7 +972,7 @@ describe('activeSessionFromLoadResponse', () => {
       usage: {
         contextUsed: null,
         contextLimit: null,
-        cumulativeCostUsd: null,
+        standardCostUsd: null,
         activeWorkMs: 0,
         activeWorkStartedAt: null
       },

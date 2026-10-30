@@ -1,5 +1,5 @@
 import type { SessionNotification } from '@agentclientprotocol/sdk';
-import { readUsageBreakdown } from '$lib/domain/session-usage';
+import { readAccountingMeta, readUsageBreakdown } from '$lib/domain/session-usage';
 import type {
   ActiveSessionViewModel,
   SessionEventItem,
@@ -26,7 +26,7 @@ export function createEmptyActiveSession(): ActiveSessionViewModel {
     usage: {
       contextUsed: null,
       contextLimit: null,
-      cumulativeCostUsd: null,
+      standardCostUsd: null,
       activeWorkMs: 0,
       activeWorkStartedAt: null
     },
@@ -269,8 +269,13 @@ function applySessionNotificationInPlace(
     case 'usage_update':
       session.usage.contextUsed = readFiniteNumber(update.used) ?? session.usage.contextUsed;
       session.usage.contextLimit = readPositiveNumber(update.size) ?? session.usage.contextLimit;
-      session.usage.cumulativeCostUsd = readCostUsd(update.cost) ?? session.usage.cumulativeCostUsd;
       session.usage.breakdown = readUsageBreakdown(update._meta) ?? session.usage.breakdown;
+      session.usage.standardCostUsd = readCostUsd(update.cost) ?? session.usage.standardCostUsd;
+      applyAccountingMeta(session, update._meta);
+      break;
+    case 'session_info_update':
+      // Metadata-only accounting fallback when no reliable context pair exists.
+      applyAccountingMeta(session, update._meta);
       break;
     case 'plan_update':
       if (update.plan.type === 'items') {
@@ -545,8 +550,12 @@ export function applySessionNotification(
     case 'usage_update':
       next.usage.contextUsed = readFiniteNumber(update.used) ?? next.usage.contextUsed;
       next.usage.contextLimit = readPositiveNumber(update.size) ?? next.usage.contextLimit;
-      next.usage.cumulativeCostUsd = readCostUsd(update.cost) ?? next.usage.cumulativeCostUsd;
       next.usage.breakdown = readUsageBreakdown(update._meta) ?? next.usage.breakdown;
+      next.usage.standardCostUsd = readCostUsd(update.cost) ?? next.usage.standardCostUsd;
+      applyAccountingMeta(next, update._meta);
+      break;
+    case 'session_info_update':
+      applyAccountingMeta(next, update._meta);
       break;
     case 'plan_update':
       if (update.plan.type === 'items') {
@@ -866,6 +875,10 @@ export function endSessionWork(session: ActiveSessionViewModel, endedAt = Date.n
  * miss `usage_update` while the load snapshot already knows the context
  * window. Present values always win, later live or drained `usage_update`
  * notifications keep overriding, and active-work timers are never merged.
+ *
+ * Accounting is only copied when the target has never received a payload.
+ * A received payload, including one whose `completeTotalUsd` is an explicit
+ * `null`, is authoritative and is never refilled from an older candidate.
  */
 export function mergeMissingSessionUsage(target: ActiveSessionViewModel, source: ActiveSessionViewModel): void {
   target.usage.breakdown ??= source.usage.breakdown;
@@ -875,9 +888,27 @@ export function mergeMissingSessionUsage(target: ActiveSessionViewModel, source:
   if (target.usage.contextLimit === null && source.usage.contextLimit !== null) {
     target.usage.contextLimit = source.usage.contextLimit;
   }
-  if (target.usage.cumulativeCostUsd === null && source.usage.cumulativeCostUsd !== null) {
-    target.usage.cumulativeCostUsd = source.usage.cumulativeCostUsd;
+  if (target.usage.accounting === undefined && source.usage.accounting !== undefined) {
+    target.usage.accounting = source.usage.accounting;
   }
+  // Only displayed while no accounting exists, so filling it cannot
+  // resurrect a cleared QueryMT total.
+  if (target.usage.standardCostUsd === null && source.usage.standardCostUsd !== null) {
+    target.usage.standardCostUsd = source.usage.standardCostUsd;
+  }
+}
+
+/**
+ * A present `_meta.querymt.accounting` payload replaces accounting state
+ * atomically (explicit nulls included); an absent or malformed payload does
+ * not touch it. Standard ACP `cost` is tracked separately in
+ * `standardCostUsd` and is only displayed for sessions without accounting
+ * (non-QueryMT or older QueryMT agents); its omission is not a clearing
+ * signal.
+ */
+function applyAccountingMeta(session: ActiveSessionViewModel, meta: unknown): void {
+  const accounting = readAccountingMeta(meta);
+  if (accounting) session.usage.accounting = accounting;
 }
 
 function readFiniteNumber(value: unknown): number | null {

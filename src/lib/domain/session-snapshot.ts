@@ -1,6 +1,6 @@
 import { applyDelegationChildSession, createEmptyActiveSession, normalizeContentBlocks, stringifyOptional, summarizeContentBlocks } from '$lib/domain/session-updates';
 import type { ActiveSessionViewModel, PromptAttachment, SessionContentBlock, SessionToolCallItem, SessionTranscriptItem } from '$lib/domain/types';
-import { appendHistoricalUsage } from '$lib/domain/session-usage';
+import { appendHistoricalUsage, readAccountingSnapshot } from '$lib/domain/session-usage';
 import type { DelegationUpdateNotification } from '$lib/querymt/generated/types';
 
 type SnapshotEvent = {
@@ -36,6 +36,8 @@ type IndexedStructuredPrompt = {
 };
 
 type SessionLoadSnapshot = {
+  /** Authoritative reducer-backed accounting at the snapshot cursor. */
+  accounting?: unknown;
   delegationUpdates?: DelegationUpdateNotification[];
   audit?: {
     events?: SnapshotEvent[];
@@ -81,6 +83,9 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
     return session;
   }
 
+  // Present even without historical replay or a known context limit.
+  session.usage.accounting = readAccountingSnapshot(snapshot.accounting);
+
   const toolCallsById = new Map<string, SessionToolCallItem>();
   const pendingDelegationToolCalls = new Map<string, string>();
   const pendingChildSessionsByDelegation = new Map<string, string>();
@@ -112,8 +117,9 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
       } else {
         missingHistoricalUsage = true;
       }
+      // Money comes only from `snapshot.accounting`; request-end costs are
+      // presentation figures that omit auxiliary, failed and retry attempts.
       session.usage.contextUsed = readNonNegativeNumber(data.context_tokens) ?? session.usage.contextUsed;
-      session.usage.cumulativeCostUsd = readNonNegativeNumber(data.cumulative_cost_usd) ?? session.usage.cumulativeCostUsd;
       session.usage.activeWorkMs += elapsedWorkMs(activeWorkStartedAt, readTimestampMs(event.timestamp));
       activeWorkStartedAt = null;
       continue;

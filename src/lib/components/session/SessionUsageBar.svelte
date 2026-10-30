@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { Activity, CircleDollarSign, Info } from '@lucide/svelte';
+  import { Info } from '@lucide/svelte';
   import { onDestroy } from 'svelte';
   import { Tooltip } from 'bits-ui';
   import type { SessionTokenUsage, SessionUsageStats } from '$lib/domain/types';
-  import { formatCostUsd, formatDuration, formatTokenCount, getActiveWorkMs, getContextPercent, getContextRemaining } from '$lib/domain/session-usage';
+  import { formatDuration, formatTokenCount, getActiveWorkMs, getContextPercent, getContextRemaining, getCostLines, getSessionCostDisplay } from '$lib/domain/session-usage';
 
   let { usage }: { usage: SessionUsageStats } = $props();
   let now = $state(Date.now());
@@ -20,6 +20,8 @@
   const contextPercent = $derived(getContextPercent(usage));
   const contextRemaining = $derived(getContextRemaining(usage));
   const activeWorkLabel = $derived(formatDuration(getActiveWorkMs(usage, now)));
+  const cost = $derived(getSessionCostDisplay(usage.accounting, usage.standardCostUsd ?? null));
+  const costLines = $derived(getCostLines(cost, usage.accounting?.cycle?.budget ?? null));
   const rows: { key: keyof SessionTokenUsage; label: string; short: string; hint: string }[] = [
     { key: 'inputTokens', label: 'Uncached input', short: 'Uncached', hint: 'Input not served from or written to the cache' },
     { key: 'cacheReadTokens', label: 'Cache read', short: 'Read', hint: 'Input reused from a cached prefix' },
@@ -93,7 +95,10 @@
           <button type="button" aria-pressed={effectiveScope === 'latestRequest'} disabled={!usage.breakdown?.latestRequest} onclick={() => changeScope('latestRequest')}>Latest request</button>
           <button type="button" aria-pressed={effectiveScope === 'sessionTotals'} disabled={!usage.breakdown?.sessionTotals} onclick={() => changeScope('sessionTotals')}>Session totals</button>
         </div>
-        {#if partial}<span class="session-usage-partial" title="Some requests did not report complete usage">Partial</span>{/if}
+        <div class="session-usage-lens-meta">
+          {#if partial}<span class="session-usage-partial" title="Some requests did not report complete usage">Partial</span>{/if}
+          {@render help()}
+        </div>
       </div>
       <div class="session-usage-rings">
         {#each charts as chart}
@@ -135,22 +140,38 @@
       </div>
     </div>
   {/if}
-  <div class="session-usage-footer">
-    {#if usage.cumulativeCostUsd !== null}
-      <span class="session-usage-stat" title="Cumulative session cost, independent of the selected token scope"><CircleDollarSign size={13} aria-hidden="true" /><span>Cost</span><strong>{formatCostUsd(usage.cumulativeCostUsd)}</strong></span>
-    {/if}
-    <span class="session-usage-stat" title="Time spent actively processing prompts"><Activity size={13} aria-hidden="true" /><span>Active</span><strong>{activeWorkLabel}</strong>
-      {#if usage.activeWorkStartedAt !== null}<i class="session-usage-live-dot" aria-label="Active now"></i>{/if}
-    </span>
-    <Tooltip.Provider delayDuration={200}>
-      <Tooltip.Root>
-        <Tooltip.Trigger class="session-usage-help" type="button" aria-label="About token usage"><Info size={13} aria-hidden="true" /></Tooltip.Trigger>
-        <Tooltip.Portal>
-          <Tooltip.Content class="app-tooltip-content session-usage-help-content" side="top" sideOffset={6}>
-            Request token usage is separate from current context occupancy. Cache reads reuse a prefix; cache writes create a cache entry. Reported zeros do not establish provider support. Select a category to inspect its exact count.
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
-    </Tooltip.Provider>
-  </div>
+  {#if costLines.length > 0}
+    <dl class="session-usage-lines" aria-label="Cost">
+      {#each costLines as line (line.key)}
+        <div class="session-usage-line" data-tone={line.tone} title={line.title}>
+          <dt>{line.label}</dt>
+          <dd aria-label={`${line.prefix === '≥' ? 'at least ' : line.prefix === '~' ? 'approximately ' : ''}${line.value}`}>
+            {#if line.prefix}<span class="session-usage-prefix" aria-hidden="true">{line.prefix}</span>{/if}{line.value}
+          </dd>
+        </div>
+      {/each}
+    </dl>
+  {/if}
+  <dl class="session-usage-lines" aria-label="Activity">
+    <div class="session-usage-line" title="Time spent actively processing prompts">
+      <dt>Active</dt>
+      <dd>
+        {#if usage.activeWorkStartedAt !== null}<i class="session-usage-live-dot" aria-label="Active now"></i>{/if}{activeWorkLabel}
+        {#if !counts}{@render help()}{/if}
+      </dd>
+    </div>
+  </dl>
 </div>
+
+{#snippet help()}
+  <Tooltip.Provider delayDuration={200}>
+    <Tooltip.Root>
+      <Tooltip.Trigger class="session-usage-help" type="button" aria-label="About token usage"><Info size={13} aria-hidden="true" /></Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content class="app-tooltip-content session-usage-help-content" side="top" sideOffset={6}>
+          Request token usage is separate from current context occupancy. Cache reads reuse a prefix; cache writes create a cache entry. Reported zeros do not establish provider support. Select a category to inspect its exact count.
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  </Tooltip.Provider>
+{/snippet}

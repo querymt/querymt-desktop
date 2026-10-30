@@ -6,7 +6,7 @@ import SessionContextDial from './SessionContextDial.svelte';
 const usage = {
   contextUsed: 130_000,
   contextLimit: 1_100_000,
-  cumulativeCostUsd: null,
+  standardCostUsd: null,
   activeWorkMs: 0,
   activeWorkStartedAt: null
 };
@@ -39,7 +39,7 @@ describe('SessionContextDial', () => {
       usage: {
         contextUsed: null,
         contextLimit: null,
-        cumulativeCostUsd: null,
+        standardCostUsd: null,
         activeWorkMs: 0,
         activeWorkStartedAt: null
       }
