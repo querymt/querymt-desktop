@@ -11943,9 +11943,30 @@ a.session-delegate-session:hover {
   font-size: 0.875rem;
 }
 
+.session-composer-inner-well {
+  position: relative;
+}
+
+.session-composer-inner-well::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 0.75rem;
+  pointer-events: none;
+  z-index: 1;
+  border-radius: inherit;
+  background: linear-gradient(to bottom, var(--bg-panel-strong), transparent);
+}
+
+.session-composer-dock-expanded .composer-prompt-zone {
+  padding-right: 2.1rem;
+}
+
 .composer-prompt-expand {
   position: absolute;
-  top: 0.35rem;
+  top: 0.2rem;
   right: 0.35rem;
   z-index: 2;
 }

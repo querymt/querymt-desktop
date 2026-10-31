@@ -608,7 +608,7 @@
   {/if}
 
   {#if !sessionOnly}
-    <div class={unifiedShell ? 'px-1' : 'px-2'}>
+    <div class={unifiedShell ? 'px-1 pt-3' : 'px-2'}>
       <WorkspacePathInput
         value={cwd}
         disabled={false}
@@ -637,7 +637,7 @@
   >
     <textarea
       bind:this={promptElement}
-      class={`block w-full resize-none border-0 bg-inherit px-1 py-2 text-sm text-[var(--text)] outline-none ${promptMinHeightClass} ${launch ? 'text-base' : ''}`}
+      class={`block w-full resize-none border-0 bg-inherit px-0.5 pt-3 pb-2 text-sm text-[var(--text)] outline-none ${promptMinHeightClass} ${launch ? 'text-base' : ''}`}
       placeholder={sessionOnly ? sessionPlaceholder : launch ? 'Ask QueryMT to inspect, change, debug, explain, or plan something.' : minimal ? 'What should QueryMT do in this workspace?' : 'Ask QueryMT to inspect, plan, change, or explain something in this workspace.'}
       value={prompt}
       oninput={(event) => onPromptInput((event.currentTarget as HTMLTextAreaElement).value)}
@@ -658,7 +658,7 @@
     <SessionAttachmentPreview blocks={attachmentBlocks} removable={true} {compact} onRemove={onRemoveAttachment} />
   {/if}
 
-  <div class={`composer-toolbar flex flex-wrap items-center justify-between gap-3 ${unifiedShell ? 'border-t border-[var(--border)] px-1 pt-3' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
+  <div class={`composer-toolbar flex flex-wrap items-center justify-between gap-3 ${unifiedShell ? 'border-t border-[var(--border)] px-1 pt-2' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
     <div class="composer-toolbar-controls flex flex-wrap items-center gap-2">
       {#if !sessionOnly && onCreateSession && !minimal && !launch}
         <IconTooltipButton label="Blank session" icon={Plus} size={16} disabled={loading} onclick={onCreateSession} />
@@ -947,7 +947,7 @@
     </div>
   {:else}
     <div
-      class={`session-composer-morph-shell session-composer-dock-expanded panel-strong ${unifiedShell ? 'p-4 md:p-6' : minimal ? 'p-4 md:p-5' : 'p-3 md:p-4'}`}
+      class={`session-composer-morph-shell session-composer-dock-expanded panel-strong ${unifiedShell ? 'pl-2 pr-3 pt-1 pb-2.5' : minimal ? 'p-4 md:p-5' : 'p-3 md:p-4'}`}
       in:composerMorph={{ compact: false }}
       out:composerOut={{ compact: false }}
     >
@@ -966,7 +966,7 @@
         </div>
       {/if}
       <div
-        class={`flex flex-col ${unifiedShell ? 'gap-4 rounded-[24px] bg-inherit' : 'gap-3 rounded-[18px] border border-[var(--border)] bg-inherit'} ${unifiedShell ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}
+        class={`flex flex-col ${unifiedShell ? 'session-composer-inner-well gap-2.5 rounded-[24px] bg-inherit px-0.5 pt-0 pb-0.5' : 'gap-3 rounded-[18px] border border-[var(--border)] bg-inherit'} ${unifiedShell ? '' : minimal ? 'p-3 md:p-4' : 'p-2'}`}
       >
         {@render composerBody()}
       </div>
