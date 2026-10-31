@@ -658,7 +658,7 @@
     <SessionAttachmentPreview blocks={attachmentBlocks} removable={true} {compact} onRemove={onRemoveAttachment} />
   {/if}
 
-  <div class={`composer-toolbar flex flex-wrap items-center justify-between gap-3 ${unifiedShell ? 'border-t border-[var(--border)] px-1 pt-2' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
+  <div class={`composer-toolbar flex flex-wrap items-center justify-between gap-3 ${unifiedShell ? 'border-t border-[color-mix(in_srgb,var(--border)_60%,transparent)] px-1 pt-2' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
     <div class="composer-toolbar-controls flex flex-wrap items-center gap-2">
       {#if !sessionOnly && onCreateSession && !minimal && !launch}
         <IconTooltipButton label="Blank session" icon={Plus} size={16} disabled={loading} onclick={onCreateSession} />
