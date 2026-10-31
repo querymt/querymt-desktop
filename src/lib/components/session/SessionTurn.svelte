@@ -82,7 +82,13 @@
       if (body.trim()) segments[firstTextIndex] = { type: 'text', block: { type: 'text', text: body } };
       else segments.splice(firstTextIndex, 1);
     }
-    return { segments, frontMatter };
+    return {
+      segments: [
+        ...segments.filter((segment) => segment.type === 'attachments'),
+        ...segments.filter((segment) => segment.type === 'text')
+      ],
+      frontMatter
+    };
   });
   const metadataKey = $derived(userPresentation.frontMatter ? `${turn.user?.id}\u0000${userPresentation.frontMatter.source}` : null);
   const metadataOpen = $derived(chatPreferencesStore.developerMode && metadataKey !== null && metadataOpenKey === metadataKey);

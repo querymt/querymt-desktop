@@ -170,6 +170,33 @@ describe('SessionTurn', () => {
     expect(container.querySelector('.session-message-user')).not.toHaveTextContent('key: secret');
   });
 
+  it('renders user attachments before the prompt text', () => {
+    const attachmentTurn: SessionConversationTurn = {
+      id: 'attachments-before-text',
+      forkMessageId: null,
+      user: {
+        id: 'user-attachments-before-text',
+        messageId: 'u-attachments-before-text',
+        text: 'Inspect the screenshot',
+        html: '<p>Inspect the screenshot</p>',
+        blocks: [
+          { type: 'text', text: 'Inspect the screenshot' },
+          { type: 'image', data: 'aW1n', mimeType: 'image/png', name: 'photo.png' }
+        ]
+      },
+      content: []
+    };
+    const { container } = render(SessionTurn, { turn: attachmentTurn });
+    const message = container.querySelector('.session-message-user');
+    const attachments = container.querySelector('.session-attachments');
+    const body = container.querySelector('.session-message-body');
+
+    expect(attachments).not.toBeNull();
+    expect(body).not.toBeNull();
+    expect(message?.firstElementChild).toBe(attachments);
+    expect(attachments!.compareDocumentPosition(body!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
   it('shows a neutral placeholder for metadata-only messages', () => {
     const { container, queryByRole, getByText } = render(SessionTurn, { turn: metadataMessage('---\nkey: secret\n---') });
     expect(getByText('No message body')).toBeInTheDocument();
