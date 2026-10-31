@@ -92,6 +92,7 @@
     inputDelivery = 'steer',
     onInputDeliveryChange = null,
     onStopPrompt = null,
+    onPromptExpandedChange = null,
     onSendPrompt
   }: {
     cwd?: string;
@@ -159,6 +160,7 @@
     inputDelivery?: SessionInputDeliveryMode;
     onInputDeliveryChange?: ((delivery: SessionInputDeliveryMode) => void) | null;
     onStopPrompt?: (() => void) | null;
+    onPromptExpandedChange?: ((expanded: boolean) => void) | null;
     onSendPrompt: () => void;
   } = $props();
 
@@ -212,6 +214,10 @@
 
   $effect(() => {
     if (!hasPromptText) promptExpanded = false;
+  });
+
+  $effect(() => {
+    onPromptExpandedChange?.(promptExpanded);
   });
   const primaryActionLabel = $derived(
     agentRunning && turnControlSupported
@@ -952,7 +958,10 @@
             icon={promptExpanded ? Minimize2 : Maximize2}
             controlSize="compact"
             size={14}
-            onclick={() => (promptExpanded = !promptExpanded)}
+            onclick={() => {
+              promptExpanded = !promptExpanded;
+              onPromptExpandedChange?.(promptExpanded);
+            }}
           />
         </div>
       {/if}
