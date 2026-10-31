@@ -7,6 +7,7 @@
   import { inboxStore } from '$lib/stores/inbox.svelte';
 
   const disconnected = $derived(agentsStore.connectedAgents.length === 0);
+  const showAgentNames = $derived(agentsStore.connectedAgents.length > 1);
 
   async function openSession(item: InboxItem) {
     if (!item.agentId || !item.sessionId) {
@@ -31,6 +32,7 @@
       loading={agentsStore.loading}
       error={agentsStore.error}
       {disconnected}
+      {showAgentNames}
       onRetry={() => agentsStore.initialize()}
       onOpenAgents={() => goto('/agents')}
       onAction={(itemId, actionId) => inboxStore.handleAction(itemId, actionId)}

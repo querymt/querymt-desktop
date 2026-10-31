@@ -106,6 +106,39 @@ export function describeElicitationResolution(response: CreateElicitationRespons
   }
 }
 
+export function describeElicitationAnswers(fields: InboxFormField[]): Array<{ label: string; answer: string }> {
+  const answers: Array<{ label: string; answer: string }> = [];
+  for (const field of fields) {
+    const answer = describeFieldAnswer(field);
+    if (answer) answers.push({ label: field.label, answer });
+  }
+  return answers;
+}
+
+function describeFieldAnswer(field: InboxFormField): string | null {
+  if (field.customActive) {
+    const customValue = field.customValue?.trim() ?? '';
+    return customValue || null;
+  }
+
+  if (field.options?.length) {
+    if (field.kind === 'array' && Array.isArray(field.value)) {
+      const labels = field.options
+        .filter((option) => field.value.includes(option.value))
+        .map((option) => option.label);
+      return labels.length > 0 ? labels.join(', ') : null;
+    }
+
+    const selected = field.options.find((option) => option.value === field.value);
+    if (selected) return selected.label;
+  }
+
+  if (field.kind === 'boolean') return field.value ? 'Yes' : 'No';
+
+  const value = String(field.value ?? '').trim();
+  return value || null;
+}
+
 export function buildElicitationResponse(actionId: string, fields: InboxFormField[]): CreateElicitationResponse | null {
   if (actionId === 'decline') {
     return { action: 'decline' };

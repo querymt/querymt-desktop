@@ -347,4 +347,72 @@ describe('InboxRequestCard', () => {
       'My custom environment'
     );
   });
+
+  it('drops owner/session dump and keeps session id on Open session', async () => {
+    const onOpenSession = vi.fn();
+    render(InboxRequestCard, {
+      item: { ...item, agentId: 'agent-1', agentName: 'WS', sessionId: 'session-1' },
+      onOpenSession
+    });
+
+    expect(screen.queryByText(/Owner:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Severity:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Session:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('WS')).not.toBeInTheDocument();
+    expect(screen.queryByText('medium')).not.toBeInTheDocument();
+    const openSession = screen.getByRole('button', { name: 'Open session' });
+    expect(openSession).not.toHaveAttribute('title');
+    expect(openSession.querySelector('.lucide-arrow-up-right')).not.toBeNull();
+    await fireEvent.pointerEnter(openSession, { pointerType: 'mouse' });
+    const tooltip = await screen.findByText('session-1', { selector: '.app-tooltip-content' });
+    expect(tooltip).toHaveClass('app-tooltip-content');
+    await fireEvent.click(openSession);
+    expect(onOpenSession).toHaveBeenCalledOnce();
+  });
+
+  it('shows agent and non-default severity chips only when they add information', async () => {
+    const { rerender } = render(InboxRequestCard, {
+      item: { ...item, agentName: 'WS', severity: 'high' }
+    });
+
+    expect(screen.queryByText('WS')).not.toBeInTheDocument();
+    expect(screen.getByText('high')).toBeInTheDocument();
+
+    await rerender({
+      item: { ...item, type: 'permission', agentName: 'WS', severity: 'high' },
+      showAgentNames: true
+    });
+    expect(screen.getByText('WS')).toBeInTheDocument();
+    expect(screen.queryByText('high')).not.toBeInTheDocument();
+  });
+
+  it('shows only the selected disabled option on a submitted elicitation card', () => {
+    render(InboxRequestCard, {
+      item: {
+        ...item,
+        status: 'resolved',
+        resolution: 'Submitted',
+        actions: [],
+        formFields: [
+          {
+            ...item.formFields![0],
+            kind: 'string',
+            value: 'Looks good',
+            options: [
+              { value: 'Looks good', label: 'Looks good', description: 'Arrow is on the right of Open session.' },
+              { value: 'Needs a tweak', label: 'Needs a tweak' }
+            ]
+          }
+        ]
+      }
+    });
+
+    const selected = screen.getByRole('radio', { name: 'Looks good' });
+    expect(selected).toBeChecked();
+    expect(selected).toBeDisabled();
+    expect(screen.getByText('Arrow is on the right of Open session.')).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Needs a tweak' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Custom answer…' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Submit' })).not.toBeInTheDocument();
+  });
 });

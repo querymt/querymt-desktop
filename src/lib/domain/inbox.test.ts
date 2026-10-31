@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CreateElicitationRequest, ElicitationSchema } from '@agentclientprotocol/sdk';
-import { buildElicitationResponse, mapElicitationRequestToInboxItem } from './inbox';
+import { buildElicitationResponse, describeElicitationAnswers, mapElicitationRequestToInboxItem } from './inbox';
 
 function request(requestedSchema: ElicitationSchema, querymtMeta?: Record<string, unknown>): CreateElicitationRequest {
   return {
@@ -216,5 +216,35 @@ describe('elicitation inbox mapping', () => {
         }
       ])
     ).toEqual({ action: 'accept', content: { environments: ['staging', 'prod'] } });
+  });
+
+  it('summarizes submitted option labels and custom answers', () => {
+    expect(
+      describeElicitationAnswers([
+        {
+          key: 'selection',
+          label: 'Inbox meta',
+          kind: 'string',
+          required: true,
+          options: [
+            { value: 'Looks good', label: 'Looks good' },
+            { value: 'Needs a tweak', label: 'Needs a tweak' }
+          ],
+          value: 'Needs a tweak'
+        },
+        {
+          key: 'notes',
+          label: 'Notes',
+          kind: 'string',
+          required: false,
+          value: '',
+          customActive: true,
+          customValue: 'Move the arrow'
+        }
+      ])
+    ).toEqual([
+      { label: 'Inbox meta', answer: 'Needs a tweak' },
+      { label: 'Notes', answer: 'Move the arrow' }
+    ]);
   });
 });
