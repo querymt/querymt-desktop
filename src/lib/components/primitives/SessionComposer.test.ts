@@ -961,6 +961,31 @@ describe('SessionComposer', () => {
     expect(screen.queryByRole('button', { name: 'Expand composer' })).not.toBeInTheDocument();
     expect(prompt.closest('.composer-prompt-zone')).not.toHaveClass('composer-prompt-zone-expanded');
   });
+
+  it('notifies when the long-draft composer expand state changes', async () => {
+    const onPromptExpandedChange = vi.fn();
+    const { rerender } = renderComposer({
+      sessionOnly: true,
+      prompt: 'A longer draft that needs more room',
+      onPromptExpandedChange
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand composer' }));
+    expect(onPromptExpandedChange).toHaveBeenCalledWith(true);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse composer' }));
+    expect(onPromptExpandedChange).toHaveBeenCalledWith(false);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand composer' }));
+    await rerender({
+      sessionOnly: true,
+      prompt: '',
+      onPromptInput: vi.fn(),
+      onSendPrompt: vi.fn(),
+      onPromptExpandedChange
+    });
+    expect(onPromptExpandedChange).toHaveBeenCalledWith(false);
+  });
 });
 
 describe('SessionComposer workspace focus and suggestions', () => {

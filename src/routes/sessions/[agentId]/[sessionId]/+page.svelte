@@ -23,6 +23,7 @@
     nextSessionScrollMode,
     sessionFollowPinClass,
     type SessionChatPresentationState,
+    type SessionScrollIntent,
     type SessionScrollMode
   } from '$lib/domain/session-scroll';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
@@ -112,7 +113,9 @@
   let scrollViewport: HTMLElement | null = null;
   let viewportEventTarget: HTMLElement | Window | null = null;
   let programmaticScroll = false;
+  let pendingUserScrollIntent = false;
   let lastViewportScrollTop = 0;
+  let composerPromptExpanded = $state(false);
   let sessionLoadToken = 0;
   let lastRequestedSessionKey: string | null = null;
   let undoDialogOpen = $state(false);
@@ -159,7 +162,7 @@
   const undoAffectedTurns = $derived(
     undoTargetMessageId ? getUndoAffectedTurnCount(agentsStore.activeSession, undoTargetMessageId) : 0
   );
-  const latestVisible = $derived(chatPresentationState === 'fixed-free-compact');
+  const latestVisible = $derived(scrollMode === 'free');
   const latestContentSignature = $derived.by(() => {
     const transcript = agentsStore.activeSession.transcript;
     const lastTranscriptItem = transcript.at(-1);
@@ -373,7 +376,7 @@
     // browser clamps scrollTop, then grows back). Treat the whole load as
     // programmatic so that churn cannot flip the scroll mode to free and
     // collapse the composer; the flag self-clears once re-anchored at the
-    // bottom, and user wheel/pointer input cancels it immediately.
+    // bottom, and a user wheel or touchmove cancels it immediately.
     programmaticScroll = true;
 
     await ensureSessionLoaded(agentIdToLoad, sessionIdToLoad);
@@ -394,9 +397,7 @@
     // bottom) no scroll event fires and the flag would stay set; release it
     // after pending scroll events have been dispatched (they run before rAF
     // callbacks within the same frame).
-    requestAnimationFrame(() => {
-      programmaticScroll = false;
-    });
+    releaseProgrammaticScrollWhenSettled();
   }
 
   function setupScrollTracking() {
@@ -407,8 +408,7 @@
     lastViewportScrollTop = scrollViewport.scrollTop;
     viewportEventTarget.addEventListener('scroll', handleViewportScroll, { passive: true });
     viewportEventTarget.addEventListener('wheel', handleViewportWheel, { passive: true });
-    viewportEventTarget.addEventListener('touchstart', cancelProgrammaticScroll, { passive: true });
-    viewportEventTarget.addEventListener('pointerdown', cancelProgrammaticScroll, { passive: true });
+    viewportEventTarget.addEventListener('touchmove', markUserScrollIntent, { passive: true });
 
     if (sessionPageContent && typeof ResizeObserver !== 'undefined') {
       contentResizeObserver = new ResizeObserver(() => {
@@ -426,8 +426,7 @@
   function disconnectScrollTracking() {
     viewportEventTarget?.removeEventListener('scroll', handleViewportScroll);
     viewportEventTarget?.removeEventListener('wheel', handleViewportWheel);
-    viewportEventTarget?.removeEventListener('touchstart', cancelProgrammaticScroll);
-    viewportEventTarget?.removeEventListener('pointerdown', cancelProgrammaticScroll);
+    viewportEventTarget?.removeEventListener('touchmove', markUserScrollIntent);
     contentResizeObserver?.disconnect();
     contentResizeObserver = null;
     scrollViewport = null;
@@ -448,6 +447,8 @@
     const scrollTop = scrollViewport.scrollTop;
     const direction = scrollTop < lastViewportScrollTop ? 'up' : scrollTop > lastViewportScrollTop ? 'down' : 'none';
     const distanceFromBottom = getDistanceFromBottom(scrollViewport);
+    const intent: SessionScrollIntent = pendingUserScrollIntent ? 'user' : 'layout';
+    pendingUserScrollIntent = false;
     if (programmaticScroll) {
       lastViewportScrollTop = scrollTop;
       if (distanceFromBottom <= 16) {
@@ -456,31 +457,61 @@
       return;
     }
 
-    if (scrollMode === 'following' && scrollTop >= lastViewportScrollTop) {
-      lastViewportScrollTop = scrollTop;
+    const nextMode = nextSessionScrollMode(scrollMode, distanceFromBottom, direction, intent);
+    lastViewportScrollTop = scrollTop;
+    if (nextMode === 'following') {
+      if (scrollMode !== 'following') setScrollMode('following', distanceFromBottom);
+      else if (intent === 'layout' && direction === 'up') scheduleFollowScroll();
       return;
     }
 
-    lastViewportScrollTop = scrollTop;
-    setScrollMode(nextSessionScrollMode(scrollMode, distanceFromBottom, direction), distanceFromBottom);
-    if (scrollMode === 'free') syncDockAlign();
+    setScrollMode(nextMode, distanceFromBottom);
+    syncDockAlign();
+  }
+
+  function isSessionChromeEvent(event: Event) {
+    return event.target instanceof Element && Boolean(
+      event.target.closest('.session-composer-dock, .session-activity-bar-dock, .session-scroll-bottom-pill-host')
+    );
   }
 
   function handleViewportWheel(event: Event) {
-    programmaticScroll = false;
+    if (isSessionChromeEvent(event)) return;
+    markUserScrollIntent();
     const deltaY = 'deltaY' in event && typeof event.deltaY === 'number' ? event.deltaY : 0;
-    if (!scrollViewport || scrollMode !== 'free' || deltaY <= 0) return;
+    if (!scrollViewport) return;
 
     const distanceFromBottom = getDistanceFromBottom(scrollViewport);
-    const nextMode = nextSessionScrollMode(scrollMode, distanceFromBottom, 'down');
+    const direction = deltaY < 0 ? 'up' : deltaY > 0 ? 'down' : 'none';
+    const nextMode = nextSessionScrollMode(scrollMode, distanceFromBottom, direction, 'user');
     setScrollMode(nextMode, distanceFromBottom);
     if (nextMode === 'following') {
       lastViewportScrollTop = scrollViewport.scrollTop;
+      scheduleFollowScroll();
     }
   }
 
-  function cancelProgrammaticScroll() {
+  function markUserScrollIntent(event?: Event) {
+    if (event && isSessionChromeEvent(event)) return;
     programmaticScroll = false;
+    pendingUserScrollIntent = true;
+  }
+
+  function armProgrammaticScroll() {
+    programmaticScroll = true;
+    pendingUserScrollIntent = false;
+    releaseProgrammaticScrollWhenSettled();
+  }
+
+  function releaseProgrammaticScrollWhenSettled() {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!programmaticScroll) return;
+        if (!scrollViewport || getDistanceFromBottom(scrollViewport) <= 16) {
+          programmaticScroll = false;
+        }
+      });
+    });
   }
 
   function setScrollMode(mode: SessionScrollMode, distanceFromBottom = 0) {
@@ -492,8 +523,17 @@
     chatPresentationState = nextSessionChatPresentationState(
       chatPresentationState,
       scrollMode,
-      distanceFromBottom
+      distanceFromBottom,
+      undefined,
+      composerPromptExpanded
     );
+  }
+
+  function handlePromptExpandedChange(expanded: boolean) {
+    composerPromptExpanded = expanded;
+    if (scrollViewport) updateChatPresentation(getDistanceFromBottom(scrollViewport));
+    else updateChatPresentation(0);
+    if (scrollMode === 'following') scheduleFollowScroll();
   }
 
   const followScroll = createFollowScrollScheduler(
@@ -518,7 +558,7 @@
 
   function handleElicitationAction(itemId: string, actionId: string) {
     const keepFollowing = scrollMode === 'following';
-    if (keepFollowing) programmaticScroll = true;
+    if (keepFollowing) armProgrammaticScroll();
     inboxStore.handleAction(itemId, actionId);
     if (!keepFollowing) return;
 
@@ -553,7 +593,7 @@
 
   async function scrollToLatest() {
     setScrollMode('following');
-    programmaticScroll = true;
+    armProgrammaticScroll();
     await tick();
     scrollToEnd('smooth');
     agentsStore.requestPromptFocus();
@@ -568,21 +608,14 @@
     }
 
     await tick();
-    // Sending collapses a multi-line composer and appends the optimistic
-    // prompt in the same layout pass. When the net height shrinks, the browser
-    // clamps scrollTop downward and the resulting 'up' scroll event would
-    // flip the session out of follow mode right as generation starts, leaving
-    // the new message behind the composer. Treat the transition as
-    // programmatic so clamp events cannot flip the mode; user wheel, pointer,
-    // and touch input still clear the flag immediately, and the flag
-    // self-releases once the view is re-anchored at the bottom.
-    programmaticScroll = true;
+    // Sending shrinks a multi-line composer and appends the optimistic prompt
+    // in the same layout pass. Treat that as programmatic so layout clamps
+    // cannot leave follow; a user wheel or touchmove still takes over, and the
+    // flag self-releases once the view is re-anchored at the bottom.
+    armProgrammaticScroll();
     scrollToEnd('instant');
     void tick().then(() => {
       if (scrollMode === 'following') scheduleFollowScroll();
-      requestAnimationFrame(() => {
-        programmaticScroll = false;
-      });
     });
     await agentsStore.sendPromptToActiveSession();
   }
@@ -766,6 +799,7 @@
         onAddAttachments={(items) => agentsStore.addPromptAttachments(items)}
         onRemoveAttachment={(id) => agentsStore.removePromptAttachment(id)}
         onDismissError={() => agentsStore.clearError()}
+        onPromptExpandedChange={handlePromptExpandedChange}
         onSendPrompt={() => sendPrompt()}
       />
       {/if}

@@ -23,7 +23,17 @@ describe('session scroll state', () => {
     ).toBe('fixed-free-expanded');
   });
 
-  it('collapses the composer after the safe free-scroll threshold and latches it', () => {
+  it('collapses the composer after the free-scroll threshold', () => {
+    expect(
+      nextSessionChatPresentationState(
+        'fixed-free-expanded',
+        'free',
+        SESSION_COMPOSER_COLLAPSE_THRESHOLD + 1
+      )
+    ).toBe('fixed-free-compact');
+  });
+
+  it('keeps compact while free so expanding cannot interrupt a downward scroll', () => {
     const collapsed = nextSessionChatPresentationState(
       'fixed-free-expanded',
       'free',
@@ -31,7 +41,29 @@ describe('session scroll state', () => {
     );
 
     expect(collapsed).toBe('fixed-free-compact');
+    expect(nextSessionChatPresentationState(collapsed, 'free', 80)).toBe('fixed-free-compact');
     expect(nextSessionChatPresentationState(collapsed, 'free', 0)).toBe('fixed-free-compact');
+  });
+
+  it('keeps the composer expanded while the user is editing a long draft', () => {
+    expect(
+      nextSessionChatPresentationState(
+        'fixed-free-expanded',
+        'free',
+        SESSION_COMPOSER_COLLAPSE_THRESHOLD + 1,
+        SESSION_COMPOSER_COLLAPSE_THRESHOLD,
+        true
+      )
+    ).toBe('fixed-free-expanded');
+    expect(
+      nextSessionChatPresentationState(
+        'fixed-free-compact',
+        'free',
+        SESSION_COMPOSER_COLLAPSE_THRESHOLD + 1,
+        SESSION_COMPOSER_COLLAPSE_THRESHOLD,
+        true
+      )
+    ).toBe('fixed-free-expanded');
   });
 
   it('restores the expanded composer when follow mode resumes', () => {
@@ -42,12 +74,26 @@ describe('session scroll state', () => {
     expect(nextSessionScrollMode('following', SESSION_SCROLL_LEAVE_THRESHOLD, 'down')).toBe('following');
   });
 
-  it('leaves follow mode on even a light upward movement', () => {
-    expect(nextSessionScrollMode('following', 1, 'up')).toBe('free');
+  it('leaves follow mode on a light upward user gesture', () => {
+    expect(nextSessionScrollMode('following', 1, 'up', 'user')).toBe('free');
   });
 
-  it('enters free mode when non-user movement exceeds the leave threshold', () => {
-    expect(nextSessionScrollMode('following', SESSION_SCROLL_LEAVE_THRESHOLD + 1)).toBe('free');
+  it('does not leave follow mode for layout-induced upward clamps near the bottom', () => {
+    expect(nextSessionScrollMode('following', 1, 'up', 'layout')).toBe('following');
+    expect(nextSessionScrollMode('following', 0, 'up')).toBe('following');
+  });
+
+  it('leaves follow mode on an upward layout jump past the leave threshold', () => {
+    expect(nextSessionScrollMode('following', SESSION_SCROLL_LEAVE_THRESHOLD + 1, 'up', 'layout')).toBe('free');
+  });
+
+  it('does not leave follow mode for layout height spikes without an upward jump', () => {
+    expect(nextSessionScrollMode('following', SESSION_SCROLL_LEAVE_THRESHOLD + 1, 'none', 'layout')).toBe(
+      'following'
+    );
+    expect(nextSessionScrollMode('following', SESSION_SCROLL_LEAVE_THRESHOLD + 1, 'down', 'layout')).toBe(
+      'following'
+    );
   });
 
   it('rejoins only at the bottom boundary', () => {
@@ -59,8 +105,12 @@ describe('session scroll state', () => {
     expect(nextSessionScrollMode('free', 0, 'none')).toBe('following');
   });
 
-  it('does not rejoin during an upward gesture at the bottom boundary', () => {
-    expect(nextSessionScrollMode('free', 0, 'up')).toBe('free');
+  it('rejoins after a layout clamp at the bottom boundary', () => {
+    expect(nextSessionScrollMode('free', 0, 'up', 'layout')).toBe('following');
+  });
+
+  it('does not rejoin during an upward user gesture at the bottom boundary', () => {
+    expect(nextSessionScrollMode('free', 0, 'up', 'user')).toBe('free');
   });
 });
 
