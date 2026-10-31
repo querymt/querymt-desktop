@@ -2186,6 +2186,92 @@ summary:focus-visible {
   }
 }
 
+.inbox-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+}
+
+.inbox-card-header-collapsed {
+  min-height: var(--control-height-compact);
+  align-items: center;
+}
+
+.inbox-card-chevron {
+  display: inline-flex;
+  width: 1.2rem;
+  height: 1.2rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.12rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+  cursor: pointer;
+}
+
+.inbox-card-header-collapsed .inbox-card-chevron {
+  margin-top: 0;
+}
+
+.inbox-card-chevron:hover {
+  background: var(--row-surface-hover);
+  color: var(--text);
+}
+
+.inbox-card-chevron-open {
+  transform: rotate(90deg);
+}
+
+.inbox-card-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.inbox-card-end {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.inbox-resolved-check,
+.inbox-pending-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.inbox-resolved-check {
+  color: var(--status-success);
+}
+
+.inbox-pending-marker {
+  color: var(--status-running);
+}
+
+.inbox-collapsed-detail {
+  display: -webkit-box;
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
 .elicitation-option-list {
   display: grid;
   gap: 0.12rem;

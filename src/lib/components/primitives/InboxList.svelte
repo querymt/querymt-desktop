@@ -74,9 +74,10 @@
   {/if}
 
   <div class="space-y-3">
-    {#each items as item}
+    {#each items as item, index (item.id)}
       <InboxRequestCard
         {item}
+        collapsed={index >= 3}
         {showAgentNames}
         {onAction}
         {onFieldChange}
