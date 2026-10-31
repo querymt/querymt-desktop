@@ -123,8 +123,9 @@ function describeFieldAnswer(field: InboxFormField): string | null {
 
   if (field.options?.length) {
     if (field.kind === 'array' && Array.isArray(field.value)) {
+      const selectedValues = field.value;
       const labels = field.options
-        .filter((option) => field.value.includes(option.value))
+        .filter((option) => selectedValues.includes(option.value))
         .map((option) => option.label);
       return labels.length > 0 ? labels.join(', ') : null;
     }

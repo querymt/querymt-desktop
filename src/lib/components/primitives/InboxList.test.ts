@@ -79,4 +79,29 @@ describe('InboxList states', () => {
     expect(screen.getAllByRole('button', { name: 'Collapse request' })).toHaveLength(3);
     expect(screen.getByRole('button', { name: 'Expand request' })).toBeInTheDocument();
   });
+
+  it('keeps an expanded card open when a new request is prepended', async () => {
+    const items = Array.from({ length: 3 }, (_, index) => ({
+      ...request,
+      id: `request-${index + 1}`,
+      title: `Request ${index + 1}`,
+      detail: `Detail ${index + 1}`
+    }));
+    const onOpenSession = vi.fn();
+    const { rerender } = render(InboxList, { items, onOpenSession });
+
+    expect(screen.getByRole('heading', { name: 'Request 3' })).toBeInTheDocument();
+
+    await rerender({
+      items: [
+        { ...request, id: 'request-0', title: 'Request 0', detail: 'Detail 0' },
+        ...items
+      ],
+      onOpenSession
+    });
+
+    expect(screen.getByRole('heading', { name: 'Request 0' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Request 3' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Collapse request' })).toHaveLength(4);
+  });
 });

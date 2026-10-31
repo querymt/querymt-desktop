@@ -32,8 +32,7 @@
   const severityClass = $derived(
     item.severity === 'high' ? 'badge-high' : item.severity === 'low' ? 'badge-low' : 'badge-medium'
   );
-  let collapsedOverride = $state<boolean | null>(null);
-  const isCollapsed = $derived(collapsedOverride ?? collapsedByDefault);
+  let isCollapsed = $state(collapsedByDefault);
   const canOpenSession = $derived(Boolean(item.sessionId && item.agentId && onOpenSession));
   const showOpenSession = $derived(!compact && canOpenSession);
   const showResolvedCheck = $derived(item.status === 'resolved' && item.resolution === 'Submitted');
@@ -55,7 +54,8 @@
     if (item.status !== 'resolved' || item.resolution !== 'Submitted') return options;
     if (field.customActive) return [];
     if (field.kind === 'array' && Array.isArray(field.value)) {
-      return options.filter((option) => field.value.includes(option.value));
+      const selectedValues = field.value;
+      return options.filter((option) => selectedValues.includes(option.value));
     }
     return options.filter((option) => option.value === field.value);
   }
@@ -134,7 +134,7 @@
         type="button"
         aria-expanded={!isCollapsed}
         aria-label={isCollapsed ? 'Expand request' : 'Collapse request'}
-        onclick={() => (collapsedOverride = !isCollapsed)}
+        onclick={() => (isCollapsed = !isCollapsed)}
       >
         <ChevronRight size={14} class={isCollapsed ? '' : 'inbox-card-chevron-open'} aria-hidden="true" />
       </button>
