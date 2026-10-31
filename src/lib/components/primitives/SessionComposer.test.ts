@@ -916,6 +916,51 @@ describe('SessionComposer', () => {
 
     expect(onDismissError).toHaveBeenCalledTimes(1);
   });
+
+  it('hides the composer expand control until the prompt has text', async () => {
+    const { rerender } = renderComposer({ sessionOnly: true, prompt: '' });
+
+    expect(screen.queryByRole('button', { name: 'Expand composer' })).not.toBeInTheDocument();
+
+    await rerender({
+      sessionOnly: true,
+      prompt: 'A longer draft that needs more room',
+      onPromptInput: vi.fn(),
+      onSendPrompt: vi.fn()
+    });
+    const expand = screen.getByRole('button', { name: 'Expand composer' });
+    expect(expand).toHaveAccessibleName('Expand composer');
+    expect(expand).toHaveTextContent('');
+    expect(expand.querySelector('svg')).not.toBeNull();
+  });
+
+  it('expands the composer for long messages and collapses it again', async () => {
+    const { rerender } = renderComposer({
+      sessionOnly: true,
+      prompt: 'A longer draft that needs more room'
+    });
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+    const expand = screen.getByRole('button', { name: 'Expand composer' });
+
+    await fireEvent.click(expand);
+
+    expect(prompt.closest('.composer-prompt-zone')).toHaveClass('composer-prompt-zone-expanded');
+    expect(screen.getByRole('button', { name: 'Collapse composer' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Expand composer' })).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse composer' }));
+    expect(prompt.closest('.composer-prompt-zone')).not.toHaveClass('composer-prompt-zone-expanded');
+    expect(screen.getByRole('button', { name: 'Expand composer' })).toBeInTheDocument();
+
+    await rerender({
+      sessionOnly: true,
+      prompt: '   ',
+      onPromptInput: vi.fn(),
+      onSendPrompt: vi.fn()
+    });
+    expect(screen.queryByRole('button', { name: 'Expand composer' })).not.toBeInTheDocument();
+    expect(prompt.closest('.composer-prompt-zone')).not.toHaveClass('composer-prompt-zone-expanded');
+  });
 });
 
 describe('SessionComposer workspace focus and suggestions', () => {
