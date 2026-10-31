@@ -24,7 +24,7 @@ const item: InboxItem = {
       kind: 'array',
       required: true,
       options: [
-        { value: 'staging', label: 'Staging' },
+        { value: 'staging', label: 'Staging', description: 'Shared preview environment.' },
         { value: 'prod', label: 'Production environment with a long descriptive option label' }
       ],
       value: []
@@ -139,6 +139,8 @@ describe('InboxRequestCard', () => {
     expect(staging).toHaveClass('elicitation-option-row');
     expect(staging).not.toHaveClass('app-checkbox-pill');
     expect(longOption).toBeInTheDocument();
+    expect(screen.getByText('Shared preview environment.')).toBeInTheDocument();
+    expect(staging).toHaveAccessibleDescription('Shared preview environment.');
 
     await fireEvent.click(staging);
     await fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
@@ -177,7 +179,7 @@ describe('InboxRequestCard', () => {
           kind: 'string',
           required: true,
           options: [
-            { value: 'staging', label: 'Staging' },
+            { value: 'staging', label: 'Staging', description: 'Shared preview environment.' },
             { value: 'prod', label: 'Production environment with a long descriptive option label' }
           ],
           value: '',
@@ -199,6 +201,10 @@ describe('InboxRequestCard', () => {
 
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
     expect(screen.getByRole('radiogroup', { name: 'Target environment*' })).toBeInTheDocument();
+    expect(screen.getByText('Shared preview environment.')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Staging' })).toHaveAccessibleDescription(
+      'Shared preview environment.'
+    );
     await fireEvent.click(screen.getByRole('radio', { name: 'Staging' }));
     expect(onFieldChange).toHaveBeenCalledWith('elicitation-1', 'target', 'staging');
 

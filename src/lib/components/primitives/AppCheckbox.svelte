@@ -6,6 +6,7 @@
     checked = $bindable(false),
     disabled = false,
     label = undefined,
+    description = undefined,
     ariaLabel = undefined,
     pill = false,
     class: className = '',
@@ -14,11 +15,15 @@
     checked: boolean;
     disabled?: boolean;
     label?: string;
+    description?: string;
     ariaLabel?: string;
     pill?: boolean;
     class?: string;
     onCheckedChange?: (checked: boolean) => void;
   } = $props();
+
+  const instanceId = $props.id();
+  const descriptionId = $derived(description ? `${instanceId}-desc` : undefined);
 
   function handleCheckedChange(nextChecked: boolean) {
     checked = nextChecked;
@@ -30,6 +35,7 @@
   bind:checked
   {disabled}
   aria-label={ariaLabel ?? label}
+  aria-describedby={descriptionId}
   class={`app-checkbox-control ${pill ? 'app-checkbox-pill' : ''} ${className}`}
   onCheckedChange={handleCheckedChange}
 >
@@ -40,7 +46,12 @@
       {/if}
     </span>
     {#if label}
-      <span class="app-checkbox-label">{label}</span>
+      <span class="app-checkbox-copy">
+        <span class="app-checkbox-label">{label}</span>
+        {#if description}
+          <span id={descriptionId} class="app-checkbox-description">{description}</span>
+        {/if}
+      </span>
     {/if}
   {/snippet}
 </Checkbox.Root>

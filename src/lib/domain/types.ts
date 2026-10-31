@@ -428,6 +428,7 @@ export interface InboxAction {
 export interface InboxFormOption {
   value: string;
   label: string;
+  description?: string | null;
 }
 
 export interface InboxFormField {
