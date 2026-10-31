@@ -725,7 +725,7 @@
                 {#if optionsSummary}<small>{optionsSummary}</small>{/if}
                 <ChevronDown class="composer-options-chevron" size={13} />
                 {#if modeControl?.label}
-                  <span class="composer-mode-badge" data-tone={modeControl.tone} aria-hidden="true">{modeControl.label}</span>
+                  <span class="composer-badge composer-mode-badge" data-tone={modeControl.tone} aria-hidden="true">{modeControl.label}</span>
                 {/if}
              </summary>
            </details>
