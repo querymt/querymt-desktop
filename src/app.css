@@ -32,6 +32,8 @@
   --row-surface: rgba(255, 255, 255, 0.74);
   --row-surface-hover: rgba(36, 31, 49, 0.055);
   --icon-surface: rgba(94, 92, 100, 0.08);
+  --composer-pill-surface: rgba(94, 92, 100, 0.07);
+  --composer-pill-surface-hover: rgba(94, 92, 100, 0.13);
   --selected-surface: rgba(249, 115, 22, 0.13);
   --selected-border: rgba(249, 115, 22, 0.32);
   --status-running: #9a6700;
@@ -134,6 +136,8 @@
   --row-surface: #222222;
   --row-surface-hover: rgba(255, 255, 255, 0.055);
   --icon-surface: #202020;
+  --composer-pill-surface: rgba(255, 255, 255, 0.045);
+  --composer-pill-surface-hover: rgba(255, 255, 255, 0.09);
   --selected-surface: rgba(255, 122, 26, 0.1);
   --selected-border: rgba(255, 122, 26, 0.28);
   --status-running: #ffd27a;
@@ -3356,15 +3360,16 @@ summary:focus-visible {
   align-items: center;
   gap: 0;
   border-radius: var(--radius-control);
-  border: 1px solid var(--border);
-  background: var(--bg-card);
+  /* Transparent border keeps the pill metrics; the faint fill is the affordance. */
+  border: 1px solid transparent;
+  background: var(--composer-pill-surface);
   color: var(--text);
   padding: 0.28rem 0.6rem 0.28rem 0.3rem;
   font-size: 0.75rem;
   line-height: 1rem;
   outline: none;
   box-shadow: none;
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 
 .composer-split-pill {
@@ -3397,13 +3402,13 @@ summary:focus-visible {
 
 .composer-split-pill:hover,
 .composer-split-pill[data-highlighted],
+.composer-split-pill[data-state='open'],
 .composer-model-pill:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
 }
 
+/* The ring is keyboard-only; mouse clicks no longer leave an accent outline. */
 .composer-split-pill:focus-visible,
-.composer-split-pill[data-state='open'],
 .composer-model-pill:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-dim);
@@ -3505,21 +3510,20 @@ summary:focus-visible {
   max-width: 18rem;
   align-items: center;
   gap: 0.42rem;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-control);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
   padding: 0.3rem 0.55rem;
   color: var(--text-muted);
   font-size: 0.75rem;
   font-weight: 550;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .composer-options-trigger:hover,
 .composer-options[open] .composer-options-trigger {
-  border-color: var(--border-strong);
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
 }
 
@@ -3528,7 +3532,7 @@ summary:focus-visible {
   outline-offset: 2px;
 }
 
-/* "+" menu trigger: bare at rest, boxed on hover, and the plus turns into an x while open. */
+/* "+" menu trigger: bare at rest, faint fill on hover, and the plus turns into an x while open. */
 .composer-add-trigger {
   display: inline-flex;
   flex: 0 0 auto;
@@ -3541,13 +3545,12 @@ summary:focus-visible {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .composer-add-trigger:hover:enabled,
 .composer-add-trigger-open {
-  border-color: var(--border-strong);
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
 }
 
@@ -3586,9 +3589,11 @@ summary:focus-visible {
   gap: 0.55rem;
 }
 
-/* Current mode, attached to the Options button like the model reasoning badge. */
-.composer-mode-badge {
-  --mode-color: var(--accent);
+/* Shared tag attached to the top edge of a composer pill (reasoning on the model
+   button, mode on Options). Borderless: a tinted fill plus a card-colored halo
+   notches it out of the pill behind it. Set --badge-color on the element. */
+.composer-badge {
+  --badge-color: var(--accent);
   position: absolute;
   top: -7px;
   right: 5px;
@@ -3597,19 +3602,26 @@ summary:focus-visible {
   height: 14px;
   max-width: calc(100% - 10px);
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--mode-color) 45%, var(--bg-card));
+  border: 0;
   border-radius: calc(var(--radius-control) / 2);
-  background: color-mix(in srgb, var(--mode-color) 14%, var(--bg-card));
+  background: color-mix(in srgb, var(--badge-color) 19%, var(--bg-card));
+  box-shadow: 0 0 0 2px var(--bg-panel-strong);
   padding: 0 4px;
-  color: var(--mode-color);
+  color: var(--badge-color);
   font-size: 8.25px;
   font-weight: 600;
-  line-height: 12px;
+  line-height: 14px;
   text-align: center;
   text-overflow: ellipsis;
   text-transform: lowercase;
   white-space: nowrap;
   pointer-events: none;
+}
+
+/* Current mode, attached to the Options button like the model reasoning badge. */
+.composer-mode-badge {
+  --mode-color: var(--accent);
+  --badge-color: var(--mode-color);
 }
 
 /* --mode-tone-* is theme-aware and indexed by the mode's position in the agent's list. */
@@ -3741,7 +3753,8 @@ summary:focus-visible {
   align-self: stretch;
   width: 1px;
   margin: 0.2rem 0.4rem;
-  background: var(--border);
+  /* Softer now that the pill is a faint fill instead of an outlined box. */
+  background: color-mix(in srgb, var(--border) 55%, transparent);
 }
 
 .composer-split-pill-label,
