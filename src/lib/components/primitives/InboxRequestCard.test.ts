@@ -386,7 +386,7 @@ describe('InboxRequestCard', () => {
     expect(screen.queryByText('high')).not.toBeInTheDocument();
   });
 
-  it('shows only the selected disabled option on a submitted elicitation card', () => {
+  it('shows only the selected disabled option on a submitted elicitation card', async () => {
     render(InboxRequestCard, {
       item: {
         ...item,
@@ -414,5 +414,64 @@ describe('InboxRequestCard', () => {
     expect(screen.queryByRole('radio', { name: 'Needs a tweak' })).not.toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: 'Custom answer…' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Submitted')).not.toBeInTheDocument();
+    expect(screen.queryByText('elicitation')).not.toBeInTheDocument();
+    const submitted = screen.getByRole('button', { name: 'Submitted' });
+    expect(submitted).not.toHaveAttribute('title');
+    await fireEvent.pointerEnter(submitted, { pointerType: 'mouse' });
+    const tooltip = await screen.findByText('Submitted', { selector: '.app-tooltip-content' });
+    expect(tooltip).toHaveClass('app-tooltip-content');
+  });
+
+  it('collapses to the question and Open session button', async () => {
+    const onOpenSession = vi.fn();
+    render(InboxRequestCard, {
+      item: { ...item, agentId: 'agent-1', sessionId: 'session-1' },
+      collapsed: true,
+      onOpenSession
+    });
+
+    expect(screen.getByText('Choose environments')).toHaveClass('inbox-collapsed-detail');
+    expect(screen.queryByRole('heading', { name: 'Environments' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Submit' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pending' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Submitted' })).not.toBeInTheDocument();
+    const openSession = screen.getByRole('button', { name: 'Open session' });
+    expect(openSession.querySelector('.lucide-arrow-up-right')).not.toBeNull();
+    await fireEvent.click(openSession);
+    expect(onOpenSession).toHaveBeenCalledOnce();
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand request' }));
+    expect(screen.getByRole('heading', { name: 'Environments' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pending' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse request' }));
+    expect(screen.queryByRole('heading', { name: 'Environments' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pending' })).toBeInTheDocument();
+  });
+
+  it('shows the pending marker on expanded unanswered cards', async () => {
+    render(InboxRequestCard, { item });
+
+    const pending = screen.getByRole('button', { name: 'Pending' });
+    expect(pending).not.toHaveAttribute('title');
+    expect(screen.queryByRole('button', { name: 'Submitted' })).not.toBeInTheDocument();
+    await fireEvent.pointerEnter(pending, { pointerType: 'mouse' });
+    const tooltip = await screen.findByText('Pending', { selector: '.app-tooltip-content' });
+    expect(tooltip).toHaveClass('app-tooltip-content');
+  });
+
+  it('marks collapsed submitted cards as submitted instead of pending', () => {
+    render(InboxRequestCard, {
+      item: {
+        ...item,
+        status: 'resolved',
+        resolution: 'Submitted',
+        actions: []
+      },
+      collapsed: true
+    });
+
+    expect(screen.getByRole('button', { name: 'Submitted' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pending' })).not.toBeInTheDocument();
   });
 });

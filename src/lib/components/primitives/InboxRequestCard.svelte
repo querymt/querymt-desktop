@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowUpRight, PlugZap } from '@lucide/svelte';
+  import { ArrowUpRight, ChevronRight, CircleCheckBig, CircleDot, PlugZap } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
   import AppCheckbox from '$lib/components/primitives/AppCheckbox.svelte';
   import type { InboxFormField, InboxItem } from '$lib/domain/types';
@@ -7,6 +7,7 @@
   let {
     item,
     compact = false,
+    collapsed: collapsedByDefault = false,
     showAgentNames = false,
     onAction = null,
     onFieldChange = null,
@@ -16,6 +17,7 @@
   }: {
     item: InboxItem;
     compact?: boolean;
+    collapsed?: boolean;
     showAgentNames?: boolean;
     onAction?: ((itemId: string, actionId: string) => void | Promise<void>) | null;
     onFieldChange?: ((itemId: string, fieldKey: string, value: InboxFormField['value']) => void) | null;
@@ -30,9 +32,12 @@
   const severityClass = $derived(
     item.severity === 'high' ? 'badge-high' : item.severity === 'low' ? 'badge-low' : 'badge-medium'
   );
-  const showOpenSession = $derived(
-    !compact && Boolean(item.sessionId && item.agentId && onOpenSession)
-  );
+  let collapsedOverride = $state<boolean | null>(null);
+  const isCollapsed = $derived(collapsedOverride ?? collapsedByDefault);
+  const canOpenSession = $derived(Boolean(item.sessionId && item.agentId && onOpenSession));
+  const showOpenSession = $derived(!compact && canOpenSession);
+  const showResolvedCheck = $derived(item.status === 'resolved' && item.resolution === 'Submitted');
+  const showPendingMarker = $derived(item.status !== 'resolved');
   const showActions = $derived(
     Boolean(item.actions && item.actions.length > 0 && item.status !== 'resolved')
   );
@@ -80,27 +85,90 @@
   }
 </script>
 
-<article class={`surface-muted ${compact ? 'p-3' : 'p-4'}`}>
-  <div class="flex items-start justify-between gap-4">
-    <div>
-      <h3 class="text-sm font-semibold">{item.title}</h3>
-      <p class="muted mt-1 text-sm">{item.detail}</p>
-    </div>
-    <div class="flex flex-wrap items-center justify-end gap-2">
-      {#if showAgentNames && item.agentName}
+{#snippet statusMarker(kind: 'pending' | 'submitted')}
+  {@const label = kind === 'submitted' ? 'Submitted' : 'Pending'}
+  <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+    <Tooltip.Root disableHoverableContent>
+      <Tooltip.Trigger
+        type="button"
+        class={kind === 'submitted' ? 'inbox-resolved-check' : 'inbox-pending-marker'}
+        aria-label={label}
+      >
+        {#if kind === 'submitted'}
+          <CircleCheckBig size={13} aria-hidden="true" />
+        {:else}
+          <CircleDot size={13} aria-hidden="true" />
+        {/if}
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content class="app-tooltip-content" sideOffset={6}>{label}</Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  </Tooltip.Provider>
+{/snippet}
+
+{#snippet openSessionButton()}
+  <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+    <Tooltip.Root disableHoverableContent>
+      <Tooltip.Trigger
+        type="button"
+        class="action-btn action-btn-compact"
+        aria-label="Open session"
+        onclick={() => onOpenSession?.(item)}
+      >
+        Open session
+        <ArrowUpRight size={12} aria-hidden="true" />
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content class="app-tooltip-content" sideOffset={6}>{item.sessionId}</Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  </Tooltip.Provider>
+{/snippet}
+
+<article class={`surface-muted ${compact || isCollapsed ? 'p-3' : 'p-4'}`}>
+  <div class={`inbox-card-header ${isCollapsed ? 'inbox-card-header-collapsed' : ''}`}>
+    {#if !compact}
+      <button
+        class="inbox-card-chevron"
+        type="button"
+        aria-expanded={!isCollapsed}
+        aria-label={isCollapsed ? 'Expand request' : 'Collapse request'}
+        onclick={() => (collapsedOverride = !isCollapsed)}
+      >
+        <ChevronRight size={14} class={isCollapsed ? '' : 'inbox-card-chevron-open'} aria-hidden="true" />
+      </button>
+    {/if}
+    {#if isCollapsed}
+      <p class="inbox-collapsed-detail">{item.detail}</p>
+    {:else}
+      <div class="inbox-card-copy">
+        <h3 class="text-sm font-semibold">{item.title}</h3>
+        <p class="muted mt-1 text-sm">{item.detail}</p>
+      </div>
+    {/if}
+    <div class="inbox-card-end">
+      {#if !isCollapsed && showAgentNames && item.agentName}
         <span class="badge">{item.agentName}</span>
       {/if}
-      {#if showSeverity}
+      {#if !isCollapsed && showSeverity}
         <span class={`badge ${severityClass}`}>{item.severity}</span>
       {/if}
-      {#if item.status === 'resolved' && item.resolution}
-        <span class="badge">{item.resolution}</span>
-      {:else if offline}
+      {#if showResolvedCheck}
+        {@render statusMarker('submitted')}
+      {:else if showPendingMarker}
+        {@render statusMarker('pending')}
+      {/if}
+      {#if !isCollapsed && offline}
         <span class="badge">Temporarily unavailable</span>
       {/if}
-      <span class="badge">{item.type}</span>
+      {#if showOpenSession}
+        {@render openSessionButton()}
+      {/if}
     </div>
   </div>
+
+  {#if !isCollapsed}
 
   {#if showForm}
     <div class="mt-4 grid gap-3">
@@ -284,10 +352,9 @@
     <div class="alert-error mt-4">{item.error}</div>
   {/if}
 
-  {#if showActions || showOpenSession}
+  {#if showActions}
     <div class="mt-4 flex flex-wrap items-center gap-2">
-      {#if showActions}
-        {#each item.actions ?? [] as action}
+      {#each item.actions ?? [] as action}
           <button
             class={`action-btn ${action.id === primaryActionId ? 'action-btn-primary' : ''}`}
             type="button"
@@ -299,25 +366,7 @@
             {action.label}
           </button>
         {/each}
-      {/if}
-      {#if showOpenSession}
-        <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
-          <Tooltip.Root disableHoverableContent>
-            <Tooltip.Trigger
-              type="button"
-              class="action-btn action-btn-compact ml-auto"
-              aria-label="Open session"
-              onclick={() => onOpenSession?.(item)}
-            >
-              Open session
-              <ArrowUpRight size={12} aria-hidden="true" />
-            </Tooltip.Trigger>
-            <Tooltip.Portal>
-              <Tooltip.Content class="app-tooltip-content" sideOffset={6}>{item.sessionId}</Tooltip.Content>
-            </Tooltip.Portal>
-          </Tooltip.Root>
-        </Tooltip.Provider>
-      {/if}
     </div>
+  {/if}
   {/if}
 </article>
