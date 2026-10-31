@@ -263,7 +263,8 @@ describe('SessionComposer', () => {
       'Claude Sonnet 4 from anthropic; reasoning effort: Auto'
     ]);
     expect(screen.getByLabelText('Session options').querySelector('.composer-mode-badge')).toHaveTextContent('Build');
-    expect(screen.getByRole('button', { name: 'Attach files' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Attach files' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Image attachment encoding' })).not.toBeInTheDocument();
     expect(screen.queryByText('Native images')).not.toBeInTheDocument();
     expect(screen.queryByText('Image resources')).not.toBeInTheDocument();
@@ -286,6 +287,37 @@ describe('SessionComposer', () => {
     });
 
     expect(tones).toEqual(['0', '1', '2']);
+  });
+
+  it('puts the add menu first in the toolbar with attach files as its only action', async () => {
+    const { container } = renderComposer({ launch: true });
+
+    const controls = container.querySelector('.composer-toolbar-controls');
+    expect(controls?.firstElementChild).toBe(screen.getByRole('button', { name: 'Add' }));
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const pickFiles = vi.spyOn(fileInput, 'click').mockImplementation(() => {});
+
+    await fireEvent.keyDown(screen.getByRole('button', { name: 'Add' }), { key: 'Enter' });
+    const items = await screen.findAllByRole('menuitem');
+    expect(items.map((item) => item.textContent?.trim())).toEqual(['Attach files']);
+    expect(items[0].querySelector('svg')).not.toBeNull();
+
+    await fireEvent.click(items[0]);
+    expect(pickFiles).toHaveBeenCalledOnce();
+  });
+
+  it('turns the add trigger only when the menu is opened, not on hover', async () => {
+    renderComposer({ launch: true });
+    const trigger = screen.getByRole('button', { name: 'Add' });
+
+    await fireEvent.mouseEnter(trigger);
+    await fireEvent.pointerEnter(trigger);
+    expect(trigger).not.toHaveClass('composer-add-trigger-open');
+
+    await fireEvent.keyDown(trigger, { key: 'Enter' });
+    await screen.findByRole('menuitem', { name: 'Attach files' });
+    expect(trigger).toHaveClass('composer-add-trigger-open');
   });
 
   it('keeps send as the strong primary action', () => {
