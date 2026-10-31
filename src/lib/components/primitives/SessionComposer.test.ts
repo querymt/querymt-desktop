@@ -326,27 +326,37 @@ describe('SessionComposer', () => {
     expect(screen.getByRole('button', { name: 'Start session' })).toHaveClass('action-btn-primary');
   });
 
-  it('morphs between stable overlaid blank-session and send states', async () => {
-    const { container, rerender } = renderComposer({ launch: true, prompt: '' });
-    const morph = container.querySelector('.composer-action-morph');
-    const createState = container.querySelector('.composer-action-morph-create');
-    const sendState = container.querySelector('.composer-action-morph-send');
-
-    expect(screen.getByRole('button', { name: 'Start blank session' })).toBeInTheDocument();
-    expect(morph).toHaveClass('is-creating');
-    expect(morph).not.toHaveClass('is-sending');
-    expect(createState).toHaveAttribute('aria-hidden', 'false');
-    expect(sendState).toHaveAttribute('aria-hidden', 'true');
-    expect(createState?.querySelector('.lucide-plus')).not.toBeNull();
-    expect(sendState?.querySelector('.lucide-send-horizontal')).not.toBeNull();
+  it('keeps the send button quiet until there is something to send', async () => {
+    const { rerender } = renderComposer({ launch: true, prompt: '' });
+    const button = screen.getByRole('button', { name: 'Start blank session' });
+    expect(button).toHaveClass('composer-send', 'composer-send-idle');
+    expect(button).not.toHaveClass('composer-send-ready');
 
     await rerender({ prompt: 'Fix the failing tests' });
+    const ready = screen.getByRole('button', { name: 'Start session' });
+    expect(ready).toHaveClass('composer-send', 'composer-send-ready');
+    expect(ready).not.toHaveClass('composer-send-idle');
+  });
 
+  it('keeps the same start label and icon nodes when the first character is typed', async () => {
+    const { container, rerender } = renderComposer({ launch: true, prompt: '' });
+    const label = container.querySelector('.composer-action-morph-state > span');
+    const icon = container.querySelector('.composer-action-morph-state svg');
+
+    expect(screen.getByRole('button', { name: 'Start blank session' })).toBeInTheDocument();
+    expect(container.querySelectorAll('.composer-action-morph-state')).toHaveLength(1);
+    expect(label).toHaveTextContent('Start');
+    // The send arrow, never a "+", so it can't be mistaken for the attach menu.
+    expect(icon).toHaveClass('lucide-send-horizontal');
+
+    await rerender({ prompt: 'F' });
+
+    // Same DOM nodes, so nothing crossfades or slides and the text cannot flicker.
     expect(screen.getByRole('button', { name: 'Start session' })).toBeInTheDocument();
-    expect(morph).not.toHaveClass('is-creating');
-    expect(morph).toHaveClass('is-sending');
-    expect(createState).toHaveAttribute('aria-hidden', 'true');
-    expect(sendState).toHaveAttribute('aria-hidden', 'false');
+    expect(container.querySelectorAll('.composer-action-morph-state')).toHaveLength(1);
+    expect(container.querySelector('.composer-action-morph-state > span')).toBe(label);
+    expect(container.querySelector('.composer-action-morph-state svg')).toBe(icon);
+    expect(label).toHaveTextContent('Start');
   });
 
   it('selects the highlighted model with the arrow keys and Enter', async () => {

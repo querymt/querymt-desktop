@@ -186,8 +186,11 @@ describe('Landing page session start', () => {
     expect(screen.getByText('Working in')).toBeInTheDocument();
     expect(screen.getByText('work')).toBeInTheDocument();
     expect(screen.queryByText('Desktop control center')).not.toBeInTheDocument();
+    // Mode lives in the Options panel and is badged on the trigger.
+    const optionsTrigger = screen.getByLabelText('Session options');
+    expect(optionsTrigger.querySelector('.composer-mode-badge')).toHaveTextContent('Build');
+    await fireEvent.click(optionsTrigger);
     expect(screen.getByRole('button', { name: 'Mode' })).toHaveTextContent('Build');
-    expect(screen.queryByLabelText('Session options')).not.toBeInTheDocument();
 
     await fireEvent.click(screen.getByRole('button', { name: /Claude Sonnet 4/i }));
     expect(screen.getByRole('button', { name: 'Reasoning effort' })).toHaveTextContent('Auto');
