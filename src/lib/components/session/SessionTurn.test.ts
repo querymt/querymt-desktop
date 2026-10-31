@@ -187,14 +187,14 @@ describe('SessionTurn', () => {
       content: []
     };
     const { container } = render(SessionTurn, { turn: attachmentTurn });
-    const message = container.querySelector('.session-message-user');
-    const attachments = container.querySelector('.session-attachments');
+    const bubble = container.querySelector('.session-message-user');
+    const attachments = container.querySelector('.session-user-message-attachments');
     const body = container.querySelector('.session-message-body');
 
     expect(attachments).not.toBeNull();
     expect(body).not.toBeNull();
-    expect(message?.firstElementChild).toBe(attachments);
-    expect(attachments!.compareDocumentPosition(body!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(bubble?.contains(attachments)).toBe(false);
+    expect(attachments!.compareDocumentPosition(bubble!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
   it('shows a neutral placeholder for metadata-only messages', () => {
@@ -396,7 +396,7 @@ describe('SessionTurn', () => {
     const { container, getByRole, getByText, queryByRole } = render(SessionTurn, { turn: attachmentTurn });
 
     const trigger = getByRole('button', { name: 'Open photo.png' });
-    expect(trigger).toHaveAttribute('title', 'photo.png');
+    expect(trigger).not.toHaveAttribute('title');
     expect(within(trigger).getByRole('img', { name: 'photo.png' })).toHaveAttribute('src', 'data:image/png;base64,aW1n');
     expect(within(trigger).getByRole('img', { name: 'photo.png' })).toHaveClass('session-image-thumbnail');
     expect(container.querySelector('figcaption')).toBeNull();
