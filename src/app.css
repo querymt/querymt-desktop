@@ -7408,8 +7408,14 @@ a.session-delegate-session:hover {
   font-weight: 650;
 }
 
-.session-message-user .session-attachments {
+.session-user-message-attachments {
+  max-width: min(44rem, 86%);
+}
+
+.session-user-message-attachments .session-attachments {
+  width: auto;
   padding: 0;
+  justify-content: flex-end;
 }
 
 .session-attachments-compact .session-image-preview {

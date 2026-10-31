@@ -748,7 +748,7 @@ describe('SessionComposer', () => {
     });
 
     const trigger = screen.getByRole('button', { name: 'Open photo.png' });
-    expect(trigger).toHaveAttribute('title', 'photo.png');
+    expect(trigger).not.toHaveAttribute('title');
     expect(within(trigger).getByRole('img', { name: 'photo.png' })).toHaveAttribute('src', 'data:image/png;base64,aW1n');
     expect(within(trigger).getByRole('img', { name: 'photo.png' })).toHaveClass('session-image-thumbnail');
     expect(container.querySelector('.session-attachments')).toHaveClass('session-attachments-compact');
