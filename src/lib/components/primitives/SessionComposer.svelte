@@ -883,7 +883,7 @@
           <IconTooltipButton label="Stop agent" icon={Square} size={15} onclick={onStopPrompt} />
         {/if}
         <button
-          class={`${launch ? 'action-btn action-btn-primary min-w-[9rem] justify-center px-5 py-3' : minimal || (activeSessionId && agentRunning && turnControlSupported) ? 'action-btn action-btn-primary px-4' : 'icon-btn icon-btn-primary'}`}
+          class={`composer-send ${hasDraft ? 'composer-send-ready' : 'composer-send-idle'} ${launch ? 'action-btn action-btn-primary justify-center' : minimal || (activeSessionId && agentRunning && turnControlSupported) ? 'action-btn action-btn-primary px-4' : 'icon-btn icon-btn-primary'}`}
           disabled={loading}
           type="button"
           aria-label={activeSessionId ? primaryActionLabel : creatingBlankSession ? 'Start blank session' : 'Start session'}
@@ -903,17 +903,13 @@
             {/if}
           </span>
         {:else}
-          <span class="composer-action-morph" class:is-creating={creatingBlankSession} class:is-sending={!creatingBlankSession}>
-            <span class="composer-action-morph-state composer-action-morph-create" aria-hidden={!creatingBlankSession}>
-              <Plus size={16} />
-              {#if minimal || launch}
-                <span>New session</span>
-              {/if}
-            </span>
-            <span class="composer-action-morph-state composer-action-morph-send" aria-hidden={creatingBlankSession}>
+          <!-- One static state: blank and send share the same icon and label, so
+               crossfading two copies only made the text flicker on the first keystroke. -->
+          <span class="composer-action-morph">
+            <span class="composer-action-morph-state">
               <SendHorizontal size={16} />
               {#if minimal || launch}
-                <span>{starting ? 'Starting\u2026' : 'Start session'}</span>
+                <span>{starting ? 'Starting\u2026' : 'Start'}</span>
               {/if}
             </span>
           </span>
