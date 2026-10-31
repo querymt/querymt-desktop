@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, GitBranch, FileCog, FilePlus2, Lock, Monitor, Navigation, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
+  import { ChevronDown, FileCog, FilePlus2, GitBranch, Lock, Maximize2, Minimize2, Monitor, Navigation, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
   import { tick } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import type { TransitionConfig } from 'svelte/transition';
@@ -207,6 +207,12 @@
   ));
   const sessionPlaceholder = 'Write a reply for this session...';
   const hasDraft = $derived(prompt.trim().length > 0 || attachments.length > 0);
+  const hasPromptText = $derived(prompt.trim().length > 0);
+  let promptExpanded = $state(false);
+
+  $effect(() => {
+    if (!hasPromptText) promptExpanded = false;
+  });
   const primaryActionLabel = $derived(
     agentRunning && turnControlSupported
       ? inputDelivery === 'queue' ? 'Queue' : 'Steer'
@@ -607,7 +613,7 @@
   {/if}
 
   <div
-    class={`composer-prompt-zone ${unifiedShell ? 'px-1' : 'px-2'} rounded-[18px] bg-inherit transition ${isDragging ? 'bg-[var(--accent-dim)] ring-1 ring-[var(--border-strong)]' : ''}`}
+    class={`composer-prompt-zone ${promptExpanded ? 'composer-prompt-zone-expanded' : ''} ${unifiedShell ? 'px-1' : 'px-2'} rounded-[18px] bg-inherit transition ${isDragging ? 'bg-[var(--accent-dim)] ring-1 ring-[var(--border-strong)]' : ''}`}
     role="region"
     aria-label="Prompt and attachment drop zone"
     ondragover={(event) => {
@@ -939,6 +945,17 @@
       in:composerMorph={{ compact: false }}
       out:composerOut={{ compact: false }}
     >
+      {#if hasPromptText}
+        <div class="composer-prompt-expand">
+          <IconTooltipButton
+            label={promptExpanded ? 'Collapse composer' : 'Expand composer'}
+            icon={promptExpanded ? Minimize2 : Maximize2}
+            controlSize="compact"
+            size={14}
+            onclick={() => (promptExpanded = !promptExpanded)}
+          />
+        </div>
+      {/if}
       <div
         class={`flex flex-col ${unifiedShell ? 'gap-4 rounded-[24px] bg-inherit' : 'gap-3 rounded-[18px] border border-[var(--border)] bg-inherit'} ${unifiedShell ? 'p-1' : minimal ? 'p-3 md:p-4' : 'p-2'}`}
       >

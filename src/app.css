@@ -11889,6 +11889,7 @@ a.session-delegate-session:hover {
 }
 
 .session-composer-dock-expanded {
+  position: relative;
   filter: drop-shadow(0 -0.75rem 1.75rem var(--body-bg-base));
 }
 
@@ -11929,6 +11930,31 @@ a.session-delegate-session:hover {
   outline: none;
   font: inherit;
   font-size: 0.875rem;
+}
+
+.composer-prompt-expand {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  z-index: 2;
+}
+
+.composer-prompt-expand .icon-btn {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.composer-prompt-expand .icon-btn:hover:enabled {
+  border-color: transparent;
+  background: var(--row-surface-hover);
+  color: var(--text);
+}
+
+.composer-prompt-zone-expanded textarea {
+  min-height: min(50vh, 24rem) !important;
+  max-height: min(70vh, 36rem);
+  overflow-y: auto;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -12579,6 +12605,11 @@ a.session-delegate-session:hover {
     min-height: 3rem !important;
     max-height: 7rem;
     padding-block: 0.65rem;
+  }
+
+  .app-shell-active-session .composer-prompt-zone-expanded textarea {
+    min-height: min(50vh, 24rem) !important;
+    max-height: min(70vh, 36rem);
   }
 
   .app-shell-active-session .composer-toolbar {
