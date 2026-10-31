@@ -3528,6 +3528,64 @@ summary:focus-visible {
   outline-offset: 2px;
 }
 
+/* "+" menu trigger: bare at rest, boxed on hover, and the plus turns into an x while open. */
+.composer-add-trigger {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.composer-add-trigger:hover:enabled,
+.composer-add-trigger-open {
+  border-color: var(--border-strong);
+  background: var(--bg-card-hover);
+  color: var(--text);
+}
+
+.composer-add-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.composer-add-trigger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.composer-add-trigger .composer-add-icon {
+  transition: transform 0.2s ease;
+}
+
+/* Rotates on click (menu open), not on hover. */
+.composer-add-trigger-open .composer-add-icon {
+  transform: rotate(45deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-add-trigger .composer-add-icon {
+    transition: none;
+  }
+}
+
+.composer-add-content {
+  min-width: 11rem;
+}
+
+.composer-add-item-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
 /* Current mode, attached to the Options button like the model reasoning badge. */
 .composer-mode-badge {
   --mode-color: var(--accent);

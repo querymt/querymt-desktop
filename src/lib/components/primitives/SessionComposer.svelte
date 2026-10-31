@@ -16,6 +16,7 @@
     getConfigOptionChoices,
     type ModelLocationContext
   } from '$lib/querymt/config-options';
+  import ComposerAddMenu, { type ComposerAddMenuAction } from './ComposerAddMenu.svelte';
   import { getModeToneIndex } from '$lib/domain/session-mode-tone';
   import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment, SessionContentBlock, SessionInputDeliveryMode } from '$lib/domain/types';
   import type { SendShortcut } from '$lib/stores/chat-preferences.svelte';
@@ -557,6 +558,11 @@
     });
   }
 
+  // Actions behind the composer's "+" menu. Add new entries here.
+  const addMenuActions = $derived<ComposerAddMenuAction[]>([
+    { id: 'attach-files', label: 'Attach files', icon: Paperclip, onSelect: handleAttachClick }
+  ]);
+
   function handleAttachClick() {
     fileInputElement?.click();
   }
@@ -689,6 +695,7 @@
 
   <div class={`composer-toolbar flex flex-wrap items-center justify-between gap-3 ${unifiedShell ? 'border-t border-[color-mix(in_srgb,var(--border)_60%,transparent)] px-1 pt-2' : 'border-t border-[var(--border)] px-2 pt-3'}`}>
     <div class="composer-toolbar-controls flex flex-wrap items-center gap-2">
+      <ComposerAddMenu actions={addMenuActions} label="Add" />
       {#if !sessionOnly && onCreateSession && !minimal && !launch}
         <IconTooltipButton label="Blank session" icon={Plus} size={16} disabled={loading} onclick={onCreateSession} />
       {/if}
@@ -853,7 +860,6 @@
           (event.currentTarget as HTMLInputElement).value = '';
         }}
       />
-      <IconTooltipButton label="Attach files" icon={Paperclip} size={16} onclick={handleAttachClick} />
       {#if !sessionOnly && onCreateSession && !launch}
         <button class={minimal ? 'icon-btn' : 'action-btn'} disabled={loading} type="button" aria-label="Blank session" onclick={onCreateSession}>
           <FilePlus2 size={16} />
