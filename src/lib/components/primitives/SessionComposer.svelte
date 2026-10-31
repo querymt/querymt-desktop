@@ -16,6 +16,7 @@
     getConfigOptionChoices,
     type ModelLocationContext
   } from '$lib/querymt/config-options';
+  import { getModeToneIndex } from '$lib/domain/session-mode-tone';
   import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment, SessionContentBlock, SessionInputDeliveryMode } from '$lib/domain/types';
   import type { SendShortcut } from '$lib/stores/chat-preferences.svelte';
   import type { SessionConfigOption } from '@agentclientprotocol/sdk';
@@ -275,6 +276,33 @@
 
   const modeOption = $derived(activeSessionId ? findModeConfigOption(sessionConfigOptions) : undefined);
   const reasoningOption = $derived(activeSessionId ? findReasoningConfigOption(sessionConfigOptions) : undefined);
+  // One mode control for both launch and active sessions; it lives in the
+  // Options panel and its current value is badged on the Options trigger.
+  const modeControl = $derived.by(() => {
+    if (!activeSessionId && launch && launchModeOptions.length > 0) {
+      const options = launchModeOptions.map((option) => ({ value: option.id, label: option.label }));
+      return {
+        value: selectedLaunchModeId,
+        label: options.find((option) => option.value === selectedLaunchModeId)?.label ?? '',
+        tone: selectedLaunchModeId ? getModeToneIndex(options.map((option) => option.value), selectedLaunchModeId) : null,
+        options,
+        ariaLabel: 'Mode',
+        pending: false,
+        onChange: (value: string) => onLaunchModeChange?.(value)
+      };
+    }
+    if (!modeOption) return null;
+    const options = getConfigOptionChoices(modeOption).map((choice) => ({ value: choice.value, label: choice.name }));
+    return {
+      value: modeOption.currentValue,
+      label: options.find((option) => option.value === modeOption.currentValue)?.label ?? '',
+      tone: modeOption.currentValue ? getModeToneIndex(options.map((option) => option.value), modeOption.currentValue) : null,
+      options,
+      ariaLabel: modeOption.name,
+      pending: !!sessionConfigPending[modeOption.id],
+      onChange: (value: string) => onSessionConfigChange?.(modeOption.id, value)
+    };
+  });
   const selectedProfileLabel = $derived(
     profileOptions.find((option) => option.id === selectedProfileId)?.label ?? 'Default'
   );
@@ -282,7 +310,8 @@
     targetOptions.find((option) => option.id === selectedTargetId)?.label ?? 'Local'
   );
   const secondaryOptionCount = $derived(
-    (deliveryControlAvailable ? 1 : 0) +
+    (modeControl ? 1 : 0) +
+      (deliveryControlAvailable ? 1 : 0) +
       (!sessionOnly && profileOptions.length > 0 ? 1 : 0) +
       (sessionOnly && sessionProfileLabel ? 1 : 0) +
       (!sessionOnly && targetOptions.length > 1 ? 1 : 0) +
@@ -680,35 +709,17 @@
         onRequestPromptFocus={requestPromptFocusFromPicker}
         reasoning={reasoningControl}
       />
-       {#if !activeSessionId && launch && launchModeOptions.length > 0}
-        <ComposerSplitPillSelect
-          value={selectedLaunchModeId}
-          options={launchModeOptions.map((option) => ({ value: option.id, label: option.label }))}
-          icon={SlidersHorizontal}
-          ariaLabel="Mode"
-          class="composer-control-pill"
-          onValueChange={(value) => onLaunchModeChange?.(value)}
-        />
-      {:else if modeOption}
-        <ComposerSplitPillSelect
-          value={modeOption.currentValue}
-          options={getConfigOptionChoices(modeOption).map((choice) => ({ value: choice.value, label: choice.name }))}
-          icon={SlidersHorizontal}
-          pending={!!sessionConfigPending[modeOption.id]}
-          disabled={!!sessionConfigPending[modeOption.id]}
-          ariaLabel={modeOption.name}
-          class="composer-control-pill"
-          onValueChange={(value) => onSessionConfigChange?.(modeOption.id, value)}
-        />
-      {/if}
        {#if secondaryOptionCount > 0}
          <div class="composer-options-host">
            <details class="composer-options" use:autoCollapsePopover>
              <summary class="composer-options-trigger" aria-label="Session options">
                <Settings2 size={14} />
-               <span>Options</span>
-               {#if optionsSummary}<small>{optionsSummary}</small>{/if}
-               <ChevronDown class="composer-options-chevron" size={13} />
+                <span>Options</span>
+                {#if optionsSummary}<small>{optionsSummary}</small>{/if}
+                <ChevronDown class="composer-options-chevron" size={13} />
+                {#if modeControl?.label}
+                  <span class="composer-mode-badge" data-tone={modeControl.tone} aria-hidden="true">{modeControl.label}</span>
+                {/if}
              </summary>
            </details>
            <div class="composer-options-panel">
@@ -717,6 +728,21 @@
                 <span>Fine-tune how this session runs</span>
              </div>
               <div class="composer-options-list">
+                {#if modeControl}
+                  <div class="composer-option-row">
+                    <div class="composer-option-copy"><SlidersHorizontal size={15} /><span><strong>Mode</strong><small>How the agent approaches the next task</small></span></div>
+                    <ComposerSplitPillSelect
+                      value={modeControl.value}
+                      options={modeControl.options}
+                      icon={SlidersHorizontal}
+                      pending={modeControl.pending}
+                      disabled={modeControl.pending}
+                      ariaLabel={modeControl.ariaLabel}
+                      class="composer-control-pill"
+                      onValueChange={modeControl.onChange}
+                    />
+                  </div>
+                {/if}
                 {#if deliveryControlAvailable}
                   <div class="composer-option-row">
                     <div class="composer-option-copy">

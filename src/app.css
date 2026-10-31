@@ -3499,6 +3499,7 @@ summary:focus-visible {
 }
 
 .composer-options-trigger {
+  position: relative;
   display: inline-flex;
   min-height: 2rem;
   max-width: 18rem;
@@ -3526,6 +3527,42 @@ summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* Current mode, attached to the Options button like the model reasoning badge. */
+.composer-mode-badge {
+  --mode-color: var(--accent);
+  position: absolute;
+  top: -7px;
+  right: 5px;
+  display: block;
+  box-sizing: border-box;
+  height: 14px;
+  max-width: calc(100% - 10px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--mode-color) 45%, var(--bg-card));
+  border-radius: calc(var(--radius-control) / 2);
+  background: color-mix(in srgb, var(--mode-color) 14%, var(--bg-card));
+  padding: 0 4px;
+  color: var(--mode-color);
+  font-size: 8.25px;
+  font-weight: 600;
+  line-height: 12px;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: lowercase;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* --mode-tone-* is theme-aware and indexed by the mode's position in the agent's list. */
+.composer-mode-badge[data-tone='0'] { --mode-color: var(--mode-tone-0); }
+.composer-mode-badge[data-tone='1'] { --mode-color: var(--mode-tone-1); }
+.composer-mode-badge[data-tone='2'] { --mode-color: var(--mode-tone-2); }
+.composer-mode-badge[data-tone='3'] { --mode-color: var(--mode-tone-3); }
+.composer-mode-badge[data-tone='4'] { --mode-color: var(--mode-tone-4); }
+.composer-mode-badge[data-tone='5'] { --mode-color: var(--mode-tone-5); }
+.composer-mode-badge[data-tone='6'] { --mode-color: var(--mode-tone-6); }
+.composer-mode-badge[data-tone='7'] { --mode-color: var(--mode-tone-7); }
 
 .composer-options-trigger small {
   min-width: 0;
@@ -12539,7 +12576,7 @@ a.session-delegate-session:hover {
     padding: 0;
   }
 
-  .start-launch-page .composer-options-trigger > span,
+  .start-launch-page .composer-options-trigger > span:not(.composer-mode-badge),
   .start-launch-page .composer-options-trigger > small,
   .start-launch-page .composer-options-chevron {
     display: none;
@@ -12671,7 +12708,7 @@ a.session-delegate-session:hover {
     width: auto;
   }
 
-  .app-shell-active-session .composer-toolbar-controls .composer-options-trigger > span,
+  .app-shell-active-session .composer-toolbar-controls .composer-options-trigger > span:not(.composer-mode-badge),
   .app-shell-active-session .composer-toolbar-controls .composer-options-trigger > small,
   .app-shell-active-session .composer-toolbar-controls .composer-options-chevron {
     display: none;
