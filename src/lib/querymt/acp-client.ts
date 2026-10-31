@@ -122,6 +122,7 @@ import {
   type WorktreeHandoffOptions,
   type WorktreeSessionResult
 } from '$lib/domain/session-workspace';
+import { preserveElicitationOptionDescriptionsOnStream } from '$lib/querymt/elicitation-option-meta';
 import { createTauriAcpStream, createWebSocketAcpStream } from '$lib/querymt/transport';
 import type { Stream } from '@agentclientprotocol/sdk';
 import { isEmbedded } from '$lib/platform/runtime';
@@ -381,10 +382,11 @@ export class DesktopAcpClient {
 
   private async connectUnlocked(): Promise<InitializeResponse> {
     const epoch = this.connectEpoch;
-    const stream =
+    const stream = preserveElicitationOptionDescriptionsOnStream(
       this.config.transport === 'websocket'
         ? await createWebSocketAcpStream(requireWebSocketUrl(this.config), (reason) => this.handleConnectionLoss(reason))
-        : await createTauriAcpStream(this.config.id);
+        : await createTauriAcpStream(this.config.id)
+    );
 
     if (!this.connectIsCurrent(epoch)) {
       await closeAcpStream(stream);

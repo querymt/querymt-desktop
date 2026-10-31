@@ -99,6 +99,7 @@
                   class="elicitation-option-row"
                   checked={!field.customActive && Array.isArray(field.value) && field.value.includes(option.value)}
                   label={option.label}
+                  description={option.description ?? undefined}
                   disabled={offline}
                   onCheckedChange={(checked) => {
                     if (offline) return;
@@ -111,15 +112,19 @@
                 />
               {/each}
               {#if field.allowCustom}
-                <AppCheckbox
-                  class="elicitation-option-row"
-                  checked={Boolean(field.customActive)}
-                  label="Custom answer…"
-                  disabled={offline}
-                  onCheckedChange={(checked) => {
-                    if (!offline) onCustomFieldToggle?.(item.id, field.key, checked);
-                  }}
-                />
+                <div class="elicitation-option-custom">
+                  <span class="elicitation-option-or">or</span>
+                  <AppCheckbox
+                    class="elicitation-option-row elicitation-option-custom-row"
+                    checked={Boolean(field.customActive)}
+                    label="Custom answer…"
+                    description="Type a different response."
+                    disabled={offline}
+                    onCheckedChange={(checked) => {
+                      if (!offline) onCustomFieldToggle?.(item.id, field.key, checked);
+                    }}
+                  />
+                </div>
               {/if}
             </div>
             {#if field.customActive}
@@ -139,7 +144,8 @@
             {/if}
           {:else if field.options}
             <div class="elicitation-option-list" role="radiogroup" aria-labelledby={`${item.id}-${field.key}-label`}>
-              {#each field.options as option}
+              {#each field.options as option, optionIndex}
+                {@const descriptionId = option.description ? `${item.id}-${field.key}-option-${optionIndex}-desc` : undefined}
                 <label class="elicitation-option-row">
                   <input
                     class="elicitation-radio-input"
@@ -148,28 +154,42 @@
                     value={option.value}
                     checked={!field.customActive && field.value === option.value}
                     disabled={offline}
+                    aria-label={option.label}
+                    aria-describedby={descriptionId}
                     onchange={() => {
                       if (!offline) onFieldChange?.(item.id, field.key, option.value);
                     }}
                   />
-                  <span class="elicitation-option-label">{option.label}</span>
+                  <span class="elicitation-option-copy">
+                    <span class="elicitation-option-label">{option.label}</span>
+                    {#if option.description}
+                      <span id={descriptionId} class="elicitation-option-description">{option.description}</span>
+                    {/if}
+                  </span>
                 </label>
               {/each}
               {#if field.allowCustom}
-                <label class="elicitation-option-row">
-                  <input
-                    class="elicitation-radio-input"
-                    type="radio"
-                    name={`${item.id}-${field.key}`}
-                    value="__querymt_custom__"
-                    checked={Boolean(field.customActive)}
-                    disabled={offline}
-                    onchange={() => {
-                      if (!offline) onCustomFieldToggle?.(item.id, field.key, true);
-                    }}
-                  />
-                  <span class="elicitation-option-label">Custom answer…</span>
-                </label>
+                <div class="elicitation-option-custom">
+                  <span class="elicitation-option-or">or</span>
+                  <label class="elicitation-option-row elicitation-option-custom-row">
+                    <input
+                      class="elicitation-radio-input"
+                      type="radio"
+                      name={`${item.id}-${field.key}`}
+                      value="__querymt_custom__"
+                      checked={Boolean(field.customActive)}
+                      disabled={offline}
+                      aria-label="Custom answer…"
+                      onchange={() => {
+                        if (!offline) onCustomFieldToggle?.(item.id, field.key, true);
+                      }}
+                    />
+                    <span class="elicitation-option-copy">
+                      <span class="elicitation-option-label">Custom answer…</span>
+                      <span class="elicitation-option-description">Type a different response.</span>
+                    </span>
+                  </label>
+                </div>
               {/if}
             </div>
             {#if field.customActive}
