@@ -11902,10 +11902,7 @@ a.session-delegate-session:hover {
 .session-composer-dock-expanded {
   position: relative;
   filter: drop-shadow(0 -0.75rem 1.75rem var(--body-bg-base));
-}
-
-.session-composer-dock-expanded:hover {
-  border-color: color-mix(in srgb, var(--border), var(--border-strong) 42%);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .session-composer-morph-shell {
