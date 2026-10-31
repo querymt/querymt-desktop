@@ -163,7 +163,7 @@ describe('SessionComposer', () => {
     expect(screen.queryByText('Delegate routing')).toBeNull();
   });
 
-  it('keeps launch mode visible and moves reasoning into the model picker', async () => {
+  it('moves launch mode into session options, badges it on the trigger, and keeps reasoning in the model picker', async () => {
     const onLaunchModeChange = vi.fn();
     const onLaunchReasoningChange = vi.fn();
     renderComposer({
@@ -182,11 +182,16 @@ describe('SessionComposer', () => {
       onLaunchReasoningChange
     });
 
+    const optionsTrigger = screen.getByLabelText('Session options');
+    expect(optionsTrigger.querySelector('.composer-mode-badge')).toHaveTextContent('Build');
+    expect(screen.getByRole('button', { name: 'Mode' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reasoning effort' })).not.toBeInTheDocument();
+
+    await fireEvent.click(optionsTrigger);
     const modeSelect = screen.getByRole('button', { name: 'Mode' });
+    expect(modeSelect.closest('.composer-options-host')).not.toBeNull();
     expect(modeSelect).toHaveClass('composer-control-pill');
     expect(modeSelect).toHaveTextContent('Build');
-    expect(screen.queryByLabelText('Session options')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Reasoning effort' })).not.toBeInTheDocument();
     const modelButton = screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic; reasoning effort: Auto' });
     expect(modelButton.querySelector('.composer-reasoning-badge')).toHaveTextContent('Auto');
 
@@ -255,15 +260,32 @@ describe('SessionComposer', () => {
       .getAllByRole('button')
       .filter((button) => button.classList.contains('composer-control-pill') && !button.closest('.composer-options-host'));
     expect(controls.map((button) => button.getAttribute('aria-label') ?? button.textContent?.trim())).toEqual([
-      'Claude Sonnet 4 from anthropic; reasoning effort: Auto',
-      'Mode'
+      'Claude Sonnet 4 from anthropic; reasoning effort: Auto'
     ]);
+    expect(screen.getByLabelText('Session options').querySelector('.composer-mode-badge')).toHaveTextContent('Build');
     expect(screen.getByRole('button', { name: 'Attach files' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Image attachment encoding' })).not.toBeInTheDocument();
     expect(screen.queryByText('Native images')).not.toBeInTheDocument();
     expect(screen.queryByText('Image resources')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Session options')).toBeInTheDocument();
     expect(screen.getByLabelText('Session options').closest('.composer-options')).not.toBeNull();
+  });
+
+  it('gives each mode its own badge tone by position in the mode list', () => {
+    const modes = [
+      { id: 'build', label: 'Build' },
+      { id: 'plan', label: 'Plan' },
+      { id: 'review', label: 'Review' }
+    ];
+    const tones = modes.map((mode) => {
+      renderComposer({ launch: true, launchModeOptions: modes, selectedLaunchModeId: mode.id });
+      const badge = screen.getByLabelText('Session options').querySelector('.composer-mode-badge');
+      const tone = badge?.getAttribute('data-tone');
+      cleanup();
+      return tone;
+    });
+
+    expect(tones).toEqual(['0', '1', '2']);
   });
 
   it('keeps send as the strong primary action', () => {

@@ -23,7 +23,19 @@ export function getSessionContextTone(
   const modeOption = findModeConfigOption(configOptions);
   if (!modeOption) return null;
 
-  const index = getConfigOptionChoices(modeOption).findIndex((choice) => choice.value === currentModeId);
+  return getModeToneIndex(
+    getConfigOptionChoices(modeOption).map((choice) => choice.value),
+    currentModeId
+  );
+}
+
+/**
+ * Palette index for a mode given the ordered ids the agent advertises. Shared
+ * by the session context meter and the composer's mode badge so the same mode
+ * always gets the same color.
+ */
+export function getModeToneIndex(modeIds: readonly string[], currentModeId: string): number {
+  const index = modeIds.indexOf(currentModeId);
   if (index >= 0) return index % SESSION_CONTEXT_TONE_COUNT;
   return hashModeId(currentModeId) % SESSION_CONTEXT_TONE_COUNT;
 }
