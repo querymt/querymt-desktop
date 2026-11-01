@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { ChevronDown, FileCog, FilePlus2, GitBranch, Lock, Maximize2, Minimize2, Monitor, Navigation, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
-  import { tick } from 'svelte';
+  import { ChevronDown, FileCog, FilePlus2, GitBranch, Maximize2, Minimize2, Monitor, Navigation, Paperclip, Plus, RefreshCw, SendHorizontal, Settings2, SlidersHorizontal, Square, Waypoints, X } from '@lucide/svelte';
+  import { tick, type Component } from 'svelte';
   import { cubicOut } from 'svelte/easing';
   import type { TransitionConfig } from 'svelte/transition';
   import ComposerSplitPillSelect from '$lib/components/primitives/ComposerSplitPillSelect.svelte';
@@ -92,6 +92,7 @@
     agentRunning = false,
     turnControlSupported = false,
     inputDelivery = 'steer',
+    inputDeliveryPreference = null,
     onInputDeliveryChange = null,
     onStopPrompt = null,
     onPromptExpandedChange = null,
@@ -160,6 +161,8 @@
     agentRunning?: boolean;
     turnControlSupported?: boolean;
     inputDelivery?: SessionInputDeliveryMode;
+    /** The user's saved choice. `inputDelivery` is the effective mode and can be forced to queue (idle, non-steerable run, slash command). */
+    inputDeliveryPreference?: SessionInputDeliveryMode | null;
     onInputDeliveryChange?: ((delivery: SessionInputDeliveryMode) => void) | null;
     onStopPrompt?: (() => void) | null;
     onPromptExpandedChange?: ((expanded: boolean) => void) | null;
@@ -237,7 +240,11 @@
       ? inputDelivery === 'queue' ? Plus : Navigation
       : SendHorizontal
   );
-  const deliveryControlAvailable = $derived(activeSessionId && agentRunning && turnControlSupported);
+  // Shown whenever the session supports turn control, not only mid-run, so the
+  // row doesn't appear and vanish as the agent starts and stops. The choice is
+  // remembered and applies to the next message sent while a run is active.
+  const deliveryChoice = $derived(inputDeliveryPreference ?? inputDelivery);
+  const deliveryControlAvailable = $derived(!!activeSessionId && turnControlSupported);
   const promptMinHeightClass = $derived.by(() => {
     if (chatView && sessionOnly) return 'min-h-[76px]';
     if (launch) return 'min-h-[104px]';
@@ -318,7 +325,6 @@
     (modeControl ? 1 : 0) +
       (deliveryControlAvailable ? 1 : 0) +
       (!sessionOnly && profileOptions.length > 0 ? 1 : 0) +
-      (sessionOnly && sessionProfileLabel ? 1 : 0) +
       (!sessionOnly && targetOptions.length > 1 ? 1 : 0) +
       (!sessionOnly && workspaceModeOptions.length > 1 ? 1 : 0) +
       (sessionOnly && onOpenDelegateModels ? 1 : 0)
@@ -619,6 +625,14 @@
   }
 </script>
 
+<!-- One-line option row label: icon and title only. -->
+{#snippet optionCopy(Icon: Component<{ size?: number }>, title: string, extraClass: string = '')}
+  <div class={`composer-option-copy ${extraClass}`}>
+    <Icon size={15} />
+    <strong>{title}</strong>
+  </div>
+{/snippet}
+
 {#snippet composerBody()}
   {#if !unifiedShell}
     <div class="px-2 pt-1">
@@ -737,7 +751,10 @@
         reasoning={reasoningControl}
       />
        {#if secondaryOptionCount > 0}
-         <div class="composer-options-host">
+         <div
+           class="composer-options-host"
+           style={modeControl?.tone != null ? `--option-tone: var(--mode-tone-${modeControl.tone})` : undefined}
+         >
            <details class="composer-options" use:autoCollapsePopover>
              <summary class="composer-options-trigger" aria-label="Session options">
                <Settings2 size={14} />
@@ -752,12 +769,11 @@
            <div class="composer-options-panel">
              <div class="composer-options-heading">
                <strong>Session options</strong>
-                <span>Fine-tune how this session runs</span>
              </div>
               <div class="composer-options-list">
                 {#if modeControl}
                   <div class="composer-option-row">
-                    <div class="composer-option-copy"><SlidersHorizontal size={15} /><span><strong>Mode</strong><small>How the agent approaches the next task</small></span></div>
+                    {@render optionCopy(SlidersHorizontal, 'Mode', 'composer-option-copy-mode')}
                     <ComposerSplitPillSelect
                       value={modeControl.value}
                       options={modeControl.options}
@@ -765,6 +781,7 @@
                       pending={modeControl.pending}
                       disabled={modeControl.pending}
                       ariaLabel={modeControl.ariaLabel}
+                      showLabelTitle={false}
                       class="composer-control-pill"
                       onValueChange={modeControl.onChange}
                     />
@@ -772,15 +789,12 @@
                 {/if}
                 {#if deliveryControlAvailable}
                   <div class="composer-option-row">
-                    <div class="composer-option-copy">
-                      {#if inputDelivery === 'queue'}<Plus size={15} />{:else}<Navigation size={15} />{/if}
-                      <span><strong>Message delivery</strong><small>How the next message joins the run</small></span>
-                    </div>
+                    {@render optionCopy(deliveryChoice === 'queue' ? Plus : Navigation, 'Message delivery')}
                     <div class="composer-delivery-switch" role="group" aria-label="Input delivery">
                       <button
                         type="button"
-                        class:active={inputDelivery === 'steer'}
-                        aria-pressed={inputDelivery === 'steer'}
+                        class:active={deliveryChoice === 'steer'}
+                        aria-pressed={deliveryChoice === 'steer'}
                         onclick={() => onInputDeliveryChange?.('steer')}
                       >
                         <Navigation size={12} />
@@ -788,8 +802,8 @@
                       </button>
                       <button
                         type="button"
-                        class:active={inputDelivery === 'queue'}
-                        aria-pressed={inputDelivery === 'queue'}
+                        class:active={deliveryChoice === 'queue'}
+                        aria-pressed={deliveryChoice === 'queue'}
                         onclick={() => onInputDeliveryChange?.('queue')}
                       >
                         <Plus size={12} />
@@ -800,28 +814,21 @@
                 {/if}
                 {#if !sessionOnly && profileOptions.length > 0}
                   <div class="composer-option-row">
-                    <div class="composer-option-copy"><FileCog size={15} /><span><strong>Profile</strong><small>Agent instructions and defaults</small></span></div>
+                    {@render optionCopy(FileCog, 'Profile')}
                     <ComposerSplitPillSelect
                       value={selectedProfileId}
                       options={profileOptions.map((profile) => ({ value: profile.id, label: profile.label }))}
                       icon={FileCog}
                       ariaLabel="Profile"
+                      showLabelTitle={false}
                       class="composer-control-pill"
                       onValueChange={(value) => onProfileChange?.(value)}
                     />
                   </div>
-                {:else if sessionOnly && sessionProfileLabel}
-                  <div class="composer-option-row">
-                    <div class="composer-option-copy"><FileCog size={15} /><span><strong>Profile</strong><small>Set when this session started</small></span></div>
-                    <span class="composer-option-value-locked" title="Profiles are locked after session start">
-                      <Lock size={12} aria-hidden="true" />
-                      {sessionProfileLabel}
-                    </span>
-                  </div>
                 {/if}
                 {#if sessionOnly && onOpenDelegateModels}
                   <div class="composer-option-row composer-option-row-action">
-                    <div class="composer-option-copy"><Waypoints size={15} /><span><strong>Delegate routing</strong><small>{delegateModelsError ? 'Owner routing unavailable; open to retry' : "Choose models for the profile's delegate roles"}</small></span></div>
+                    {@render optionCopy(Waypoints, 'Delegate routing')}
                     <button
                       class="action-btn composer-option-action"
                       type="button"
@@ -836,12 +843,13 @@
                 {#if !sessionOnly && targetOptions.length > 1}
 
                  <div class="composer-option-row">
-                   <div class="composer-option-copy"><Monitor size={15} /><span><strong>Target</strong><small>Where this session will run</small></span></div>
+                   {@render optionCopy(Monitor, 'Target')}
                    <ComposerSplitPillSelect
                      value={selectedTargetId}
                      options={targetOptions.map((target) => ({ value: target.id, label: target.label }))}
                      icon={Monitor}
                      ariaLabel="Session target"
+                     showLabelTitle={false}
                      class="composer-control-pill"
                      onValueChange={(value) => onTargetChange?.(value)}
                    />
@@ -849,12 +857,13 @@
                {/if}
                {#if !sessionOnly && workspaceModeOptions.length > 1}
                  <div class="composer-option-row">
-                   <div class="composer-option-copy"><GitBranch size={15} /><span><strong>Workspace</strong><small>Run in the checkout or an isolated worktree</small></span></div>
+                   {@render optionCopy(GitBranch, 'Workspace')}
                    <ComposerSplitPillSelect
                      value={selectedWorkspaceMode}
                      options={workspaceModeOptions.map((option) => ({ value: option.id, label: option.label }))}
                      icon={GitBranch}
                      ariaLabel="Session workspace"
+                     showLabelTitle={false}
                      class="composer-control-pill"
                      onValueChange={(value) => onWorkspaceModeChange?.(value)}
                    />
@@ -945,7 +954,7 @@
   class={docked ? 'session-composer-dock' : 'session-composer-morph-host'}
   style={dockPositionStyle}
 >
-  {#if collapsed}
+{#if collapsed}
     <div
       class="session-composer-morph-shell session-composer-dock-compact session-composer-dock-collapsed"
       in:composerMorph={{ compact: true }}

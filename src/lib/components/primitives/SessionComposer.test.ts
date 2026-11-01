@@ -159,7 +159,8 @@ describe('SessionComposer', () => {
       sessionProfileLabel: 'Default'
     });
 
-    await fireEvent.click(screen.getByLabelText('Session options'));
+    // Nothing else is configurable, so there is no Options button at all.
+    expect(screen.queryByLabelText('Session options')).toBeNull();
     expect(screen.queryByText('Delegate routing')).toBeNull();
   });
 
@@ -307,6 +308,46 @@ describe('SessionComposer', () => {
     expect(pickFiles).toHaveBeenCalledOnce();
   });
 
+  it('renders options as one-line rows without tooltips and with a toned mode icon', async () => {
+    const { container } = renderComposer({
+      launch: true,
+      launchModeOptions: [
+        { id: 'build', label: 'Build' },
+        { id: 'plan', label: 'Plan' }
+      ],
+      selectedLaunchModeId: 'plan'
+    });
+
+    const panel = container.querySelector('.composer-options-panel') as HTMLElement;
+    const row = panel.querySelector('.composer-option-row') as HTMLElement;
+    expect(row.querySelector('.composer-option-copy strong')).toHaveTextContent('Mode');
+    // No second description line and no subtitle in the heading.
+    expect(panel.querySelector('.composer-option-copy small')).toBeNull();
+    expect(panel).not.toHaveTextContent('Fine-tune how this session runs');
+    expect(panel).not.toHaveTextContent('How the agent approaches the next task');
+    // The mode icon takes the same tone as the badge on the Options button.
+    expect(container.querySelector('.composer-options-host')).toHaveAttribute('style', expect.stringContaining('--mode-tone-1'));
+
+    // No custom tooltip on the label and no native title on the select's value.
+    await fireEvent.pointerEnter(row.querySelector('.composer-option-copy') as HTMLElement);
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect(panel.querySelector('[title]')).toBeNull();
+  });
+
+  it('does not list a read-only profile row inside an active session', async () => {
+    const { container } = renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      sessionProfileLabel: 'Default'
+    });
+
+    // The profile is shown in the session header; with no other options, the panel is not rendered.
+    expect(container.querySelector('.composer-options-panel')).toBeNull();
+    expect(container.textContent ?? '').not.toContain('Default');
+    expect(screen.queryByLabelText('Session options')).toBeNull();
+  });
+
   it('turns the add trigger only when the menu is opened, not on hover', async () => {
     renderComposer({ launch: true });
     const trigger = screen.getByRole('button', { name: 'Add' });
@@ -394,7 +435,8 @@ describe('SessionComposer', () => {
       onSessionConfigChange
     });
 
-    await fireEvent.click(screen.getByLabelText('Session options'));
+    // Reasoning is not an option row; with nothing else to configure there is no Options button.
+    expect(screen.queryByLabelText('Session options')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Reasoning effort' })).not.toBeInTheDocument();
     expect(screen.queryByText('Adjust reasoning for the next reply')).not.toBeInTheDocument();
 
@@ -603,6 +645,49 @@ describe('SessionComposer', () => {
     const queueButton = container.querySelector('button.action-btn-primary');
     expect(queueButton?.querySelector('.lucide-plus')).not.toBeNull();
     expect(queueButton?.getAttribute('aria-label')).toBe('Queue');
+  });
+
+  it('keeps the delivery row available while the agent is idle so it never appears and vanishes', async () => {
+    const onInputDeliveryChange = vi.fn();
+    const { container, rerender } = renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      turnControlSupported: true,
+      agentRunning: false,
+      inputDelivery: 'steer',
+      onInputDeliveryChange
+    });
+
+    const switchGroup = screen.getByRole('group', { name: 'Input delivery', hidden: true });
+    expect(container.querySelectorAll('.composer-delivery-switch')).toHaveLength(1);
+    await fireEvent.click(within(switchGroup).getByRole('button', { name: /Queue/, hidden: true }));
+    expect(onInputDeliveryChange).toHaveBeenCalledWith('queue');
+    // The send button still uses the plain idle label and glyph.
+    expect(screen.getByRole('button', { name: 'Send reply' }).querySelector('.lucide-send-horizontal')).not.toBeNull();
+
+    await rerender({ agentRunning: true });
+    expect(container.querySelectorAll('.composer-delivery-switch')).toHaveLength(1);
+    await rerender({ agentRunning: false });
+    expect(container.querySelectorAll('.composer-delivery-switch')).toHaveLength(1);
+  });
+
+  it('shows the saved delivery choice in the switch even when the effective mode is forced to queue', async () => {
+    const onInputDeliveryChange = vi.fn();
+    const { rerender } = renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      turnControlSupported: true,
+      inputDelivery: 'queue',
+      inputDeliveryPreference: 'steer',
+      onInputDeliveryChange
+    });
+
+    const group = screen.getByRole('group', { name: 'Input delivery', hidden: true });
+    expect(within(group).getByRole('button', { name: /Steer/, hidden: true })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(group).getByRole('button', { name: /Queue/, hidden: true })).toHaveAttribute('aria-pressed', 'false');
+
+    await rerender({ inputDeliveryPreference: 'queue' });
+    expect(within(group).getByRole('button', { name: /Queue/, hidden: true })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('hides the delivery row when the active run does not support turn control', () => {

@@ -24,12 +24,14 @@ describe('dark theme palette', () => {
     expect(darkTheme).toContain('--code-bg: #1b1b1b;');
   });
 
-  it('keeps passive panels quiet while the composer retains a subtle hover highlight', () => {
+  it('keeps passive panels quiet and the composer border constant on hover', () => {
     const panelStrong = appCss.match(/\.panel-strong \{([\s\S]*?)\n\}/)?.[1] ?? '';
-    const composerHover = appCss.match(/\.session-composer-dock-expanded:hover \{([\s\S]*?)\n\}/)?.[1] ?? '';
+    const composer = appCss.match(/\.session-composer-dock-expanded \{([\s\S]*?)\n\}/)?.[1] ?? '';
     expect(panelStrong).not.toContain('transition: border-color');
     expect(appCss).not.toContain('.panel:hover,');
-    expect(composerHover).toContain('border-color: color-mix(in srgb, var(--border), var(--border-strong) 42%);');
+    // The composer border does not change on hover or focus; it gets a static inset highlight instead.
+    expect(appCss).not.toContain('.session-composer-dock-expanded:hover');
+    expect(composer).toContain('inset 0 1px 0 rgba(255, 255, 255, 0.04)');
   });
 
   it('uses diff-addition green only for the resolved header icon', () => {

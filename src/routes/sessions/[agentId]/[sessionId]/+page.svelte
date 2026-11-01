@@ -753,6 +753,7 @@
         agentRunning={agentRunActive}
         turnControlSupported={agentsStore.canControlActiveRun}
         inputDelivery={agentsStore.activeInputDelivery}
+        inputDeliveryPreference={agentsStore.activeComposerInputDelivery}
         onInputDeliveryChange={(delivery) => agentsStore.setActiveComposerInputDelivery(delivery)}
         onStopPrompt={() => agentsStore.cancelActiveSession()}
         sendShortcut={chatPreferencesStore.sendShortcut}

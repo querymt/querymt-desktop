@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
 import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelte';
@@ -7112,6 +7112,80 @@ describe('AgentsStore prompt session start', () => {
     expect(mockClient.steerSession).not.toHaveBeenCalled();
     expect(mockClient.queueSession).not.toHaveBeenCalled();
     expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('keeps the saved delivery choice switchable while the session is idle', async () => {
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.sessionRuntimeBySession = {
+      'agent-1:session-1': {
+        phase: SessionRuntimePhase.Idle,
+        active_run_id: undefined,
+        steerable: false,
+        pending_steering_count: 0,
+        queued_input_count: 0
+      }
+    };
+
+    // While idle the effective mode is always queue, but the saved choice must still change.
+    expect(store.activeInputDelivery).toBe('queue');
+    store.setActiveComposerInputDelivery('steer');
+    expect(store.activeInputDelivery).toBe('queue');
+    expect(store.activeComposerInputDelivery).toBe('steer');
+    store.setActiveComposerInputDelivery('queue');
+    expect(store.activeComposerInputDelivery).toBe('queue');
+    store.setActiveComposerInputDelivery('steer');
+    expect(store.activeComposerInputDelivery).toBe('steer');
+  });
+
+  it('lets the composer switch message delivery while idle through the real store', async () => {
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.sessionRuntimeBySession = {
+      'agent-1:session-1': {
+        phase: SessionRuntimePhase.Idle,
+        active_run_id: undefined,
+        steerable: false,
+        pending_steering_count: 0,
+        queued_input_count: 0
+      }
+    };
+    const { default: SessionComposer } = await import('$lib/components/primitives/SessionComposer.svelte');
+    render(SessionComposer, {
+      props: {
+        activeSessionId: 'session-1',
+        sessionOnly: true,
+        docked: true,
+        chatView: true,
+        prompt: '',
+        onPromptInput: () => {},
+        onSendPrompt: () => {},
+        // Getters keep the props live against the store, like the session page's template.
+        get agentRunning() { return store.activeRunBusy; },
+        get turnControlSupported() { return true; },
+        get inputDelivery() { return store.activeInputDelivery; },
+        get inputDeliveryPreference() { return store.activeComposerInputDelivery; },
+        onInputDeliveryChange: (delivery: 'steer' | 'queue') => store.setActiveComposerInputDelivery(delivery)
+      } as never
+    });
+
+    const group = screen.getByRole('group', { name: 'Input delivery', hidden: true });
+    const steer = within(group).getByRole('button', { name: /Steer/, hidden: true });
+    const queue = within(group).getByRole('button', { name: /Queue/, hidden: true });
+    const initial = store.activeComposerInputDelivery;
+    const other = initial === 'steer' ? queue : steer;
+
+    await fireEvent.click(other);
+    await tick();
+    expect(store.activeComposerInputDelivery).toBe(initial === 'steer' ? 'queue' : 'steer');
+    expect(other).toHaveAttribute('aria-pressed', 'true');
+
+    await fireEvent.click(initial === 'steer' ? steer : queue);
+    await tick();
+    expect(store.activeComposerInputDelivery).toBe(initial);
+    expect(initial === 'steer' ? steer : queue).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('shows queue delivery when an active runtime lacks an active run id', async () => {
