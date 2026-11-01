@@ -6403,15 +6403,20 @@ summary:focus-visible {
   pointer-events: none;
 }
 
+/* Activity bar and its queue/delegate bubbles keep the halo look: a page-colored
+   fill with a feathered page-colored glow that fades the transcript behind
+   them, at the same 2rem control height and corner radius as the composer. */
 .session-activity-bar {
+  box-sizing: border-box;
   display: inline-flex;
   width: fit-content;
   max-width: 100%;
   min-width: 0;
+  min-height: var(--control-height-compact);
   align-items: center;
-  gap: 0.55rem;
-  padding: 0.3rem 0.7rem;
-  border-radius: 999px;
+  gap: 0.5rem;
+  padding: 0 0.7rem;
+  border-radius: var(--radius-control);
   background: var(--body-bg-base);
   color: var(--muted);
   pointer-events: auto;
@@ -6441,6 +6446,12 @@ summary:focus-visible {
   transition: bottom 180ms ease;
 }
 
+/* The scroll-to-latest button is pinned to the dock's right end, so keep the
+   dock's content (bar and bubbles) clear of it while it is shown. */
+.session-scroll-bottom-pill-host ~ .session-activity-bar-dock {
+  padding-right: calc(var(--control-height-compact) + 1rem);
+}
+
 .session-delegates-bubble ~ .session-activity-bar .session-activity-meta {
   min-width: 0;
   flex-shrink: 1;
@@ -6454,8 +6465,8 @@ summary:focus-visible {
   align-items: start;
   min-width: 0;
   gap: 0.5rem;
-  border-radius: calc(var(--radius-control) - 2px);
-  background: var(--bg-card);
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
   padding: 0.4rem 0.5rem;
   color: var(--text);
   font-size: 0.74rem;
@@ -6464,7 +6475,7 @@ summary:focus-visible {
 }
 
 a.session-delegate-session:hover {
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
 }
 
 .session-delegate-copy {
@@ -6491,7 +6502,16 @@ a.session-delegate-session:hover {
 }
 
 .session-activity-bar-failed {
+  background: color-mix(in srgb, var(--status-danger) 10%, var(--body-bg-base));
   color: var(--status-danger);
+}
+
+.session-activity-bar-attention {
+  background: color-mix(in srgb, var(--accent) 10%, var(--body-bg-base));
+}
+
+.session-activity-bar-attention .session-activity-indicator {
+  color: var(--accent);
 }
 
 .session-activity-indicator {
@@ -6512,16 +6532,42 @@ a.session-delegate-session:hover {
   white-space: nowrap;
 }
 
+/* Running tool: the name stays prominent; the command is dimmed and is the
+   part that truncates first. The tooltip carries the full command. */
+.session-activity-preview,
+.session-activity-extra {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.session-activity-tooltip-preview {
+  display: block;
+  max-width: min(32rem, 80vw);
+  font-family: var(--font-mono);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.session-activity-tooltip-hint {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--text-dim);
+  line-height: 1.2;
+}
+
 .session-queued-bubble {
+  box-sizing: border-box;
   display: inline-flex;
   flex: 0 0 auto;
   width: fit-content;
   min-width: 0;
+  min-height: var(--control-height-compact);
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.3rem 0.7rem;
+  gap: 0.4rem;
+  padding: 0 0.6rem;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-control);
   background: var(--body-bg-base);
   color: var(--muted);
   font-family: inherit;
@@ -6532,11 +6578,19 @@ a.session-delegate-session:hover {
     0 0 0 4px var(--body-bg-base),
     0 0 12px 4px color-mix(in srgb, var(--body-bg-base) 85%, transparent),
     0 0 28px 9px color-mix(in srgb, var(--body-bg-base) 50%, transparent);
+  transition: color 0.15s ease;
 }
 
+/* Same faint overlay as the composer pills; the base color stays opaque. */
 .session-queued-bubble:hover,
 .session-queued-bubble.open {
+  background-image: linear-gradient(var(--composer-pill-surface-hover), var(--composer-pill-surface-hover));
   color: var(--text);
+}
+
+.session-queued-bubble:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .session-queued-bubble svg {
@@ -6565,9 +6619,9 @@ a.session-delegate-session:hover {
   min-width: 0;
   max-width: 100%;
   border: 1px solid var(--border);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius);
   background: var(--bg-panel-strong);
-  padding: 0.4rem;
+  padding: 0.3rem;
   box-shadow: var(--shadow-lg);
 }
 
@@ -6589,8 +6643,8 @@ a.session-delegate-session:hover {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.5rem;
-  border-radius: calc(var(--radius-control) - 2px);
-  background: var(--bg-card);
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
   padding: 0.25rem 0.375rem 0.25rem 0.5rem;
 }
 
@@ -12082,21 +12136,24 @@ a.session-delegate-session:hover {
 
 /* Floats over the transcript, so it keeps the composer card's opaque surface,
    border, radius and shadow; hover adds the same faint fill as the pills. */
+/* Same page-colored halo as the activity bar and its bubbles. */
 .session-scroll-bottom-slot .session-scroll-bottom-btn {
-  border-color: var(--border);
+  border: 0;
   border-radius: var(--radius-control);
-  background: var(--bg-panel-strong);
-  color: var(--text-muted);
-  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  background: var(--body-bg-base);
+  color: var(--muted);
+  box-shadow:
+    0 0 0 4px var(--body-bg-base),
+    0 0 12px 4px color-mix(in srgb, var(--body-bg-base) 85%, transparent),
+    0 0 28px 9px color-mix(in srgb, var(--body-bg-base) 50%, transparent);
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .session-scroll-bottom-slot .session-scroll-bottom-btn:hover:enabled,
 .session-scroll-bottom-slot .session-scroll-bottom-btn:focus-visible {
-  border-color: var(--border);
   /* Re-assert the base color: the global .icon-btn:hover would otherwise put
      --bg-card-hover underneath the overlay. */
-  background-color: var(--bg-panel-strong);
+  background-color: var(--body-bg-base);
   background-image: linear-gradient(var(--composer-pill-surface-hover), var(--composer-pill-surface-hover));
   color: var(--text);
 }
@@ -12924,6 +12981,11 @@ a.session-delegate-session:hover {
 
   .app-shell-active-session .session-activity-bar-dock {
     padding-inline: 0.2rem;
+  }
+
+  /* Keep the gutter for the scroll-to-latest button on narrow windows too. */
+  .app-shell-active-session .session-scroll-bottom-pill-host ~ .session-activity-bar-dock {
+    padding-right: calc(var(--control-height-compact) + 1rem);
   }
 }
 
