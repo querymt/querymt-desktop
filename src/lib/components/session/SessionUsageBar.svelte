@@ -2,6 +2,7 @@
   import { Info } from '@lucide/svelte';
   import { onDestroy } from 'svelte';
   import { Tooltip } from 'bits-ui';
+  import Hint from '$lib/components/primitives/Hint.svelte';
   import type { SessionTokenUsage, SessionUsageStats } from '$lib/domain/types';
   import { formatDuration, formatTokenCount, getActiveWorkMs, getContextPercent, getContextRemaining, getCostLines, getSessionCostDisplay } from '$lib/domain/session-usage';
 
@@ -74,7 +75,7 @@
 
 <div class="session-usage-bar" aria-label="Session usage">
   {#if usage.contextUsed !== null}
-    <div class="session-usage-context-row" title={`${usage.contextUsed.toLocaleString('en-US')} / ${usage.contextLimit?.toLocaleString('en-US') ?? 'unknown'} context tokens`}>
+    <Hint as="div" class="session-usage-context-row" text={`${usage.contextUsed.toLocaleString('en-US')} / ${usage.contextLimit?.toLocaleString('en-US') ?? 'unknown'} context tokens`}>
       <span>Context</span>
       {#if contextPercent !== null}
         <div class="session-usage-context-track" role="meter" aria-label="Current context occupancy" aria-valuemin={0} aria-valuemax={100} aria-valuenow={contextPercent}
@@ -86,7 +87,7 @@
       {:else}
         <strong>{formatTokenCount(usage.contextUsed)} tokens</strong>
       {/if}
-    </div>
+    </Hint>
   {/if}
   {#if counts}
     <div class="session-usage-breakdown">
@@ -96,7 +97,7 @@
           <button type="button" aria-pressed={effectiveScope === 'sessionTotals'} disabled={!usage.breakdown?.sessionTotals} onclick={() => changeScope('sessionTotals')}>Session totals</button>
         </div>
         <div class="session-usage-lens-meta">
-          {#if partial}<span class="session-usage-partial" title="Some requests did not report complete usage">Partial</span>{/if}
+          {#if partial}<Hint class="session-usage-partial" text="Some requests did not report complete usage">Partial</Hint>{/if}
           {@render help()}
         </div>
       </div>
@@ -110,9 +111,8 @@
                   {#if segment.count !== null && segment.count > 0}
                     <circle role="presentation" class="session-usage-arc" class:session-usage-arc-dimmed={chart.active && chart.active.key !== segment.key} data-token={segment.key}
                       cx="50" cy="50" r="42" pathLength="100" stroke-dasharray={`${segment.share} ${100 - segment.share}`} stroke-dashoffset={-segment.offset} transform="rotate(-90 50 50)"
-                      onpointerenter={() => hovered = segment.key} onpointerleave={() => hovered = null}>
-                      <title>{segment.label}: {segment.count.toLocaleString('en-US')} tokens</title>
-                    </circle>
+                      onpointerenter={() => hovered = segment.key} onpointerleave={() => hovered = null} />
+                    <!-- No native <title>: hovering an arc already shows its exact count in the ring centre. -->
                   {/if}
                 {/each}
               </svg>
@@ -126,13 +126,13 @@
             </p>
             <div class="session-usage-color-key" aria-label={`${chart.label} categories`}>
               {#each chart.segments as segment}
-                <button type="button" aria-label={`${segment.label}: ${segment.count === null ? 'not reported' : `${segment.count.toLocaleString('en-US')} tokens`}`} aria-pressed={pinned === segment.key}
-                  title={segment.hint} onpointerenter={() => hovered = segment.key} onpointerleave={() => hovered = null}
+                <Hint as="button" type="button" text={segment.hint} side="top" aria-label={`${segment.label}: ${segment.count === null ? 'not reported' : `${segment.count.toLocaleString('en-US')} tokens`}`} aria-pressed={pinned === segment.key}
+                  onpointerenter={() => hovered = segment.key} onpointerleave={() => hovered = null}
                   onfocus={() => focused = segment.key} onblur={() => focused = null}
                   onclick={() => toggleCategory(segment.key)}
-                  onkeydown={(event) => { if (event.key === 'Escape') pinned = hovered = focused = null; }}>
+                  onkeydown={(event: KeyboardEvent) => { if (event.key === 'Escape') pinned = hovered = focused = null; }}>
                   <i class="session-usage-swatch" data-token={segment.key} aria-hidden="true"></i>{segment.short}
-                </button>
+                </Hint>
               {/each}
             </div>
           </section>
@@ -143,23 +143,23 @@
   {#if costLines.length > 0}
     <dl class="session-usage-lines" aria-label="Cost">
       {#each costLines as line (line.key)}
-        <div class="session-usage-line" data-tone={line.tone} title={line.title}>
+        <Hint as="div" class="session-usage-line" data-tone={line.tone} text={line.title} side="left">
           <dt>{line.label}</dt>
           <dd aria-label={`${line.prefix === '≥' ? 'at least ' : line.prefix === '~' ? 'approximately ' : ''}${line.value}`}>
             {#if line.prefix}<span class="session-usage-prefix" aria-hidden="true">{line.prefix}</span>{/if}{line.value}
           </dd>
-        </div>
+        </Hint>
       {/each}
     </dl>
   {/if}
   <dl class="session-usage-lines" aria-label="Activity">
-    <div class="session-usage-line" title="Time spent actively processing prompts">
+    <Hint as="div" class="session-usage-line" text="Time spent actively processing prompts" side="left">
       <dt>Active</dt>
       <dd>
         {#if usage.activeWorkStartedAt !== null}<i class="session-usage-live-dot" aria-label="Active now"></i>{/if}{activeWorkLabel}
         {#if !counts}{@render help()}{/if}
       </dd>
-    </div>
+    </Hint>
   </dl>
 </div>
 
