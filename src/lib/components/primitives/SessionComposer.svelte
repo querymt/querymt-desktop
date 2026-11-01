@@ -174,7 +174,12 @@
     typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
   function composerMorph(node: Element, { compact }: { compact: boolean }): TransitionConfig {
-    const opacity = Number(getComputedStyle(node).opacity) || 1;
+    const style = getComputedStyle(node);
+    const opacity = Number(style.opacity) || 1;
+    // Clip with the shell's real corner radius so the morph never shows a
+    // different shape than the resting card (it follows the CSS, including
+    // the larger radius on narrow windows).
+    const radius = Number.parseFloat(style.borderTopLeftRadius) || 12;
 
     return {
       duration: prefersReducedMotion() ? 0 : 220,
@@ -183,7 +188,6 @@
         const hidden = 1 - t;
         const translateY = hidden * (compact ? 8 : 4);
         const clipTop = hidden * (compact ? 35 : 72);
-        const radius = compact ? 999 : 18 + hidden * 20;
 
         return `opacity:${t * opacity};transform:translateY(${translateY}px);clip-path:inset(${clipTop}% 0 0 0 round ${radius}px);overflow:clip;`;
       }
@@ -643,7 +647,7 @@
   {/if}
 
   {#if !sessionOnly}
-    <div class={unifiedShell ? 'px-1 pt-3' : 'px-2'}>
+    <div class={unifiedShell ? 'px-1 pt-2.5' : 'px-2'}>
       <WorkspacePathInput
         value={cwd}
         disabled={false}
@@ -670,6 +674,22 @@
       }
     }}
   >
+    {#if hasPromptText && !collapsed}
+      <!-- Anchored to the prompt zone (not the card) so it stays at the top of the
+           textarea even when the workspace input sits above it. -->
+      <div class="composer-prompt-expand">
+        <IconTooltipButton
+          label={promptExpanded ? 'Collapse composer' : 'Expand composer'}
+          icon={promptExpanded ? Minimize2 : Maximize2}
+          controlSize="compact"
+          size={14}
+          onclick={() => {
+            promptExpanded = !promptExpanded;
+            onPromptExpandedChange?.(promptExpanded);
+          }}
+        />
+      </div>
+    {/if}
     <textarea
       bind:this={promptElement}
       class={`block w-full resize-none border-0 bg-inherit px-0.5 pt-3 pb-2 text-sm text-[var(--text)] outline-none ${promptMinHeightClass} ${launch ? 'text-base' : ''}`}
@@ -945,6 +965,8 @@
         }}
       />
 
+      <ComposerAddMenu actions={addMenuActions} label="Add" />
+      {#if attachments.length > 0}<span class="session-composer-attachment-count" aria-label={`${attachments.length} pending attachments`}>{attachments.length}</span>{/if}
       <input
         class="session-composer-dock-input"
         type="text"
@@ -956,15 +978,22 @@
           if (event.clipboardData?.files.length) void normalizeAndAddFiles(event.clipboardData.files);
         }}
       />
-      {#if attachments.length > 0}<span class="session-composer-attachment-count" aria-label={`${attachments.length} pending attachments`}>{attachments.length}</span>{/if}
-      <IconTooltipButton label="Attach files" icon={Paperclip} size={16} onclick={handleAttachClick} />
       {#if agentRunning && onStopPrompt && (!turnControlSupported || !hasDraft)}
-        <IconTooltipButton label="Stop agent" icon={Square} tone="primary" size={16} onclick={onStopPrompt} />
+        <IconTooltipButton label="Stop agent" icon={Square} tone="primary" controlSize="compact" size={16} onclick={onStopPrompt} />
       {:else}
         {#if agentRunning && turnControlSupported && onStopPrompt}
-          <IconTooltipButton label="Stop agent" icon={Square} size={15} onclick={onStopPrompt} />
+          <IconTooltipButton label="Stop agent" icon={Square} controlSize="compact" size={15} onclick={onStopPrompt} />
         {/if}
-        <IconTooltipButton label={primaryActionLabel} icon={primaryActionIcon} tone="primary" size={16} disabled={loading} onclick={handlePrimaryAction} />
+        <IconTooltipButton
+          label={primaryActionLabel}
+          icon={primaryActionIcon}
+          tone="primary"
+          controlSize="compact"
+          size={16}
+          class={`composer-send ${hasDraft ? 'composer-send-ready' : 'composer-send-idle'}`}
+          disabled={loading}
+          onclick={handlePrimaryAction}
+        />
       {/if}
 
       {#if attachmentErrors.length > 0}
@@ -979,20 +1008,6 @@
       in:composerMorph={{ compact: false }}
       out:composerOut={{ compact: false }}
     >
-      {#if hasPromptText}
-        <div class="composer-prompt-expand">
-          <IconTooltipButton
-            label={promptExpanded ? 'Collapse composer' : 'Expand composer'}
-            icon={promptExpanded ? Minimize2 : Maximize2}
-            controlSize="compact"
-            size={14}
-            onclick={() => {
-              promptExpanded = !promptExpanded;
-              onPromptExpandedChange?.(promptExpanded);
-            }}
-          />
-        </div>
-      {/if}
       <div
         class={`flex flex-col ${unifiedShell ? 'session-composer-inner-well gap-2.5 rounded-[24px] bg-inherit px-0.5 pt-0 pb-0.5' : 'gap-3 rounded-[18px] border border-[var(--border)] bg-inherit'} ${unifiedShell ? '' : minimal ? 'p-3 md:p-4' : 'p-2'}`}
       >

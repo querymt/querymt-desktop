@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { FolderSearch } from '@lucide/svelte';
+  import { Folder, FolderSearch } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
   import { onDestroy } from 'svelte';
   import { suggestWorkspacePaths } from '$native';
   import type { WorkspaceSuggestion } from '$lib/domain/types';
@@ -30,6 +31,15 @@
   let restoringInputFocus = false;
 
   onDestroy(() => { requestToken += 1; });
+
+  // The popover scrolls once it is height-capped; keep the arrow-key highlight visible.
+  $effect(() => {
+    if (!open) return;
+    const index = highlightedIndex;
+    containerElement
+      ?.querySelectorAll<HTMLElement>('.workspace-suggestion-row')[index]
+      ?.scrollIntoView?.({ block: 'nearest' });
+  });
 
   function closeSuggestions() {
     selectingSuggestion = false;
@@ -125,6 +135,14 @@
       : suggestion.name;
   }
 
+  /** Directory containing the suggestion, shown dimmed after the name on the same line. */
+  function formatSuggestionParent(suggestion: WorkspaceSuggestion): string {
+    const trimmed = suggestion.path.replace(/\/+$/, '');
+    const cut = trimmed.lastIndexOf('/');
+    if (cut < 0) return '';
+    return trimmed.slice(0, cut) || '/';
+  }
+
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       if (open || loading) event.preventDefault();
@@ -184,20 +202,42 @@
 
   {#if open && suggestions.length > 0}
     <div class="workspace-suggestion-popover">
-      {#each suggestions as suggestion, index}
-        <button
-          class="workspace-suggestion-row"
-          class:model-picker-row-selected={highlightedIndex === index}
-          type="button"
-          onpointerdown={beginSuggestionPointer}
-          onmousedown={(event) => event.preventDefault()}
-          onclick={() => applySuggestion(suggestion.path)}
-          onmousemove={() => (highlightedIndex = index)}
-        >
-          <div class="truncate text-sm font-medium">{formatSuggestionName(suggestion)}</div>
-          <div class="muted truncate text-xs">{suggestion.path}</div>
-        </button>
-      {/each}
+      <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+        {#each suggestions as suggestion, index}
+          <Tooltip.Root disableHoverableContent>
+            <Tooltip.Trigger>
+              {#snippet child({ props })}
+                <!-- The tooltip owns pointerdown/click on this row too, so chain our handlers after it. -->
+                <button
+                  {...props}
+                  class="workspace-suggestion-row"
+                  data-highlighted={highlightedIndex === index ? '' : undefined}
+                  type="button"
+                  onpointerdown={(event) => {
+                    (props.onpointerdown as ((e: PointerEvent) => void) | undefined)?.(event);
+                    beginSuggestionPointer(event);
+                  }}
+                  onmousedown={(event) => event.preventDefault()}
+                  onclick={(event) => {
+                    (props.onclick as ((e: MouseEvent) => void) | undefined)?.(event);
+                    applySuggestion(suggestion.path);
+                  }}
+                  onmousemove={() => (highlightedIndex = index)}
+                >
+                  <Folder class="workspace-suggestion-icon" size={15} strokeWidth={2} />
+                  <span class="workspace-suggestion-name">{formatSuggestionName(suggestion)}</span>
+                  <span class="workspace-suggestion-path">{formatSuggestionParent(suggestion)}</span>
+                </button>
+              {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class="app-tooltip-content" side="bottom" align="start" sideOffset={6}>
+                {suggestion.path}
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+        {/each}
+      </Tooltip.Provider>
     </div>
   {/if}
 </div>

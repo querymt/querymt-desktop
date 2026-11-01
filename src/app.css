@@ -5390,18 +5390,26 @@ summary:focus-visible {
   display: flex;
   box-sizing: border-box;
   min-width: 0;
-  height: 2.75rem;
+  height: var(--control-height-standard);
   align-items: center;
-  gap: 0.65rem;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--bg-card);
-  padding: 0.54rem 0.54rem 0.54rem 0.9rem;
-  color: var(--muted);
+  gap: 0.55rem;
+  border-radius: var(--radius-control);
+  /* Same recipe as the composer pills: transparent border keeps the metrics,
+     a faint fill is the affordance, and hover/focus strengthen the fill. */
+  border: 1px solid transparent;
+  background: var(--composer-pill-surface);
+  padding: 0.3rem 0.6rem;
+  color: var(--text-dim);
+  transition: background 0.15s ease;
+}
+
+.workspace-input-shell:hover,
+.workspace-input-shell:focus-within {
+  background: var(--composer-pill-surface-hover);
 }
 
 .workspace-input-shell:focus-within {
-  border-color: var(--border-strong);
+  color: var(--text-muted);
 }
 
 .workspace-input {
@@ -5413,36 +5421,86 @@ summary:focus-visible {
   color: var(--text);
   outline: none;
   font: inherit;
+  font-size: 0.875rem;
+}
+
+.workspace-input::placeholder {
+  color: var(--text-dim);
 }
 
 .workspace-input-loading {
   flex: 0 0 auto;
 }
 
+/* Same menu language as the composer's other popovers (app-select-content):
+   inset rounded rows, a soft highlight, and no divider lines between rows. */
 .workspace-suggestion-popover {
   position: absolute;
   z-index: 30;
-  margin-top: 0.5rem;
+  margin-top: 0.4rem;
   width: 100%;
-  overflow: hidden;
+  max-height: min(16rem, calc(100vh - 2rem));
+  overflow-y: auto;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg-panel-strong);
+  padding: 0.3rem;
   box-shadow: var(--shadow-md);
 }
 
 .workspace-suggestion-row {
-  display: block;
+  display: flex;
   width: 100%;
-  padding: 0.75rem 0.9rem;
+  min-height: var(--control-height-compact);
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.2rem 0.6rem;
   text-align: left;
   border: 0;
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--text);
+  cursor: pointer;
+  outline: none;
+  transition: background 0.12s ease;
 }
 
-.workspace-suggestion-row + .workspace-suggestion-row {
-  border-top: 1px solid var(--border);
+.workspace-suggestion-row[data-highlighted],
+.workspace-suggestion-row:hover {
+  background: var(--composer-pill-surface-hover);
+}
+
+.workspace-suggestion-icon {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+.workspace-suggestion-row[data-highlighted] .workspace-suggestion-icon {
+  color: var(--text-muted);
+}
+
+/* One line per row: the name keeps its width (up to a cap) and the dimmed
+   parent directory takes the remaining space and truncates. */
+.workspace-suggestion-name {
+  flex: 0 1 auto;
+  max-width: 55%;
+  overflow: hidden;
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-suggestion-path {
+  min-width: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  line-height: 1.25rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .markdown-body {
@@ -11995,13 +12053,28 @@ a.session-delegate-session:hover {
   right: 0.55rem;
   bottom: 0;
   display: inline-flex;
-  opacity: 0.8;
-  transition: opacity 0.15s ease;
   pointer-events: auto;
 }
 
-.session-scroll-bottom-slot:hover {
-  opacity: 1;
+/* Floats over the transcript, so it keeps the composer card's opaque surface,
+   border, radius and shadow; hover adds the same faint fill as the pills. */
+.session-scroll-bottom-slot .session-scroll-bottom-btn {
+  border-color: var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg-panel-strong);
+  color: var(--text-muted);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.session-scroll-bottom-slot .session-scroll-bottom-btn:hover:enabled,
+.session-scroll-bottom-slot .session-scroll-bottom-btn:focus-visible {
+  border-color: var(--border);
+  /* Re-assert the base color: the global .icon-btn:hover would otherwise put
+     --bg-card-hover underneath the overlay. */
+  background-color: var(--bg-panel-strong);
+  background-image: linear-gradient(var(--composer-pill-surface-hover), var(--composer-pill-surface-hover));
+  color: var(--text);
 }
 
 .session-composer-dock {
@@ -12033,17 +12106,18 @@ a.session-delegate-session:hover {
   position: relative;
 }
 
+/* Collapsed bar shares the expanded card's surface, radius, border and shadow. */
 .session-composer-dock-collapsed {
   display: flex;
+  min-height: 3rem;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
   border: 1px solid var(--border);
-  background: var(--nav-bg);
-  backdrop-filter: var(--surface-blur);
-  -webkit-backdrop-filter: var(--surface-blur);
-  border-radius: 999px;
-  padding: 0.45rem 0.55rem 0.45rem 0.85rem;
-  box-shadow: var(--shadow-md);
+  background: var(--bg-panel-strong);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.5rem;
+  filter: drop-shadow(0 -0.75rem 1.75rem var(--body-bg-base));
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .session-composer-dock-input {
@@ -12074,14 +12148,19 @@ a.session-delegate-session:hover {
   background: linear-gradient(to bottom, var(--bg-panel-strong), transparent);
 }
 
+.composer-prompt-zone {
+  position: relative;
+}
+
 .session-composer-dock-expanded .composer-prompt-zone {
   padding-right: 2.1rem;
 }
 
+/* Positioned against the prompt zone, so it never overlaps fields above the textarea. */
 .composer-prompt-expand {
   position: absolute;
-  top: 0.2rem;
-  right: 0.35rem;
+  top: 0;
+  right: 0.1rem;
   z-index: 2;
 }
 
@@ -12725,14 +12804,7 @@ a.session-delegate-session:hover {
   }
 
   .app-shell-active-session .session-composer-dock-collapsed {
-    min-height: 3.5rem;
     border-radius: 1rem;
-    padding: 0.45rem 0.5rem 0.45rem 0.8rem;
-  }
-
-  .app-shell-active-session .session-composer-dock .icon-btn {
-    width: 2.5rem;
-    height: 2.5rem;
   }
 
   .app-shell-active-session .session-composer-dock-expanded {

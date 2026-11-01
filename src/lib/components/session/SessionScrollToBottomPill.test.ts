@@ -18,6 +18,14 @@ describe('SessionScrollToBottomPill', () => {
     expect(onScrollToBottom).toHaveBeenCalledOnce();
   });
 
+  it('uses the compact composer-styled button', () => {
+    render(SessionScrollToBottomPill, { visible: true, onScrollToBottom: vi.fn() });
+
+    const button = screen.getByRole('button', { name: 'Scroll to latest message and follow new content' });
+    expect(button).toHaveClass('icon-btn', 'icon-btn-compact', 'session-scroll-bottom-btn');
+    expect(button.closest('.session-scroll-bottom-slot')).not.toBeNull();
+  });
+
   it('stays hidden while the view follows current content', () => {
     render(SessionScrollToBottomPill, { visible: false, onScrollToBottom: vi.fn() });
 
