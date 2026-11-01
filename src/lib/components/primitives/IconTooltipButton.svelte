@@ -10,6 +10,7 @@
     controlSize = 'standard',
     size = undefined,
     iconClass = '',
+    class: className = '',
     onclick
   }: {
     icon: Component<{ size?: number; strokeWidth?: number; class?: string }>;
@@ -19,6 +20,7 @@
     controlSize?: 'compact' | 'standard';
     size?: number;
     iconClass?: string;
+    class?: string;
     onclick?: () => void;
   } = $props();
 
@@ -28,7 +30,7 @@
 <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
   <Tooltip.Root disableHoverableContent disabled={disabled}>
     <Tooltip.Trigger
-      class={`icon-btn ${controlSize === 'compact' ? 'icon-btn-compact' : ''} ${tone === 'primary' ? 'icon-btn-primary' : tone === 'accent' ? 'icon-btn-accent' : tone === 'danger' ? 'icon-btn-danger' : ''}`}
+      class={`icon-btn ${controlSize === 'compact' ? 'icon-btn-compact' : ''} ${tone === 'primary' ? 'icon-btn-primary' : tone === 'accent' ? 'icon-btn-accent' : tone === 'danger' ? 'icon-btn-danger' : ''} ${className}`}
       type="button"
       aria-label={label}
       {disabled}

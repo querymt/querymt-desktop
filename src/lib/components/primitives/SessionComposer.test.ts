@@ -758,6 +758,25 @@ describe('SessionComposer', () => {
     expect(container.querySelector('textarea')).toBeNull();
   });
 
+  it('gives the collapsed composer the same add menu and quiet send button as the expanded one', async () => {
+    const { container, rerender } = renderComposer({ docked: true, collapsed: true, sessionOnly: true, chatView: true, prompt: '' });
+    const bar = container.querySelector('.session-composer-dock-collapsed') as HTMLElement;
+
+    // "+" menu replaces the standalone paperclip and sits before the input.
+    expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Attach files' })).not.toBeInTheDocument();
+    const order = Array.from(bar.querySelectorAll('button, input[type="text"]'));
+    expect(order.indexOf(screen.getByRole('button', { name: 'Add' }))).toBeLessThan(
+      order.indexOf(bar.querySelector('.session-composer-dock-input') as Element)
+    );
+
+    // Send is the compact, quiet button: idle without a draft, ready with one.
+    const send = screen.getByRole('button', { name: /send|reply|start/i, hidden: false });
+    expect(send).toHaveClass('composer-send', 'composer-send-idle', 'icon-btn-compact');
+    await rerender({ prompt: 'hello' });
+    expect(screen.getByRole('button', { name: /send|reply|start/i })).toHaveClass('composer-send-ready');
+  });
+
   it('preserves the prompt while morphing between composer states', async () => {
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
     const prompt = 'Keep this draft';
@@ -797,6 +816,25 @@ describe('SessionComposer', () => {
     const transforms = keyframes.flat().map((frame) => String(frame.transform ?? ''));
     expect(transforms.some((transform) => transform.includes('translateY'))).toBe(true);
     expect(transforms.every((transform) => !transform.includes('scale'))).toBe(true);
+  });
+
+  it('clips the morph with the shell radius instead of the old pill or 18px radius', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false })));
+    const keyframes = captureAnimationKeyframes();
+    const { rerender } = renderComposer({ docked: true, collapsed: true, sessionOnly: true, chatView: true });
+
+    await rerender({ collapsed: false });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const clips = keyframes
+      .flat()
+      .map((frame) => String((frame as Record<string, unknown>)['clip-path'] ?? (frame as Record<string, unknown>).clipPath ?? ''))
+      .filter(Boolean);
+    expect(clips.length).toBeGreaterThan(0);
+    // jsdom has no stylesheet, so this is the fallback for the real 12px card radius.
+    expect(clips.every((clip) => /round 12px\)?$/.test(clip.trim()))).toBe(true);
+    expect(clips.some((clip) => /round (999|18|38)px/.test(clip))).toBe(false);
   });
 
   it('renders compact pending image triggers without captions and keeps removal independent', async () => {
@@ -1120,6 +1158,24 @@ describe('SessionComposer workspace focus and suggestions', () => {
     expect(onCwdInput).toHaveBeenCalledExactlyOnceWith('/tmp/other-project');
     expect(input).toHaveFocus();
     expect(screen.queryByRole('button', { name: /other-project/ })).not.toBeInTheDocument();
+  });
+
+  it('shows the full suggestion path in a bits-ui tooltip instead of a native title', async () => {
+    renderComposer({ launch: true, recentWorkspaces: ['/tmp/workspace', '/tmp/other-project'] });
+    await tick();
+    const input = screen.getByPlaceholderText('/absolute/path/to/workspace');
+    input.focus();
+    await tick();
+    const suggestion = screen.getByRole('button', { name: /other-project/ });
+
+    expect(suggestion.querySelector('[title]')).toBeNull();
+    expect(suggestion).not.toHaveAttribute('title');
+    // One line per row: name, then the dimmed parent directory.
+    expect(suggestion.querySelector('.workspace-suggestion-name')).toHaveTextContent('other-project');
+    expect(suggestion.querySelector('.workspace-suggestion-path')).toHaveTextContent('/tmp');
+
+    await fireEvent.pointerEnter(suggestion);
+    expect(await screen.findByText('/tmp/other-project', { selector: '.app-tooltip-content' })).toBeInTheDocument();
   });
 
   it('keeps suggestion buttons available while focus moves within the widget', async () => {
