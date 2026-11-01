@@ -97,6 +97,29 @@ describe('SessionActivityBar', () => {
     expect(screen.getByRole('status').querySelector('.session-activity-shimmer')).not.toBeInTheDocument();
   });
 
+  it('keeps the tool name prominent, dims the command and shows it in full in the tooltip', async () => {
+    const command = 'cd /projects/querymt-org/querymt-desktop; git add src/app.css src/lib/components/primitives/IconTooltipButton.svelte';
+    render(SessionActivityBar, {
+      session: session({
+        runState: 'tool-running',
+        activeToolCallId: 'shell-1',
+        toolCalls: [
+          { id: 'shell-1', title: 'Run shell', kind: 'shell', status: 'in_progress', arguments: JSON.stringify({ command }) }
+        ]
+      })
+    });
+
+    const bar = screen.getByRole('status');
+    expect(bar.querySelector('.session-activity-label')).toHaveTextContent(/^Run command$/);
+    expect(bar.querySelector('.session-activity-preview')).toHaveTextContent('git add src/app.css');
+    expect(bar).not.toHaveAttribute('title');
+
+    await fireEvent.pointerEnter(bar, { pointerType: 'mouse' });
+    const preview = await screen.findByText(/git add src\/app\.css/, { selector: '.session-activity-tooltip-preview' });
+    expect(preview.closest('.app-tooltip-content')).not.toBeNull();
+    expect(preview.closest('.app-tooltip-content')).toHaveTextContent('Double Esc to cancel');
+  });
+
   it('announces failures as alerts', () => {
     render(SessionActivityBar, { session: session({ runState: 'failed', lastError: 'shell failed.' }) });
 
