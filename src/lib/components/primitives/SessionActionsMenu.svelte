@@ -1,7 +1,7 @@
 <script lang="ts">
   import { getContext } from 'svelte';
-  import { DropdownMenu } from 'bits-ui';
-  import { Archive, ArchiveRestore, Check, Copy, Ellipsis, GitBranch, GitBranchPlus, LoaderCircle, Pin, PinOff, RotateCcw, Trash2 } from '@lucide/svelte';
+  import { DropdownMenu, Tooltip } from 'bits-ui';
+  import { Archive, ArchiveRestore, Bug, Check, Copy, Ellipsis, GitBranch, GitBranchPlus, LoaderCircle, Pin, PinOff, RotateCcw, Trash2 } from '@lucide/svelte';
   import type { DesktopSessionSummary, SessionLifecyclePatch } from '$lib/domain/types';
 
   let {
@@ -9,6 +9,7 @@
     canPin = false, onSetPinned = null,
     onSetLifecycle = null, onCopy = null, onDelete = null, copied = false,
     onCreateWorktree = null, onHandoffWorktree = null,
+    onDebug = null, debugLabel = 'Debug events', tooltip = false,
     triggerClass = 'session-row-menu-trigger', open = $bindable(false)
   }: {
     session: Pick<DesktopSessionSummary, 'sessionId' | 'title' | 'lifecycle' | 'pin'>;
@@ -23,6 +24,11 @@
     /** Gated by the caller on capability, ownership and read-only state; null hides the entry. */
     onCreateWorktree?: (() => void) | null;
     onHandoffWorktree?: (() => void) | null;
+    /** Opens the debug events view; null hides the entry. */
+    onDebug?: (() => void) | null;
+    debugLabel?: string;
+    /** Use a bits-ui tooltip on the trigger instead of a native title. */
+    tooltip?: boolean;
     copied?: boolean;
     triggerClass?: string;
     open?: boolean;
@@ -58,10 +64,31 @@
   }
 </script>
 
+{#snippet triggerIcon()}
+  {#if busy}<LoaderCircle size={16} class="animate-spin" />{:else}<Ellipsis size={16} />{/if}
+{/snippet}
+
 <DropdownMenu.Root bind:open>
-  <DropdownMenu.Trigger class={triggerClass} aria-label={`Session actions for ${session.title}`} title="Session actions">
-    {#if busy}<LoaderCircle size={16} class="animate-spin" />{:else}<Ellipsis size={16} />{/if}
-  </DropdownMenu.Trigger>
+  {#if tooltip}
+    <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+      <Tooltip.Root disableHoverableContent disabled={open}>
+        <Tooltip.Trigger>
+          {#snippet child({ props })}
+            <DropdownMenu.Trigger {...props} class={triggerClass} aria-label={`Session actions for ${session.title}`}>
+              {@render triggerIcon()}
+            </DropdownMenu.Trigger>
+          {/snippet}
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content class="app-tooltip-content" sideOffset={6}>Session actions</Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </Tooltip.Provider>
+  {:else}
+    <DropdownMenu.Trigger class={triggerClass} aria-label={`Session actions for ${session.title}`} title="Session actions">
+      {@render triggerIcon()}
+    </DropdownMenu.Trigger>
+  {/if}
   <DropdownMenu.Portal to={portalTarget}>
     <DropdownMenu.Content class="session-actions-content" sideOffset={5} align="end" loop>
       {#if localError || error}<div class="session-actions-error" role="alert">{localError || error} Retry the action.</div>{/if}
@@ -88,6 +115,11 @@
       {#if onHandoffWorktree}
         <DropdownMenu.Item disabled={busy} onSelect={() => onHandoffWorktree?.()}>
           <GitBranch size={14} />Hand off worktree
+        </DropdownMenu.Item>
+      {/if}
+      {#if onDebug}
+        <DropdownMenu.Item onSelect={() => onDebug?.()}>
+          <Bug size={14} />{debugLabel}
         </DropdownMenu.Item>
       {/if}
       {#if onCopy}

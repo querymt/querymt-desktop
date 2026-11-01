@@ -304,6 +304,19 @@ export function getContextPressure(percent: number | null): ContextPressure {
   return 'full';
 }
 
+/** One-line context reading shared by the dial's accessible value and the header tooltip. */
+export function describeContext(usage: SessionUsageStats): string {
+  if (usage.contextUsed === null) return '';
+  const percent = getContextPercent(usage);
+  const used = formatTokenCount(usage.contextUsed);
+  if (percent !== null && usage.contextLimit !== null) {
+    const remaining = getContextRemaining(usage);
+    const remainingNote = remaining === null ? '' : `, ${formatTokenCount(remaining)} left`;
+    return `${used} of ${formatTokenCount(usage.contextLimit)} · ${Math.round(percent)}% of the context window${remainingNote}`;
+  }
+  return `${used} in the context window`;
+}
+
 export function getContextRemaining(usage: SessionUsageStats): number | null {
   if (usage.contextUsed === null || usage.contextLimit === null) return null;
   return Math.max(0, usage.contextLimit - usage.contextUsed);

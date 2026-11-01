@@ -28,7 +28,7 @@
   } from '$lib/domain/session-scroll';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { isPendingLaunchId } from '$lib/domain/session-launch';
-  import { formatSessionTimestamp, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
+  import { formatSessionTimestampAbsolute, formatSessionTimestampShort, getSessionById, getSessionWorkspaceName } from '$lib/domain/sessions';
   import {
     findReasoningConfigOption,
     getConfigOptionChoices,
@@ -642,7 +642,8 @@
     remoteHost={pendingLaunch ? pendingLaunch.targetLabel : selectedSession?.location === 'remote' ? (selectedSession.remoteNodeLabel?.trim() || selectedSession.remoteNodeId || 'remote host') : null}
     agentName={activeAgentCount > 1 ? (selectedSession?.agentName ?? 'Unknown agent') : undefined}
     profileLabel={sessionProfileLabel}
-    updatedAt={selectedSession ? formatSessionTimestamp(selectedSession.updatedAt, relativeTimeNow) : 'Not loaded'}
+    updatedAt={selectedSession ? formatSessionTimestampShort(selectedSession.updatedAt, relativeTimeNow) : 'Not loaded'}
+    updatedAtFull={selectedSession ? formatSessionTimestampAbsolute(selectedSession.updatedAt) : null}
     summaryStatus={selectedSession?.status ?? 'idle'}
     debugLabel={debugEventsTooltip}
     showDebug={chatPreferencesStore.developerMode}

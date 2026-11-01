@@ -1,13 +1,17 @@
 <script lang="ts">
-  import { Archive, ArrowLeft, Bug, CircleCheckBig, FileCog, GitBranch, Info, Network, Pin, RefreshCw } from '@lucide/svelte';
+  import { Archive, ArrowLeft, CircleCheckBig, FileCog, GitBranch, Info, Network, Pin, RefreshCw } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
+  import Hint from '$lib/components/primitives/Hint.svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
   import SessionContextDial from '$lib/components/session/SessionContextDial.svelte';
   import SessionUsageBar from '$lib/components/session/SessionUsageBar.svelte';
   import { autoCollapsePopover } from '$lib/design/details-popover';
   import { isWorkspaceUsable, worktreeTooltip } from '$lib/domain/session-workspace';
+  import { describeContext } from '$lib/domain/session-usage';
+  import { getSessionStatusTone } from '$lib/domain/sessions';
   import type { ActiveSessionViewModel, DesktopSessionSummary, SessionLifecyclePatch, SessionStatus } from '$lib/domain/types';
 
   let {
@@ -25,6 +29,7 @@
     agentName,
     profileLabel = null,
     updatedAt,
+    updatedAtFull = null,
     summaryStatus = 'idle',
     debugLabel = 'Debug events',
     showDebug = false,
@@ -53,7 +58,10 @@
     agentName?: string;
     /** Display label of the profile this session was started with; null hides the chip. */
     profileLabel?: string | null;
+    /** Compact label for the metadata row ("5m"). */
     updatedAt: string;
+    /** Absolute date for the row's tooltip and the details panel; falls back to `updatedAt`. */
+    updatedAtFull?: string | null;
     summaryStatus?: SessionStatus;
     debugLabel?: string;
     showDebug?: boolean;
@@ -64,6 +72,17 @@
     onRefresh?: () => void | Promise<void>;
     onDebug?: () => void;
   } = $props();
+
+  const contextDetail = $derived(describeContext(session.usage));
+  const hasContext = $derived(session.usage.contextUsed !== null);
+
+  // Debug events live in the More menu. Without a loaded summary the menu still
+  // opens (for debug only) using a minimal stand-in session.
+  const menuSession = $derived.by(() => {
+    if (summary) return summary;
+    if (!showDebug) return null;
+    return { sessionId: session.sessionId ?? '', title, lifecycle: null, pin: undefined } as Pick<DesktopSessionSummary, 'sessionId' | 'title' | 'lifecycle' | 'pin'>;
+  });
 
   const status = $derived.by((): { label: string; tone: string; busy: boolean } => {
     if (forkPending) return { label: 'Creating fork', tone: 'running', busy: true };
@@ -84,7 +103,8 @@
       return { label: session.activityLabel?.startsWith('Cancelling') ? 'Cancelling' : session.activityLabel?.startsWith('Finishing') ? 'Finishing' : session.activityLabel?.startsWith('Waiting for delegates') ? 'Waiting for delegates' : 'Working', tone: 'running', busy: true };
     }
     if (session.runState === 'completed' || (!session.sessionId && summaryStatus === 'completed')) {
-      return { label: 'Turn complete', tone: 'muted', busy: false };
+      // Same tone the session list gives a completed turn.
+      return { label: 'Turn complete', tone: getSessionStatusTone('completed'), busy: false };
     }
     return { label: 'Ready', tone: 'muted', busy: false };
   });
@@ -94,13 +114,13 @@
   {#if summary?.pin?.pinned || summary?.lifecycle?.resolved || summary?.lifecycle?.archived}
     <span class="session-header-lifecycle">
       {#if summary.pin?.pinned}
-        <span class="session-header-lifecycle-icon" role="img" aria-label="Pinned" title="Pinned"><Pin size={13} aria-hidden="true" /></span>
+        <Hint text="Pinned" class="session-header-lifecycle-icon" role="img" aria-label="Pinned"><Pin size={13} aria-hidden="true" /></Hint>
       {/if}
       {#if summary.lifecycle?.resolved}
-        <span class="session-header-lifecycle-icon session-header-lifecycle-icon-resolved" role="img" aria-label="Resolved" title="Resolved"><CircleCheckBig size={13} aria-hidden="true" /></span>
+        <Hint text="Resolved" class="session-header-lifecycle-icon session-header-lifecycle-icon-resolved" role="img" aria-label="Resolved"><CircleCheckBig size={13} aria-hidden="true" /></Hint>
       {/if}
       {#if summary.lifecycle?.archived}
-        <span class="session-header-lifecycle-icon" role="img" aria-label="Archived" title="Archived"><Archive size={13} aria-hidden="true" /></span>
+        <Hint text="Archived" class="session-header-lifecycle-icon" role="img" aria-label="Archived"><Archive size={13} aria-hidden="true" /></Hint>
       {/if}
     </span>
   {/if}
@@ -122,68 +142,88 @@
 {/snippet}
 
 <header class="session-header">
-  <button class="icon-btn session-header-back" type="button" aria-label="Back to sessions" title="Back to sessions" onclick={onBack}>
-    <ArrowLeft size={17} />
-  </button>
+  <IconTooltipButton label="Back to sessions" icon={ArrowLeft} controlSize="compact" size={16} class="session-header-btn session-header-back" onclick={() => onBack?.()} />
 
   <div class="session-header-identity">
     <div class="session-header-title-line">
-      <span class="session-header-status-wrap">
-        <span
-          class={`session-header-status-dot session-header-status-dot-${status.tone}`}
-          aria-label={`Status: ${status.label}`}
-        ></span>
-        <span class="session-row-status-tooltip" role="tooltip">{status.label}</span>
-      </span>
+      <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+        <Tooltip.Root disableHoverableContent>
+          <Tooltip.Trigger>
+            {#snippet child({ props })}
+              <span {...props} class="session-header-status-wrap">
+                <span
+                  class={`session-header-status-dot session-header-status-dot-${status.tone}`}
+                  aria-label={`Status: ${status.label}`}
+                ></span>
+              </span>
+            {/snippet}
+          </Tooltip.Trigger>
+          <Tooltip.Portal>
+            <Tooltip.Content class="app-tooltip-content" side="bottom" align="start" sideOffset={6}>{status.label}</Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+      </Tooltip.Provider>
       <h1>{title}</h1>
     </div>
     <div class="session-header-mobile-meta" aria-label="Session context">
       {@render lifecycleIcons()}
       {@render remoteHostIcon()}
-      <span class="session-header-mobile-workspace" title={workspace}>{workspace}</span>
+      <Hint text={workspace} class="session-header-mobile-workspace">{workspace}</Hint>
       {#if session.sessionId}
-        <span aria-hidden="true">·</span>
-        <span class="session-header-mobile-id" title={session.sessionId}>{session.sessionId.slice(0, 13)}</span>
+        <Hint text={session.sessionId} class="session-header-mobile-id">{session.sessionId.slice(0, 8)}</Hint>
       {/if}
-      <SessionContextDial usage={session.usage} />
     </div>
     <div class="session-header-meta">
       {@render lifecycleIcons()}
       {@render remoteHostIcon()}
-      <CopyTextChip class="session-header-workspace" value={workspacePath ?? workspace} display={workspace} title="Copy project path" />
+      <CopyTextChip class="session-header-workspace" value={workspacePath ?? workspace} display={workspace} title="Copy project path" tooltip />
       {#if summary?.workspace}
         {@const usable = isWorkspaceUsable(summary.workspace)}
-        <span aria-hidden="true">·</span>
-        <span class="session-header-worktree" class:session-header-worktree-warning={!usable} data-testid="header-worktree-chip" title={worktreeTooltip(summary.workspace)}>
+        <Hint text={worktreeTooltip(summary.workspace)} class={`session-header-worktree ${usable ? '' : 'session-header-worktree-warning'}`} data-testid="header-worktree-chip">
           <GitBranch size={11} aria-hidden="true" />{summary.workspace.branch ?? 'worktree'}{#if !usable} · {summary.workspace.lifecycle}{/if}
-        </span>
+        </Hint>
       {/if}
       {#if session.sessionId}
-        <span class="session-header-session-id"><span aria-hidden="true">·</span><SessionIdChip sessionId={session.sessionId} /></span>
+        <span class="session-header-session-id"><SessionIdChip sessionId={session.sessionId} length={8} tooltip /></span>
       {/if}
       {#if profileLabel}
         <span class="session-header-meta-desktop">
-          <span aria-hidden="true">·</span>
-          <span class="session-header-profile" title="Session profile (set at start)"><FileCog size={11} aria-hidden="true" />{profileLabel}</span>
+          <Hint text="Session profile (set at start)" class="session-header-profile"><FileCog size={11} aria-hidden="true" />{profileLabel}</Hint>
         </span>
       {/if}
-      {#if session.usage.contextUsed !== null}
-        <span class="session-header-context-slot"><span aria-hidden="true">·</span><SessionContextDial usage={session.usage} /></span>
-      {/if}
-      <span class="session-header-meta-desktop"><span aria-hidden="true">·</span><span>{updatedAt}</span></span>
+      <span class="session-header-meta-desktop"><Hint text={updatedAtFull ?? updatedAt} class="session-header-updated">{updatedAt}</Hint></span>
       {#if agentName}
-        <span class="session-header-meta-desktop"><span aria-hidden="true">·</span><span>{agentName}</span></span>
+        <span class="session-header-meta-desktop"><span>{agentName}</span></span>
       {/if}
     </div>
   </div>
 
   <div class="session-header-controls">
     <div class="session-header-action-group" aria-label="Session actions">
-      {#if summary}
-        <SessionActionsMenu session={summary} canManage={canManageLifecycle} {canPin} {onSetPinned} pending={pinPending || lifecyclePending} error={pinError || lifecycleError} {onSetLifecycle} {onCreateWorktree} {onHandoffWorktree} triggerClass="icon-btn" />
-      {/if}
+      <!-- First action: session details, merged with the context ring. The ring is the
+           only context readout now; clicking it opens the same details panel. -->
       <details class="session-header-details" use:autoCollapsePopover>
-        <summary class="icon-btn" aria-label="Session details" title="Session details"><Info size={16} /></summary>
+        <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+          <Tooltip.Root disableHoverableContent>
+            <Tooltip.Trigger>
+              {#snippet child({ props })}
+                <summary
+                  {...props}
+                  class={`icon-btn icon-btn-compact session-header-btn session-header-details-trigger ${hasContext ? 'session-header-details-trigger-context' : ''}`}
+                  aria-label="Session details"
+                >
+                  {#if hasContext}<SessionContextDial usage={session.usage} inline />{:else}<Info size={15} />{/if}
+                </summary>
+              {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class={`app-tooltip-content ${contextDetail ? 'app-tooltip-multiline' : ''}`} sideOffset={6}>
+                Session details
+                {#if contextDetail}<span class="app-tooltip-detail">{contextDetail}</span>{/if}
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+        </Tooltip.Provider>
         <div class="session-header-details-panel">
           <div class="session-header-details-heading">
             <strong>Session</strong>
@@ -193,7 +233,7 @@
             </span>
           </div>
           <dl class="session-header-details-list session-header-mobile-details">
-            <div><dt>Workspace</dt><dd><CopyTextChip value={workspacePath ?? workspace} display={workspace} title="Copy project path" /></dd></div>
+            <div><dt>Workspace</dt><dd><CopyTextChip value={workspacePath ?? workspace} display={workspace} title="Copy project path" tooltip /></dd></div>
             {#if agentName}
               <div><dt>Agent</dt><dd>{agentName}</dd></div>
             {/if}
@@ -203,14 +243,14 @@
             {#if summary?.workspace}
               {@const wt = summary.workspace}
               <div><dt>Worktree branch</dt><dd>{wt.branch ?? 'Unknown'}</dd></div>
-              {#if wt.checkoutPath}<div><dt>Checkout</dt><dd><CopyTextChip value={wt.checkoutPath} display={wt.checkoutPath} title="Copy checkout path" /></dd></div>{/if}
+              {#if wt.checkoutPath}<div><dt>Checkout</dt><dd><CopyTextChip value={wt.checkoutPath} display={wt.checkoutPath} title="Copy checkout path" tooltip /></dd></div>{/if}
               {#if wt.baselineMode}<div><dt>Baseline</dt><dd>{wt.baselineMode.replace(/_/g, ' ')}</dd></div>{/if}
               {#if wt.lifecycle}<div><dt>Worktree state</dt><dd>{wt.lifecycle}</dd></div>{/if}
               {#if wt.handedOffTo}<div><dt>Handed off</dt><dd>Yes</dd></div>{/if}
             {/if}
-            <div><dt>Updated</dt><dd>{updatedAt}</dd></div>
+            <div><dt>Updated</dt><dd>{updatedAtFull ?? updatedAt}</dd></div>
             {#if session.sessionId}
-              <div><dt>Session ID</dt><dd><SessionIdChip sessionId={session.sessionId} /></dd></div>
+              <div><dt>Session ID</dt><dd><SessionIdChip sessionId={session.sessionId} tooltip /></dd></div>
             {/if}
           </dl>
           {#if session.lastError}
@@ -221,14 +261,24 @@
           <SessionUsageBar usage={session.usage} />
         </div>
       </details>
-      {#if showDebug}
-        <button class="icon-btn" type="button" aria-label={debugLabel} title={debugLabel} onclick={onDebug}>
-          <Bug size={16} />
-        </button>
+      {#if menuSession}
+        <SessionActionsMenu
+          session={menuSession}
+          canManage={canManageLifecycle}
+          {canPin}
+          {onSetPinned}
+          pending={pinPending || lifecyclePending}
+          error={pinError || lifecycleError}
+          {onSetLifecycle}
+          {onCreateWorktree}
+          {onHandoffWorktree}
+          onDebug={showDebug ? onDebug ?? null : null}
+          {debugLabel}
+          tooltip
+          triggerClass="icon-btn icon-btn-compact session-header-btn"
+        />
       {/if}
-      <button class="icon-btn" type="button" aria-label="Refresh session" title="Refresh session" onclick={onRefresh}>
-        <RefreshCw size={16} />
-      </button>
+      <IconTooltipButton label="Refresh session" icon={RefreshCw} controlSize="compact" size={15} class="session-header-btn" onclick={() => void onRefresh?.()} />
     </div>
   </div>
 </header>

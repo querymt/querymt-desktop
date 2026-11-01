@@ -9,7 +9,7 @@
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
   import SessionLifecycleBadges from '$lib/components/primitives/SessionLifecycleBadges.svelte';
-  import { createSessionBrowserState, SESSION_LIFECYCLE_VIEWS, RECENT_SESSION_GROUP_KEY, PINNED_SESSION_GROUP_KEY, compareSessionsByPin, getSessionKey, getSessionWorkspaceName, isRootSession, sessionMatchesLifecycle, compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
+  import { createSessionBrowserState, SESSION_LIFECYCLE_VIEWS, RECENT_SESSION_GROUP_KEY, PINNED_SESSION_GROUP_KEY, compareSessionsByPin, getSessionKey, getSessionWorkspaceName, isRootSession, sessionMatchesLifecycle, compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, getSessionStatusTone, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import Identicon from '$lib/components/primitives/Identicon.svelte';
   import { isWorkspaceArchivedAccess, isWorkspaceUsable, worktreeTooltip } from '$lib/domain/session-workspace';
   import type { DesktopSessionSummary, ExcludedSessionAgent, SessionBrowserState, SessionLifecyclePatch, SessionLifecycleView, SessionStatus } from '$lib/domain/types';
@@ -395,21 +395,6 @@
     }
   }
 
-  function getStatusTone(status: SessionStatus): string {
-    switch (status) {
-      case 'thinking':
-      case 'cancelling':
-        return 'running';
-      case 'waiting':
-      case 'unknown':
-        return 'warning';
-      case 'completed':
-        return 'success';
-      default:
-        return 'muted';
-    }
-  }
-
   async function copySessionId(sessionId: string) {
 
     try {
@@ -540,7 +525,7 @@
                         {#if showAgentNames}<span>{session.agentName}</span>{/if}
                         <span class="session-row-status-line">
                           <span
-                            class={`session-header-status-dot session-header-status-dot-${getStatusTone(session.status)}`}
+                            class={`session-header-status-dot session-header-status-dot-${getSessionStatusTone(session.status)}`}
                             aria-label={`Status: ${getStatusLabel(session.status)}`}
                             title={`Status: ${getStatusLabel(session.status)}`}
                           ></span>
