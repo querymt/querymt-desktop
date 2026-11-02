@@ -152,7 +152,7 @@ describe('RecentSessionRail navigation', () => {
   it('keeps unknown execution explicit in existing rail status labels', () => {
     render(RecentSessionRail, { current: 'Sessions', sessions: [{ ...activeSession, status: 'unknown' }] });
     expect(screen.getByRole('link', { name: /^Waiting session, Status unavailable/ })).toBeInTheDocument();
-    expect(screen.getByText('work · Status unavailable')).toBeInTheDocument();
+    expect(document.querySelector('.app-sidebar-session-status-unknown')).not.toBeNull();
   });
   it('defaults to a labeled sidebar with grouped navigation and readable sessions', () => {
     render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
@@ -164,7 +164,7 @@ describe('RecentSessionRail navigation', () => {
     expect(screen.getAllByRole('link', { name: 'Sessions' })).toHaveLength(1);
     expect(screen.queryByRole('link', { name: 'View all' })).not.toBeInTheDocument();
     expect(screen.getByText('Waiting session')).toBeInTheDocument();
-    expect(screen.getByText('work · Waiting')).toBeInTheDocument();
+    expect(screen.getByText('work', { selector: '.app-sidebar-session-workspace' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
   });
 
@@ -344,13 +344,20 @@ describe('RecentSessionRail navigation', () => {
     expect(screen.queryByText('Agents command and control')).not.toBeInTheDocument();
   });
 
-  it('omits the redundant Recent status from the session subtitle but keeps meaningful ones', () => {
+  it('lays out the row as title + status, then a 16px identicon, workspace and last active time', () => {
     const { container, rerender } = render(RecentSessionRail, { current: 'Sessions', sessions: [{ ...activeSession, status: 'idle' }] });
-    const subtitle = () => container.querySelector('.app-sidebar-session-copy small')?.textContent ?? '';
-    expect(subtitle()).not.toContain('Recent');
+    const row = container.querySelector('.app-sidebar-session')!;
+    expect(row.querySelector('.app-sidebar-session-title')).toHaveTextContent('Waiting session');
+    expect(row.querySelector('.app-sidebar-session-workspace')).toHaveTextContent('work');
+    expect(row.querySelector('.app-sidebar-session-time')?.textContent?.trim()).toBeTruthy();
+    expect(row.querySelector('.app-sidebar-session-avatar svg')?.getAttribute('width')).toBe('16');
+    // Idle sessions leave the status slot empty and never spell out Recent.
+    expect(row.querySelector('.app-sidebar-session-status')?.children).toHaveLength(0);
+    expect(row.textContent).not.toContain('Recent');
 
     rerender({ current: 'Sessions', sessions: [{ ...activeSession, status: 'unknown' }] });
-    expect(subtitle()).toContain('Status unavailable');
+    expect(container.querySelector('.app-sidebar-session-status-unknown')).not.toBeNull();
+    expect(container.querySelector('.app-sidebar-session')?.textContent).not.toContain('Status unavailable');
   });
 
   it.each([false, true])('uses only activity and attention circles for active sessions, without a row highlight (collapsed=%s)', (collapsed) => {
