@@ -1091,6 +1091,7 @@ export interface ControlFeatureInfo {
 	remote_sessions: boolean;
 	session_lifecycle?: boolean;
 	session_pins?: boolean;
+	session_source_listing?: boolean;
 	schedules: boolean;
 	remote_schedules: boolean;
 	profiles: boolean;

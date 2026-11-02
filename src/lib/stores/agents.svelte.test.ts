@@ -1574,6 +1574,12 @@ describe('AgentsStore session lifecycle', () => {
     return { agentId: 'agent-1', agentName: 'QMTCODE', sessionId, title: sessionId, cwd: '/tmp/work', updatedAt: '2026-10-01T00:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'thinking', lifecycle: { session_id: sessionId, resolved: false, archived: false, resolved_at: null, archived_at: null } };
   }
 
+  /** `_meta.querymt.sessionSource` of a recorded `session/list` request. */
+  const sourceOf = (request: { _meta?: unknown } | undefined) =>
+    (request?._meta as { querymt?: { sessionSource?: string } } | undefined)?.querymt?.sessionSource;
+  const peersOf = (request: { _meta?: unknown } | undefined) =>
+    (request?._meta as { remoteNodeIds?: string[] } | undefined)?.remoteNodeIds;
+
   function listed(sessionId: string): SessionInfo {
     return { sessionId, title: sessionId, cwd: '/tmp/work', _meta: { querymt: { lifecycle: summary(sessionId).lifecycle } } } as SessionInfo;
   }
@@ -2403,6 +2409,63 @@ describe('AgentsStore session lifecycle', () => {
       chatPreferencesStore.setRemoteSessionPeer('peer-owner', false);
       chatPreferencesStore.setShowRemoteSessions(false);
     }
+  });
+
+  it('lists local and remote sources in parallel when the agent supports source-scoped listing', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = {};
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('peer-owner', true);
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'session_source_listing');
+    try {
+      // The local chain stalls on its second page; remote rows must still land first.
+      let releaseLocal!: () => void;
+      const localGate = new Promise<void>((resolve) => { releaseLocal = resolve; });
+      mockClient.listSessions.mockImplementation(async (request) => {
+        const source = sourceOf(request);
+        if (source === 'remote') return { sessions: [listed('remote-1')] };
+        if (request?.cursor === '250') { await localGate; return { sessions: [listed('local-2')] }; }
+        return { sessions: [listed('local-1')], nextCursor: '250' };
+      });
+      const loading = store.refreshSessionCatalog({ resolution: 'any', archive: 'any' });
+      await vi.waitFor(() => expect(store.sessionCatalog.map((session) => session.sessionId)).toContain('remote-1'));
+      expect(store.sessionCatalog.map((session) => session.sessionId)).not.toContain('local-2');
+      releaseLocal();
+      await loading;
+      expect(store.sessionCatalog.map((session) => session.sessionId).sort()).toEqual(['local-1', 'local-2', 'remote-1']);
+      const sources = mockClient.listSessions.mock.calls.map(([request]) => sourceOf(request));
+      expect(sources.sort()).toEqual(['local', 'local', 'remote']);
+      expect(mockClient.listSessions.mock.calls.every(([request]) => peersOf(request)?.[0] === 'peer-owner')).toBe(true);
+    } finally {
+      chatPreferencesStore.setRemoteSessionPeer('peer-owner', false);
+      chatPreferencesStore.setShowRemoteSessions(false);
+    }
+  });
+
+  it('keeps the chained listing for agents without source-scoped listing', async () => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('peer-owner', true);
+    try {
+      mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('local-1')], nextCursor: 'remote:0:0:live' })
+        .mockResolvedValueOnce({ sessions: [listed('remote-1')] });
+      await store.refreshSessionCatalog({ resolution: 'any', archive: 'any' });
+      expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+      expect(mockClient.listSessions.mock.calls.every(([request]) => sourceOf(request) === undefined)).toBe(true);
+      expect(store.sessionCatalog.map((session) => session.sessionId).sort()).toEqual(['local-1', 'remote-1']);
+    } finally {
+      chatPreferencesStore.setRemoteSessionPeer('peer-owner', false);
+      chatPreferencesStore.setShowRemoteSessions(false);
+    }
+  });
+
+  it('does not scope listing by source when no remote peers are selected', async () => {
+    const store = await lifecycleStore();
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'session_source_listing');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('local-1')] });
+    await store.refreshSessionCatalog({ resolution: 'any', archive: 'any' });
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+    expect(sourceOf(mockClient.listSessions.mock.calls[0][0])).toBeUndefined();
   });
 
   it('confirms the whole catalog is empty before offering first-session recovery', async () => {

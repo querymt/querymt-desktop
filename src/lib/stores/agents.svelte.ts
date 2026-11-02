@@ -2411,31 +2411,46 @@ export class AgentsStore {
         if (!record) throw new Error('Agent disconnected.');
         // Accumulate by key: per page this is O(page), not a merge + sort of everything loaded so far.
         const loaded = new Map<string, DesktopSessionSummary>();
-        const seen = new Set<string>();
-        let cursor: string | undefined;
-        do {
-          const page = await this.listSessionPage(config, record, buildListSessionsRequest({
-            cursor, remoteNodeIds, lifecycle: filtered ? lifecycle : undefined
-          }), fresh, 5 * 60_000, () => { shared = true; });
+        // One cursor chain per source. The legacy chain lists every local page before the first remote
+        // one, so with thousands of local sessions remote rows would appear last; agents that support
+        // source-scoped listing get both chains at once.
+        const walk = async (source?: 'local' | 'remote') => {
+          const seen = new Set<string>();
+          let cursor: string | undefined;
+          do {
+            const page = await this.listSessionPage(config, record, buildListSessionsRequest({
+              cursor, remoteNodeIds, lifecycle: filtered ? lifecycle : undefined, source
+            }), fresh, 5 * 60_000, () => { shared = true; });
+            if (generation !== this.sessionCatalogGeneration) return;
+            const incoming = this.preserveCatalogWrites(this.mapSessionSummaries(page.sessions, { agentId: config.id, agentName: config.name }), writeRevision, config.id)
+              .filter((session) => sessionMatchesLifecycle(session.lifecycle, lifecycle));
+            const previousCount = loaded.size;
+            for (const session of incoming) {
+              const existing = loaded.get(session.sessionId);
+              loaded.set(session.sessionId, existing ? mergeSessionSummary(existing, session) : session);
+            }
+            this.sessionCatalogLoadedCount += loaded.size - previousCount;
+            if (incoming.length) {
+              // Pages render progressively; the warm cache is written once the agent finishes.
+              this.sessionCatalog = mergeSessions(this.sessionCatalog, incoming);
+              this.sessionCatalogHasSessions = true;
+              this.sessionsByAgent = { ...this.sessionsByAgent, [config.id]: mergeSessions(this.sessionsByAgent[config.id] ?? [], incoming) };
+            }
+            cursor = page.nextCursor ?? undefined;
+            if (cursor && seen.has(cursor)) throw new Error('Agent returned a repeated session cursor.');
+            if (cursor) seen.add(cursor);
+          } while (cursor);
+        };
+        if (remoteNodeIds.length && record.client.supportsQuerymtFeature('session_source_listing')) {
+          // Let both chains finish before reporting, so one failing source never aborts the other mid-write.
+          const results = await Promise.allSettled([walk('local'), walk('remote')]);
+          const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+          if (failure) throw failure.reason;
           if (generation !== this.sessionCatalogGeneration) return;
-          const incoming = this.preserveCatalogWrites(this.mapSessionSummaries(page.sessions, { agentId: config.id, agentName: config.name }), writeRevision, config.id)
-            .filter((session) => sessionMatchesLifecycle(session.lifecycle, lifecycle));
-          const previousCount = loaded.size;
-          for (const session of incoming) {
-            const existing = loaded.get(session.sessionId);
-            loaded.set(session.sessionId, existing ? mergeSessionSummary(existing, session) : session);
-          }
-          this.sessionCatalogLoadedCount += loaded.size - previousCount;
-          if (incoming.length) {
-            // Pages render progressively; the warm cache is written once the agent finishes.
-            this.sessionCatalog = mergeSessions(this.sessionCatalog, incoming);
-            this.sessionCatalogHasSessions = true;
-            this.sessionsByAgent = { ...this.sessionsByAgent, [config.id]: mergeSessions(this.sessionsByAgent[config.id] ?? [], incoming) };
-          }
-          cursor = page.nextCursor ?? undefined;
-          if (cursor && seen.has(cursor)) throw new Error('Agent returned a repeated session cursor.');
-          if (cursor) seen.add(cursor);
-        } while (cursor);
+        } else {
+          await walk();
+          if (generation !== this.sessionCatalogGeneration) return;
+        }
         // Remove stale cached rows only after this agent's entire refresh succeeds.
         const sessions = this.preserveCatalogWrites([...loaded.values()], writeRevision, config.id, true)
           .filter((session) => sessionMatchesLifecycle(session.lifecycle, lifecycle));

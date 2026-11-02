@@ -48,6 +48,15 @@ describe('session pin metadata and requests', () => {
     });
     expect(() => buildListSessionsRequest({ pinned: false, remoteNodeIds: ['peer'] })).toThrow('directly connected');
   });
+  it('scopes a request to one session source alongside lifecycle filters', () => {
+    expect(buildListSessionsRequest({ remoteNodeIds: ['peer'], source: 'remote' })._meta).toEqual({
+      session_scope: 'root', remoteNodeIds: ['peer'], querymt: { sessionSource: 'remote' }
+    });
+    expect(buildListSessionsRequest({ source: 'local', lifecycle: { resolution: 'open', archive: 'excluded' } })._meta).toEqual({
+      session_scope: 'root', querymt: { sessionFilters: { resolution: 'open', archive: 'excluded' }, sessionSource: 'local' }
+    });
+    expect(buildListSessionsRequest()._meta).toEqual({ session_scope: 'root' });
+  });
 });
 
 describe('compareSessionsByPin', () => {
