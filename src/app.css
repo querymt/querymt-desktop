@@ -9246,27 +9246,22 @@ a.session-delegate-session:hover {
   justify-content: flex-end;
 }
 
+/* The expanded sidebar floats as a bordered card; the collapsed rail is
+   transparent. Rows inside get a faint fill instead of outlines. */
 .app-sidebar {
-  --rail-item-radius-rest: 999px;
-  --rail-item-radius-hover: 14px;
-  --rail-item-morph-duration: 180ms;
-  --rail-item-morph-easing: cubic-bezier(0.22, 1, 0.36, 1);
   position: fixed;
-  top: 1rem;
+  top: var(--session-composer-bottom-offset);
+  bottom: var(--session-composer-bottom-offset);
   left: 0.5rem;
   z-index: 40;
   display: flex;
-  height: calc(100dvh - 2rem);
-  max-height: calc(100dvh - 2rem);
+  height: auto;
+  max-height: none;
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--nav-bg);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: var(--surface-blur);
-  -webkit-backdrop-filter: var(--surface-blur);
+  border: 0;
+  background: transparent;
   transition: width var(--app-panel-duration) var(--app-panel-easing), transform var(--app-panel-duration) var(--app-panel-easing);
 }
 
@@ -9274,15 +9269,19 @@ a.session-delegate-session:hover {
   width: var(--app-sidebar-collapsed-width);
   align-items: center;
   gap: 0.65rem;
-  border-color: transparent;
-  background: transparent;
   padding: 0.45rem 0;
-  box-shadow: none;
-  backdrop-filter: none;
 }
 
+/* Floating card with the composer's radius and surface (border, soft shadow
+   and blur as before the restyle). */
 .app-sidebar-expanded {
   width: var(--app-sidebar-expanded-width);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel-strong);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: var(--surface-blur);
+  -webkit-backdrop-filter: var(--surface-blur);
   padding: 0.65rem;
 }
 
@@ -9291,8 +9290,31 @@ a.session-delegate-session:hover {
   flex: 0 0 auto;
   align-items: center;
   gap: 0.5rem;
-  border-bottom: 1px solid var(--border);
-  padding: 0.1rem 0.1rem 0.7rem;
+  padding: 0.1rem 0.1rem 0.4rem;
+}
+
+/* 2rem ghost button, like the session header buttons. */
+.app-sidebar-footer .app-sidebar-collapse {
+  flex: 0 0 auto;
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.app-sidebar-footer .app-sidebar-collapse:hover,
+.app-sidebar-footer .app-sidebar-collapse:focus-visible {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.app-sidebar-footer .app-sidebar-collapse:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .app-sidebar-brand {
@@ -9313,10 +9335,6 @@ a.session-delegate-session:hover {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-control);
-  background: var(--accent);
-  color: white;
-  font-size: 0.78rem;
-  font-weight: 800;
 }
 
 .app-sidebar-brand-copy {
@@ -9326,24 +9344,23 @@ a.session-delegate-session:hover {
   line-height: 1;
 }
 
-.app-sidebar-brand strong,
-.app-sidebar-brand small {
+.app-sidebar-brand strong {
   overflow: hidden;
+  font-size: 0.9rem;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.app-sidebar-brand strong {
-  font-size: 0.88rem;
-  font-weight: 700;
-}
-
 .app-sidebar-brand small {
+  overflow: hidden;
   color: var(--text-dim);
   font-size: 0.58rem;
   font-weight: 550;
   line-height: calc(1em + 2px);
   letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-sidebar-navigation {
@@ -9358,17 +9375,16 @@ a.session-delegate-session:hover {
   gap: 0.16rem;
 }
 
+/* Quiet sentence-case labels instead of loud uppercase headings. */
 .app-sidebar-group-label,
 .app-sidebar-section-heading {
-  color: var(--muted);
-  font-size: 0.66rem;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 
 .app-sidebar-group-label {
-  padding: 0.25rem 0.55rem;
+  padding: 0.25rem 0.5rem;
 }
 
 .app-sidebar-link {
@@ -9393,19 +9409,11 @@ a.session-delegate-session:hover {
   outline: none;
 }
 
+/* Current rows share one neutral faint fill (nav and sessions); the accent shows
+   only in the nav icon. */
 .app-sidebar-link-current {
-  background: var(--selected-surface);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
-}
-
-.app-sidebar-link-current::before {
-  position: absolute;
-  left: -0.66rem;
-  width: 0.2rem;
-  height: 1.2rem;
-  border-radius: 999px;
-  background: var(--accent);
-  content: '';
 }
 
 .app-sidebar-link {
@@ -9425,8 +9433,9 @@ a.session-delegate-session:hover {
 }
 
 .app-sidebar-link small {
-  color: var(--muted);
-  font-size: 0.65rem;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Shared visually-hidden utility. Markup already uses it for accessible-only text
@@ -9457,15 +9466,20 @@ a.session-delegate-session:hover {
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
-  border-top: 1px solid var(--border);
-  padding-top: 0.65rem;
+  border-top: 1px solid var(--subtle-border);
+  padding-top: 0.35rem;
 }
 
+/* Headings stay pinned to the top of the list so the zone is always labelled. */
 .app-sidebar-section-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.25rem 0.55rem 0.45rem;
+  background: var(--bg-panel-strong);
+  padding: 0.4rem 0.5rem 0.3rem;
 }
 
 .session-pin-indicator {
@@ -9492,7 +9506,7 @@ a.session-delegate-session:hover {
 }
 
 .app-sidebar-session[aria-current='page'] {
-  background: var(--row-surface-hover);
+  background: var(--composer-pill-surface-hover);
 }
 
 .app-sidebar-session-list {
@@ -9500,18 +9514,24 @@ a.session-delegate-session:hover {
   align-content: start;
   gap: 0.18rem;
   overflow-y: auto;
-  padding: 0 0.1rem;
+  /* Rows fade out above the footer; the bottom padding lets the last row scroll
+     clear of the fade. */
+  padding: 0 0.1rem 1.25rem;
   scrollbar-width: thin;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.25rem), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.25rem), transparent);
 }
 
 .app-sidebar-session {
   display: grid;
+  /* Same 1.75rem icon column and 0.5rem inset as the nav links, so identicon
+     centers and titles line up with the icons and labels above. */
   grid-template-columns: 1.75rem minmax(0, 1fr);
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.45rem;
   border-radius: var(--radius-control);
   color: var(--text);
-  padding: 0.38rem 0.45rem;
+  padding: 0.38rem 0.5rem;
   text-decoration: none;
   transition: background 0.15s ease;
 }
@@ -9525,8 +9545,9 @@ a.session-delegate-session:hover {
 .app-sidebar-session-avatar {
   position: relative;
   display: inline-flex;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  justify-self: center;
   align-items: center;
   justify-content: center;
   overflow: visible;
@@ -9566,14 +9587,14 @@ a.session-delegate-session:hover {
 }
 
 .app-sidebar-session-copy strong {
-  font-size: 0.75rem;
-  font-weight: 580;
+  font-size: 0.79rem;
+  font-weight: 560;
 }
 
 .app-sidebar-session-copy small {
   margin-top: 0.08rem;
-  color: var(--muted);
-  font-size: 0.64rem;
+  color: var(--text-dim);
+  font-size: 0.66rem;
 }
 
 .app-sidebar-empty {
@@ -9583,18 +9604,31 @@ a.session-delegate-session:hover {
 }
 
 .app-sidebar-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
   flex: 0 0 auto;
-  border-top: 1px solid var(--border);
-  padding-top: 0.55rem;
+  border-top: 1px solid var(--subtle-border);
+  padding-top: 0.4rem;
 }
 
 .app-sidebar-footer .app-sidebar-link {
+  flex: 1;
+  min-width: 0;
   grid-template-columns: 1.75rem minmax(0, 1fr);
 }
 
 .app-sidebar-toggle-compact {
-  border: 1px solid var(--subtle-border);
-  background: var(--bg-card);
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.app-sidebar-toggle-compact:hover,
+.app-sidebar-toggle-compact:focus-visible {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
 }
 
 .app-icon-rail-top,
@@ -9639,21 +9673,27 @@ a.session-delegate-session:hover {
   width: 2.4rem;
   height: 2.4rem;
   flex: 0 0 auto;
-  border-radius: var(--rail-item-radius-rest);
+  border-radius: var(--radius-control);
   color: var(--text);
   text-decoration: none;
   outline: none;
-  transition: border-radius var(--rail-item-morph-duration) var(--rail-item-morph-easing), transform 160ms ease, box-shadow 160ms ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
+/* Collapsed rail is flat: ghost icons that take the faint fill on hover, no
+   shape morph, lift or shadows. Identicons keep their own colors. */
 .app-icon-link:hover,
 .app-icon-link:focus-visible {
-  border-radius: var(--rail-item-radius-hover);
-  transform: translateY(-1px);
+  background: var(--composer-pill-surface-hover);
+}
+
+.app-icon-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .session-icon-link {
-  transition: background 160ms ease;
+  transition: background 0.15s ease;
 }
 
 .session-icon-link:hover,
@@ -9666,20 +9706,30 @@ a.session-delegate-session:hover {
   outline-offset: 3px;
 }
 
-.app-icon-home {
-  border: 1px solid var(--selected-border);
-  background: var(--accent);
-  color: #ffffff;
-  box-shadow: 0 10px 24px rgba(249, 115, 22, 0.18);
-  font-size: 0.88rem;
-  font-weight: 800;
-  letter-spacing: -0.05em;
+.app-brand-icon {
+  display: inline-flex;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-control);
 }
 
-.app-icon-home:hover,
-.app-icon-home:focus-visible,
-.app-icon-home.app-icon-link-current {
-  box-shadow: 0 14px 30px rgba(249, 115, 22, 0.24);
+.app-brand-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.app-brand-icon .app-brand-icon-dark {
+  display: none;
+}
+
+:root[data-theme='dark'] .app-brand-icon-light {
+  display: none;
+}
+
+:root[data-theme='dark'] .app-brand-icon-dark {
+  display: block;
 }
 
 .app-nav-icon-surface {
@@ -9690,12 +9740,9 @@ a.session-delegate-session:hover {
   width: 2.4rem;
   height: 2.4rem;
   overflow: hidden;
-  border-radius: var(--rail-item-radius-rest);
-  border: 1px solid var(--subtle-border);
-  background: var(--bg-card);
+  border-radius: var(--radius-control);
   color: var(--text-dim);
-  box-shadow: var(--shadow-sm);
-  transition: border-radius var(--rail-item-morph-duration) var(--rail-item-morph-easing), border-color 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+  transition: color 0.15s ease;
 }
 
 .app-nav-icon-surface {
@@ -9718,9 +9765,8 @@ a.session-delegate-session:hover {
   height: 2.4rem;
   align-items: center;
   justify-content: center;
-  border-radius: var(--rail-item-radius-rest);
+  border-radius: var(--radius-control);
   overflow: visible;
-  transition: border-radius var(--rail-item-morph-duration) var(--rail-item-morph-easing);
 }
 
 .session-identicon-svg {
@@ -9733,36 +9779,16 @@ a.session-delegate-session:hover {
 
 .app-icon-link:hover .app-nav-icon-surface,
 .app-icon-link:focus-visible .app-nav-icon-surface {
-  border-color: var(--border-strong);
   color: var(--text);
-  box-shadow: var(--shadow-md);
 }
 
-.app-icon-link:hover .app-nav-icon-surface,
-.app-icon-link:focus-visible .app-nav-icon-surface {
-  border-radius: var(--rail-item-radius-hover);
-}
-
-.app-icon-link-current .app-icon-activity-pill {
-  height: 1.45rem;
-  opacity: 1;
-  transform: scaleY(1);
-}
-
-.app-icon-link-current .app-icon-activity-pill {
-  background: var(--accent);
+/* Current section: the same faint fill as the expanded rows, accent icon. */
+.app-icon-link-current:not(.app-icon-home) {
+  background: var(--composer-pill-surface-hover);
 }
 
 .app-icon-link-current .app-nav-icon-surface {
-  border-color: var(--selected-border);
-  background: var(--selected-surface);
   color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-dim);
-}
-
-:root[data-theme='dark'] .app-icon-link-current .app-nav-icon-surface {
-  background: #202020;
-  border-color: var(--subtle-border);
 }
 
 .app-icon-agent-count {
@@ -9774,7 +9800,7 @@ a.session-delegate-session:hover {
   justify-content: center;
   min-width: 1.12rem;
   height: 1.12rem;
-  border: 2px solid var(--bg);
+  border: 2px solid var(--body-bg-base);
   border-radius: 999px;
   background: var(--success);
   color: white;
@@ -9793,10 +9819,9 @@ a.session-delegate-session:hover {
   aspect-ratio: 1;
   flex: 0 0 auto;
   padding: 0;
-  border: 2px solid var(--bg);
+  border: 2px solid var(--body-bg-base);
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-dim), 0 6px 16px rgba(249, 115, 22, 0.28);
   line-height: 0;
 }
 
@@ -9814,7 +9839,7 @@ a.session-delegate-session:hover {
   width: 1.8rem;
   height: 1px;
   border-radius: 999px;
-  background: var(--subtle-border-strong);
+  background: var(--subtle-border);
 }
 
 .session-icon-avatar svg {
@@ -9822,24 +9847,6 @@ a.session-delegate-session:hover {
   width: 100%;
   height: 100%;
   shape-rendering: geometricPrecision;
-}
-
-.app-icon-activity-pill {
-  position: absolute;
-  left: -0.38rem;
-  width: 0.22rem;
-  height: 0.7rem;
-  border-radius: 999px;
-  background: var(--text-dim);
-  opacity: 0;
-  transform: scaleY(0.65);
-  transition: height 0.16s ease, opacity 0.16s ease, transform 0.16s ease;
-}
-
-.app-icon-link:hover .app-icon-activity-pill,
-.app-icon-link:focus-visible .app-icon-activity-pill {
-  opacity: 0.55;
-  transform: scaleY(1);
 }
 
 .session-icon-status {
@@ -9850,7 +9857,7 @@ a.session-delegate-session:hover {
   width: 0.9rem;
   height: 0.9rem;
   border-radius: 999px;
-  border: 2px solid var(--bg);
+  border: 2px solid var(--body-bg-base);
 }
 
 .session-icon-status-active {
@@ -9902,17 +9909,13 @@ a.session-delegate-session:hover {
 
 @media (min-width: 1024px) {
   .app-shell-custom-titlebar .app-sidebar {
-    top: calc(12px + 3.5rem);
+    top: calc(12px + 2.5rem + var(--session-composer-bottom-offset));
     left: calc(12px + 0.75rem);
-    height: calc(100dvh - 24px - 5rem);
-    max-height: calc(100dvh - 24px - 5rem);
   }
 
   .app-shell-custom-titlebar.app-shell-maximized .app-sidebar {
-    top: 3.5rem;
+    top: calc(2.5rem + var(--session-composer-bottom-offset));
     left: 0.75rem;
-    height: calc(100dvh - 5rem);
-    max-height: calc(100dvh - 5rem);
   }
 }
 
@@ -9923,8 +9926,7 @@ a.session-delegate-session:hover {
   .session-icon-link,
   .app-nav-icon-surface,
   .session-icon-surface,
-  .session-icon-avatar,
-  .app-icon-activity-pill {
+  .session-icon-avatar {
     transition: none;
   }
 }

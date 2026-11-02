@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { Tooltip } from 'bits-ui';
+  import Hint from '$lib/components/primitives/Hint.svelte';
+  import brandLight from '$lib/assets/querymt-icon-light.svg';
+  import brandDark from '$lib/assets/querymt-icon-dark.svg';
   import { ChevronLeft, ChevronRight, LoaderCircle, Menu, Pin } from '@lucide/svelte';
   import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
@@ -141,7 +144,6 @@
       .filter(isRootSession)
       .filter((session) => !pinnedKeys.has(`${session.agentId}:${session.sessionId}`))
       .filter((session) => sessionMatchesLifecycle(session.lifecycle, { resolution: 'open', archive: 'excluded' }))
-      .filter((session) => !(session.agentId === currentAgentId && session.sessionId === currentSessionId))
   );
   const openRailItems = $derived(
     getRecentSessionRailItems(visibleSessions, {
@@ -284,6 +286,16 @@
     return activity ?? 'Recent';
   }
 
+  // Workspace first; the status is only spelled out when it is not the default "Recent".
+  function getSessionSubtitle(session: DesktopSessionSummary, item: SessionRailItem): string {
+    const status = getStatusLabel(session.status, item);
+    return [
+      getSessionWorkspaceName(session.cwd),
+      status === 'Recent' ? null : status,
+      session.lifecycle ? null : 'Lifecycle unavailable'
+    ].filter(Boolean).join(' · ');
+  }
+
   function openSession(session: DesktopSessionSummary) {
     onOpenSession?.(session);
   }
@@ -291,6 +303,7 @@
 
 {#snippet sessionMenu(session: DesktopSessionSummary, key: string)}
   <SessionActionsMenu
+    tooltip
     {session}
     bind:open={() => menuSessionKey === key, (value) => (menuSessionKey = value ? key : null)}
     canManage={canManageLifecycle?.(session) ?? false}
@@ -348,9 +361,8 @@
             {/snippet}
           </Tooltip.Trigger>
           <Tooltip.Portal>
-            <Tooltip.Content class="app-icon-tooltip" side="right" sideOffset={10}>
+            <Tooltip.Content class="app-tooltip-content" side="right" sideOffset={6}>
               {status}
-              <Tooltip.Arrow class="app-icon-tooltip-arrow" />
             </Tooltip.Content>
           </Tooltip.Portal>
         </Tooltip.Root>
@@ -384,11 +396,11 @@
           <Tooltip.Trigger>
             {#snippet child({ props })}
               <a {...props} class={`app-icon-link app-icon-home ${current === 'Start' ? 'app-icon-link-current' : ''}`} href="/" aria-current={current === 'Start' ? 'page' : undefined} aria-label="Start">
-                <span class="app-icon-activity-pill" aria-hidden="true"></span><span>Q</span>
+                <span class="app-brand-icon" aria-hidden="true"><img class="app-brand-icon-light" src={brandLight} alt="" /><img class="app-brand-icon-dark" src={brandDark} alt="" /></span>
               </a>
             {/snippet}
           </Tooltip.Trigger>
-          <Tooltip.Portal><Tooltip.Content class="app-icon-tooltip" side="right" sideOffset={10}>Start<Tooltip.Arrow class="app-icon-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal>
+          <Tooltip.Portal><Tooltip.Content class="app-tooltip-content" side="right" sideOffset={6}>Start</Tooltip.Content></Tooltip.Portal>
         </Tooltip.Root>
 
         <div class="app-icon-nav-list">
@@ -406,12 +418,11 @@
                     aria-describedby={section === 'Agents' && configuredAgentCount > 0 ? AGENTS_STATUS_DESCRIPTION_ID :
                       section === 'Mesh' && meshNodeCount > 0 ? MESH_STATUS_DESCRIPTION_ID : undefined}
                   >
-                    <span class="app-icon-activity-pill" aria-hidden="true"></span>
                     <span class="app-nav-icon-surface" aria-hidden="true"><Icon size={16} />{@render navIndicator(section)}</span>
                   </a>
                 {/snippet}
               </Tooltip.Trigger>
-              <Tooltip.Portal><Tooltip.Content class="app-icon-tooltip" side="right" sideOffset={10}>{getSectionTooltip(section)}<Tooltip.Arrow class="app-icon-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal>
+              <Tooltip.Portal><Tooltip.Content class="app-tooltip-content" side="right" sideOffset={6}>{getSectionTooltip(section)}</Tooltip.Content></Tooltip.Portal>
             </Tooltip.Root>
             {#if section === 'Agents' && configuredAgentCount > 0}
               <span class="sr-only" id={AGENTS_STATUS_DESCRIPTION_ID}>{getAgentsStatus()}</span>
@@ -433,7 +444,7 @@
             <Tooltip.Root>
               <Tooltip.Trigger>
                 {#snippet child({ props })}
-                  <a {...props} class="session-icon-link" href={getSessionHref(session)} aria-current={pinnedKeys.has(item.key) && session.agentId === currentAgentId && session.sessionId === currentSessionId ? 'page' : undefined} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
+                  <a {...props} class="session-icon-link" href={getSessionHref(session)} aria-current={session.agentId === currentAgentId && session.sessionId === currentSessionId ? 'page' : undefined} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
                     <span class="session-icon-surface" aria-hidden="true">
                       <span class="session-icon-avatar">
                         <Identicon seed={session.sessionId} />
@@ -445,13 +456,12 @@
                 {/snippet}
               </Tooltip.Trigger>
               <Tooltip.Portal>
-                <Tooltip.Content class="session-icon-tooltip" side="right" sideOffset={10}>
+                <Tooltip.Content class="app-tooltip-content app-tooltip-multiline" side="right" sideOffset={6}>
                   <div class="session-icon-tooltip-title">{session.title}</div>
                   {#if pinnedKeys.has(item.key)}<div class="session-icon-tooltip-meta">Pinned</div>{/if}
                   {#if !session.lifecycle}<div class="session-icon-tooltip-meta">Lifecycle unavailable</div>{/if}
                   <div class="session-icon-tooltip-meta">{getStatusLabel(session.status, item)}{#if onlineAgentCount > 1} / {session.agentName}{/if} / {getSessionWorkspaceName(session.cwd)}</div>
-                  <div class="session-icon-tooltip-meta">{formatSessionTimestamp(session.updatedAt)} / <SessionIdChip sessionId={session.sessionId} /> / {getSessionShortcutLabel(index)}</div>
-                  <Tooltip.Arrow class="session-icon-tooltip-arrow" />
+                  <div class="session-icon-tooltip-meta">{formatSessionTimestamp(session.updatedAt)} / <SessionIdChip sessionId={session.sessionId} tooltip /> / {getSessionShortcutLabel(index)}</div>
                 </Tooltip.Content>
               </Tooltip.Portal>
             </Tooltip.Root>
@@ -462,25 +472,24 @@
       </div>
 
       <div class="app-icon-rail-bottom">
-        {#if !collapseLocked}<button class="app-icon-link app-sidebar-toggle-compact" type="button" aria-label="Expand sidebar" title="Expand sidebar" onclick={onToggleCollapsed}><ChevronRight size={16} /></button>{/if}
+        {#if !collapseLocked}<Hint text="Expand sidebar" as="button" side="right" class="app-icon-link app-sidebar-toggle-compact" type="button" aria-label="Expand sidebar" onclick={onToggleCollapsed}><ChevronRight size={16} /></Hint>{/if}
         <Tooltip.Root>
           <Tooltip.Trigger>
             {#snippet child({ props })}
               <a {...props} class={`app-icon-link app-nav-icon-link ${current === 'Settings' ? 'app-icon-link-current' : ''}`} href="/settings" aria-current={current === 'Settings' ? 'page' : undefined} aria-label="Settings">
-                <span class="app-icon-activity-pill" aria-hidden="true"></span><span class="app-nav-icon-surface" aria-hidden="true"><SettingsIcon size={16} /></span>
+                <span class="app-nav-icon-surface" aria-hidden="true"><SettingsIcon size={16} /></span>
               </a>
             {/snippet}
           </Tooltip.Trigger>
-          <Tooltip.Portal><Tooltip.Content class="app-icon-tooltip" side="right" sideOffset={10}>Settings<Tooltip.Arrow class="app-icon-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal>
+          <Tooltip.Portal><Tooltip.Content class="app-tooltip-content" side="right" sideOffset={6}>Settings</Tooltip.Content></Tooltip.Portal>
         </Tooltip.Root>
       </div>
     {:else}
       <div class="app-sidebar-header">
         <a class="app-sidebar-brand" href="/" aria-label="Start">
-          <span>Q</span>
+          <span class="app-brand-icon" aria-hidden="true"><img class="app-brand-icon-light" src={brandLight} alt="" /><img class="app-brand-icon-dark" src={brandDark} alt="" /></span>
           <span class="app-sidebar-brand-copy"><strong>QueryMT</strong><small>Agents command and control</small></span>
         </a>
-        <button class="icon-btn app-sidebar-collapse" type="button" aria-label="Collapse sidebar" title="Collapse sidebar" onclick={onToggleCollapsed}><ChevronLeft size={16} /></button>
       </div>
 
       <div class="app-sidebar-navigation">
@@ -500,13 +509,13 @@
               {#if index === 0 && visiblePinnedItems.length}<div class="app-sidebar-section-heading app-sidebar-pinned-heading"><Pin size={12} /><span>Pinned</span></div>{/if}
               {#if index === visiblePinnedItems.length}<div class="app-sidebar-section-heading"><span>Open sessions</span></div>{/if}
               <div class="session-rail-entry" class:session-rail-entry-menu-open={menuSessionKey === item.key} role="group" aria-label={`Session ${session.title}`}>
-              <a class="app-sidebar-session" href={getSessionHref(session)} aria-current={pinnedKeys.has(item.key) && session.agentId === currentAgentId && session.sessionId === currentSessionId ? 'page' : undefined} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
+              <a class="app-sidebar-session" href={getSessionHref(session)} aria-current={session.agentId === currentAgentId && session.sessionId === currentSessionId ? 'page' : undefined} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
                 <span class="app-sidebar-session-avatar" aria-hidden="true">
                   <Identicon seed={session.sessionId} />
                   {#if item.isActive}<span class="app-sidebar-session-spinner"><LoaderCircle size={9} class="animate-spin" /></span>{/if}
                   {#if item.requiresAttention}<SidebarAttentionDot />{/if}
                 </span>
-                <span class="app-sidebar-session-copy"><strong>{session.title}</strong><small>{getSessionWorkspaceName(session.cwd)} · {getStatusLabel(session.status, item)}{#if !session.lifecycle} · Lifecycle unavailable{/if}</small></span>
+                <span class="app-sidebar-session-copy"><strong>{session.title}</strong><small>{getSessionSubtitle(session, item)}</small></span>
               </a>
               {@render sessionMenu(session, item.key)}
               </div>
@@ -528,6 +537,7 @@
         <a class={`app-sidebar-link ${current === 'Settings' ? 'app-sidebar-link-current' : ''}`} href="/settings" aria-current={current === 'Settings' ? 'page' : undefined}>
           <span class="app-sidebar-link-icon"><SettingsIcon size={16} /></span><span>Settings</span>
         </a>
+        <Hint text="Collapse sidebar" as="button" side="top" class="icon-btn app-sidebar-collapse" type="button" aria-label="Collapse sidebar" onclick={onToggleCollapsed}><ChevronLeft size={16} /></Hint>
       </div>
     {/if}
   </nav>
