@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
   import { FolderOpen } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import { agentsStore, LAUNCH_MODE_OPTIONS, LAUNCH_REASONING_OPTIONS } from '$lib/stores/agents.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
@@ -9,6 +10,7 @@
   import { inboxStore } from '$lib/stores/inbox.svelte';
 
   const onlineAgents = $derived(agentsStore.connectedAgents);
+  const configuredAgentCount = $derived(agentsStore.configs.filter((config) => config.enabled).length);
 
   const primaryAgentId = $derived(
     agentsStore.configs.find((config) => config.enabled && config.id === agentsStore.composerAgentId)?.id ??
@@ -66,6 +68,23 @@
     }
   }
 </script>
+
+{#snippet overviewLink(href: string, hint: string, label: import('svelte').Snippet)}
+  <Tooltip.Root disableHoverableContent>
+    <Tooltip.Trigger>
+      {#snippet child({ props })}
+        <a {...props} class="status-item status-item-link" {href}>{@render label()}</a>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Tooltip.Portal>
+      <Tooltip.Content class="app-tooltip-content" sideOffset={6}>{hint}</Tooltip.Content>
+    </Tooltip.Portal>
+  </Tooltip.Root>
+{/snippet}
+
+{#snippet sessionsLabel()}<strong>{activeNowCount}</strong> {activeNowCount === 1 ? 'session' : 'sessions'} running{/snippet}
+{#snippet agentsLabel()}<strong>{onlineAgents.length}/{configuredAgentCount}</strong> {configuredAgentCount === 1 ? 'agent' : 'agents'} connected{/snippet}
+{#snippet inboxLabel()}<strong>{inboxStore.pendingCount}</strong> {inboxStore.pendingCount === 1 ? 'request needs' : 'requests need'} input{/snippet}
 
 <div class="start-launch-page flex min-h-[calc(100vh-7rem)] w-full items-center justify-center px-4">
   <section class="mx-auto w-full max-w-4xl space-y-6">
@@ -147,10 +166,12 @@
       onSendPrompt={() => startSessionFromLauncher()}
     />
 
-    <div class="flex flex-wrap items-center justify-center gap-3 text-sm text-[var(--muted)]">
-      <span class="status-item"><strong>{activeNowCount}</strong> active</span>
-      <span class="status-item"><strong>{onlineAgents.length}</strong> online</span>
-      <span class="status-item"><strong>{inboxStore.pendingCount}</strong> inbox</span>
-    </div>
+    <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+      <nav class="flex flex-wrap items-center justify-center gap-3 text-sm text-[var(--muted)]" aria-label="Overview">
+        {@render overviewLink('/sessions', 'Sessions currently running on this machine or the mesh', sessionsLabel)}
+        {@render overviewLink('/agents', 'Agents connected and ready to start sessions', agentsLabel)}
+        {@render overviewLink('/inbox', 'Requests waiting for your answer', inboxLabel)}
+      </nav>
+    </Tooltip.Provider>
   </section>
 </div>
