@@ -1902,6 +1902,30 @@ summary:focus-visible {
   font-size: 0.78rem;
 }
 
+/* Borderless faint-fill pill, matching the composer pills. */
+.status-item-link {
+  border: 0;
+  background: var(--composer-pill-surface-hover);
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.status-item-link strong {
+  color: var(--text);
+}
+
+.status-item-link:hover,
+.status-item-link:focus-visible {
+  background: var(--subtle-border-strong);
+  color: var(--text);
+}
+
+.status-item-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .empty-state {
   border: 1px solid var(--border);
   background: var(--bg-card);

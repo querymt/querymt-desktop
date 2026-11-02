@@ -509,3 +509,17 @@ describe('Landing page session start', () => {
     expect(screen.getByRole('button', { name: /Claude Sonnet 4/i })).toHaveTextContent('QMTCODE');
   });
 });
+
+describe('Landing page overview links', () => {
+  it('use the shared Bits UI tooltip instead of a native title', async () => {
+    render(LandingPage);
+    const overview = screen.getByRole('navigation', { name: 'Overview' });
+    const links = within(overview).getAllByRole('link');
+    expect(links).toHaveLength(3);
+    for (const link of links) expect(link).not.toHaveAttribute('title');
+    await fireEvent.pointerEnter(links[1]);
+    await waitFor(() => {
+      expect(document.querySelector('.app-tooltip-content')).toHaveTextContent('Agents connected and ready to start sessions');
+    });
+  });
+});
