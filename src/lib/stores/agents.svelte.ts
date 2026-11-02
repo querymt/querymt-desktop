@@ -612,48 +612,60 @@ export class AgentsStore {
   }
 
   private mapSessionSummaries(sessions: SessionInfo[], agent: { agentId: string; agentName: string }): DesktopSessionSummary[] {
+    const { agentId } = agent;
     let incarnationVerifications = 0;
-    const record = this.clients.get(agent.agentId);
+    const record = this.clients.get(agentId);
+    // Accept runtimes row by row, but patch the session lists once per page (not once per row).
+    const acceptedRuntimes = new Map<string, SessionRuntimeStatus>();
+    const accept = (sessionId: string, runtime: SessionRuntimeStatus, authoritative = false) => {
+      if (!this.acceptSessionRuntime(agentId, sessionId, runtime, authoritative)) return false;
+      acceptedRuntimes.set(sessionId, runtime);
+      return true;
+    };
     for (const info of sessions) {
       const runtime = info._meta?.runtimeStatus as SessionRuntimeStatus | undefined;
-      if (runtime?.observation) {
-        const key = buildSessionKey(agent.agentId, info.sessionId);
-        const pending = this.sessionRuntimeRefreshPromises.get(key);
-        const verifying = pending?.verificationEpoch && pending.record === record &&
-          pending.selection === this.sessionSelectionGeneration &&
-          pending.generation === this.sessionRuntimeRefreshGenerations.get(key);
-        // List evidence cannot end a pending incarnation verification, even if an old list arrives.
-        const accepted = !verifying && this.reconcileSessionRuntime(agent.agentId, info.sessionId, runtime);
-        const observed = this.sessionRuntimeBySession[key];
-        if (!accepted && observed?.observation?.epoch !== runtime.observation.epoch) {
-          if (this.isSelectedSession(agent.agentId, info.sessionId)) {
-            if (record) void this.refreshSessionRuntime(agent.agentId, info.sessionId, record.client, true).catch(() => null);
-          } else {
-            this.markSessionRuntimeUnavailable(agent.agentId, info.sessionId);
-            if (!verifying || pending.verificationEpoch !== runtime.observation.epoch) {
-              // Fence pre-change reads before starting a bounded, deduplicated replacement.
-              this.sessionRuntimeRefreshGenerations.set(key, (this.sessionRuntimeRefreshGenerations.get(key) ?? 0) + 1);
-              if (record && runtime.observation.epoch && incarnationVerifications < MAX_LIST_INCARNATION_VERIFICATIONS) {
-                incarnationVerifications++;
-                void this.refreshSessionRuntime(agent.agentId, info.sessionId, record.client, false, runtime.observation.epoch).catch(() => null);
-              }
-            }
-          }
+      if (!runtime?.observation) continue;
+      const key = buildSessionKey(agentId, info.sessionId);
+      const pending = this.sessionRuntimeRefreshPromises.get(key);
+      const verifying = pending?.verificationEpoch && pending.record === record &&
+        pending.selection === this.sessionSelectionGeneration &&
+        pending.generation === this.sessionRuntimeRefreshGenerations.get(key);
+      // List evidence cannot end a pending incarnation verification, even if an old list arrives.
+      const accepted = !verifying && accept(info.sessionId, runtime);
+      const observed = this.sessionRuntimeBySession[key];
+      if (accepted || observed?.observation?.epoch === runtime.observation.epoch) continue;
+      if (this.isSelectedSession(agentId, info.sessionId)) {
+        if (record) void this.refreshSessionRuntime(agentId, info.sessionId, record.client, true).catch(() => null);
+        continue;
+      }
+      if (observed) accept(info.sessionId, unavailableRuntime(observed), true);
+      if (!verifying || pending.verificationEpoch !== runtime.observation.epoch) {
+        // Fence pre-change reads before starting a bounded, deduplicated replacement.
+        this.sessionRuntimeRefreshGenerations.set(key, (this.sessionRuntimeRefreshGenerations.get(key) ?? 0) + 1);
+        if (record && runtime.observation.epoch && incarnationVerifications < MAX_LIST_INCARNATION_VERIFICATIONS) {
+          incarnationVerifications++;
+          void this.refreshSessionRuntime(agentId, info.sessionId, record.client, false, runtime.observation.epoch).catch(() => null);
         }
       }
     }
-    const incoming = mapAcpSessionsToDesktopSessions(sessions, agent).map((summary) => {
-      const runtime = this.sessionRuntimeBySession[buildSessionKey(agent.agentId, summary.sessionId)];
-      const hasUserHistory = summary.hasUserHistory ?? getSessionById(this.sessionsByAgent[agent.agentId] ?? [], summary.sessionId)?.hasUserHistory;
-      return runtime?.observation ? { ...summary, hasUserHistory, status: runtimeSessionStatus(runtime, hasUserHistory) } : summary;
-    });
-    const incomingKeys = new Set(incoming.map(getSessionKey));
-    const summaries = mergeSessions(this.sessionsByAgent[agent.agentId] ?? [], incoming)
-      .filter((session) => incomingKeys.has(getSessionKey(session)));
-    for (const session of summaries) {
-      if (session.parentSessionId) this.rememberSessionChildren(agent.agentId, session.parentSessionId, [session.sessionId]);
+    this.patchSessionStatuses(agentId, acceptedRuntimes);
+    // Merge each listed row with its known summary through one index instead of re-sorting the whole agent list.
+    const known = new Map((this.sessionsByAgent[agentId] ?? []).map((session) => [session.sessionId, session]));
+    const merged = new Map<string, DesktopSessionSummary>();
+    const parents: Array<[string, string | undefined]> = [];
+    for (const summary of mapAcpSessionsToDesktopSessions(sessions, agent)) {
+      const existing = known.get(summary.sessionId);
+      const runtime = this.sessionRuntimeBySession[buildSessionKey(agentId, summary.sessionId)];
+      const hasUserHistory = summary.hasUserHistory ?? existing?.hasUserHistory;
+      const listed = runtime?.observation ? { ...summary, hasUserHistory, status: runtimeSessionStatus(runtime, hasUserHistory) } : summary;
+      const previous = merged.get(summary.sessionId) ?? existing;
+      const next = previous ? mergeSessionSummary(previous, listed) : listed;
+      merged.set(summary.sessionId, next);
+      if (next.parentSessionId) parents.push([next.sessionId, next.parentSessionId]);
     }
-    return summaries.map((session) => this.withKnownSessionPin(this.withKnownSessionParent(session)));
+    this.rememberSessionParents(agentId, parents);
+    return [...merged.values()].sort(compareSessionsByActivity)
+      .map((session) => this.withKnownSessionPin(this.withKnownSessionParent(session)));
   }
 
   private withKnownSessionParent(session: DesktopSessionSummary): DesktopSessionSummary {
@@ -662,13 +674,17 @@ export class AgentsStore {
   }
 
   private rememberSessionChildren(agentId: string, parentSessionId: string, childIds: Array<string | null | undefined>) {
-    if (typeof parentSessionId !== 'string' || !parentSessionId.trim()) return;
-    parentSessionId = parentSessionId.trim();
-    // Copy lazily: this runs once per child on every list refresh and almost always changes nothing.
+    this.rememberSessionParents(agentId, childIds.map((childId) => [childId, parentSessionId]));
+  }
+
+  /** Record child -> parent links in one copy and one list pass, however many links a page carries. */
+  private rememberSessionParents(agentId: string, links: Array<[string | null | undefined, string | null | undefined]>) {
+    // Copy lazily: this runs on every list refresh and almost always changes nothing.
     let parents: Record<string, string> | null = null;
-    for (const childId of childIds) {
-      const childSessionId = typeof childId === 'string' ? childId.trim() : null;
-      if (!childSessionId || childSessionId === parentSessionId) continue;
+    for (const [childId, parentId] of links) {
+      const parentSessionId = typeof parentId === 'string' ? parentId.trim() : '';
+      const childSessionId = typeof childId === 'string' ? childId.trim() : '';
+      if (!parentSessionId || !childSessionId || childSessionId === parentSessionId) continue;
       const key = buildSessionKey(agentId, childSessionId);
       if ((parents ?? this.knownSessionParents)[key] === parentSessionId) continue;
       parents ??= { ...this.knownSessionParents };
@@ -2393,7 +2409,8 @@ export class AgentsStore {
       try {
         const record = this.initializedClientRecord(config.id);
         if (!record) throw new Error('Agent disconnected.');
-        let sessions: DesktopSessionSummary[] = [];
+        // Accumulate by key: per page this is O(page), not a merge + sort of everything loaded so far.
+        const loaded = new Map<string, DesktopSessionSummary>();
         const seen = new Set<string>();
         let cursor: string | undefined;
         do {
@@ -2403,19 +2420,24 @@ export class AgentsStore {
           if (generation !== this.sessionCatalogGeneration) return;
           const incoming = this.preserveCatalogWrites(this.mapSessionSummaries(page.sessions, { agentId: config.id, agentName: config.name }), writeRevision, config.id)
             .filter((session) => sessionMatchesLifecycle(session.lifecycle, lifecycle));
-          const previousCount = sessions.length;
-          sessions = mergeSessions(sessions, incoming);
-          this.sessionCatalogLoadedCount += sessions.length - previousCount;
-          this.sessionCatalog = mergeSessions(this.sessionCatalog, incoming);
-          if (incoming.length) this.sessionCatalogHasSessions = true;
-          remember(false);
-          this.sessionsByAgent = { ...this.sessionsByAgent, [config.id]: mergeSessions(this.sessionsByAgent[config.id] ?? [], incoming) };
+          const previousCount = loaded.size;
+          for (const session of incoming) {
+            const existing = loaded.get(session.sessionId);
+            loaded.set(session.sessionId, existing ? mergeSessionSummary(existing, session) : session);
+          }
+          this.sessionCatalogLoadedCount += loaded.size - previousCount;
+          if (incoming.length) {
+            // Pages render progressively; the warm cache is written once the agent finishes.
+            this.sessionCatalog = mergeSessions(this.sessionCatalog, incoming);
+            this.sessionCatalogHasSessions = true;
+            this.sessionsByAgent = { ...this.sessionsByAgent, [config.id]: mergeSessions(this.sessionsByAgent[config.id] ?? [], incoming) };
+          }
           cursor = page.nextCursor ?? undefined;
           if (cursor && seen.has(cursor)) throw new Error('Agent returned a repeated session cursor.');
           if (cursor) seen.add(cursor);
         } while (cursor);
         // Remove stale cached rows only after this agent's entire refresh succeeds.
-        sessions = this.preserveCatalogWrites(sessions, writeRevision, config.id, true)
+        const sessions = this.preserveCatalogWrites([...loaded.values()], writeRevision, config.id, true)
           .filter((session) => sessionMatchesLifecycle(session.lifecycle, lifecycle));
         this.sessionCatalog = mergeSessions(this.sessionCatalog.filter((session) => session.agentId !== config.id), sessions);
         remember(false);
@@ -3998,22 +4020,21 @@ export class AgentsStore {
 
   private markSessionRuntimeUnavailable(agentId: string, sessionId: string) {
     const current = this.sessionRuntimeBySession[buildSessionKey(agentId, sessionId)];
-    if (current) this.reconcileSessionRuntime(agentId, sessionId, {
-      ...current, phase: 'unknown' as SessionRuntimeStatus['phase'], active_run_id: null, steerable: false,
-      observation: { ...current.observation, availability: 'unavailable' }
-    }, true);
+    if (current) this.reconcileSessionRuntime(agentId, sessionId, unavailableRuntime(current), true);
   }
 
   private reconcileManagedActivity(agentId: string, sessionId: string, updates: DelegationUpdateNotification[], complete = false, allowNewSource = false) {
     const key = buildSessionKey(agentId, sessionId);
     const matching = updates.filter((item) => item.sessionId === sessionId);
-    const merged = mergeDelegationActivity(this.sessionDelegations.get(key) ?? [], matching,
+    const current = this.sessionDelegations.get(key);
+    const merged = mergeDelegationActivity(current ?? [], matching,
       complete && matching.length === updates.length, allowNewSource);
-    this.sessionDelegations.set(key, merged);
-    const runtime = this.sessionRuntimeBySession[key];
-    if (runtime) this.sessionRuntimeBySession = { ...this.sessionRuntimeBySession, [key]: {
-      ...runtime, delegation_activity: merged.filter((item) => item.activity === 'live')
-    } };
+    // mergeDelegationActivity returns its input when nothing changed: skip the store writes entirely.
+    if (merged !== current && (current || merged.length)) {
+      this.sessionDelegations.set(key, merged);
+      const runtime = this.sessionRuntimeBySession[key];
+      if (runtime) this.sessionRuntimeBySession[key] = { ...runtime, delegation_activity: liveDelegations(merged) };
+    }
     if (this.isSelectedSession(agentId, sessionId)) {
       this.activeSession.delegations = merged;
       projectDelegationActivity(this.activeSession);
@@ -4021,6 +4042,13 @@ export class AgentsStore {
   }
 
   private reconcileSessionRuntime(agentId: string, sessionId: string, runtime: SessionRuntimeStatus, authoritative = false, completeActivity = false): boolean {
+    if (!this.acceptSessionRuntime(agentId, sessionId, runtime, authoritative, completeActivity)) return false;
+    this.patchSessionStatuses(agentId, new Map([[sessionId, runtime]]));
+    return true;
+  }
+
+  /** Apply ordering rules and record the runtime in place; session list statuses are patched by the caller. */
+  private acceptSessionRuntime(agentId: string, sessionId: string, runtime: SessionRuntimeStatus, authoritative = false, completeActivity = false): boolean {
     const key = buildSessionKey(agentId, sessionId);
     const current = this.sessionRuntimeBySession[key];
     const before = current?.observation;
@@ -4038,17 +4066,43 @@ export class AgentsStore {
     if (runtime.active_run_id && runtime.phase !== 'unknown' && runtime.observation?.availability !== 'unavailable') {
       for (const pending of this.pendingPromptRuns.get(key) ?? []) pending.runId ??= runtime.active_run_id;
     }
-    this.sessionRuntimeBySession = { ...this.sessionRuntimeBySession, [key]: {
-      ...runtime, delegation_activity: this.sessionDelegations.get(key)?.filter((item) => item.activity === 'live') ?? runtime.delegation_activity
-    } };
+    const delegations = this.sessionDelegations.get(key);
+    const next = { ...runtime, delegation_activity: delegations ? liveDelegations(delegations) : runtime.delegation_activity };
+    // Written in place: the deep $state tracks each key, so one session never copies the whole map.
+    if (!current || !sameRuntime(current, next)) this.sessionRuntimeBySession[key] = next;
     this.projectSelectedExecution(agentId, sessionId, runtime);
-    const patch = (session: DesktopSessionSummary) => session.agentId === agentId && session.sessionId === sessionId
-      ? { ...session, status: runtimeSessionStatus(runtime, session.hasUserHistory) } : session;
-    this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: (this.sessionsByAgent[agentId] ?? []).map(patch) };
-    this.sessionCatalog = this.sessionCatalog.map(patch);
-    this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: (this.pinnedSessionsByAgent[agentId] ?? []).map(patch) };
-    for (const source of Object.values(this.workspaceSessionSources[agentId] ?? {})) source.sessions = source.sessions.map(patch);
     return true;
+  }
+
+  /** Project accepted runtimes onto every session list in a single pass, allocating only rows whose status changes. */
+  private patchSessionStatuses(agentId: string, runtimes: ReadonlyMap<string, SessionRuntimeStatus>) {
+    if (!runtimes.size) return;
+    const patch = (sessions: DesktopSessionSummary[]) => {
+      let next: DesktopSessionSummary[] | null = null;
+      for (let index = 0; index < sessions.length; index++) {
+        const session = sessions[index];
+        const runtime = session.agentId === agentId ? runtimes.get(session.sessionId) : undefined;
+        if (!runtime) continue;
+        const status = runtimeSessionStatus(runtime, session.hasUserHistory);
+        if (status === session.status) continue;
+        next ??= sessions.slice();
+        next[index] = { ...session, status };
+      }
+      return next ?? sessions;
+    };
+    const byAgent = this.sessionsByAgent[agentId] ?? [];
+    const patchedByAgent = patch(byAgent);
+    if (patchedByAgent !== byAgent) this.sessionsByAgent = { ...this.sessionsByAgent, [agentId]: patchedByAgent };
+    const catalog = patch(this.sessionCatalog);
+    if (catalog !== this.sessionCatalog) this.sessionCatalog = catalog;
+    const pinned = this.pinnedSessionsByAgent[agentId] ?? [];
+    const patchedPinned = patch(pinned);
+    if (patchedPinned !== pinned) this.pinnedSessionsByAgent = { ...this.pinnedSessionsByAgent, [agentId]: patchedPinned };
+    for (const source of Object.values(this.workspaceSessionSources[agentId] ?? {})) {
+      const sessions = source.sessions;
+      const patched = patch(sessions);
+      if (patched !== sessions) source.sessions = patched;
+    }
   }
 
   private projectSelectedExecution(agentId: string, sessionId: string, runtime = this.sessionRuntimeBySession[buildSessionKey(agentId, sessionId)]) {
@@ -7333,27 +7387,55 @@ function deduplicateSessions(sessions: DesktopSessionSummary[]): DesktopSessionS
 }
 
 function mergeSessions(current: DesktopSessionSummary[], incoming: DesktopSessionSummary[]): DesktopSessionSummary[] {
+  if (!incoming.length) return current;
   const sessions = new Map(current.map((session) => [getSessionKey(session), session]));
   for (const session of incoming) {
-    // A delayed session/list response must never roll a summary's activity
-    // timestamp backwards past what live notifications already recorded.
     const key = getSessionKey(session);
     const existing = sessions.get(key);
-    sessions.set(key, existing ? {
-      ...existing,
-      ...session,
-      // Parentage is immutable; an incomplete list/load must not promote a known child.
-      parentSessionId: session.parentSessionId ?? existing.parentSessionId,
-      forkOrigin: session.forkOrigin ?? existing.forkOrigin,
-      // A list that lacks worktree metadata must not erase what a richer list/load established.
-      workspace: session.workspace ?? existing.workspace ?? null,
-      access: session.access ?? existing.access ?? null,
-      hasUserHistory: session.hasUserHistory ?? existing.hasUserHistory,
-      relationshipKnown: existing.relationshipKnown === true ? true : session.relationshipKnown ?? existing.relationshipKnown,
-      updatedAt: newestTimestamp(existing.updatedAt, session.updatedAt)
-    } : session);
+    sessions.set(key, existing ? mergeSessionSummary(existing, session) : session);
   }
   return [...sessions.values()].sort(compareSessionsByActivity);
+}
+
+/** Overlay a listed/loaded summary on a known one without losing richer, immutable or newer facts. */
+function mergeSessionSummary(existing: DesktopSessionSummary, session: DesktopSessionSummary): DesktopSessionSummary {
+  return {
+    ...existing,
+    ...session,
+    // Parentage is immutable; an incomplete list/load must not promote a known child.
+    parentSessionId: session.parentSessionId ?? existing.parentSessionId,
+    forkOrigin: session.forkOrigin ?? existing.forkOrigin,
+    // A list that lacks worktree metadata must not erase what a richer list/load established.
+    workspace: session.workspace ?? existing.workspace ?? null,
+    access: session.access ?? existing.access ?? null,
+    hasUserHistory: session.hasUserHistory ?? existing.hasUserHistory,
+    relationshipKnown: existing.relationshipKnown === true ? true : session.relationshipKnown ?? existing.relationshipKnown,
+    // A delayed session/list response must never roll activity backwards past live notifications.
+    updatedAt: newestTimestamp(existing.updatedAt, session.updatedAt)
+  };
+}
+
+function liveDelegations(items: DelegationUpdateNotification[]): DelegationUpdateNotification[] {
+  return items.filter((item) => item.activity === 'live');
+}
+
+function unavailableRuntime(current: SessionRuntimeStatus): SessionRuntimeStatus {
+  return {
+    ...current, phase: 'unknown' as SessionRuntimeStatus['phase'], active_run_id: null, steerable: false,
+    observation: { ...current.observation, availability: 'unavailable' }
+  };
+}
+
+/** Structural equality for the fields a runtime write can change; avoids invalidating readers on no-op re-lists. */
+function sameRuntime(a: SessionRuntimeStatus, b: SessionRuntimeStatus): boolean {
+  const left = a.delegation_activity ?? [];
+  const right = b.delegation_activity ?? [];
+  return a.phase === b.phase && a.active_run_id === b.active_run_id && a.steerable === b.steerable &&
+    a.pending_steering_count === b.pending_steering_count && a.queued_input_count === b.queued_input_count &&
+    a.run_started_at_ms === b.run_started_at_ms && a.observation?.availability === b.observation?.availability &&
+    a.observation?.epoch === b.observation?.epoch && a.observation?.revision === b.observation?.revision &&
+    a.observation?.reason === b.observation?.reason &&
+    left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
 function maxTimestamp(values: Array<string | null>): string | null {
