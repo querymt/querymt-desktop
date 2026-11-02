@@ -5908,16 +5908,82 @@ summary:focus-visible {
   align-items: center;
   min-height: 3rem;
   gap: 0.4rem 0.6rem;
-  /* Same page-colored halo as the activity bar: no card, no border; the
-     transcript fades out underneath instead of being cut by an outline. */
+  /* Borderless. The frosted glass lives on ::before, not here: a backdrop blur
+     on the header itself would make it a backdrop root and stop the ::after
+     dissolve zone from blurring the transcript. */
   border: 0;
-  border-radius: var(--radius-control);
-  background: var(--body-bg-base);
+  border-radius: 0;
+  background: transparent;
   padding: 0.35rem 0.4rem;
+}
+
+/* ::before is the header's frosted glass (behind its content). Page-coloured
+   inset shadows, stronger on the left and right, hide the bar's sharp corners;
+   the outer shadow shifted upward is the solid strip covering the gap above
+   the header. ::after is the frosted dissolve zone below it: text lightly blurs
+   and fades out over 1.5rem, and the mask tapers the blur so it has no hard edge. */
+.session-header::before,
+.session-header::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+
+.session-header::before {
+  top: 0;
+  bottom: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--body-bg-base) 78%, transparent);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
   box-shadow:
-    0 0 0 4px var(--body-bg-base),
-    0 0 12px 4px color-mix(in srgb, var(--body-bg-base) 85%, transparent),
-    0 0 28px 9px color-mix(in srgb, var(--body-bg-base) 50%, transparent);
+    inset 2rem 0 1.25rem -0.5rem var(--body-bg-base),
+    inset -2rem 0 1.25rem -0.5rem var(--body-bg-base),
+    inset 0 0 12px 6px var(--body-bg-base),
+    0 calc(-1 * (var(--app-sticky-top) + 1rem)) 0 0 var(--body-bg-base);
+}
+
+.session-header::after {
+  top: 100%;
+  height: 1.5rem;
+  background: linear-gradient(
+    to bottom,
+    var(--body-bg-base),
+    color-mix(in srgb, var(--body-bg-base) 70%, transparent) 40%,
+    transparent
+  );
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  mask-image: linear-gradient(to bottom, #000 30%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent);
+}
+
+/* Same treatment under the docked composer: solid below its top edge, fading
+   out just above it, so text never shows through around the dock. */
+.session-composer-fade {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  z-index: 33;
+  width: min(var(--session-chat-max), calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+  height: calc(
+    var(
+      --session-composer-live-top,
+      calc(var(--session-composer-bottom-offset) + var(--control-height-standard))
+    ) + 1.25rem
+  );
+  transform: translateX(-50%);
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--body-bg-base) 1.25rem);
+  transition: height 180ms ease;
+}
+
+/* Stay inside the rounded window frame instead of painting the transparent margin. */
+.app-shell-custom-titlebar:not(.app-shell-maximized) .session-composer-fade {
+  bottom: 13px;
 }
 
 .session-header-back {
@@ -12666,8 +12732,6 @@ a.session-delegate-session:hover {
     border-left: 0;
     border-radius: 0;
     padding: 0.15rem 0.4rem;
-    background: var(--body-bg-base);
-    box-shadow: none;
   }
 
   .app-shell-active-session .session-header-controls,
@@ -12951,6 +13015,7 @@ a.session-delegate-session:hover {
   }
 
   .app-shell-active-session .session-composer-dock,
+  .app-shell-active-session .session-composer-fade,
   .app-shell-active-session .session-activity-bar-dock,
   .app-shell-active-session .session-scroll-bottom-pill-host {
     right: 0.5rem;

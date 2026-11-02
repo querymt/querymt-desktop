@@ -702,6 +702,12 @@
     {/if}
 
     {#if selectedSession && !pendingLaunch}
+      <div
+        class="session-composer-fade"
+        aria-hidden="true"
+        style={dockAlignLeft != null && dockAlignWidth != null ? `left:${dockAlignLeft}px;width:${dockAlignWidth}px;transform:none;` : ''}
+      ></div>
+
       {#if latestVisible}
         <SessionScrollToBottomPill
           visible={true}

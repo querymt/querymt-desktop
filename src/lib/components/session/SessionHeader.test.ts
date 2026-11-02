@@ -458,13 +458,26 @@ describe('SessionHeader restyle', () => {
     expect(await screen.findByText('Working', { selector: '.app-tooltip-content' })).toBeInTheDocument();
   });
 
-  it('uses the halo surface without a card border, shadow or divider', () => {
+  it('keeps frosted glass on the header and its dissolve zone, with stronger side insets hiding corners', () => {
     const appCss = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8');
     const rules = (selector: string) => appCss.match(new RegExp(`\\n${selector} \\{([^}]+)\\}`))?.[1] ?? '';
     const header = rules('\\.session-header');
-    expect(header).toContain('background: var(--body-bg-base);');
-    expect(header).toContain('0 0 0 4px var(--body-bg-base)');
     expect(header).toContain('border: 0;');
+    expect(header).toContain('border-radius: 0;');
+    // The header itself must not be a backdrop root, or the ::after dissolve
+    // zone could no longer blur the transcript.
+    expect(header).not.toContain('backdrop-filter');
+    expect(header).not.toContain('box-shadow');
+    const glass = appCss.match(/\n\n\.session-header::before \{([^}]+)\}/)?.[1] ?? '';
+    expect(glass).toContain('background: color-mix(in srgb, var(--body-bg-base) 78%, transparent);');
+    expect(glass).toContain('backdrop-filter: blur(12px) saturate(140%);');
+    expect(glass).toContain('inset 2rem 0 1.25rem -0.5rem var(--body-bg-base)');
+    expect(glass).toContain('inset -2rem 0 1.25rem -0.5rem var(--body-bg-base)');
+    expect(glass).toContain('inset 0 0 12px 6px var(--body-bg-base)');
+    const fade = appCss.match(/\n\n\.session-header::after \{([^}]+)\}/)?.[1] ?? '';
+    expect(fade).toContain('backdrop-filter: blur(3px);');
+    expect(fade).toContain('height: 1.5rem;');
+    expect(fade).toContain('mask-image: linear-gradient(to bottom, #000 30%, transparent);');
     expect(header).not.toContain('--shadow-sm');
     expect(header).not.toContain('--nav-bg');
     expect(rules('\\.session-header-action-group')).not.toContain('border-left');
