@@ -96,7 +96,7 @@ describe('flat sidebar rail', () => {
     const entry = appCss.match(/\n\.session-rail-entry \{([\s\S]*?)\}/)?.[1];
     expect(entry).not.toContain('grid-template-columns');
     const row = appCss.match(/\n\.app-sidebar-session \{([\s\S]*?)\}/)?.[1];
-    expect(row).toContain('grid-template-columns: 1.75rem minmax(0, 1fr);');
+    expect(row).toContain('grid-template-columns: 1rem minmax(0, 1fr) auto;');
     expect(row).toContain('padding: 0.38rem 0.5rem;');
     const trigger = appCss.match(/\.session-rail-entry:not\(\.session-rail-entry-compact\) > \.session-row-menu-trigger \{([\s\S]*?)\}/)?.[1];
     expect(trigger).toContain('position: absolute;');

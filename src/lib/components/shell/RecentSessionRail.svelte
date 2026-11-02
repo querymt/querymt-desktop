@@ -4,7 +4,7 @@
   import Hint from '$lib/components/primitives/Hint.svelte';
   import brandLight from '$lib/assets/querymt-icon-light.svg';
   import brandDark from '$lib/assets/querymt-icon-dark.svg';
-  import { ChevronLeft, ChevronRight, LoaderCircle, Menu, Pin } from '@lucide/svelte';
+  import { ChevronLeft, ChevronRight, CircleQuestionMark, LoaderCircle, Menu, Pin } from '@lucide/svelte';
   import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
@@ -14,6 +14,7 @@
   import {
     compareSessionsByPin,
     formatSessionTimestamp,
+    formatSessionTimestampShort,
     getRecentSessionRailItems,
     getSessionWorkspaceName,
     isRootSession,
@@ -109,6 +110,13 @@
   let sessionListElement = $state<HTMLElement | null>(null);
   let mobileNavigation = $state(false);
   let menuSessionKey = $state<string | null>(null);
+  // Reference clock for the relative "last active" label on each row, so it
+  // advances on its own like the session header's.
+  let relativeTimeNow = $state(Date.now());
+  $effect(() => {
+    const timer = setInterval(() => (relativeTimeNow = Date.now()), 30_000);
+    return () => clearInterval(timer);
+  });
   let expandedSessionLimit = $state(SESSION_PAGE_SIZE);
   let pinnedLimit = $state(5);
   let requestingMore = $state(false);
@@ -284,16 +292,6 @@
     const activity = status === 'unknown' ? 'Status unavailable' : status === 'thinking' ? 'Active' : status === 'waiting' ? 'Waiting' : status === 'cancelling' ? 'Cancelling' : item.requiresAttention ? null : 'Recent';
     if (item.requiresAttention) return activity ? `${activity}, action required` : 'Action required';
     return activity ?? 'Recent';
-  }
-
-  // Workspace first; the status is only spelled out when it is not the default "Recent".
-  function getSessionSubtitle(session: DesktopSessionSummary, item: SessionRailItem): string {
-    const status = getStatusLabel(session.status, item);
-    return [
-      getSessionWorkspaceName(session.cwd),
-      status === 'Recent' ? null : status,
-      session.lifecycle ? null : 'Lifecycle unavailable'
-    ].filter(Boolean).join(' · ');
   }
 
   function openSession(session: DesktopSessionSummary) {
@@ -510,12 +508,15 @@
               {#if index === visiblePinnedItems.length}<div class="app-sidebar-section-heading"><span>Open sessions</span></div>{/if}
               <div class="session-rail-entry" class:session-rail-entry-menu-open={menuSessionKey === item.key} role="group" aria-label={`Session ${session.title}`}>
               <a class="app-sidebar-session" href={getSessionHref(session)} aria-current={session.agentId === currentAgentId && session.sessionId === currentSessionId ? 'page' : undefined} aria-label={`${session.title}, ${getStatusLabel(session.status, item)}${index < MAX_SESSION_ICONS ? `, ${getSessionShortcutLabel(index)}` : ''}`} aria-keyshortcuts={getSessionAriaShortcut(index)} oncontextmenu={(event) => openSessionMenu(event, item.key)} onkeydown={(event) => openSessionMenu(event, item.key)} onclick={() => openSession(session)}>
-                <span class="app-sidebar-session-avatar" aria-hidden="true">
-                  <Identicon seed={session.sessionId} />
-                  {#if item.isActive}<span class="app-sidebar-session-spinner"><LoaderCircle size={9} class="animate-spin" /></span>{/if}
-                  {#if item.requiresAttention}<SidebarAttentionDot />{/if}
+                <strong class="app-sidebar-session-title">{session.title}</strong>
+                <span class="app-sidebar-session-status" aria-hidden="true">
+                  {#if item.isActive}<span class="app-sidebar-session-spinner"><LoaderCircle size={12} class="animate-spin" /></span>{/if}
+                  {#if item.requiresAttention}<span class="sidebar-attention-dot sidebar-attention-dot-inline"></span>{/if}
+                  {#if session.status === 'unknown'}<span class="app-sidebar-session-status-unknown"><CircleQuestionMark size={12} /></span>{/if}
                 </span>
-                <span class="app-sidebar-session-copy"><strong>{session.title}</strong><small>{getSessionSubtitle(session, item)}</small></span>
+                <span class="app-sidebar-session-avatar" aria-hidden="true"><Identicon seed={session.sessionId} size={16} /></span>
+                <small class="app-sidebar-session-workspace">{getSessionWorkspaceName(session.cwd)}</small>
+                <small class="app-sidebar-session-time">{formatSessionTimestampShort(session.updatedAt, relativeTimeNow)}</small>
               </a>
               {@render sessionMenu(session, item.key)}
               </div>
