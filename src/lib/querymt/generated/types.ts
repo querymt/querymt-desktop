@@ -2111,6 +2111,11 @@ export interface UsageBreakdown {
 
 /** Usage accumulated over the part of history preceding a window. */
 export interface PriorUsage {
+	/**
+	 * Journal position of the window's first event; the prior totals cover
+	 * exactly the events with a smaller position.
+	 */
+	windowStart?: number;
 	sessionTotals?: UsageBreakdown;
 	partial: boolean;
 	requestCount: number;

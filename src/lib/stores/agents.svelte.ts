@@ -6015,7 +6015,10 @@ export class AgentsStore {
     const record = request?.record ?? this.initializedClientRecord(agentId);
     const snapshotIsCurrent = this.sessionRuntimeBySession[key] === request?.initialRuntime &&
       this.sessionDelegations.get(key) === request?.initialActivity;
-    if (select) this.resetActiveSession(agentId, sessionId, preserveSelectionGeneration);
+    if (select) {
+      this.resetActiveSession(agentId, sessionId, preserveSelectionGeneration);
+      this.sessionLoadFailure = null;
+    }
     const generation = this.sessionSelectionGeneration;
     const isCurrent = () => (!select || (generation === this.sessionSelectionGeneration && this.isSelectedSession(agentId, sessionId))) &&
       (!record || this.clients.get(agentId) === record);

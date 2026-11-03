@@ -11274,6 +11274,23 @@ describe('AgentsStore remote transfer failures and stale history', () => {
     expect(store.sessionLoadFailure).toBeNull();
   });
 
+  it('clears a remote attach load failure once a retry attaches and selects the session', async () => {
+    const store = createStore();
+    mockClient.attachRemoteSession.mockRejectedValueOnce(new RequestError(-32603, 'transfer failed', {
+      category: 'remote_transfer', code: 'remote_transfer_failed', retryable: true, message: 'owner timed out'
+    }));
+    await expect(store.attachRemoteSession('agent-1', 'node-1', 'session-1')).rejects.toThrow();
+    expect(store.sessionLoadFailure).toMatchObject({ sessionKey: 'agent-1:session-1', retryable: true });
+
+    mockClient.attachRemoteSession.mockResolvedValueOnce({
+      session_id: 'session-1', node_id: 'node-1', attached: true, config_options: [],
+      snapshot: { audit: { events: [] } }
+    } as unknown as RemoteSessionAttachInfo);
+    await store.attachRemoteSession('agent-1', 'node-1', 'session-1');
+    expect(store.activeSessionId).toBe('session-1');
+    expect(store.sessionLoadFailure).toBeNull();
+  });
+
   it('does not mark unrelated load errors as retryable transfer failures', async () => {
     const store = createStore();
     mockClient.loadSession.mockRejectedValueOnce(new Error('boom'));
