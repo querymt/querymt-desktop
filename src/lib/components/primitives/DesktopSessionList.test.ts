@@ -5,6 +5,14 @@ import { tick } from 'svelte';
 import { createSessionBrowserState, getSessionKey, RECENT_SESSION_GROUP_KEY } from '$lib/domain/sessions';
 import type { DesktopSessionSummary } from '$lib/domain/types';
 import DesktopSessionList from './DesktopSessionList.svelte';
+
+async function expectHint(element: Element, text: string) {
+  expect(element).not.toHaveAttribute('title');
+  await fireEvent.pointerEnter(element);
+  await waitFor(() => expect([...document.querySelectorAll('.app-tooltip-content')].some((tip) => tip.textContent?.includes(text))).toBe(true));
+  await fireEvent.pointerLeave(element);
+}
+
 import { SessionSearchClient } from '$lib/domain/session-search-client';
 import type { SessionSearchMatch } from '$lib/domain/session-search';
 
@@ -511,8 +519,8 @@ describe('DesktopSessionList', () => {
       expect(icon.querySelector('svg')).toHaveAttribute('width', '16');
       expect(icon.querySelector('svg')).toHaveAttribute('stroke-width', '1.75');
     }
-    expect(screen.getByText('Remote', { selector: '.session-workspace-machine' })).toHaveAttribute('title', 'Remote workspace');
-    expect(screen.getByText('local + remote')).toHaveAttribute('title', 'Local and remote workspace');
+    await expectHint(screen.getByText('Remote', { selector: '.session-workspace-machine' }), 'Remote workspace');
+    await expectHint(screen.getByText('local + remote'), 'Local and remote workspace');
     expect(screen.getByText('Remote', { selector: '.session-workspace-machine' }).closest('.session-workspace-path')).not.toBeNull();
   });
 
@@ -532,7 +540,7 @@ describe('DesktopSessionList', () => {
     expect(triggers[1].querySelector('.lucide-folder-open')).not.toBeNull();
   });
 
-  it('shows the owning machine on remote and mixed workspace path lines', () => {
+  it('shows the owning machine on remote and mixed workspace path lines', async () => {
     const longNodeId = '12D3KooWPtRjf6xSzZKwyRWP2kBA1kZhqYjr4XxEmtHfunWZUT62';
     render(DesktopSessionList, {
       sessions: [
@@ -544,13 +552,10 @@ describe('DesktopSessionList', () => {
       ]
     });
 
-    expect(screen.getByText('sapr')).toHaveAttribute('title', 'Remote workspace on sapr');
+    await expectHint(screen.getByText('sapr'), 'Remote workspace on sapr');
     expect(screen.getByText('sapr').querySelector('.lucide-network')).not.toBeNull();
-    expect(screen.getByText('local + 12D3KooWPtRj...unWZUT62')).toHaveAttribute(
-      'title',
-      'Local workspace and remote workspace on 12D3KooWPtRj...unWZUT62'
-    );
-    expect(screen.getByText('2 machines')).toHaveAttribute('title', 'Remote workspace on alpha, beta');
+    await expectHint(screen.getByText('local + 12D3KooWPtRj...unWZUT62'), 'Local workspace and remote workspace on 12D3KooWPtRj...unWZUT62');
+    await expectHint(screen.getByText('2 machines'), 'Remote workspace on alpha, beta');
     expect(screen.getAllByText(/^(sapr|local \+ 12D3KooWPtRj\.\.\.unWZUT62|2 machines)$/).every((item) => item.querySelector('.lucide-network'))).toBe(true);
   });
 
@@ -591,9 +596,10 @@ describe('DesktopSessionList', () => {
     const remotePills = container.querySelectorAll('.session-relationship-badge-remote');
     expect(remotePills).toHaveLength(1);
     expect(remotePills[0]).toHaveTextContent('Remote');
-    expect(screen.getByText('Mixed remote').closest('.session-row-title-line')?.querySelector('.session-relationship-badge-remote')).not.toBeNull();
-    expect(screen.getByText('Remote only').closest('.session-row-title-line')?.querySelector('.session-relationship-badge-remote')).toBeNull();
-    expect(screen.getByText('Mixed local').closest('.session-row-title-line')?.querySelector('.session-relationship-badge-remote')).toBeNull();
+    expect(remotePills[0].closest('.session-row-meta')).not.toBeNull();
+    expect(screen.getByText('Mixed remote').closest('.session-row')?.querySelector('.session-row-title-line .session-relationship-badge-remote')).toBeNull();
+    expect(screen.getByText('Remote only').closest('.session-row')?.querySelector('.session-relationship-badge-remote')).toBeNull();
+    expect(screen.getByText('Mixed local').closest('.session-row')?.querySelector('.session-relationship-badge-remote')).toBeNull();
   });
 
   it('shows fork relationships and parent fork counts without inferring from titles', async () => {
@@ -610,6 +616,9 @@ describe('DesktopSessionList', () => {
     expect(screen.getByText('Fork')).toBeInTheDocument();
     expect(screen.getByText('Delegate')).toBeInTheDocument();
     expect(screen.getByText('Child')).toBeInTheDocument();
+    for (const label of ['2 forks', 'Fork', 'Delegate', 'Child']) {
+      expect(screen.getByText(label).closest('.session-row-meta')).not.toBeNull();
+    }
   });
 
   it('does not show relationship badges for a root session without hierarchy metadata', async () => {
@@ -1274,12 +1283,14 @@ describe('DesktopSessionList worktree sessions', () => {
     ...sessions[1], sessionId: 'wt-child', title: 'WT child', cwd: '/w/ws_1', parentSessionId: 'parent', forkOrigin: 'worktree', workspace
   };
 
-  it('marks worktree sessions with a branch badge, tooltip and Worktree relationship', () => {
+  it('marks worktree sessions with a branch badge, tooltip and Worktree relationship', async () => {
     render(DesktopSessionList, { sessions: [worktreeChild], catalogComplete: true });
     expect(screen.getByText('Worktree')).toBeInTheDocument();
     const badge = screen.getByTestId('worktree-branch-badge');
     expect(badge).toHaveTextContent('qmt/ws_1');
-    expect(badge.getAttribute('title')).toContain('Checkout /w/ws_1');
+    expect(badge.closest('.session-row-meta')).not.toBeNull();
+    expect(screen.getByText('Worktree').closest('.session-row-meta')).not.toBeNull();
+    await expectHint(badge, 'Checkout /w/ws_1');
     expect(screen.queryByText('Handed off')).not.toBeInTheDocument();
   });
 
