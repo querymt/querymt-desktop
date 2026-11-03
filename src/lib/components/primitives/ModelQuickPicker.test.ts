@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ModelQuickPicker from './ModelQuickPicker.svelte';
 import ModelPickerPanel, { type ModelPickerReasoningControl } from './ModelPickerPanel.svelte';
@@ -133,7 +133,9 @@ describe('model catalog availability', () => {
     const meshNode = within(rows[0]).getByLabelText('Mesh node Build server');
     expect(meshNode.querySelector('.lucide-network')).toHaveClass('model-availability-warning');
     expect(meshNode.querySelector('svg')).toHaveAttribute('width', '11');
-    expect(meshNode).toHaveAttribute('title', hint);
+    expect(meshNode).not.toHaveAttribute('title');
+    await fireEvent.pointerEnter(meshNode, { pointerType: 'mouse' });
+    await waitFor(() => expect(document.querySelector('.app-tooltip-content')).toHaveTextContent(hint));
     expect(rows[0].querySelector('.lucide-triangle-alert')).toBeNull();
     expect(within(rows[1]).queryByLabelText(/Mesh node/)).toBeNull();
     expect(within(rows[2]).getByLabelText('Mesh node Other server').querySelector('.model-availability-warning')).toBeNull();

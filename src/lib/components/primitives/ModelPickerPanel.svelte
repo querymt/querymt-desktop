@@ -5,6 +5,7 @@
   import providerSprite from '$lib/assets/providers.svg?raw';
   import { ensureProviderSprite, providerIconHref, providerIconId } from '$lib/domain/provider-icons';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import Hint from '$lib/components/primitives/Hint.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import {
     displayedInputModalities,
@@ -298,33 +299,35 @@
               </span>
               <span class="delegate-model-choice-meta">
                 {#if nodeLabel}
-                  <small aria-label={`Mesh node ${nodeLabel}`} title={unavailable ? unavailableHint : undefined}>
+                  <Hint as="small" text={unavailableHint} disabled={!unavailable} aria-label={`Mesh node ${nodeLabel}`}>
                     <Network class={unavailable ? 'model-availability-warning' : undefined} size={11} />{nodeLabel}
-                  </small>
+                  </Hint>
                 {/if}
               </span>
               <span class="app-picker-row-detail delegate-model-choice-detail">
-                <span
+                <Hint
                   class="app-picker-row-context"
+                  side="left"
+                  text={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
                   aria-label={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
-                  title={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
                 >
                   <Gauge size={12} aria-hidden="true" />
                   <span>{info?.limits?.context ? formatContextSize(info.limits.context) : 'UNK'}</span>
-                </span>
+                </Hint>
                 <span
                   class="app-picker-model-modalities"
                   aria-label={knownModalities.length > 0 ? `Input modalities: ${knownModalities.join(', ')}` : 'Input modalities unknown'}
                 >
                   {#each displayedInputModalities(model, modelInfo) as modality}
                     {@const ModalityIcon = modalityIcon(modality)}
-                    <span
+                    <Hint
                       class="app-picker-model-modality"
+                      side="left"
+                      text={modalityLabel(modality, knownModalities.length > 0)}
                       aria-label={modalityLabel(modality, knownModalities.length > 0)}
-                      title={modalityLabel(modality, knownModalities.length > 0)}
                     >
                       <ModalityIcon size={13} strokeWidth={1.9} aria-hidden="true" />
-                    </span>
+                    </Hint>
                   {/each}
                 </span>
               </span>

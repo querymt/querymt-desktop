@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Check, ChevronDown, Copy, LoaderCircle } from '@lucide/svelte';
+  import Hint from '$lib/components/primitives/Hint.svelte';
   import AppDialog from '$lib/components/primitives/AppDialog.svelte';
   import { restoreProviderDialogFocus, type ProviderDialogFocusTarget } from './provider-dialog-focus';
   import type { AuthProviderStatus } from '$lib/querymt/generated/types';
@@ -77,10 +78,10 @@
       <div class="app-dialog-field">
         <span class="app-dialog-field-label">Authorization link</span>
         <div class="app-dialog-input-action">
-          <input class="input-shell dialog-code-field w-full" readonly value={authorizationUrl} aria-label="Authorization URL" title={authorizationUrl} />
-          <button class="app-dialog-input-action-button" type="button" aria-label={urlCopied ? 'URL copied' : 'Copy URL'} title={urlCopied ? 'Copied' : 'Copy URL'} onclick={onCopyAuthorizationUrl}>
+          <input class="input-shell dialog-code-field w-full" readonly value={authorizationUrl} aria-label="Authorization URL" />
+          <Hint as="button" class="app-dialog-input-action-button" type="button" side="top" text={urlCopied ? 'Copied' : 'Copy URL'} aria-label={urlCopied ? 'URL copied' : 'Copy URL'} onclick={onCopyAuthorizationUrl}>
             {#if urlCopied}<Check size={15} />{:else}<Copy size={15} />{/if}
-          </button>
+          </Hint>
         </div>
       </div>
     {/if}

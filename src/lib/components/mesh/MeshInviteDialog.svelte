@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Check, Clipboard, LoaderCircle } from '@lucide/svelte';
+  import Hint from '$lib/components/primitives/Hint.svelte';
   import AppDialog from '$lib/components/primitives/AppDialog.svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import type { CreateMeshInviteRequest, MeshInviteCreatedInfo } from '$lib/querymt/generated/types';
@@ -48,7 +49,6 @@
   title={result ? 'Invite ready' : 'Create mesh invite'}
   description={result ? 'Share this link with the peer joining your mesh.' : 'Choose how long the invite remains valid and how often it can be used.'}
   size="standard"
-  divided={false}
   {pending}
   closeLabel="Close invite dialog"
 >
@@ -58,7 +58,7 @@
         <span class="mesh-invite-result-icon"><Check size={18} /></span>
         <div class="mesh-invite-result-main">
           <strong>{result.invite_id}</strong>
-          <span title={result.url}>{result.url}</span>
+          <Hint text={result.url}>{result.url}</Hint>
         </div>
       </div>
       {#if error}<div class="alert-error" role="alert">{error}</div>{/if}
