@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Hint from '$lib/components/primitives/Hint.svelte';
   import { Check, ChevronDown, LoaderCircle } from '@lucide/svelte';
   import type { ProfileTemplateInfo } from '$lib/querymt/profile-templates';
 
@@ -54,7 +55,7 @@
         <div><strong>Tags</strong><span>{template.tags.join(', ')}</span></div>
       {/if}
       <div><strong>Profile ID</strong><span>{template.id}</span></div>
-      {#if template.userPath}<div><strong>Installed at</strong><span title={template.userPath}>{template.userPath}</span></div>{/if}
+      {#if template.userPath}<div><strong>Installed at</strong><Hint text={template.userPath}>{template.userPath}</Hint></div>{/if}
     </div>
   {/if}
 </article>
