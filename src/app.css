@@ -1117,6 +1117,9 @@ html:has(.app-shell-custom-titlebar) body {
   text-transform: uppercase;
 }
 
+/* TODO(restyle): buttons are being restyled area by area (faint fills, no borders).
+   Dialogs and pickers already override this below ("Dialog controls"); move the
+   rest of the app over part by part, then fold those overrides back in here. */
 .action-btn {
   display: inline-flex;
   height: var(--control-height-standard);
@@ -1335,6 +1338,8 @@ html:has(.app-shell-custom-titlebar) body {
   font-size: 0.75rem;
 }
 
+/* TODO(restyle): inputs still use the bordered look outside dialogs; see
+   "Dialog controls" for the faint-fill version to roll out part by part. */
 .input-shell {
   border-radius: var(--radius-control);
   border: 1px solid var(--border);
@@ -3495,6 +3500,8 @@ summary:focus-visible {
   }
 }
 
+/* TODO(restyle): selects keep the bordered look outside dialogs; see
+   "Dialog controls" for the faint-fill version to roll out part by part. */
 .app-select-trigger {
   display: inline-flex;
   min-width: 12rem;
@@ -4036,7 +4043,8 @@ summary:focus-visible {
   margin: auto;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border);
+  /* Solid on purpose: frosted surfaces are reserved for special cases. */
+  border: 1px solid var(--subtle-border-strong);
   border-radius: var(--radius);
   background: var(--dialog-bg);
   color: var(--text);
@@ -4064,16 +4072,20 @@ summary:focus-visible {
   flex: 0 0 auto;
   align-items: flex-start;
   gap: 0.75rem;
-  padding: 1.1rem 1.25rem 0.95rem;
+  padding: 1rem 1rem 0.5rem 1.25rem;
 }
 
-.app-picker-header::after {
+.app-picker-header.app-dialog-header-divided {
+  padding-bottom: 0.85rem;
+}
+
+.app-picker-header.app-dialog-header-divided::after {
   position: absolute;
   right: 1.25rem;
   bottom: 0;
   left: 1.25rem;
   height: 1px;
-  background: color-mix(in srgb, var(--border), transparent 35%);
+  background: var(--subtle-border);
   content: '';
 }
 
@@ -4098,8 +4110,8 @@ summary:focus-visible {
 
 .app-picker-header-action {
   display: inline-flex;
-  width: var(--control-height-compact);
-  height: var(--control-height-compact);
+  width: 2rem;
+  height: 2rem;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
@@ -4107,10 +4119,11 @@ summary:focus-visible {
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .app-picker-header-action:hover:enabled {
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
 }
 
@@ -4123,10 +4136,19 @@ summary:focus-visible {
 .app-picker-command-bar {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--border), transparent 35%);
-  padding: 0.85rem 1rem 0.85rem 1.2rem;
+  gap: 0.6rem;
+  margin: 0.6rem 0.6rem 0.2rem;
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
+  padding: 0.6rem 0.8rem;
   color: var(--muted);
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: box-shadow 0.15s ease;
+}
+
+.app-picker-command-bar:focus-within,
+.app-picker-search-shell:focus-within {
+  box-shadow: inset 0 0 0 1px var(--subtle-border-strong);
 }
 
 .app-picker-search-input {
@@ -4148,11 +4170,13 @@ summary:focus-visible {
   min-height: 2.7rem;
   align-items: center;
   gap: 0.65rem;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--bg-card), transparent 35%);
+  background: var(--composer-pill-surface);
   padding: 0 0.8rem;
   color: var(--muted);
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: box-shadow 0.15s ease;
 }
 
 .app-picker-scroll-frame {
@@ -4173,16 +4197,14 @@ summary:focus-visible {
 }
 
 .app-picker-group + .app-picker-group {
-  margin-top: 0.7rem;
+  margin-top: 0.5rem;
 }
 
 .app-picker-group-heading {
-  padding: 0.45rem 0.7rem 0.3rem;
+  padding: 0.45rem 0.75rem 0.25rem;
   color: var(--text-dim);
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 0.72rem;
+  font-weight: 550;
 }
 
 .app-picker-list {
@@ -4221,45 +4243,27 @@ summary:focus-visible {
   position: relative;
   display: flex;
   width: 100%;
-  min-height: 3.25rem;
+  min-height: 3rem;
   align-items: center;
   gap: 0.75rem;
   border: 0;
   border-radius: var(--radius-control);
   background: transparent;
-  padding: 0.65rem 0.75rem;
+  padding: 0.55rem 0.75rem;
   color: var(--text);
   text-align: left;
   outline: none;
-}
-
-.app-picker-row + .app-picker-row::before {
-  position: absolute;
-  top: 0;
-  right: 0.75rem;
-  left: 0.75rem;
-  height: 1px;
-  background: color-mix(in srgb, var(--border), transparent 45%);
-  content: '';
+  transition: background 0.12s ease;
 }
 
 .app-picker-row:hover,
 .app-picker-row[data-selected],
 .app-picker-row-highlighted {
-  background: var(--bg-card-hover);
-}
-
-.app-picker-row:hover::before,
-.app-picker-row[data-selected]::before,
-.app-picker-row-highlighted::before,
-.app-picker-row:hover + .app-picker-row::before,
-.app-picker-row[data-selected] + .app-picker-row::before,
-.app-picker-row-highlighted + .app-picker-row::before {
-  opacity: 0;
+  background: var(--row-surface-hover);
 }
 
 .app-picker-row:focus-visible {
-  box-shadow: inset 0 0 0 1px var(--selected-border);
+  box-shadow: inset 0 0 0 1px var(--subtle-border-strong);
 }
 
 .app-picker-row[aria-disabled='true'],
@@ -4398,7 +4402,8 @@ summary:focus-visible {
   transform: translate(-50%, -50%);
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border);
+  /* Solid on purpose: frosted surfaces are reserved for special cases. */
+  border: 1px solid var(--subtle-border-strong);
   border-radius: var(--radius);
   background: var(--dialog-bg);
   color: var(--text);
@@ -4436,22 +4441,22 @@ summary:focus-visible {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1.25rem;
-  padding: 1.25rem 1.5rem 1rem;
+  padding: 1.15rem 1.25rem 0.5rem 1.5rem;
 }
 
-.app-dialog-header::after {
+/* Header dividers are opt-in (`divided` on AppDialog); spacing separates by default. */
+.app-dialog-header.app-dialog-header-divided {
+  padding-bottom: 0.9rem;
+}
+
+.app-dialog-header.app-dialog-header-divided::after {
   position: absolute;
   right: 1.5rem;
   bottom: 0;
   left: 1.5rem;
   height: 1px;
-  background: color-mix(in srgb, var(--border), transparent 35%);
+  background: var(--subtle-border);
   content: '';
-}
-
-.app-dialog-header-undivided::after,
-.app-confirm-dialog-header::after {
-  display: none;
 }
 
 .app-dialog-heading {
@@ -4481,15 +4486,16 @@ summary:focus-visible {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  margin: -0.45rem -0.55rem 0 0;
+  margin: -0.3rem 0 0 0;
   border: 0;
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .app-dialog-close:hover:enabled {
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
 }
 
@@ -4599,8 +4605,63 @@ summary:focus-visible {
 }
 
 .app-dialog-disclosure {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--subtle-border);
   padding-top: 0.85rem;
+}
+
+/* Dialog controls: faint fills instead of borders, scoped to dialogs and
+   pickers until the rest of the app is restyled (see TODO(restyle) on
+   .action-btn, .input-shell and .app-select-trigger). Primary, accent and
+   danger buttons keep their tones. */
+:is(.app-dialog, .app-picker) .action-btn:not(.action-btn-primary, .action-btn-accent, .action-btn-danger) {
+  border-color: transparent;
+  background: var(--composer-pill-surface);
+}
+
+:is(.app-dialog, .app-picker) .action-btn:not(.action-btn-primary, .action-btn-accent, .action-btn-danger):hover:enabled {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+}
+
+:is(.app-dialog, .app-picker) .action-btn-accent {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent-dim), transparent 20%);
+}
+
+:is(.app-dialog, .app-picker) .action-btn-accent:hover:enabled {
+  border-color: transparent;
+  background: var(--accent-dim);
+}
+
+:is(.app-dialog, .app-picker) .action-btn-danger {
+  border-color: transparent;
+}
+
+:is(.app-dialog, .app-picker) .action-btn-danger:hover:enabled {
+  border-color: transparent;
+}
+
+:is(.app-dialog, .app-picker) .dialog-segmented-button-active {
+  border-color: transparent;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+:is(.app-dialog, .app-picker) :is(.input-shell, .select-shell, .app-select-trigger) {
+  border-color: transparent;
+  background: var(--composer-pill-surface);
+  box-shadow: none;
+}
+
+:is(.app-dialog, .app-picker) :is(.input-shell, .select-shell):focus,
+:is(.app-dialog, .app-picker) .app-select-trigger:is(:focus-visible, [data-state='open']) {
+  border-color: var(--subtle-border-strong);
+  box-shadow: none;
+}
+
+:is(.app-dialog, .app-picker) .app-select-trigger:is(:hover, [data-highlighted]) {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
 }
 
 .app-dialog-disclosure summary {
@@ -4739,6 +4800,11 @@ summary:focus-visible {
 .delegate-model-choice:hover:enabled,
 .delegate-model-choice-highlighted {
   background: var(--bg-card-hover);
+}
+
+.delegate-model-picker-list .delegate-model-choice:hover:enabled,
+.delegate-model-picker-list .delegate-model-choice-highlighted {
+  background: var(--row-surface-hover);
 }
 
 .delegate-model-row:focus-visible,
@@ -5113,15 +5179,12 @@ summary:focus-visible {
   min-height: 0;
   max-height: min(24rem, 50vh);
   overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  /* Match sticky titles so Chromium cannot show a 1px lighter strip
-     above the header inside a rounded overflow container. */
-  background: var(--bg-panel-strong);
+  /* Flat list: no card edge; sticky titles sit on the dialog surface. */
+  background: var(--dialog-bg);
 }
 
 .delegate-model-picker-group + .delegate-model-picker-group {
-  border-top: 1px solid var(--border);
+  margin-top: 0.35rem;
 }
 
 .delegate-model-picker-group-title {
@@ -5132,8 +5195,8 @@ summary:focus-visible {
   align-items: center;
   gap: 0.4rem;
   padding: 0.38rem 0.7rem;
-  background: var(--bg-panel-strong);
-  box-shadow: 0 -1px 0 var(--bg-panel-strong);
+  background: var(--dialog-bg);
+  box-shadow: 0 -1px 0 var(--dialog-bg);
   color: var(--muted);
   font-size: 0.62rem;
   font-weight: 650;
@@ -5152,21 +5215,17 @@ summary:focus-visible {
   justify-content: stretch;
   gap: 0.8rem;
   border: 0;
-  border-top: 1px solid color-mix(in srgb, var(--border), transparent 28%);
-  background: var(--bg-card);
-  padding: 0.68rem 0.72rem;
+  border-radius: var(--radius-control);
+  background: transparent;
+  padding: 0.6rem 0.72rem;
   color: var(--text);
   text-align: left;
   cursor: pointer;
 }
 
-.delegate-model-choice:first-of-type {
-  border-top: 0;
-}
-
 .delegate-model-choice-unavailable,
 .delegate-model-choice-unavailable:hover:enabled {
-  background: var(--bg-card);
+  background: transparent;
   color: var(--muted);
   cursor: not-allowed;
 }
@@ -5330,7 +5389,7 @@ summary:focus-visible {
 
 .dialog-row + .dialog-row,
 .dialog-row-group + .dialog-row-group {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--subtle-border);
 }
 
 .dialog-row-main {
