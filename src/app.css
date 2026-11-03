@@ -12555,11 +12555,14 @@ a.session-delegate-session:hover {
   word-break: break-word;
 }
 
-/* Flat list like the sidebar and sessions rows: hover fills, no card or separators. */
+/* Rows sit on one faint-fill surface (no border or separators) so the list reads
+   as a group; hovered rows get a slightly stronger fill. */
 .agent-list {
   display: grid;
   gap: 0.1rem;
-  margin-inline: -0.55rem;
+  border-radius: var(--radius);
+  background: var(--composer-pill-surface);
+  padding: 0.3rem;
 }
 
 .agent-list-row {
@@ -12569,7 +12572,7 @@ a.session-delegate-session:hover {
 }
 
 .agent-list-row:hover {
-  background: var(--row-surface-hover);
+  background: var(--composer-pill-surface-hover);
 }
 
 .agent-list-row-inner {
