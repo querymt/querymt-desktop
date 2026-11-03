@@ -734,23 +734,21 @@
                    <span class="session-workspace-trigger-main">
                       <span class="session-workspace-icon" aria-hidden="true">
                         {#if group.kind === 'pinned'}
-                          <Pin size={22} strokeWidth={1.5} />
+                          <Pin size={16} strokeWidth={1.75} />
                         {:else if group.kind === 'recent'}
-                          <Clock3 size={22} strokeWidth={1.5} />
+                          <Clock3 size={16} strokeWidth={1.75} />
                         {:else if getOpenGroups().includes(group.key)}
-                          <FolderOpen size={22} strokeWidth={1.5} />
+                          <FolderOpen size={16} strokeWidth={1.75} />
                         {:else if group.location === 'remote' || group.location === 'mixed'}
-                          <FolderSync size={22} strokeWidth={1.5} />
+                          <FolderSync size={16} strokeWidth={1.75} />
                         {:else}
-                          <Folder size={22} strokeWidth={1.5} />
+                          <Folder size={16} strokeWidth={1.75} />
                         {/if}
                       </span>
                       <span class="session-workspace-copy">
                         <span class="session-workspace-name">{group.name}</span>
                          <span class="session-workspace-path">
-                           {#if !!group.kind}
-                             <span>{group.kind === 'pinned' ? 'Saved on your agents' : 'Recently opened'}</span>
-                           {:else}
+                           {#if !group.kind}
                              <CopyTextChip value={group.path} title="Copy project path" />
                            {/if}
                            {#if !group.kind && workspaceMachineText(group)}
@@ -772,7 +770,7 @@
                      {:else}
                        <span class="session-workspace-count session-workspace-count-pending" aria-label="Sessions not loaded" title="Sessions load when opened">—</span>
                      {/if}
-                      {#if !group.kind}<span class="session-workspace-updated" title={formatSessionTimestampAbsolute(group.latestActivity)}><Clock3 size={12} /> {formatSessionTimestamp(group.latestActivity)}</span>{/if}
+                      {#if !group.kind}<span class="session-workspace-updated" title={formatSessionTimestampAbsolute(group.latestActivity)}>{formatSessionTimestampShort(group.latestActivity)}</span>{/if}
                      <ChevronDown size={15} class="session-workspace-chevron" />
                    </span>
                  </Accordion.Trigger>
@@ -818,12 +816,8 @@
                       disabled={group.loading}
                       onclick={() => loadMore(group)}
                     >
-                      {#if group.loading}
-                        <LoaderCircle size={14} class="animate-spin" />
-                      {:else}
-                        <ChevronDown size={14} aria-hidden="true" />
-                      {/if}
-                      {group.loading ? 'Loading...' : 'Load 10 more'}
+                      {#if group.loading}<LoaderCircle size={13} class="animate-spin" />{/if}
+                      {group.loading ? 'Loading...' : 'Show 10 more'}
                     </button>
                   </div>
                 {/if}

@@ -51,8 +51,7 @@ describe('dark theme palette', () => {
     const loadMore = appCss.match(/\.session-workspace-load-more \{([\s\S]*?)\n\}/)?.[1] ?? '';
     expect(workspaceIcon).not.toMatch(/background:|border:|box-shadow:/);
     expect(workspaceIcon).toContain('color: var(--text-muted);');
-    expect(loadMore).toContain('width: 100%;');
-    expect(loadMore).toContain('background: var(--subtle-surface);');
-    expect(loadMore).toContain('color: var(--text-muted);');
+    expect(loadMore).toContain('background: transparent;');
+    expect(loadMore).toContain('color: var(--text-dim);');
   });
 });
