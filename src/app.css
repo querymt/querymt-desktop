@@ -329,6 +329,72 @@ select {
   margin-top: 1.1rem;
 }
 
+/* Settings controls: ghost icon buttons, faint-fill buttons, selects and inputs,
+   like dialogs and the Agents page. Row groups keep their card surface so the
+   page does not go fully flat. See TODO(restyle) on .action-btn. */
+.settings-page .icon-btn:not(.icon-btn-primary, .icon-btn-accent) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.settings-page .icon-btn:not(.icon-btn-primary, .icon-btn-accent, .icon-btn-danger):hover:enabled {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.settings-page .action-btn:not(.action-btn-primary, .action-btn-accent, .action-btn-danger) {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+}
+
+.settings-page .action-btn:not(.action-btn-primary, .action-btn-accent, .action-btn-danger):hover:enabled {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--composer-pill-surface-hover), var(--text) 6%);
+}
+
+.settings-page .action-btn-danger {
+  border-color: transparent;
+}
+
+.settings-page :is(.input-shell, .select-shell, .app-select-trigger) {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  box-shadow: none;
+}
+
+.settings-page .app-select-trigger:is(:hover, [data-highlighted]) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--composer-pill-surface-hover), var(--text) 6%);
+}
+
+.settings-page :is(.input-shell, .select-shell):focus,
+.settings-page .app-select-trigger:is(:focus-visible, [data-state='open']) {
+  border-color: var(--subtle-border-strong);
+  box-shadow: none;
+}
+
+/* Empty and error states: a card surface instead of the dashed frame. */
+.settings-page .state-panel {
+  border: 1px solid transparent;
+  background: var(--bg-card);
+}
+
+.settings-page .state-panel-error {
+  background: var(--status-danger-bg);
+}
+
+.settings-page .state-skeleton-list {
+  border-color: transparent;
+}
+
+.settings-page .badge {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text-dim);
+}
+
 .settings-unified-panel {
   display: grid;
   gap: 1.45rem;
@@ -389,13 +455,15 @@ select {
 
 .settings-subnav-item:hover,
 .settings-subnav-item:focus-visible {
-  background: var(--subtle-surface);
+  background: var(--composer-pill-surface);
   color: var(--text);
   outline: none;
 }
 
-.settings-subnav-item-current {
-  background: var(--selected-surface);
+/* Same current state as the sidebar links: a neutral fill, accent icon only. */
+.settings-subnav-item-current,
+.settings-subnav-item-current:hover {
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
 }
 
@@ -554,7 +622,6 @@ select {
 
 .provider-overview {
   overflow: hidden;
-  border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-card);
 }
@@ -570,7 +637,7 @@ select {
 }
 
 .provider-overview-stat + .provider-overview-stat {
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--subtle-border);
 }
 
 .provider-overview-stat span {
@@ -1153,8 +1220,8 @@ html:has(.app-shell-custom-titlebar) body {
 }
 
 /* TODO(restyle): buttons are being restyled area by area (faint fills, no borders).
-   Dialogs, pickers and the Agents page already override it ("Dialog controls",
-   "Agents page controls"); move the rest of the app over part by part, then
+   Dialogs, pickers, the Agents page and Settings already override it ("Dialog
+   controls", "Agents page controls", "Settings controls"); move the rest of the app over part by part, then
    fold those overrides back in here. */
 .action-btn {
   display: inline-flex;
@@ -1745,12 +1812,12 @@ summary:focus-visible {
   }
 
   .provider-overview-stat:nth-child(3) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
     border-left: 0;
   }
 
   .provider-overview-stat:nth-child(4) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
   }
 
   .profile-row-details-content div {
@@ -3390,7 +3457,7 @@ summary:focus-visible {
 }
 
 .provider-connection-row-attention .provider-connection-action {
-  border-color: var(--status-warn-border);
+  color: var(--status-warn);
 }
 
 .provider-connection-feedback,
@@ -10983,9 +11050,10 @@ a.session-delegate-session:hover {
   display: inline-flex;
   align-items: center;
   padding: 0.12rem 0.45rem;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-control);
-  background: var(--bg-elevated);
+  background: var(--composer-pill-surface-hover);
+  box-shadow: inset 0 -1px 0 var(--subtle-border-strong);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 0.72rem;
@@ -11048,17 +11116,19 @@ a.session-delegate-session:hover {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition: border-color 0.14s ease, color 0.14s ease;
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
 }
 
 .theme-card:hover {
-  border-color: var(--border-strong);
+  border-color: var(--subtle-border-strong);
+  background: var(--composer-pill-surface);
   color: var(--text);
 }
 
 .theme-card-selected,
 .theme-card-selected:hover {
-  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent), transparent 35%);
+  background: color-mix(in srgb, var(--accent-dim), transparent 55%);
   color: var(--text);
 }
 
@@ -11074,60 +11144,115 @@ a.session-delegate-session:hover {
   aspect-ratio: 16 / 9;
   border-radius: calc(var(--radius) - 4px);
   overflow: hidden;
+  isolation: isolate;
+}
+
+/* One even edge drawn above both halves, so the dark preview still reads on a
+   dark page without uneven light lines at the top and bottom. */
+.theme-card-preview::after {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--subtle-border);
+  content: '';
+  pointer-events: none;
 }
 
 .theme-mini {
   position: absolute;
   inset: 0;
   display: flex;
-  gap: 7%;
-  padding: 8% 9%;
 }
 
 .theme-mini[data-scheme='light'] {
-  background: #f3f2f1;
+  --mini-bg: #f6f5f4;
+  --mini-rail: #ecebe9;
+  --mini-ink: #dad8d5;
+  --mini-ink-strong: #c9c6c2;
+  --mini-bubble: #e6e4e1;
+  --mini-composer: #ffffff;
+  --mini-composer-edge: rgba(0, 0, 0, 0.07);
+  background: var(--mini-bg);
 }
 
 .theme-mini[data-scheme='dark'] {
-  background: #191919;
+  --mini-bg: #191919;
+  --mini-rail: #141414;
+  --mini-ink: #333333;
+  --mini-ink-strong: #454545;
+  --mini-bubble: #2a2a2a;
+  --mini-composer: #242424;
+  --mini-composer-edge: rgba(255, 255, 255, 0.07);
+  background: var(--mini-bg);
 }
 
-.theme-mini-overlay {
+.theme-mini-half-start {
+  clip-path: inset(0 50% 0 0);
+}
+
+.theme-mini-half-end {
   clip-path: inset(0 0 0 50%);
+}
+
+.theme-mini i {
+  display: block;
+  border-radius: 999px;
 }
 
 .theme-mini-rail {
   display: flex;
+  width: 27%;
   flex-direction: column;
-  gap: 14%;
-  width: 24%;
+  gap: 7%;
+  background: var(--mini-rail);
+  padding: 7% 5%;
 }
 
-.theme-mini-rail i {
-  display: block;
-  height: 11%;
-  border-radius: 999px;
+.theme-mini-brand {
+  width: 18%;
+  aspect-ratio: 1;
+  margin-bottom: 6%;
+  border-radius: 30% !important;
+  background: var(--mini-ink-strong);
 }
 
-.theme-mini[data-scheme='light'] .theme-mini-rail i {
-  background: #dedddb;
+.theme-mini-rail-row {
+  height: 9%;
+  background: var(--mini-ink);
 }
 
-.theme-mini[data-scheme='dark'] .theme-mini-rail i {
-  background: #333333;
+.theme-mini-rail-row:nth-child(3) {
+  width: 82%;
+}
+
+.theme-mini-rail-row:nth-child(4) {
+  width: 64%;
+}
+
+.theme-mini-rail-row-current {
+  background: var(--mini-ink-strong);
 }
 
 .theme-mini-main {
-  flex: 1;
   display: flex;
+  flex: 1;
   flex-direction: column;
-  gap: 9%;
+  gap: 7%;
+  padding: 8% 9% 7%;
+}
+
+.theme-mini-bubble {
+  align-self: flex-end;
+  width: 44%;
+  height: 13%;
+  border-radius: 0.3rem !important;
+  background: var(--mini-bubble);
 }
 
 .theme-mini-line {
-  display: block;
-  height: 9%;
-  border-radius: 999px;
+  height: 7%;
+  background: var(--mini-ink);
 }
 
 .theme-mini-w80 {
@@ -11138,42 +11263,21 @@ a.session-delegate-session:hover {
   width: 60%;
 }
 
-.theme-mini-w45 {
-  width: 45%;
-}
-
-.theme-mini[data-scheme='light'] .theme-mini-line {
-  background: #dcdbd8;
-}
-
-.theme-mini[data-scheme='dark'] .theme-mini-line {
-  background: #3a3a3a;
-}
-
 .theme-mini-composer {
-  margin-top: auto;
   display: flex;
+  height: 22%;
   align-items: center;
   justify-content: flex-end;
-  height: 24%;
-  padding-inline: 6%;
-  border-radius: 999px;
-}
-
-.theme-mini[data-scheme='light'] .theme-mini-composer {
-  background: #ffffff;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
-}
-
-.theme-mini[data-scheme='dark'] .theme-mini-composer {
-  background: #2a2a2a;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  margin-top: auto;
+  border-radius: 0.35rem;
+  background: var(--mini-composer);
+  box-shadow: inset 0 0 0 1px var(--mini-composer-edge);
+  padding-inline: 4%;
 }
 
 .theme-mini-dot {
-  width: 16%;
+  width: 9%;
   aspect-ratio: 1;
-  border-radius: 999px;
   background: var(--accent);
 }
 

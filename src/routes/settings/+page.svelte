@@ -603,11 +603,12 @@
               <AppSelect bind:value={selectedAgentId} options={authAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Provider agent" />
             {/if}
             <IconTooltipButton
-              label={refreshingProviders ? 'Refreshing providers' : 'Refresh providers'}
+              label={refreshingProviders ? 'Refreshing provider sign-in status…' : 'Refresh providers'}
               icon={refreshingProviders ? LoaderCircle : RefreshCw}
               iconClass={refreshingProviders ? 'animate-spin' : ''}
               size={16}
-              disabled={!selectedAgentId || authLoading || refreshingProviders}
+              busy={refreshingProviders}
+              disabled={!refreshingProviders && (!selectedAgentId || authLoading)}
               onclick={() => refreshProviders()}
             />
           </div>
