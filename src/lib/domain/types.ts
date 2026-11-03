@@ -330,6 +330,10 @@ export interface SessionToolCallItem {
   isError?: boolean;
   eventIndex?: number;
   childSessionId?: string | null;
+  /** The load shortened `result`; `fullBytes` is the stored size. */
+  truncatedResult?: { fullBytes: number };
+  /** The load shortened string arguments; `paths` are JSON pointers (empty for non-JSON arguments). */
+  truncatedArguments?: { fullBytes: number; paths: string[] };
   // The dispatch tool can finish before its delegated task does.
   delegationState?: `${DelegationUpdateState}`;
   delegationUpdatedAt?: number;

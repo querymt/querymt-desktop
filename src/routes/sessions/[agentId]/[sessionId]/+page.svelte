@@ -635,6 +635,18 @@
       promptRetryPending={agentsStore.promptRetryPending}
       onRetryPrompt={() => agentsStore.retryPromptFailure()}
       onDismissPromptFailure={() => agentsStore.dismissPromptFailure()}
+      olderHistory={agentsStore.sessionHistoryPaging.sessionKey === `${agentId}:${sessionId}`
+        ? {
+            available: agentsStore.sessionHistoryPaging.before !== null,
+            loading: agentsStore.sessionHistoryPaging.loading,
+            error: agentsStore.sessionHistoryPaging.error,
+            stale: agentsStore.sessionHistoryPaging.stale
+          }
+        : null}
+      onLoadOlder={() => agentsStore.loadOlderHistory()}
+      loadFailure={agentsStore.sessionLoadFailure?.sessionKey === `${agentId}:${sessionId}` ? agentsStore.sessionLoadFailure : null}
+      onRetryLoad={() => refreshSession()}
+      onFetchToolContent={(toolCallId, part) => agentsStore.fetchToolContent(toolCallId, part)}
       onUndo={openUndoDialog}
       onRedo={() => void agentsStore.redoActiveSession()}
       onFork={openForkDialog}

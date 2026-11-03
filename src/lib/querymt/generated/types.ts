@@ -761,6 +761,8 @@ export interface AttachPendingElicitationSessionResponse {
 export interface AttachRemoteSessionRequest {
 	node_id: string;
 	session_id: string;
+	/** ACP-style `_meta`; `_meta.querymt.loadWindow` requests a windowed load. */
+	_meta?: any;
 }
 
 /** Why an attempt was dispatched. */
@@ -1092,6 +1094,10 @@ export interface ControlFeatureInfo {
 	session_lifecycle?: boolean;
 	session_pins?: boolean;
 	session_source_listing?: boolean;
+	/** `loadWindow` on load/attach, the whole-session `summary`, and `querymt/session/history`. */
+	session_history_window?: boolean;
+	/** `querymt/session/toolContent` returns complete tool results / arguments. */
+	session_tool_content?: boolean;
 	schedules: boolean;
 	remote_schedules: boolean;
 	profiles: boolean;
@@ -1810,6 +1816,12 @@ export interface SessionLoadSnapshot {
 	delegationUpdates: DelegationUpdateNotification[];
 	userPrompts?: UserPromptRecord[];
 	runtimeStatus?: SessionRuntimeStatus;
+	/** Present only for windowed loads: where the returned events sit. */
+	history?: HistoryInfo;
+	/** Present only for windowed loads: whole-session state. */
+	summary?: SessionHistorySummary;
+	/** Present only for windowed loads that shortened tool content. */
+	truncated?: TruncatedEntry[];
 }
 
 export enum SessionRuntimePhase {
@@ -2047,3 +2059,149 @@ export type SubmitInputResult =
 	input_id: string;
 }};
 
+/** A child session spawned by this session. */
+export interface ChildSessionLink {
+	childSessionId: string;
+	delegationId?: string;
+	toolCallId?: string;
+}
+
+/** Where the returned events sit in the session's history. */
+export interface HistoryInfo {
+	/** No older history exists before the returned events. */
+	complete: boolean;
+	/**
+	 * Opaque token for the `session/history` request that returns the turns
+	 * preceding the returned events. Absent when `complete`.
+	 */
+	before?: string;
+	/** The owner was unreachable; the history was served from the local copy. */
+	stale?: boolean;
+}
+
+/** A client's request for a recent-history window. */
+export interface LoadWindow {
+	maxTurns: number;
+	maxBytes: number;
+	truncateBytes: number;
+}
+
+/** A queued or steering input that has not started or been applied yet. */
+export interface PendingInputSummary {
+	inputId: string;
+	/** `"steer"` or `"queue"`. */
+	delivery: string;
+	/** `"accepted"` or `"queued"`. */
+	state: string;
+	runId?: string;
+	position?: number;
+	blocks?: any;
+	/** Acceptance time in milliseconds since the epoch. */
+	createdAt: number;
+}
+
+/** Exclusive token categories, as in the live usage meta. */
+export interface UsageBreakdown {
+	inputTokens: number;
+	outputTokens: number;
+	reasoningTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+}
+
+/** Usage accumulated over the part of history preceding a window. */
+export interface PriorUsage {
+	sessionTotals?: UsageBreakdown;
+	partial: boolean;
+	requestCount: number;
+	accounting: any;
+}
+
+/**
+ * Whole-session token usage (the live `_meta.querymt.usage` v1 fields) plus
+ * the state a client needs to keep live usage correct after a window.
+ */
+export interface SummaryUsage {
+	latestRequest?: UsageBreakdown;
+	sessionTotals?: UsageBreakdown;
+	partial: boolean;
+	/** Number of main-request completions in the session. */
+	requestCount: number;
+	/** Context occupancy reported by the last request, and its position. */
+	contextTokens?: number;
+	contextPosition?: number;
+	/** Session-lifetime accounting totals from the shared reducer. */
+	accounting: any;
+	/**
+	 * Usage of the events *before* the returned window. A consumer that
+	 * replays the window's own events seeds from this to reach whole-session
+	 * totals without counting any event twice.
+	 */
+	beforeWindow?: PriorUsage;
+}
+
+/** The session's current model, from its last `ProviderChanged`. */
+export interface SummaryProvider {
+	provider: string;
+	model: string;
+	node?: string;
+	contextLimit?: number;
+	position: number;
+}
+
+/**
+ * Request for the turns preceding a position reported by a load or a
+ * previous older-history response.
+ */
+export interface SessionHistoryRequest {
+	sessionId: string;
+	/** The `history.before` token of the previous response. */
+	before: string;
+	loadWindow?: LoadWindow;
+}
+
+export interface SessionHistoryResponse {
+	/** Events whose `seq` is their history position, ascending. */
+	events: AgentEvent[];
+	history: HistoryInfo;
+	truncated: TruncatedEntry[];
+}
+
+/** Which part of a tool call a truncation marker or content request refers to. */
+export enum ToolContentPart {
+	Result = "result",
+	Arguments = "arguments",
+}
+
+/** A tool result or argument string that was shortened in a response. */
+export interface TruncatedEntry {
+	tool_call_id: string;
+	part: ToolContentPart;
+	/**
+	 * JSON pointer to the shortened string inside the arguments; absent for
+	 * results and for arguments that are not JSON.
+	 */
+	path?: string;
+	full_bytes: number;
+}
+
+/** State computed over the entire session, independent of the window. */
+export interface SessionHistorySummary {
+	usage: SummaryUsage;
+	provider?: SummaryProvider;
+	pendingInputs: PendingInputSummary[];
+	childSessions: ChildSessionLink[];
+}
+
+export interface SessionToolContentRequest {
+	sessionId: string;
+	toolCallId: string;
+	part: ToolContentPart;
+}
+
+export interface SessionToolContentResponse {
+	sessionId: string;
+	toolCallId: string;
+	part: ToolContentPart;
+	content: string;
+}

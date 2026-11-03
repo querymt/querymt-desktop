@@ -75,6 +75,7 @@ impl AcpWebSocketManager {
                     },
                     incoming = reader.next() => match incoming {
                         Some(Ok(Message::Text(data))) => {
+                            crate::session_load_telemetry::record_ipc_delivery(data.len());
                             if events.send(AcpWebSocketEvent::Message { data: data.to_string() }).is_err() {
                                 break;
                             }

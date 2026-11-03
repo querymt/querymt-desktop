@@ -6006,6 +6006,30 @@ summary:focus-visible {
   gap: 0.9rem;
 }
 
+.session-history-notice {
+  margin: 0;
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+.session-history-older {
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+}
+
+.session-history-older button {
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  opacity: 0.75;
+}
+
+.session-history-older button:disabled {
+  opacity: 0.45;
+}
+
 .session-turn-spacer {
   pointer-events: none;
 }

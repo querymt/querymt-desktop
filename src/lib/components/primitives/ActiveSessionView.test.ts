@@ -1014,3 +1014,74 @@ describe('ActiveSessionView turn action settle hold', () => {
     expect(screen.getByRole('button', { name: 'Undo to this prompt' })).toBeInTheDocument();
   });
 });
+
+describe('ActiveSessionView older history', () => {
+  afterEach(cleanup);
+
+  function stubScroller(initial: { height: number; top: number }) {
+    const el = document.documentElement;
+    const state = { height: initial.height, top: initial.top };
+    Object.defineProperties(el, {
+      scrollHeight: { configurable: true, get: () => state.height },
+      scrollTop: { configurable: true, get: () => state.top, set: (v: number) => { state.top = v; } },
+      clientHeight: { configurable: true, value: 600 }
+    });
+    return state;
+  }
+
+  it('shows no control when nothing older exists and never requests on mount', () => {
+    const onLoadOlder = vi.fn();
+    render(ActiveSessionView, { session: createEmptyActiveSession(), olderHistory: { available: false, loading: false, error: null, stale: false }, onLoadOlder });
+    expect(screen.queryByRole('button', { name: /earlier messages/i })).toBeNull();
+    expect(onLoadOlder).not.toHaveBeenCalled();
+  });
+
+  it('keeps the visible content in place after older turns are prepended', async () => {
+    const state = stubScroller({ height: 1000, top: 0 });
+    const onLoadOlder = vi.fn(async () => { state.height = 1800; });
+    render(ActiveSessionView, {
+      session: sessionWithImages(),
+      olderHistory: { available: true, loading: false, error: null, stale: false },
+      onLoadOlder
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }));
+    await vi.waitFor(() => expect(onLoadOlder).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(state.top).toBe(800));
+  });
+
+  it('reports a stale history notice and a retryable error', () => {
+    render(ActiveSessionView, {
+      session: sessionWithImages(),
+      olderHistory: { available: true, loading: false, error: 'boom', stale: true },
+      onLoadOlder: vi.fn()
+    });
+    expect(screen.getByTestId('history-stale')).toBeInTheDocument();
+    expect(screen.getByTestId('older-history-error')).toHaveTextContent('boom');
+    expect(screen.getByRole('button', { name: 'Retry loading earlier messages' })).toBeInTheDocument();
+  });
+});
+
+describe('ActiveSessionView load failure', () => {
+  afterEach(cleanup);
+
+  it('shows a retryable load failure with a Retry action', async () => {
+    const onRetryLoad = vi.fn();
+    render(ActiveSessionView, {
+      session: sessionWithImages(),
+      loadFailure: { message: 'owner timed out', retryable: true },
+      onRetryLoad
+    });
+    expect(screen.getByTestId('load-failure')).toHaveTextContent('owner timed out');
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetryLoad).toHaveBeenCalledOnce();
+  });
+
+  it('offers no Retry for a non-retryable failure', () => {
+    render(ActiveSessionView, {
+      session: sessionWithImages(),
+      loadFailure: { message: 'gone', retryable: false },
+      onRetryLoad: vi.fn()
+    });
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+});

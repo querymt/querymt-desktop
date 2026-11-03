@@ -24,7 +24,8 @@
     Trash2,
     Wrench
   } from '@lucide/svelte';
-  import { toolFilePath, parseObject } from '$lib/domain/session-tool-args';
+  import { toolFilePath, parseObject, isEditToolName } from '$lib/domain/session-tool-args';
+  import { useToolContentFetcher } from './tool-content-context';
   import { buildSessionToolDiffs } from '$lib/domain/session-tool-diff';
   import { parseReadFileOutput } from '$lib/domain/session-tool-read-output';
   import { parseShellToolOutput } from '$lib/domain/session-tool-shell-output';
@@ -46,15 +47,31 @@
   let open = $state(false);
   let sourceOpenForId = $state<string | null>(null);
   let copiedPart = $state<'arguments' | 'result' | null>(null);
-  const presentation = $derived(getSessionToolPresentation(tool));
+  // A windowed load shortens large results and string arguments. The prefix
+  // stays visible until the complete content is fetched; a failed fetch keeps it.
+  const fetchToolContent = useToolContentFetcher();
+  let fullResult = $state<string | null>(null);
+  let fullArguments = $state<string | null>(null);
+  let contentLoading = $state<'result' | 'arguments' | null>(null);
+  let contentError = $state<string | null>(null);
+  const argumentsTruncated = $derived(Boolean(tool.truncatedArguments) && fullArguments === null);
+  const resultTruncated = $derived(Boolean(tool.truncatedResult) && fullResult === null);
+  const shownTool = $derived<SessionToolCallItem>({
+    ...tool,
+    arguments: fullArguments ?? tool.arguments,
+    result: fullResult ?? tool.result
+  });
+  const presentation = $derived(getSessionToolPresentation(shownTool));
   const displayStatus = $derived(presentation.status);
   const READ_FILE_TOOLS = new Set(['read_tool', 'get_function', 'get_symbol', 'read', 'read_shared']);
   const toolName = $derived(getSessionToolName(tool));
   // Active-turn updates replace tool wrappers even when this output is unchanged.
   const toolStatus = $derived(tool.status);
-  const toolArguments = $derived(tool.arguments);
-  const toolResult = $derived(tool.result);
-  const diffs = $derived(buildSessionToolDiffs(toolName, toolStatus, toolArguments, toolResult));
+  const toolArguments = $derived(shownTool.arguments);
+  const toolResult = $derived(shownTool.result);
+  // A diff built from shortened arguments would be silently incomplete.
+  const diffs = $derived(argumentsTruncated ? [] : buildSessionToolDiffs(toolName, toolStatus, toolArguments, toolResult));
+  const editNeedsFullArguments = $derived(argumentsTruncated && isEditToolName(toolName));
   const isRead = $derived(READ_FILE_TOOLS.has(toolName));
   const isShell = $derived(toolName === 'shell' || toolName === 'execute');
   const readOutputView = $derived.by(() => {
@@ -77,7 +94,7 @@
     };
   });
   const readFallback = $derived.by(() => {
-    const raw = tool.result?.trim();
+    const raw = toolResult?.trim();
     if (!raw) return tool.status === 'in_progress' ? 'Waiting for read output...' : 'No read output available.';
     return resultError(raw) ?? (/^[\[{]/.test(raw) ? 'Unable to display read output.' : raw);
   });
@@ -100,6 +117,32 @@
 
   $effect(() => {
     if (!open || !chatPreferencesStore.developerMode) sourceOpenForId = null;
+  });
+
+  async function loadFullContent(part: 'result' | 'arguments') {
+    const fetcher = fetchToolContent();
+    if (!fetcher || contentLoading) return;
+    contentLoading = part;
+    contentError = null;
+    const toolId = tool.id;
+    try {
+      const content = await fetcher(toolId, part);
+      if (tool.id !== toolId) return;
+      if (part === 'result') fullResult = content;
+      else fullArguments = content;
+    } catch (error) {
+      if (tool.id !== toolId) return;
+      contentError = error instanceof Error ? error.message : 'Failed to load the full content.';
+    } finally {
+      contentLoading = null;
+    }
+  }
+
+  // Opening an edit whose arguments were shortened fetches them before any diff shows.
+  $effect(() => {
+    if (open && editNeedsFullArguments && !contentLoading && !contentError && fetchToolContent()) {
+      void loadFullContent('arguments');
+    }
   });
 
   function resultError(raw: string): string | null {
@@ -282,6 +325,22 @@
 
   {#if open && expandable}
     <div class="session-tool-content">
+      {#if resultTruncated || argumentsTruncated}
+        <div class="session-tool-truncated" data-testid="tool-truncated">
+          {#if contentError}
+            <p class="session-tool-diff-error" role="alert">{contentError}</p>
+          {/if}
+          {#if contentLoading === 'arguments'}
+            <p>Loading full parameters…</p>
+          {:else if resultTruncated && fetchToolContent()}
+            <button type="button" class="session-tool-copy" disabled={contentLoading !== null} onclick={() => loadFullContent('result')}>
+              {contentLoading === 'result' ? 'Loading full output…' : 'Show full output'}
+            </button>
+          {:else if resultTruncated}
+            <p>Output shortened ({tool.truncatedResult?.fullBytes} bytes in full).</p>
+          {/if}
+        </div>
+      {/if}
       {#if diffs.length > 0}
         <section class="session-tool-detail" aria-label="File diff">
           {#await loadSessionToolPatchDiff() then { default: SessionToolPatchDiff }}

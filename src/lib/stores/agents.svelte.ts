@@ -37,7 +37,7 @@ import {
   type PromptSendInput,
   type SessionCreateOptions
 } from '$lib/domain/session-launch';
-import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotRuntimeStatus, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotChildSessionIds, getSnapshotHistory, prependOlderHistory, getSnapshotInputStates, getSnapshotRuntimeStatus, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
 import {
   createEmptyActiveSession,
@@ -102,7 +102,7 @@ import type {
   SessionLifecyclePatch,
   SessionLifecycleFilter
 } from '$lib/domain/types';
-import { DelegateAssignmentSource, SessionInputDelivery, SessionInputState } from '$lib/querymt/generated/types';
+import { DelegateAssignmentSource, SessionInputDelivery, SessionInputState, ToolContentPart } from '$lib/querymt/generated/types';
 import type {
   AuthMethod,
   AuthProviderStatus,
@@ -172,6 +172,7 @@ import {
 import { sendDesktopNotification } from '$lib/querymt/notifications';
 import {
   SessionLoadMeasurement,
+  countSnapshotBytes,
   countSnapshotEvents,
   type SessionLoadMetrics,
   type SessionLoadTelemetryCounters
@@ -245,6 +246,35 @@ interface AgentLogEvent {
 }
 
 type UnlistenFn = () => void;
+
+/** A failed session load; `retryable` failures offer Retry. */
+export interface SessionLoadFailure {
+  sessionKey: string;
+  message: string;
+  retryable: boolean;
+}
+
+/** Reads the agent's typed `remote_transfer_failed` error (retryable by contract). */
+export function readLoadFailure(error: unknown, sessionKey: string): SessionLoadFailure | null {
+  const data = error instanceof RequestError ? error.data : (error as { data?: unknown } | null)?.data;
+  if (!data || typeof data !== 'object') return null;
+  const record = data as Record<string, unknown>;
+  if (record.code !== 'remote_transfer_failed') return null;
+  const message = typeof record.message === 'string' && record.message ? record.message
+    : error instanceof Error ? error.message : 'Remote session transfer failed.';
+  return { sessionKey, message, retryable: record.retryable !== false };
+}
+
+/** Older-history paging state of the selected session. */
+export interface SessionHistoryPaging {
+  sessionKey: string | null;
+  /** Token for the next older page; null when the transcript starts at the session's beginning. */
+  before: string | null;
+  loading: boolean;
+  error: string | null;
+  /** The owner was unreachable; history came from the local copy. */
+  stale: boolean;
+}
 
 interface AgentClientRecord {
   client: DesktopAcpClient;
@@ -452,6 +482,10 @@ export class AgentsStore {
   activeSession = $state<ActiveSessionViewModel>(createEmptyActiveSession());
   forkPending = $state(false);
   sessionHistoryLoading = $state(false);
+  /** Older-history paging for the selected session; `before` is null when nothing older exists. */
+  /** Why the selected session failed to load, when a retry may help. */
+  sessionLoadFailure = $state<SessionLoadFailure | null>(null);
+  sessionHistoryPaging = $state<SessionHistoryPaging>({ sessionKey: null, before: null, loading: false, error: null, stale: false });
   lastCreatedSession = $state<NewSessionResponse | null>(null);
   lastLoadedSession = $state<LoadSessionResponse | null>(null);
   lastPromptResponse = $state<PromptResponse | null>(null);
@@ -4369,8 +4403,10 @@ export class AgentsStore {
     this.activeLoadMeasurement = measurement;
     const telemetryOperationId = await startSessionLoadTelemetry(agentId, sessionId);
     let heartbeat: ReturnType<typeof setInterval> | null = null;
+    let telemetrySnapshotBytes: number | undefined;
     const telemetryCounters = (): SessionLoadTelemetryCounters => ({
       ...measurement.counters(),
+      snapshotBytes: telemetrySnapshotBytes,
       transcriptItems: this.activeSession.transcript.length,
       toolCalls: this.activeSession.toolCalls.length,
       debugEvents: this.activeSession.events.length,
@@ -4415,6 +4451,8 @@ export class AgentsStore {
       // Distinguish "history is loading" from a live prompt run: both set
       // runState to 'thinking', but only a real run should expose Stop.
       this.sessionHistoryLoading = true;
+      this.sessionHistoryPaging = { sessionKey: null, before: null, loading: false, error: null, stale: false };
+      this.sessionLoadFailure = null;
       this.activeSession.runState = 'thinking';
       this.activeSession.activityLabel = 'Loading session history...';
       this.activeSession.lastError = null;
@@ -4459,6 +4497,7 @@ export class AgentsStore {
         return;
       }
       this.lastLoadedSession = loadedSession;
+      telemetrySnapshotBytes = countSnapshotBytes(loadedSession);
       const loadMeta = loadedSession._meta;
       if (loadMeta?.location === 'remote' && typeof loadMeta.nodeId === 'string') {
         const config = this.configs.find((candidate) => candidate.id === agentId);
@@ -4630,7 +4669,11 @@ export class AgentsStore {
       const snapshotRuntime = getSnapshotRuntimeStatus(loadedSession);
       if (snapshotRuntime) this.reconcileSessionRuntime(agentId, sessionId, snapshotRuntime);
       this.projectSelectedExecution(agentId, sessionId);
-      this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
+      this.rememberSessionChildren(agentId, sessionId, [
+        ...this.activeSession.toolCalls.map((tool) => tool.childSessionId),
+        ...getSnapshotChildSessionIds(loadedSession)
+      ]);
+      this.setHistoryPaging(agentId, sessionId, loadedSession);
       checkpoint('frontend.normalize');
       this.activeSession.undo.pendingOperation = pendingOperation;
       this.reconcileInputStatesFromSnapshot(agentId, sessionId, loadedSession);
@@ -4666,6 +4709,7 @@ export class AgentsStore {
       checkpoint('frontend.render_frames');
       this.lastSessionLoadMetrics = measurement.finish({
         snapshotEvents: countSnapshotEvents(loadedSession),
+        snapshotBytes: telemetrySnapshotBytes ?? countSnapshotBytes(loadedSession),
         transcriptItems: this.activeSession.transcript.length,
         toolCalls: this.activeSession.toolCalls.length,
         debugEvents: this.activeSession.events.length
@@ -4685,6 +4729,7 @@ export class AgentsStore {
       }
       telemetryStatus = 'error';
       const message = error instanceof Error ? error.message : 'Failed to load ACP session.';
+      this.sessionLoadFailure = readLoadFailure(error, sessionKey);
       this.activeSession.runState = 'failed';
       this.activeSession.lastError = message;
       this.activeSession.activityLabel = message;
@@ -4697,6 +4742,73 @@ export class AgentsStore {
       await finishSessionLoadTelemetry(telemetryOperationId, telemetryStatus, telemetryCounters());
       measurement.cleanup();
       if (this.activeLoadMeasurement === measurement) this.activeLoadMeasurement = null;
+    }
+  }
+
+  /** Complete result or arguments of a tool call in the selected session. */
+  async fetchToolContent(toolCallId: string, part: 'result' | 'arguments'): Promise<string> {
+    const agentId = this.activeAgentId;
+    const sessionId = this.activeSessionId;
+    const record = agentId ? this.initializedClientRecord(agentId) : undefined;
+    if (!agentId || !sessionId || !record) throw new Error('No active session.');
+    const response = await record.client.toolContent(sessionId, toolCallId,
+      part === 'result' ? ToolContentPart.Result : ToolContentPart.Arguments);
+    return response.content;
+  }
+
+  private setHistoryPaging(agentId: string, sessionId: string, response: unknown) {
+    const history = getSnapshotHistory(response);
+    this.sessionHistoryPaging = {
+      sessionKey: buildSessionKey(agentId, sessionId),
+      before: history && !history.complete && history.before ? history.before : null,
+      loading: false,
+      error: null,
+      stale: history?.stale === true
+    };
+  }
+
+  /**
+   * Requests the turns preceding the loaded transcript. Called only when the
+   * user reaches the top; never in the background. One request per session is
+   * in flight, and a result for a superseded selection is dropped.
+   */
+  async loadOlderHistory(): Promise<void> {
+    const agentId = this.activeAgentId;
+    const sessionId = this.activeSessionId;
+    const paging = this.sessionHistoryPaging;
+    if (!agentId || !sessionId || !paging.before || paging.loading) return;
+    if (paging.sessionKey !== buildSessionKey(agentId, sessionId)) return;
+    const record = this.initializedClientRecord(agentId);
+    if (!record) return;
+    const generation = this.sessionSelectionGeneration;
+    const isCurrent = () => generation === this.sessionSelectionGeneration &&
+      this.isSelectedSession(agentId, sessionId) && this.clients.get(agentId) === record;
+    this.sessionHistoryPaging = { ...paging, loading: true, error: null };
+    try {
+      const page = await record.client.sessionHistory(sessionId, paging.before);
+      if (!isCurrent()) return;
+      this.activeSession = prependOlderHistory(this.activeSession, page);
+      this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
+      this.sessionHistoryPaging = {
+        ...paging,
+        before: !page.history.complete && page.history.before ? page.history.before : null,
+        loading: false,
+        error: null
+      };
+    } catch (error) {
+      if (!isCurrent()) return;
+      const data = error instanceof RequestError ? error.data : (error as { data?: unknown } | null)?.data;
+      if (data && typeof data === 'object' && (data as Record<string, unknown>).code === 'history_changed') {
+        // An undo rewrote the history: the position is void, so reload from scratch.
+        this.sessionHistoryPaging = { ...paging, loading: false };
+        await this.loadSession(agentId, sessionId);
+        return;
+      }
+      this.sessionHistoryPaging = {
+        ...paging,
+        loading: false,
+        error: error instanceof Error ? error.message : 'Failed to load older history.'
+      };
     }
   }
 
@@ -5868,7 +5980,10 @@ export class AgentsStore {
     } catch (error) {
       // A fallback load owns its cleanup; only an explicit attachment can inherit loading.
       if (expectedGeneration === undefined && generation === this.sessionSelectionGeneration &&
-        (!record || this.clients.get(agentId) === record)) this.sessionHistoryLoading = false;
+        (!record || this.clients.get(agentId) === record)) {
+        this.sessionHistoryLoading = false;
+        this.sessionLoadFailure = readLoadFailure(error, buildSessionKey(agentId, session_id));
+      }
       throw error;
     } finally {
       unsubscribe();
@@ -5918,7 +6033,11 @@ export class AgentsStore {
         if (tool && tool.runId === undefined && (tool.status === 'pending' || tool.status === 'in_progress')) tool.runId = null;
       }
       if (record) record.recentSessionUpdateKeys = replay.map(getSessionNotificationKey).slice(-200);
-      this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
+      this.rememberSessionChildren(agentId, sessionId, [
+        ...this.activeSession.toolCalls.map((tool) => tool.childSessionId),
+        ...getSnapshotChildSessionIds(response)
+      ]);
+      this.setHistoryPaging(agentId, sessionId, response);
       this.reconcileInputStatesFromSnapshot(agentId, sessionId, response);
     }
     this.applySessionConfigOptionsSnapshot(agentId, sessionId, configOptions);

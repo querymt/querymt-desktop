@@ -3,7 +3,98 @@ import type { ActiveSessionViewModel } from './types';
 import { buildSessionConversation } from './session-conversation';
 import { applySessionNotification } from './session-updates';
 import { buildSessionToolDiffs } from './session-tool-diff';
-import { activeSessionFromLoadResponse, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession } from './session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotChildSessionIds, getSnapshotHistory, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession } from './session-snapshot';
+
+const usageBreakdown = (n: number) => ({
+  inputTokens: n, outputTokens: n, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0
+});
+
+function windowedResponse(history: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+  return {
+    _meta: {
+      'querymt/sessionLoadSnapshot.v1': {
+        audit: { events: [
+          { seq: 50, kind: { type: 'run_started', data: { run_id: 'run-9' } } },
+          { seq: 51, kind: { type: 'tool_call_start', data: { tool_call_id: 'tool-1', tool_name: 'write_file', arguments: '{"content":"abc"}' } } },
+          { seq: 52, kind: { type: 'tool_call_end', data: { tool_call_id: 'tool-1', result: 'ok-prefix', is_error: false } } },
+          { seq: 53, kind: { type: 'llm_request_end', data: { usage: { input_tokens: 1, output_tokens: 1, reasoning_tokens: 0, cache_read: 0, cache_write: 0 }, context_tokens: 7 } } }
+        ] },
+        history,
+        summary: {
+          usage: {
+            latestRequest: usageBreakdown(1), sessionTotals: usageBreakdown(100), partial: false,
+            requestCount: 40, contextTokens: 900, accounting: null
+          },
+          provider: { provider: 'anthropic', model: 'claude-old', node: 'node-7', contextLimit: 200000, position: 3 },
+          pendingInputs: [
+            { inputId: 'in-1', delivery: 'queue', state: 'queued', position: 1, createdAt: 5, blocks: [{ type: 'text', text: 'later' }] },
+            { inputId: 'in-bad', delivery: 'other', state: 'queued', createdAt: 6 }
+          ],
+          childSessions: [{ childSessionId: 'child-1', toolCallId: 'tool-1' }, { childSessionId: 'child-2' }]
+        },
+        ...extra
+      }
+    }
+  };
+}
+
+describe('windowed load snapshots', () => {
+  it('prefers the summary for totals, model, pending inputs and child links when older history exists', () => {
+    const response = windowedResponse({ complete: false, before: 'tok' });
+    const session = activeSessionFromLoadResponse('s', response);
+
+    expect(session.usage.breakdown?.sessionTotals?.inputTokens).toBe(100);
+    expect(session.usage.breakdown?.latestRequest?.inputTokens).toBe(1);
+    expect(session.usage.contextUsed).toBe(900);
+    expect(session.usage.contextLimit).toBe(200000);
+    expect(session.toolCalls[0].childSessionId).toBe('child-1');
+    expect(getSnapshotProviderChange(response)).toEqual({ provider: 'anthropic', model: 'claude-old', providerNodeId: 'node-7' });
+    expect(getSnapshotInputStates(response)).toEqual([expect.objectContaining({
+      inputId: 'in-1', delivery: 'queue', state: 'queued', position: 1, createdAt: 5, prompt: 'later'
+    })]);
+    expect(getSnapshotChildSessionIds(response)).toEqual(['child-1', 'child-2']);
+    expect(getSnapshotHistory(response)).toEqual({ complete: false, before: 'tok' });
+  });
+
+  it('keeps deriving state from events when the window holds the complete history', () => {
+    const response = windowedResponse({ complete: true });
+    const session = activeSessionFromLoadResponse('s', response);
+
+    expect(session.usage.breakdown?.sessionTotals?.inputTokens).toBe(1);
+    expect(session.usage.contextUsed).toBe(7);
+    expect(getSnapshotProviderChange(response)).toBeNull();
+    expect(getSnapshotInputStates(response)).toEqual([]);
+    expect(getSnapshotChildSessionIds(response)).toEqual([]);
+    expect(getSnapshotHistory(response)).toEqual({ complete: true });
+  });
+
+  it('ignores history and summary for loads without a window', () => {
+    const response = windowedResponse({ complete: true }, { history: undefined, summary: undefined });
+    expect(getSnapshotHistory(response)).toBeNull();
+    expect(activeSessionFromLoadResponse('s', response).usage.breakdown?.sessionTotals?.inputTokens).toBe(1);
+  });
+
+  it('marks truncated results and arguments on their tool calls', () => {
+    const response = windowedResponse({ complete: true }, {
+      truncated: [
+        { tool_call_id: 'tool-1', part: 'result', full_bytes: 512000 },
+        { tool_call_id: 'tool-1', part: 'arguments', path: '/content', full_bytes: 5000000 },
+        { tool_call_id: 'missing', part: 'result', full_bytes: 1 }
+      ]
+    });
+    const [tool] = activeSessionFromLoadResponse('s', response).toolCalls;
+
+    expect(tool.truncatedResult).toEqual({ fullBytes: 512000 });
+    expect(tool.truncatedArguments).toEqual({ fullBytes: 5000000, paths: ['/content'] });
+    expect(tool.result).toBe('ok-prefix');
+  });
+
+  it('leaves tool calls unmarked when nothing was truncated', () => {
+    const [tool] = activeSessionFromLoadResponse('s', windowedResponse({ complete: true })).toolCalls;
+    expect(tool.truncatedResult).toBeUndefined();
+    expect(tool.truncatedArguments).toBeUndefined();
+  });
+});
 
 const snapshotAccounting = {
   version: 1,

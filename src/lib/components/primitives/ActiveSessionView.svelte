@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { tick } from 'svelte';
+  import { provideToolContentFetcher, type ToolContentFetcher } from '$lib/components/session/tool-content-context';
   import Conversation from '$lib/components/ai-elements/conversation.svelte';
   import SessionTurn from '$lib/components/session/SessionTurn.svelte';
   import SessionTurnDiffPanel from '$lib/components/session/SessionTurnDiffPanel.svelte';
@@ -26,6 +28,11 @@
     promptRetryPending = false,
     onRetryPrompt,
     onDismissPromptFailure,
+    olderHistory = null,
+    onLoadOlder,
+    loadFailure = null,
+    onRetryLoad = null,
+    onFetchToolContent = null,
     onUndo,
     onRedo,
     onFork,
@@ -41,11 +48,21 @@
     promptRetryPending?: boolean;
     onRetryPrompt?: (() => void | Promise<void>) | null;
     onDismissPromptFailure?: (() => void) | null;
+    /** Older-history state; `available` is false once the transcript reaches the session start. */
+    olderHistory?: { available: boolean; loading: boolean; error: string | null; stale: boolean } | null;
+    onLoadOlder?: (() => void | Promise<void>) | null;
+    /** A load error worth surfacing with Retry (e.g. `remote_transfer_failed`). */
+    loadFailure?: { message: string; retryable: boolean } | null;
+    onRetryLoad?: (() => void | Promise<void>) | null;
+    /** Loads full tool content for "Show full output" and truncated-argument diffs. */
+    onFetchToolContent?: ToolContentFetcher | null;
     onUndo?: (messageId: string) => void;
     onRedo?: () => void | Promise<void>;
     onFork?: (messageId: string) => void;
     onDisclosureChange?: (anchor: HTMLElement, expanded: boolean) => void;
   } = $props();
+
+  provideToolContentFetcher(() => onFetchToolContent);
 
   function imageName(block: SessionImageBlock, index: number): string {
     return block.name || `Image attachment ${index + 1}`;
@@ -167,6 +184,37 @@
     );
   }
 
+  const OLDER_HISTORY_TOP_THRESHOLD = 24;
+  let lastScrollTop = 0;
+  let loadingOlderAnchor = false;
+
+  /** Requests older turns, then restores the scroll offset so the visible content does not move. */
+  async function loadOlder() {
+    if (!onLoadOlder || !olderHistory?.available || olderHistory.loading || loadingOlderAnchor) return;
+    loadingOlderAnchor = true;
+    const { element } = resolveScrollViewport();
+    const previousHeight = element.scrollHeight;
+    const previousTop = element.scrollTop;
+    try {
+      await onLoadOlder();
+      await tick();
+      const grown = element.scrollHeight - previousHeight;
+      if (grown > 0) element.scrollTop = previousTop + grown;
+      syncViewport();
+    } finally {
+      loadingOlderAnchor = false;
+    }
+  }
+
+  // Only a user scroll that moves up and reaches the transcript top asks for
+  // older history; opening a session never does.
+  function maybeLoadOlderOnScroll() {
+    const { element } = resolveScrollViewport();
+    const scrollingUp = element.scrollTop < lastScrollTop;
+    lastScrollTop = element.scrollTop;
+    if (scrollingUp && viewport.top <= OLDER_HISTORY_TOP_THRESHOLD) void loadOlder();
+  }
+
   function measureVisibleTurns() {
     if (!conversationRoot) return;
     const next = { ...turnHeights };
@@ -194,9 +242,14 @@
       syncViewport();
       measureVisibleTurns();
     };
+    const onUserScroll = () => {
+      onScroll();
+      maybeLoadOlderOnScroll();
+    };
     syncViewport();
     measureVisibleTurns();
-    eventTarget.addEventListener('scroll', onScroll, { passive: true });
+    lastScrollTop = resolveScrollViewport().element.scrollTop;
+    eventTarget.addEventListener('scroll', onUserScroll, { passive: true });
     window.addEventListener('resize', onScroll);
     const observer =
       typeof ResizeObserver === 'function' ? new ResizeObserver(onScroll) : null;
@@ -204,7 +257,7 @@
     const frame = requestAnimationFrame(onScroll);
     return () => {
       cancelAnimationFrame(frame);
-      eventTarget.removeEventListener('scroll', onScroll);
+      eventTarget.removeEventListener('scroll', onUserScroll);
       window.removeEventListener('resize', onScroll);
       observer?.disconnect();
     };
@@ -275,6 +328,29 @@
       emptyDescription="Send a prompt below to start streaming messages, reasoning, and activities into this view."
     >
       <div bind:this={conversationRoot} class="session-conversation-window">
+        {#if loadFailure}
+          <div class="session-history-notice" role="alert" data-testid="load-failure">
+            <p>{loadFailure.message}</p>
+            {#if loadFailure.retryable && onRetryLoad}
+              <button type="button" onclick={() => void onRetryLoad()}>Retry</button>
+            {/if}
+          </div>
+        {/if}
+        {#if olderHistory?.stale}
+          <p class="session-history-notice" role="status" data-testid="history-stale">
+            This history may be out of date: the session's host could not be reached.
+          </p>
+        {/if}
+        {#if olderHistory?.available}
+          <div class="session-history-older">
+            {#if olderHistory.error}
+              <p role="alert" data-testid="older-history-error">{olderHistory.error}</p>
+            {/if}
+            <button type="button" disabled={olderHistory.loading} onclick={() => void loadOlder()}>
+              {olderHistory.loading ? 'Loading earlier messages…' : olderHistory.error ? 'Retry loading earlier messages' : 'Load earlier messages'}
+            </button>
+          </div>
+        {/if}
         {#each windowedTurns as item (item.type === 'turn' ? item.turn.id : item.key)}
           {#if item.type === 'spacer'}
             <div class="session-turn-spacer" style={`height:${item.height}px`} aria-hidden="true"></div>
