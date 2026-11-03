@@ -9553,7 +9553,7 @@ a.session-delegate-session:hover {
      a session starts or stops running. */
   grid-template-columns: 1rem minmax(0, 1fr) auto;
   grid-template-areas:
-    'title title status'
+    'title title title'
     'icon workspace time';
   align-items: center;
   gap: 0.18rem 0.4rem;
@@ -9570,18 +9570,25 @@ a.session-delegate-session:hover {
   outline: none;
 }
 
+/* The title spans the whole first line and dissolves at its end instead of
+   ending in an ellipsis; the status icon sits on top of the faded part. Short
+   titles never reach the fade, so they are unaffected. */
 .app-sidebar-session-title {
   grid-area: title;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
+  mask-image: linear-gradient(to right, #000 calc(100% - 3.2rem), rgb(0 0 0 / 40%) calc(100% - 1.8rem), transparent calc(100% - 0.95rem));
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 3.2rem), rgb(0 0 0 / 40%) calc(100% - 1.8rem), transparent calc(100% - 0.95rem));
   font-size: 0.79rem;
   font-weight: 560;
 }
 
 .app-sidebar-session-status {
-  grid-area: status;
+  grid-area: title;
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   width: 0.85rem;
   height: 0.85rem;
