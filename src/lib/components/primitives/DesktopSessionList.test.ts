@@ -64,7 +64,7 @@ describe('DesktopSessionList pinned sessions', () => {
     expect(pinGroup.getAllByRole('button', { name: /^Open session/ })[0]).toHaveAccessibleName('Open session Pinned task 11');
     expect(within(groups[1]).queryByText('Pinned task 0')).not.toBeInTheDocument();
     expect(pinGroup.queryByTitle('Copy project path')).not.toBeInTheDocument();
-    await fireEvent.click(pinGroup.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(pinGroup.getByRole('button', { name: 'Show 10 more' }));
     expect(pinGroup.getAllByRole('button', { name: /^Open session/ })).toHaveLength(12);
   });
   it('finds old pins not in the activity catalog and honors lifecycle and search filters', async () => {
@@ -105,12 +105,12 @@ describe('DesktopSessionList recent sessions', () => {
     expect(groups[0].querySelector('.session-workspace-icon .lucide-clock-3')).not.toBeNull();
     await fireEvent.click(recent.getByRole('button', { name: 'Open session Recent task 0' }));
     expect(onOpenSession).toHaveBeenCalledWith(catalog[0]);
-    await fireEvent.click(recent.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(recent.getByRole('button', { name: 'Show 10 more' }));
     expect(recent.getAllByRole('button', { name: /^Open session/ })).toHaveLength(20);
     expect(onLoadMoreWorkspace).not.toHaveBeenCalled();
-    await fireEvent.click(recent.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(recent.getByRole('button', { name: 'Show 10 more' }));
     expect(recent.getAllByRole('button', { name: /^Open session/ })).toHaveLength(24);
-    expect(recent.queryByRole('button', { name: 'Load 10 more' })).not.toBeInTheDocument();
+    expect(recent.queryByRole('button', { name: 'Show 10 more' })).not.toBeInTheDocument();
   });
 
   it('filters recents by lifecycle, runtime, location, and workspace search before limiting', async () => {
@@ -508,8 +508,8 @@ describe('DesktopSessionList', () => {
     expect(container.querySelectorAll('.lucide-folder-sync')).toHaveLength(2);
     for (const icon of container.querySelectorAll('.session-workspace-icon')) {
       expect(icon).toHaveAttribute('aria-hidden', 'true');
-      expect(icon.querySelector('svg')).toHaveAttribute('width', '22');
-      expect(icon.querySelector('svg')).toHaveAttribute('stroke-width', '1.5');
+      expect(icon.querySelector('svg')).toHaveAttribute('width', '16');
+      expect(icon.querySelector('svg')).toHaveAttribute('stroke-width', '1.75');
     }
     expect(screen.getByText('Remote', { selector: '.session-workspace-machine' })).toHaveAttribute('title', 'Remote workspace');
     expect(screen.getByText('local + remote')).toHaveAttribute('title', 'Local and remote workspace');
@@ -765,7 +765,7 @@ describe('DesktopSessionList', () => {
     const catalog = Array.from({ length: 25 }, (_, index) => ({ ...sessions[0], sessionId: `task-${index}`, title: `Task ${index}`, updatedAt: `2026-07-${String(25 - index).padStart(2, '0')}T01:00:00Z` }));
     const first = render(DesktopSessionList, { sessions: catalog, catalogComplete: true });
     expect(screen.queryByText('Task 24')).not.toBeInTheDocument();
-    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }));
     await searchFor('Task 24');
     expect(screen.getByText('Task 24')).toBeInTheDocument();
     first.unmount();
@@ -924,7 +924,7 @@ describe('DesktopSessionList', () => {
     expect(container.querySelectorAll('.session-row')).toHaveLength(10);
     expect(search).not.toHaveBeenCalled();
     expect(onLoadMoreWorkspace).not.toHaveBeenCalled();
-    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }));
     expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
     expect(container.querySelectorAll('.session-row')).toHaveLength(20);
     expect(search).not.toHaveBeenCalled();
@@ -1072,9 +1072,8 @@ describe('DesktopSessionList', () => {
     render(DesktopSessionList, { workspaceGroups, onOpenWorkspace, onLoadMoreWorkspace });
 
     await waitFor(() => expect(onOpenWorkspace).toHaveBeenCalledWith('/projects/querymt'));
-    const loadMoreButton = screen.getByRole('button', { name: 'Load 10 more' });
+    const loadMoreButton = screen.getByRole('button', { name: 'Show 10 more' });
     expect(loadMoreButton).toHaveClass('session-workspace-load-more');
-    expect(loadMoreButton.querySelector('.lucide-chevron-down')).not.toBeNull();
     await fireEvent.click(loadMoreButton);
 
     expect(onLoadMoreWorkspace).toHaveBeenCalledWith('/projects/querymt');
@@ -1176,21 +1175,21 @@ describe('DesktopSessionList asynchronous search', () => {
     const catalog = Array.from({ length: 65 }, (_, index) => ({ ...sessions[0], sessionId: `task-${index}`, title: `Task ${index}` }));
     const { container } = render(DesktopSessionList, { sessions: catalog, catalogComplete: true });
     for (let count = 20; count <= 60; count += 10) {
-      await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+      await fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }));
       expect(container.querySelectorAll('.session-row')).toHaveLength(count);
       expect(screen.getByText('Task 0')).toBeInTheDocument();
     }
-    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }));
     expect(container.querySelectorAll('.session-row')).toHaveLength(65);
     expect(screen.getByText('Task 64')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Next 30|Previous 30|Load 10 more/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Next 30|Previous 30|Show 10 more/ })).not.toBeInTheDocument();
     await searchFor('Task');
     expect(container.querySelectorAll('.session-row')).toHaveLength(10);
     for (let count = 20; count <= 60; count += 10) {
-      await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+      await fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }));
       expect(container.querySelectorAll('.session-row')).toHaveLength(count);
     }
-    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }));
     expect(container.querySelectorAll('.session-row')).toHaveLength(65);
     await searchFor('');
     expect(container.querySelectorAll('.session-row')).toHaveLength(65);
