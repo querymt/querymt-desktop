@@ -425,7 +425,8 @@
             <button class="action-btn action-btn-compact" type="button" onclick={() => refreshAgents()}>Retry</button>
           </div>
         {:else if refreshing}
-          <div class="state-inline-progress" role="status"><LoaderCircle size={14} class="animate-spin" /><span>Refreshing agent status…</span></div>
+          <!-- The toolbar refresh button spins while refreshing; this only announces it. -->
+          <span class="sr-only" role="status">Refreshing agent status…</span>
         {/if}
         <div class="agent-list">
           {#each agentCards as card}
