@@ -11115,15 +11115,9 @@ a.session-delegate-session:hover {
   border-top: 0;
 }
 
+/* Rows are separated by spacing and the hover fill only, like the sidebar. */
 .session-workspace-session-list .session-row + .session-row::before {
-  position: absolute;
-  top: -0.12rem;
-  right: 0.55rem;
-  left: 0.55rem;
-  height: 1px;
-  background: var(--subtle-border);
-  content: '';
-  pointer-events: none;
+  content: none;
 }
 
 .session-workspace-loading,
@@ -11182,10 +11176,10 @@ a.session-delegate-session:hover {
   position: relative;
   justify-content: space-between;
   gap: 0.75rem;
-  margin: 0.12rem 0;
-  border-radius: var(--radius-sm);
+  margin: 0.06rem 0;
+  border-radius: var(--radius-control);
   background: transparent;
-  padding: 0.64rem 0.55rem;
+  padding: 0.45rem 0.55rem;
 }
 
 .session-row:hover,
@@ -11219,8 +11213,8 @@ a.session-delegate-session:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.85rem;
-  height: 1.85rem;
+  width: 1rem;
+  height: 1rem;
   flex: 0 0 auto;
 }
 
@@ -11249,9 +11243,8 @@ a.session-delegate-session:hover {
   overflow: hidden;
   min-width: 0;
   color: var(--text);
-  font-size: 0.9rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: 0.84rem;
+  font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -11477,13 +11470,71 @@ a.session-delegate-session:hover {
   color: var(--text-dim);
 }
 
+/* Right side: status slot (spinner / needs-input dot / unknown), short last
+   active time, and the actions button that only shows on hover or focus. */
 .session-row-side {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 0.5rem;
   flex: 0 0 auto;
-  color: var(--muted);
+  color: var(--text-dim);
+}
+
+.session-row-status {
+  display: inline-flex;
+  width: 0.85rem;
+  height: 0.85rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.session-row-status-running {
+  display: inline-flex;
+  color: var(--success);
+}
+
+.session-row-status-waiting {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.session-row-status-unknown {
+  display: inline-flex;
+  color: var(--text-dim);
+}
+
+.session-row-side > .session-row-timestamp {
+  min-width: 1.75rem;
+  pointer-events: auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* The small actions button takes the time's place on hover or focus, so the
+   row never shifts; right-click still opens the same menu. */
+.session-row-side > .session-row-menu-trigger {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: 1.5rem;
+  height: 1.5rem;
+  transform: translateY(-50%);
+}
+
+.session-row:hover .session-row-side > .session-row-timestamp,
+.session-row:focus-within .session-row-side > .session-row-timestamp,
+.session-row:has(.session-row-menu-trigger[data-state='open']) .session-row-side > .session-row-timestamp {
+  visibility: hidden;
 }
 
 .session-row-menu {
