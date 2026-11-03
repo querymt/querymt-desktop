@@ -374,11 +374,12 @@
 
     <div class="compact-toolbar agents-page-actions">
       <IconTooltipButton
-        label={refreshing ? 'Refreshing agents' : 'Refresh agents'}
+        label={refreshing ? 'Refreshing agent status and connections…' : 'Refresh agents'}
         icon={refreshing ? LoaderCircle : RefreshCw}
         iconClass={refreshing ? 'animate-spin' : ''}
         size={16}
-        disabled={agentsStore.loading}
+        busy={refreshing}
+        disabled={agentsStore.loading && !refreshing}
         onclick={() => refreshAgents()}
       />
       {#if !isEmbedded}

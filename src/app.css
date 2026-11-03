@@ -1279,6 +1279,11 @@ html:has(.app-shell-custom-titlebar) body {
   height: var(--control-height-compact);
 }
 
+/* Busy: still hoverable so its tooltip can say what is in progress. */
+.icon-btn[data-busy] {
+  cursor: progress;
+}
+
 .icon-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
