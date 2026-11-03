@@ -59,6 +59,13 @@ const agentsStore = vi.hoisted(() => createAgentsStore());
 
 vi.mock('$lib/stores/agents.svelte', () => ({ agentsStore }));
 
+async function expectHint(element: Element, text: string) {
+  expect(element).not.toHaveAttribute('title');
+  await fireEvent.pointerEnter(element);
+  await waitFor(() => expect([...document.querySelectorAll('.app-tooltip-content')].some((tip) => tip.textContent?.includes(text))).toBe(true));
+  await fireEvent.pointerLeave(element);
+}
+
 afterEach(() => {
   cleanup();
   chatPreferencesStore.setShowRemoteSessions(false);
@@ -104,10 +111,28 @@ describe('Mesh page', () => {
     expect(screen.getByText('0', { selector: '.mesh-overview-context-count' })).toBeInTheDocument();
 
     const copyButton = screen.getByRole('button', { name: `Copy peer ID ${peerId}` });
-    expect(copyButton).toHaveAttribute('title', peerId);
+    await expectHint(copyButton, peerId);
     await fireEvent.click(copyButton);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(peerId);
     expect(screen.getByRole('button', { name: 'Peer ID copied' })).toBeInTheDocument();
+  });
+
+  it('keeps the refresh button busy with a descriptive tooltip while refreshing', async () => {
+    let finish: () => void = () => undefined;
+    agentsStore.refreshMeshForAgent.mockImplementationOnce(() => new Promise<undefined>((resolve) => { finish = () => resolve(undefined); }));
+
+    render(MeshPage);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh mesh' }));
+    const busy = await screen.findByRole('button', { name: 'Refreshing mesh nodes and invites…' });
+    expect(busy).toHaveAttribute('aria-busy', 'true');
+    expect(busy).not.toBeDisabled();
+
+    await fireEvent.click(busy);
+    expect(agentsStore.refreshMeshForAgent).toHaveBeenCalledTimes(1);
+
+    finish();
+    expect(await screen.findByRole('button', { name: 'Refresh mesh' })).not.toHaveAttribute('aria-busy');
   });
 
   it('shows a page-scoped selector when multiple mesh agents are available', () => {
@@ -130,7 +155,7 @@ describe('Mesh page', () => {
     expect(screen.getByText('r12D3KooWPtR...unWZUT62')).toBeInTheDocument();
     expect(screen.queryByText('unknown')).not.toBeInTheDocument();
     const copyButton = screen.getByRole('button', { name: `Copy remote peer ID ${nodeId}` });
-    expect(copyButton).toHaveAttribute('title', nodeId);
+    await expectHint(copyButton, nodeId);
 
     await fireEvent.click(copyButton);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(nodeId);
@@ -149,8 +174,8 @@ describe('Mesh page', () => {
 
     render(MeshPage);
 
-    expect(screen.getAllByRole('button', { name: /^Copy remote peer ID/ }).map((button) => button.getAttribute('title')))
-      .toEqual(['peer-a', 'peer-m', 'peer-z']);
+    expect(screen.getAllByRole('button', { name: /^Copy remote peer ID/ }).map((button) => button.getAttribute('aria-label')))
+      .toEqual(['Copy remote peer ID peer-a', 'Copy remote peer ID peer-m', 'Copy remote peer ID peer-z']);
     expect(agentsStore.meshNodesByAgent['agent-1'].nodes.map((node) => node.id))
       .toEqual(['peer-z', 'peer-a', 'peer-m']);
   });
