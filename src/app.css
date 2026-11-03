@@ -4727,8 +4727,8 @@ summary:focus-visible {
 
 .delegate-model-notice {
   gap: 0.65rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
   padding: 0.65rem 0.75rem;
   color: var(--text-muted);
   font-size: 0.76rem;
@@ -4755,27 +4755,24 @@ summary:focus-visible {
 }
 
 .delegate-model-notice-warning {
-  border-color: var(--status-warn-border);
   background: var(--status-warn-bg);
   color: var(--status-warn);
 }
 
 .delegate-model-notice-error {
-  border-color: var(--status-danger-border);
   background: var(--status-danger-bg);
   color: var(--status-danger);
 }
 
 .delegate-model-notice-neutral {
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
 }
 
+/* Flat list like the sidebar and sessions rows: hover fills, no card or separators. */
 .delegate-model-list {
   display: grid;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-card);
+  gap: 0.1rem;
+  margin-inline: -0.5rem;
 }
 
 .delegate-model-row {
@@ -4783,15 +4780,17 @@ summary:focus-visible {
   justify-content: stretch;
   gap: 0.75rem;
   border: 0;
+  border-radius: var(--radius-control);
   background: transparent;
-  padding: 0.78rem;
+  padding: 0.65rem 0.5rem;
   color: inherit;
   text-align: left;
   cursor: pointer;
+  transition: background 0.12s ease;
 }
 
-.delegate-model-row + .delegate-model-row {
-  border-top: 1px solid var(--border);
+.delegate-model-list .delegate-model-row:hover:enabled {
+  background: var(--row-surface-hover);
 }
 
 .delegate-model-row:hover:enabled,
@@ -4844,8 +4843,8 @@ summary:focus-visible {
 }
 
 .delegate-model-choice-icon {
-  border: 1px solid color-mix(in srgb, var(--accent), var(--border) 65%);
-  background: color-mix(in srgb, var(--accent-dim), transparent 30%);
+  border: 0;
+  background: var(--accent-dim);
   color: var(--accent);
 }
 
@@ -4928,16 +4927,13 @@ summary:focus-visible {
 
 .delegate-model-source {
   flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--accent), var(--border) 55%);
   border-radius: 999px;
-  padding: 0.06rem 0.28rem;
-  background: color-mix(in srgb, var(--accent-dim), transparent 36%);
+  padding: 0.08rem 0.4rem;
+  background: var(--accent-dim);
   color: var(--accent);
-  font-size: 0.5rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
+  font-size: 0.64rem;
+  font-weight: 550;
   line-height: 1.25;
-  text-transform: uppercase;
 }
 
 .delegate-model-row-unavailable .delegate-model-route-label {
@@ -4950,8 +4946,8 @@ summary:focus-visible {
   place-items: center;
   align-content: center;
   gap: 0.35rem;
-  border: 1px dashed var(--border);
   border-radius: var(--radius);
+  background: var(--composer-pill-surface);
   padding: 1.5rem;
   color: var(--muted);
   text-align: center;
@@ -4970,13 +4966,13 @@ summary:focus-visible {
 
 .delegate-model-empty-compact {
   min-height: 8rem;
-  border: 0;
+  background: transparent;
 }
 
 .delegate-model-orphans {
   display: grid;
   gap: 0.55rem;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--subtle-border);
   padding-top: 0.8rem;
 }
 
@@ -4997,8 +4993,8 @@ summary:focus-visible {
 .delegate-model-orphan {
   justify-content: stretch;
   gap: 0.6rem;
-  border: 1px solid var(--status-warn-border);
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: var(--radius-control);
   background: color-mix(in srgb, var(--status-warn-bg), transparent 35%);
   padding: 0.55rem 0.65rem;
   color: var(--status-warn);
@@ -5052,9 +5048,8 @@ summary:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 0.9rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-card);
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
   padding: 0.65rem 0.75rem;
 }
 
@@ -5084,8 +5079,8 @@ summary:focus-visible {
 .delegate-model-orphan-detail,
 .delegate-model-default-choice {
   gap: 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: var(--radius-control);
   padding: 0.72rem;
 }
 
@@ -5104,7 +5099,7 @@ summary:focus-visible {
 
 .delegate-model-default-choice {
   width: 100%;
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
   color: var(--text);
   text-align: left;
   cursor: pointer;
@@ -5134,8 +5129,7 @@ summary:focus-visible {
 }
 
 .delegate-model-choice-selected {
-  border-color: color-mix(in srgb, var(--accent), var(--border) 42%) !important;
-  background: color-mix(in srgb, var(--accent-dim), var(--bg-card) 72%);
+  background: color-mix(in srgb, var(--accent-dim), transparent 40%);
 }
 
 .delegate-model-choice-name {
