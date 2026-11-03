@@ -616,9 +616,9 @@
         </Popover.Portal>
       </Popover.Root>
       {#if showToolbarRefresh && onRefresh}
-        <IconTooltipButton class="session-browser-refresh" label={refreshing ? 'Refreshing sessions' : 'Refresh sessions'}
+        <IconTooltipButton class="session-browser-refresh" label={refreshing ? 'Refreshing sessions…' : 'Refresh sessions'}
           icon={refreshing ? LoaderCircle : RefreshCw} iconClass={refreshing ? 'animate-spin' : ''} size={15}
-          disabled={loading} onclick={() => void onRefresh?.()} />
+          busy={refreshing} disabled={loading && !refreshing} onclick={() => void onRefresh?.()} />
       {/if}
     </div>
   </div>
