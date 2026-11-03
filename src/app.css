@@ -5191,11 +5191,9 @@ summary:focus-visible {
   padding: 0.38rem 0.7rem;
   background: var(--dialog-bg);
   box-shadow: 0 -1px 0 var(--dialog-bg);
-  color: var(--muted);
-  font-size: 0.62rem;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 550;
 }
 
 .model-picker-provider-icon {
