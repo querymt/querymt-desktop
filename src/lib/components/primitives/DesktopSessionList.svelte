@@ -5,6 +5,7 @@
   import { Accordion, Popover, RadioGroup } from 'bits-ui';
   import { AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, CircleQuestionMark, Clock3, Folder, FolderOpen, FolderSync, GitBranch, GitFork, Info, LoaderCircle, MessageSquarePlus, Network, PlugZap, Pin, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, X } from '@lucide/svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
@@ -616,9 +617,9 @@
         </Popover.Portal>
       </Popover.Root>
       {#if showToolbarRefresh && onRefresh}
-        <button class="icon-btn" type="button" aria-label={refreshing ? 'Refreshing sessions' : 'Refresh sessions'} disabled={loading} onclick={onRefresh}>
-          {#if refreshing}<LoaderCircle size={16} class="animate-spin" />{:else}<RefreshCw size={16} />{/if}
-        </button>
+        <IconTooltipButton class="session-browser-refresh" label={refreshing ? 'Refreshing sessions' : 'Refresh sessions'}
+          icon={refreshing ? LoaderCircle : RefreshCw} iconClass={refreshing ? 'animate-spin' : ''} size={15}
+          disabled={loading} onclick={() => void onRefresh?.()} />
       {/if}
     </div>
   </div>

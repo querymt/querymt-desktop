@@ -10131,26 +10131,30 @@ a.session-delegate-session:hover {
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-control);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
   padding: 0 0.75rem;
   color: var(--text-muted);
   font-size: 0.76rem;
   white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .session-filter-trigger:hover,
 .session-filter-trigger[data-state='open'] {
-  border-color: var(--border-strong);
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
 }
 
+/* Active filter count sits inside the pill as a small neutral badge. */
 .session-filter-count {
-  border-left: 1px solid var(--border);
-  padding-left: 0.45rem;
-  color: var(--accent);
+  min-width: 1.1rem;
+  border-radius: 999px;
+  background: var(--composer-pill-surface-hover);
+  padding: 0 0.35rem;
+  color: var(--text);
+  text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
@@ -10272,7 +10276,7 @@ a.session-delegate-session:hover {
 }
 
 .session-browser-search:focus-within {
-  border-color: var(--border-strong);
+  background: var(--composer-pill-surface-hover);
 }
 
 .session-browser-viewbar {
@@ -10584,11 +10588,24 @@ a.session-delegate-session:hover {
   gap: 0.55rem;
   min-width: 0;
   border-radius: var(--radius-control);
-  border: 1px solid var(--border);
-  background: var(--bg-card);
+  border: 0;
+  background: var(--composer-pill-surface);
   color: var(--muted);
   height: 2.5rem;
   padding: 0 0.75rem;
+  transition: background 0.15s ease;
+}
+
+/* Ghost refresh next to Filters: no frame until hovered. */
+.session-browser-toolbar .session-browser-refresh {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.session-browser-toolbar .session-browser-refresh:hover:enabled {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
 }
 
 .session-browser-search input {
@@ -10626,8 +10643,9 @@ a.session-delegate-session:hover {
   color: var(--text);
 }
 
+/* Neutral underline: the accent is reserved for "needs you". */
 .session-browser-filter-active {
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--text);
 }
 
 .session-browser-filter:focus-visible {

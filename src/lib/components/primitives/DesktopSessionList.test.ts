@@ -1006,6 +1006,18 @@ describe('DesktopSessionList', () => {
     expect(screen.getByRole('button', { name: /^Recent sessions/ })).toHaveAttribute('aria-expanded', 'false');
   });
 
+  it('puts a ghost refresh with the shared tooltip next to Filters', async () => {
+    const onRefresh = vi.fn(async () => {});
+    const { container } = render(DesktopSessionList, { sessions, onRefresh });
+    const refresh = screen.getByRole('button', { name: 'Refresh sessions' });
+    expect(refresh).toHaveClass('session-browser-refresh');
+    expect(refresh.closest('.session-browser-actions')).not.toBeNull();
+    expect(refresh).not.toHaveAttribute('title');
+    await fireEvent.click(refresh);
+    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(container.querySelector('.session-browser-filter-active')).toHaveTextContent('Open');
+  });
+
   it('shows status, short time and actions on the right of each row', () => {
     const { container } = render(DesktopSessionList, { sessions: [{ ...sessions[0], status: 'thinking' }, { ...sessions[1], status: 'waiting' }] });
     const rows = container.querySelectorAll('.session-row');
