@@ -10395,9 +10395,9 @@ a.session-delegate-session:hover {
   flex-shrink: 0;
   align-items: center;
   gap: 0.25rem;
-  border: 1px solid var(--subtle-border);
-  border-radius: var(--radius-control);
-  background: var(--subtle-surface);
+  border: 0;
+  border-radius: 999px;
+  background: var(--composer-pill-surface-hover);
   color: var(--text-muted);
   padding: 0.1rem 0.35rem;
   font-size: 0.64rem;
@@ -10730,7 +10730,9 @@ a.session-delegate-session:hover {
 
 .session-workspace-new {
   position: absolute;
+  top: 50%;
   right: 0.65rem;
+  transform: translateY(-50%);
   z-index: 2;
   display: inline-flex;
   width: 1.6rem;
@@ -10854,7 +10856,8 @@ a.session-delegate-session:hover {
 }
 
 .session-workspace-updated {
-  min-width: 1.75rem;
+  width: 6rem;
+  flex: 0 0 6rem;
   justify-content: flex-end;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -11269,50 +11272,22 @@ a.session-delegate-session:hover {
   white-space: nowrap;
 }
 
+/* Relationship badges are borderless faint-fill pills in muted text, like the
+   launcher pills. Only a broken worktree keeps a warning colour; the accent
+   stays reserved for "needs you". */
 .session-relationship-badge {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
   gap: 0.2rem;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 999px;
-  padding: 0.08rem 0.38rem;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 0.62rem;
-  font-weight: 650;
-  letter-spacing: 0.02em;
+  background: var(--composer-pill-surface-hover);
+  padding: 0.04rem 0.42rem;
+  color: var(--text-muted);
+  font-size: 0.64rem;
+  font-weight: 560;
   line-height: 1rem;
-}
-
-.session-relationship-badge-fork {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-  color: var(--accent);
-}
-
-.session-relationship-badge-delegate {
-  border-color: color-mix(in srgb, var(--status-running) 42%, var(--border));
-  background: color-mix(in srgb, var(--status-running) 9%, transparent);
-  color: var(--status-running);
-}
-
-.session-relationship-badge-remote {
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-  color: var(--accent);
-}
-
-.session-relationship-badge-child,
-.session-relationship-badge-count {
-  background: var(--status-muted-bg);
-}
-
-.session-relationship-badge-worktree,
-.session-relationship-badge-branch {
-  border-color: color-mix(in srgb, var(--status-success, var(--accent)) 40%, var(--border));
-  background: color-mix(in srgb, var(--status-success, var(--accent)) 9%, transparent);
-  color: var(--status-success, var(--accent));
 }
 
 .session-relationship-badge-branch {
@@ -11323,13 +11298,8 @@ a.session-delegate-session:hover {
 }
 
 .session-relationship-badge-warning {
-  border-color: color-mix(in srgb, var(--status-warning, #d97706) 50%, var(--border));
-  background: color-mix(in srgb, var(--status-warning, #d97706) 10%, transparent);
+  background: color-mix(in srgb, var(--status-warning, #d97706) 14%, transparent);
   color: var(--status-warning, #d97706);
-}
-
-.session-relationship-badge-handoff {
-  background: var(--status-muted-bg);
 }
 
 .session-header-worktree {
@@ -11392,9 +11362,10 @@ a.session-delegate-session:hover {
 
 .session-row-meta {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.25rem 0.45rem;
   color: var(--muted);
   font-size: 0.72rem;
   line-height: 1.35;
@@ -11484,10 +11455,15 @@ a.session-delegate-session:hover {
   white-space: nowrap;
 }
 
-.session-row-meta > span + span::before {
+.session-row-meta > span + span:not(.session-relationship-badge):not(.session-lifecycle-badge)::before {
   content: '·';
   margin-right: 0.45rem;
   color: var(--text-dim);
+}
+
+.session-row-meta .session-relationship-badge,
+.session-row-meta .session-row-workspace {
+  pointer-events: auto;
 }
 
 /* Right side: status slot (spinner / needs-input dot / unknown), short last
@@ -11528,7 +11504,8 @@ a.session-delegate-session:hover {
 }
 
 .session-row-side > .session-row-timestamp {
-  min-width: 1.75rem;
+  width: 6rem;
+  flex: 0 0 6rem;
   pointer-events: auto;
   border: 0;
   background: transparent;
