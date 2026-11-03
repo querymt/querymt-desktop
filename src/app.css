@@ -1902,6 +1902,126 @@ summary:focus-visible {
   font-size: 0.78rem;
 }
 
+/* New-session page sits a bit above center so the "Needs you" strip fits below
+   the composer without the page feeling stacked. */
+.start-launch-page {
+  padding-top: clamp(2rem, 16vh, 9rem);
+}
+
+.start-needs-you {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.start-needs-you-heading {
+  margin: 0;
+  padding: 0 0.6rem;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 560;
+}
+
+.start-needs-you-list {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.start-needs-you-row {
+  display: grid;
+  grid-template-columns: 0.5rem minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 0.7rem;
+  border-radius: var(--radius-control);
+  padding: 0.45rem 0.6rem;
+  color: var(--text);
+  text-decoration: none;
+  transition: background 0.15s ease;
+}
+
+.start-needs-you-row:hover,
+.start-needs-you-row:focus-visible {
+  background: var(--row-surface-hover);
+  outline: none;
+}
+
+.start-needs-you-row:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.start-needs-you-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* Recent-session fallback: quieter dot, green while the session is running. */
+.start-needs-you-recent .start-needs-you-dot {
+  background: var(--text-dim);
+}
+
+.start-needs-you-recent .start-needs-you-dot.start-needs-you-dot-running {
+  background: var(--success);
+}
+
+.start-needs-you-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.start-needs-you-copy strong,
+.start-needs-you-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start-needs-you-copy strong {
+  font-size: 0.85rem;
+  font-weight: 560;
+}
+
+.start-needs-you-copy small {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
+.start-needs-you-meta {
+  color: var(--text-dim);
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
+.start-needs-you-time {
+  min-width: 2rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.start-needs-you-action {
+  border-radius: 999px;
+  background: var(--composer-pill-surface-hover);
+  padding: 0.2rem 0.65rem;
+  color: var(--text);
+  font-size: 0.74rem;
+  font-weight: 560;
+}
+
+.start-needs-you-more {
+  justify-self: start;
+  padding: 0 0.6rem;
+  color: var(--text-dim);
+  font-size: 0.74rem;
+}
+
+.start-needs-you-more:hover,
+.start-needs-you-more:focus-visible {
+  color: var(--text);
+}
+
 /* Borderless faint-fill pill, matching the composer pills. */
 .status-item-link {
   border: 0;

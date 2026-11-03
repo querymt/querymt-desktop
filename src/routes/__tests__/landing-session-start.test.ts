@@ -510,6 +510,52 @@ describe('Landing page session start', () => {
   });
 });
 
+describe('Landing page strip under the composer', () => {
+  const session = (id: string, updatedAt: string, extra: Partial<DesktopSessionSummary> = {}) => ({
+    agentId: 'agent-1', agentName: 'QMTCODE', sessionId: id, title: `Session ${id}`, cwd: `/tmp/${id}-ws`,
+    updatedAt, runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp',
+    lifecycle: { session_id: id, resolved: false, archived: false, resolved_at: null, archived_at: null },
+    status: 'idle', ...extra
+  }) as DesktopSessionSummary;
+
+  afterEach(async () => {
+    const { inboxStore } = await import('$lib/stores/inbox.svelte');
+    (inboxStore as { actionableItems?: unknown[] }).actionableItems = [];
+    (agentsStore as { sessions?: unknown[] }).sessions = [];
+  });
+
+  it('shows recently active open sessions when nothing needs input', () => {
+    (agentsStore as { sessions?: unknown[] }).sessions = [
+      session('a', '2026-11-01T10:00:00Z'),
+      session('b', '2026-11-02T10:00:00Z', { status: 'thinking' }),
+      session('c', '2026-10-01T10:00:00Z', { lifecycle: { session_id: 'c', resolved: true, archived: false, resolved_at: null, archived_at: null } })
+    ];
+    render(LandingPage);
+    const strip = screen.getByRole('region', { name: 'Continue where you left off' });
+    const links = within(strip).getAllByRole('link');
+    expect(links.map((link) => link.textContent)).toEqual([expect.stringContaining('Session b'), expect.stringContaining('Session a')]);
+    expect(links[0]).toHaveAttribute('href', '/sessions/agent-1/b');
+    expect(links[0].querySelector('.start-needs-you-dot-running')).not.toBeNull();
+  });
+
+  it('switches to Needs you when a session is waiting for input', async () => {
+    const { inboxStore } = await import('$lib/stores/inbox.svelte');
+    (agentsStore as { sessions?: unknown[] }).sessions = [session('a', '2026-11-01T10:00:00Z')];
+    (inboxStore as { actionableItems?: unknown[] }).actionableItems = [
+      { id: 'r1', title: 'Pick a branch', type: 'elicitation', agentId: 'agent-1', sessionId: 'a', actions: [{}] },
+      { id: 'r2', title: 'Second question', type: 'elicitation', agentId: 'agent-1', sessionId: 'a', actions: [{}] }
+    ];
+    render(LandingPage);
+    const strip = screen.getByRole('region', { name: 'Needs you' });
+    const links = within(strip).getAllByRole('link');
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveTextContent('Session a');
+    expect(links[0]).toHaveTextContent('Pick a branch');
+    expect(links[0]).toHaveTextContent('Reply');
+    expect(screen.queryByRole('region', { name: 'Continue where you left off' })).not.toBeInTheDocument();
+  });
+});
+
 describe('Landing page overview links', () => {
   it('use the shared Bits UI tooltip instead of a native title', async () => {
     render(LandingPage);
