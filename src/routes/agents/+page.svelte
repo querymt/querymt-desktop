@@ -20,6 +20,7 @@
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
   import AppDialog from '$lib/components/primitives/AppDialog.svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import Hint from '$lib/components/primitives/Hint.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import SidecarLogList from '$lib/components/primitives/SidecarLogList.svelte';
@@ -442,9 +443,9 @@
                         <span class="badge">auto-start</span>
                       {/if}
                       {#if isAttentionCard(card)}
-                        <button class="agent-issue-chip" type="button" title={getAttentionMessage(card)} onclick={() => openDetails(card.config.id)}>
+                        <Hint as="button" class="agent-issue-chip" type="button" text={getAttentionMessage(card)} onclick={() => openDetails(card.config.id)}>
                           Issue
-                        </button>
+                        </Hint>
                       {/if}
                     </div>
                     <div class="agent-list-endpoint mt-1 truncate text-xs text-[var(--muted)]">{endpointLabel(card.config)}</div>
@@ -628,7 +629,7 @@
               </div>
               <div class="agent-details-overview-context">
                 <span class="agent-details-context-label">Endpoint</span>
-                <code title={endpointLabel(selectedCard.config)}>{endpointLabel(selectedCard.config)}</code>
+                <Hint as="code" text={endpointLabel(selectedCard.config)}>{endpointLabel(selectedCard.config)}</Hint>
                 <span class="agent-details-context-separator" aria-hidden="true"></span>
                 <span>{selectedCard.config.transport}</span>
               </div>
