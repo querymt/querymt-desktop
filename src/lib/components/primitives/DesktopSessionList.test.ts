@@ -468,7 +468,7 @@ describe('DesktopSessionList', () => {
     expect(container.querySelector('.session-agent-chip')).toBeNull();
     const identicon = container.querySelector('.hex-identicon');
     expect(identicon).not.toBeNull();
-    expect(identicon?.querySelector('svg')).toHaveAttribute('viewBox', '0 0 32 32');
+    expect(identicon?.querySelector('svg')).toHaveAttribute('viewBox', '0 0 16 16');
     expect(identicon?.querySelector('polygon')).toHaveAttribute('fill', expect.stringMatching(/^#[0-9a-f]{6}$/i));
     expect(identicon?.querySelector('circle')).toBeNull();
     expect(screen.getAllByText('WS-QMT')).toHaveLength(1);
@@ -990,7 +990,29 @@ describe('DesktopSessionList', () => {
     expect(within(groups[0] as HTMLElement).getByLabelText('12 loaded sessions')).toHaveTextContent(/^12$/);
     expect(groups[0].querySelectorAll('.session-row')).toHaveLength(10);
     expect(within(groups[1] as HTMLElement).getByLabelText('13 loaded sessions')).toHaveTextContent(/^13$/);
-    expect(groups[1].querySelectorAll('.session-row')).toHaveLength(10);
+    // Recent starts collapsed when pinned sessions are listed above it.
+    expect(groups[1].querySelectorAll('.session-row')).toHaveLength(0);
+  });
+
+  it('opens Recent by default only when there are no pinned sessions', () => {
+    const catalog = Array.from({ length: 3 }, (_, index) => ({ ...sessions[0], sessionId: `r-${index}`, title: `Recent ${index}` }));
+    const first = render(DesktopSessionList, { sessions: catalog, recentSessionKeys: catalog.map(getSessionKey), catalogComplete: true });
+    expect(screen.getByRole('button', { name: /^Recent sessions/ })).toHaveAttribute('aria-expanded', 'true');
+    first.unmount();
+    const pinned = [{ ...catalog[0], pin: { session_id: 'r-0', pinned: true, pinned_at: '2026-10-21T10:00:00Z' } }];
+    render(DesktopSessionList, { sessions: [...pinned, ...catalog.slice(1)], pinnedSessions: pinned,
+      recentSessionKeys: catalog.map(getSessionKey), catalogComplete: true });
+    expect(screen.getByRole('button', { name: /^Pinned sessions/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: /^Recent sessions/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('shows status, short time and actions on the right of each row', () => {
+    const { container } = render(DesktopSessionList, { sessions: [{ ...sessions[0], status: 'thinking' }, { ...sessions[1], status: 'waiting' }] });
+    const rows = container.querySelectorAll('.session-row');
+    expect(rows[0].querySelector('.session-row-side .session-row-status-running')).not.toBeNull();
+    expect(rows[1].querySelector('.session-row-side .session-row-status-waiting')).not.toBeNull();
+    expect(rows[0].querySelector('.session-row-side .session-row-timestamp')?.textContent?.trim()).not.toMatch(/ago|Yesterday/);
+    expect(container.querySelector('.session-header-status-dot')).toBeNull();
   });
 
   it('opens only the latest workspace by default and creates a session in its context', async () => {

@@ -3,13 +3,13 @@
   import { SessionSearchClient } from '$lib/domain/session-search-client';
   import type { SessionSearchMatch } from '$lib/domain/session-search';
   import { Accordion, Popover, RadioGroup } from 'bits-ui';
-  import { AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, Clock3, Folder, FolderOpen, FolderSync, GitBranch, GitFork, Info, LoaderCircle, MessageSquarePlus, Network, PlugZap, Pin, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, X } from '@lucide/svelte';
+  import { AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, CircleQuestionMark, Clock3, Folder, FolderOpen, FolderSync, GitBranch, GitFork, Info, LoaderCircle, MessageSquarePlus, Network, PlugZap, Pin, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, X } from '@lucide/svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
   import SessionLifecycleBadges from '$lib/components/primitives/SessionLifecycleBadges.svelte';
-  import { createSessionBrowserState, SESSION_LIFECYCLE_VIEWS, RECENT_SESSION_GROUP_KEY, PINNED_SESSION_GROUP_KEY, compareSessionsByPin, getSessionKey, getSessionWorkspaceName, isRootSession, sessionMatchesLifecycle, compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, getSessionStatusTone, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
+  import { createSessionBrowserState, SESSION_LIFECYCLE_VIEWS, RECENT_SESSION_GROUP_KEY, PINNED_SESSION_GROUP_KEY, compareSessionsByPin, getSessionKey, getSessionWorkspaceName, isRootSession, sessionMatchesLifecycle, compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, formatSessionTimestampShort, getSessionStatusTone, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import Identicon from '$lib/components/primitives/Identicon.svelte';
   import { isWorkspaceArchivedAccess, isWorkspaceUsable, worktreeTooltip } from '$lib/domain/session-workspace';
   import type { DesktopSessionSummary, ExcludedSessionAgent, SessionBrowserState, SessionLifecyclePatch, SessionLifecycleView, SessionStatus } from '$lib/domain/types';
@@ -298,7 +298,11 @@
         browserState.pinnedGroupInitialized = true;
       }
       if (!browserState.recentGroupInitialized && filteredWorkspaceGroups.some((group) => group.kind === 'recent')) {
-        browserState.openGroups = [...new Set([RECENT_SESSION_GROUP_KEY, ...browserState.openGroups])];
+        // Recent mostly repeats rows shown elsewhere, so it starts collapsed
+        // whenever pinned sessions are listed above it.
+        if (!filteredWorkspaceGroups.some((group) => group.kind === 'pinned')) {
+          browserState.openGroups = [...new Set([RECENT_SESSION_GROUP_KEY, ...browserState.openGroups])];
+        }
         browserState.recentGroupInitialized = true;
       }
     }
@@ -475,7 +479,7 @@
                        </button>
                      {/if}
                     <span class="session-row-identicon" aria-hidden="true">
-                      <Identicon seed={session.sessionId} />
+                      <Identicon seed={session.sessionId} size={16} />
                     </span>
                     <span class="session-row-main">
                        <span class="session-row-title-line">
@@ -524,23 +528,22 @@
                         {/if}
                         {#if showAgentNames}<span>{session.agentName}</span>{/if}
                         <span class="session-row-status-line">
-                          <span
-                            class={`session-header-status-dot session-header-status-dot-${getSessionStatusTone(session.status)}`}
-                            aria-label={`Status: ${getStatusLabel(session.status)}`}
-                            title={`Status: ${getStatusLabel(session.status)}`}
-                          ></span>
                           <SessionIdChip sessionId={session.sessionId} />
-                          <span aria-hidden="true">·</span>
-                          <button
-                            class="session-row-timestamp"
-                            type="button"
-                            title={formatSessionTimestampAbsolute(session.updatedAt)}
-                            onclick={() => onOpenSession?.(session)}
-                          >{formatSessionTimestamp(session.updatedAt)}</button>
                         </span>
                       </span>
                     </span>
                      <span class="session-row-side">
+                       <span class="session-row-status" role="img" aria-label={`Status: ${getStatusLabel(session.status)}`}>
+                         {#if session.status === 'thinking' || session.status === 'cancelling'}<span class="session-row-status-running"><LoaderCircle size={12} class="animate-spin" /></span>
+                         {:else if session.status === 'waiting'}<span class="session-row-status-waiting"></span>
+                         {:else if session.status === 'unknown'}<span class="session-row-status-unknown"><CircleQuestionMark size={12} /></span>{/if}
+                       </span>
+                       <button
+                         class="session-row-timestamp"
+                         type="button"
+                         title={formatSessionTimestampAbsolute(session.updatedAt)}
+                         onclick={() => onOpenSession?.(session)}
+                       >{formatSessionTimestampShort(session.updatedAt)}</button>
                        <SessionActionsMenu
                          {session}
                           canManage={canManageLifecycle?.(session) ?? false}
