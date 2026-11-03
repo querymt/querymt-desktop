@@ -1961,10 +1961,6 @@ summary:focus-visible {
   .mesh-section-header > .icon-btn {
     flex: 0 0 auto;
   }
-
-  .mesh-created-invite .action-btn {
-    justify-content: center;
-  }
 }
 
 .panel-stat {
@@ -2966,11 +2962,12 @@ summary:focus-visible {
   gap: 0.45rem;
 }
 
+/* Overview block: one faint-fill surface with subtle dividers, like the agent
+   details overview. No card border. */
 .mesh-overview {
   overflow: hidden;
-  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
 }
 
 .mesh-overview-stats {
@@ -2984,7 +2981,7 @@ summary:focus-visible {
 }
 
 .mesh-overview-stat + .mesh-overview-stat {
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--subtle-border);
 }
 
 .mesh-overview-stat span {
@@ -3016,9 +3013,9 @@ summary:focus-visible {
   min-width: 0;
   align-items: center;
   overflow: hidden;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--subtle-border);
   padding: 0.5rem 1rem;
-  background: color-mix(in srgb, var(--bg-panel), var(--bg-card) 54%);
+  background: transparent;
   color: var(--text-dim);
   font-size: 0.68rem;
   white-space: nowrap;
@@ -3038,8 +3035,7 @@ summary:focus-visible {
   height: 0.75rem;
   flex: 0 0 auto;
   margin-inline: 0.75rem;
-  background: var(--border-strong);
-  opacity: 0.65;
+  background: var(--subtle-border-strong);
 }
 
 .mesh-overview-peer {
@@ -3049,7 +3045,7 @@ summary:focus-visible {
 .mesh-overview-context-label {
   flex: 0 0 auto;
   color: var(--muted);
-  font-weight: 550;
+  font-weight: 560;
 }
 
 .mesh-overview-context-value,
@@ -3067,8 +3063,8 @@ summary:focus-visible {
   min-width: 0;
   align-items: center;
   gap: 0.3rem;
-  border-radius: 4px;
-  padding: 0.1rem 0.2rem;
+  border-radius: var(--radius-control);
+  padding: 0.1rem 0.3rem;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -3085,7 +3081,7 @@ summary:focus-visible {
 
 .mesh-overview-peer-button:hover,
 .mesh-overview-peer-button:focus-visible {
-  background: var(--subtle-surface-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
   outline: none;
 }
@@ -3108,10 +3104,9 @@ summary:focus-visible {
 }
 
 .mesh-empty-row {
-  border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.9rem 1rem;
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
   color: var(--muted);
   font-size: 0.8rem;
 }
@@ -3120,10 +3115,9 @@ summary:focus-visible {
   display: flex;
   align-items: flex-start;
   gap: 0.8rem;
-  border: 1px solid color-mix(in srgb, var(--status-success), var(--border) 72%);
   border-radius: var(--radius);
   padding: 0.9rem 1rem;
-  background: color-mix(in srgb, var(--status-success-bg), var(--bg-card) 74%);
+  background: var(--status-success-bg);
 }
 
 .mesh-invite-result-icon {
@@ -3134,7 +3128,7 @@ summary:focus-visible {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--status-success-bg);
+  background: color-mix(in srgb, var(--status-success) 16%, transparent);
   color: var(--status-success);
 }
 
@@ -3152,7 +3146,8 @@ summary:focus-visible {
 
 .mesh-invite-result-main strong {
   color: var(--text);
-  font-size: 0.9rem;
+  font-size: 0.88rem;
+  font-weight: 600;
 }
 
 .mesh-invite-result-main span {
@@ -3162,11 +3157,14 @@ summary:focus-visible {
   font-size: 0.74rem;
 }
 
+/* Rows sit on one faint-fill surface (no border or separators) so the list reads
+   as a group, like the agents list; hovered rows get a stronger fill. */
 .mesh-item-list {
-  overflow: hidden;
-  border: 1px solid var(--border);
+  display: grid;
+  gap: 0.1rem;
   border-radius: var(--radius);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
+  padding: 0.3rem;
 }
 
 .mesh-item-row {
@@ -3174,16 +3172,14 @@ summary:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.9rem 1rem;
-  background: var(--bg-card);
+  border-radius: var(--radius-control);
+  padding: 0.65rem 0.75rem;
+  background: transparent;
+  transition: background 0.12s ease;
 }
 
-.mesh-item-row + .mesh-item-row {
-  border-top: 1px solid var(--border);
-}
-
-.mesh-item-list:not(.mesh-node-list) .mesh-item-row:hover {
-  background: var(--bg-card-hover);
+.mesh-item-row:hover {
+  background: var(--composer-pill-surface-hover);
 }
 
 .mesh-item-row-stacked {
@@ -3197,9 +3193,8 @@ summary:focus-visible {
 
 .mesh-item-title {
   color: var(--text);
-  font-size: 0.9rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: 0.86rem;
+  font-weight: 600;
 }
 
 .mesh-node-title-line {
@@ -3219,10 +3214,11 @@ summary:focus-visible {
 .mesh-node-session-count {
   flex: 0 0 auto;
   border-radius: 999px;
-  background: var(--status-muted-bg);
-  color: var(--muted);
-  padding: 0.12rem 0.42rem;
-  font-size: 0.68rem;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text-muted);
+  padding: 0.1rem 0.45rem;
+  font-size: 0.66rem;
+  font-weight: 560;
   font-variant-numeric: tabular-nums;
 }
 
@@ -3254,10 +3250,10 @@ summary:focus-visible {
   flex: 0 1 auto;
   align-items: center;
   gap: 0.3rem;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   font-family: var(--font-mono);
-  padding: 0.05rem 0.16rem;
+  padding: 0.05rem 0.3rem;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -3274,7 +3270,7 @@ summary:focus-visible {
 
 .mesh-node-peer-button:hover,
 .mesh-node-peer-button:focus-visible {
-  background: var(--subtle-surface-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
   outline: none;
 }
@@ -3314,14 +3310,15 @@ summary:focus-visible {
   height: 1.5rem;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-control);
   color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .mesh-node-inclusion-info:hover,
 .mesh-node-inclusion-info:focus-visible {
   color: var(--text);
-  background: var(--subtle-surface-hover);
+  background: var(--composer-pill-surface-hover);
 }
 
 .mesh-node-inclusion-info:focus-visible {
@@ -3344,12 +3341,12 @@ summary:focus-visible {
   }
 
   .mesh-overview-stat:nth-child(3) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
     border-left: 0;
   }
 
   .mesh-overview-stat:nth-child(4) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
   }
 
   .automation-overview-stat:nth-child(3) {
@@ -3389,7 +3386,7 @@ summary:focus-visible {
     align-items: center;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.6rem;
-    padding: 0.75rem;
+    padding: 0.65rem 0.6rem;
   }
 }
 

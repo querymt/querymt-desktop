@@ -127,11 +127,12 @@
         <AppSelect bind:value={selectedAgentId} options={meshAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Mesh agent" />
       {/if}
       <IconTooltipButton
-        label={refreshingMesh ? 'Refreshing mesh' : 'Refresh mesh'}
+        label={refreshingMesh ? 'Refreshing mesh nodes and invites…' : 'Refresh mesh'}
         icon={refreshingMesh ? LoaderCircle : RefreshCw}
         iconClass={refreshingMesh ? 'animate-spin' : ''}
         size={16}
-        disabled={!selectedAgentId || refreshingMesh}
+        busy={refreshingMesh}
+        disabled={!refreshingMesh && !selectedAgentId}
         onclick={refreshMesh}
       />
     </div>

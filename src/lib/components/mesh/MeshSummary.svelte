@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Check, Copy } from '@lucide/svelte';
+  import Hint from '$lib/components/primitives/Hint.svelte';
   import type { MeshStatusInfo } from '$lib/querymt/generated/types';
 
   let {
@@ -65,16 +66,17 @@
       <span class="mesh-overview-context-item mesh-overview-peer">
         <span class="mesh-overview-context-label">Peer</span>
         {#if status.peer_id}
-          <button
+          <Hint
+            as="button"
             class="mesh-overview-peer-button"
             type="button"
+            text={status.peer_id}
             aria-label={copiedPeerId ? 'Peer ID copied' : `Copy peer ID ${status.peer_id}`}
-            title={status.peer_id}
             onclick={() => copyPeerId(status.peer_id!)}
           >
             <span>{compactPeerId(status.peer_id)}</span>
             {#if copiedPeerId}<Check size={11} aria-hidden="true" />{:else}<Copy size={11} aria-hidden="true" />{/if}
-          </button>
+          </Hint>
         {:else}
           <span class="mesh-overview-context-value">Unavailable</span>
         {/if}
@@ -89,7 +91,7 @@
         <span class="mesh-overview-context-label">Known peers</span>
         <span class="mesh-overview-context-value mesh-overview-context-count">{status.known_peer_count}</span>
       </span>
-      {#if storeWarning}<span class="mesh-overview-context-item mesh-overview-warning" title={storeWarning}>{storeWarning}</span>{/if}
+      {#if storeWarning}<Hint as="span" class="mesh-overview-context-item mesh-overview-warning" text={storeWarning}>{storeWarning}</Hint>{/if}
     </div>
   {/if}
 </section>
