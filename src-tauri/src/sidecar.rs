@@ -1096,6 +1096,9 @@ fn spawn_stdout_reader(
                     .stdout_channel
                     .as_ref()
                     .is_some_and(|channel| channel.send(line.clone()).is_ok());
+                if delivered {
+                    crate::session_load_telemetry::record_ipc_delivery(line.len());
+                }
                 if let Some(value) = recovery_session_update(&line, delivered) {
                     if process.session_updates.len() >= MAX_SESSION_UPDATES {
                         process.session_updates.pop_front();
@@ -1109,6 +1112,7 @@ fn spawn_stdout_reader(
                 stream: "system".to_string(),
                 message: format!("ACP-OUT {}", summarize_acp_out_line(&line)),
             };
+            crate::session_load_telemetry::record_log_emit();
             let _ = app.emit(
                 LOG_EVENT,
                 AgentLogEvent {

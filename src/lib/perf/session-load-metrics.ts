@@ -21,6 +21,8 @@ export interface SessionLoadMetrics {
   /** Loads that received historical `session/update` replay. */
   replayedSessions: number;
   snapshotEvents: number;
+  /** JSON-encoded size of the load snapshot (`querymt/sessionLoadSnapshot.v1`). */
+  snapshotBytes: number;
   transcriptItems: number;
   toolCalls: number;
   debugEvents: number;
@@ -121,6 +123,7 @@ export class SessionLoadMeasurement {
 
   finish(counts: {
     snapshotEvents: number;
+    snapshotBytes: number;
     transcriptItems: number;
     toolCalls: number;
     debugEvents: number;
@@ -170,6 +173,7 @@ export type SessionLoadTelemetryCounters = Partial<
     | 'replayReactiveNotifications'
     | 'historyAssignments'
     | 'snapshotEvents'
+    | 'snapshotBytes'
     | 'transcriptItems'
     | 'toolCalls'
     | 'debugEvents'
@@ -179,6 +183,19 @@ export type SessionLoadTelemetryCounters = Partial<
     | 'longestTaskMs'
   >
 >;
+
+/** JSON-encoded byte length of the load snapshot carried in a `session/load` response. */
+export function countSnapshotBytes(response: unknown): number {
+  if (!response || typeof response !== 'object') return 0;
+  const meta = (response as { _meta?: Record<string, unknown> })._meta;
+  const snapshot = meta?.['querymt/sessionLoadSnapshot.v1'];
+  if (!snapshot || typeof snapshot !== 'object') return 0;
+  try {
+    return new TextEncoder().encode(JSON.stringify(snapshot)).length;
+  } catch {
+    return 0;
+  }
+}
 
 export function countSnapshotEvents(response: unknown): number {
   if (!response || typeof response !== 'object') return 0;

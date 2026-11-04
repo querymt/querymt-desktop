@@ -11,6 +11,49 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 static NEXT_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Process-wide IPC counters. A load records the delta between its start and
+/// finish, so overlapping loads over-count; the baseline scenarios load one
+/// session at a time.
+static IPC_DELIVERIES: AtomicU64 = AtomicU64::new(0);
+static IPC_LOG_EMITS: AtomicU64 = AtomicU64::new(0);
+static IPC_WIRE_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// Record one delivery of agent output to the webview (one channel send).
+pub fn record_ipc_delivery(wire_bytes: usize) {
+    IPC_DELIVERIES.fetch_add(1, Ordering::Relaxed);
+    IPC_WIRE_BYTES.fetch_add(wire_bytes as u64, Ordering::Relaxed);
+}
+
+/// Record one agent log event emitted to the webview.
+pub fn record_log_emit() {
+    IPC_LOG_EMITS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct IpcSnapshot {
+    deliveries: u64,
+    log_emits: u64,
+    wire_bytes: u64,
+}
+
+impl IpcSnapshot {
+    fn now() -> Self {
+        Self {
+            deliveries: IPC_DELIVERIES.load(Ordering::Relaxed),
+            log_emits: IPC_LOG_EMITS.load(Ordering::Relaxed),
+            wire_bytes: IPC_WIRE_BYTES.load(Ordering::Relaxed),
+        }
+    }
+
+    fn since(self, start: Self) -> Self {
+        Self {
+            deliveries: self.deliveries.saturating_sub(start.deliveries),
+            log_emits: self.log_emits.saturating_sub(start.log_emits),
+            wire_bytes: self.wire_bytes.saturating_sub(start.wire_bytes),
+        }
+    }
+}
+
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Default, Clone)]
@@ -23,6 +66,7 @@ struct SessionLoadOperation {
     started: Instant,
     last_checkpoint: Instant,
     current_phase: String,
+    ipc_at_start: IpcSnapshot,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -36,6 +80,7 @@ pub struct SessionLoadCounters {
     pub replay_reactive_notifications: Option<u64>,
     pub history_assignments: Option<u64>,
     pub snapshot_events: Option<u64>,
+    pub snapshot_bytes: Option<u64>,
     pub transcript_items: Option<u64>,
     pub tool_calls: Option<u64>,
     pub debug_events: Option<u64>,
@@ -61,6 +106,10 @@ impl SessionLoadTelemetry {
             session.load.status = tracing::field::Empty,
             session.load.elapsed_ms = tracing::field::Empty,
             session.load.applied_notification_count = tracing::field::Empty,
+            session.load.snapshot_bytes = tracing::field::Empty,
+            session.load.ipc_delivery_count = tracing::field::Empty,
+            session.load.log_emit_count = tracing::field::Empty,
+            session.load.wire_bytes = tracing::field::Empty,
         );
         let now = Instant::now();
         self.operations
@@ -73,6 +122,7 @@ impl SessionLoadTelemetry {
                     started: now,
                     last_checkpoint: now,
                     current_phase: "started".to_string(),
+                    ipc_at_start: IpcSnapshot::now(),
                 },
             );
         operation_id
@@ -111,6 +161,7 @@ impl SessionLoadTelemetry {
             session.load.replay_reactive_count = counters.replay_reactive_notifications,
             session.load.history_assignments = counters.history_assignments,
             session.load.snapshot_event_count = counters.snapshot_events,
+            session.load.snapshot_bytes = counters.snapshot_bytes,
             session.load.transcript_count = counters.transcript_items,
             session.load.tool_count = counters.tool_calls,
             session.load.debug_event_count = counters.debug_events,
@@ -204,6 +255,19 @@ impl SessionLoadTelemetry {
             "session.load.applied_notification_count",
             counters.applied_notifications,
         );
+        if let Some(bytes) = counters.snapshot_bytes {
+            operation.span.record("session.load.snapshot_bytes", bytes);
+        }
+        let ipc = IpcSnapshot::now().since(operation.ipc_at_start);
+        operation
+            .span
+            .record("session.load.ipc_delivery_count", ipc.deliveries);
+        operation
+            .span
+            .record("session.load.log_emit_count", ipc.log_emits);
+        operation
+            .span
+            .record("session.load.wire_bytes", ipc.wire_bytes);
     }
 
     pub fn context(&self, operation_id: &str) -> Option<Context> {
@@ -277,6 +341,20 @@ mod tests {
 
         telemetry.close_all("application_shutdown");
         assert_eq!(telemetry.active_count(), 0);
+    }
+
+    #[test]
+    fn ipc_snapshot_reports_the_delta_since_start() {
+        let start = IpcSnapshot::now();
+        record_ipc_delivery(100);
+        record_ipc_delivery(50);
+        record_log_emit();
+        let delta = IpcSnapshot::now().since(start);
+        // Other tests may record concurrently, so only lower bounds hold.
+        assert!(delta.deliveries >= 2);
+        assert!(delta.wire_bytes >= 150);
+        assert!(delta.log_emits >= 1);
+        assert_eq!(start.since(IpcSnapshot::now()), IpcSnapshot::default());
     }
 
     #[test]

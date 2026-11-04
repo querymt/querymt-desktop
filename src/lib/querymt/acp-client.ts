@@ -35,8 +35,13 @@ import type {
   MeshInviteRevokedInfo,
   MeshNodesInfo,
   MeshStatusInfo,
+  LoadWindow,
   RemoteSessionAttachInfo,
   RemoteSessionDismissInfo,
+  SessionHistoryRequest,
+  SessionHistoryResponse,
+  SessionToolContentRequest,
+  SessionToolContentResponse,
   RemoteSessionListInfo,
   RemoteSessionsRequest,
   RevokeMeshInviteRequest,
@@ -132,6 +137,13 @@ const PROTOCOL_VERSION = 1;
  * with the agent's `QUERYMT_SESSION_LOAD_SNAPSHOT_EPOCH`.
  */
 const SESSION_LOAD_SNAPSHOT_EPOCH = 1;
+
+/** Recent-history window requested on load/attach from agents that advertise `session_history_window`. */
+export const DEFAULT_LOAD_WINDOW: LoadWindow = {
+  maxTurns: 20,
+  maxBytes: 1048576,
+  truncateBytes: 32768
+};
 const CONNECT_CANCELLED_MESSAGE = 'ACP connection cancelled.';
 
 /**
@@ -637,13 +649,7 @@ export class DesktopAcpClient {
         sessionId,
         cwd,
         mcpServers: [],
-        _meta: operationId
-          ? {
-              querymt: {
-                session_load_operation_id: operationId
-              }
-            }
-          : undefined
+        _meta: this.buildLoadMeta(operationId)
       });
       // Keep capture open until the store finishes its post-RPC flush.
       // session/update notifications can still be in-flight after this RPC
@@ -677,6 +683,46 @@ export class DesktopAcpClient {
         }
       }
     });
+  }
+
+  /** True when the agent advertises windowed loads, `session/history` and the whole-session summary. */
+  supportsHistoryWindow(): boolean {
+    return this.supportsQuerymtFeature('session_history_window');
+  }
+
+  /** True when the agent can return complete tool results/arguments that a load truncated. */
+  supportsToolContent(): boolean {
+    return this.supportsQuerymtFeature('session_tool_content');
+  }
+
+  private buildLoadMeta(operationId?: string | null): { querymt: Record<string, unknown> } | undefined {
+    const querymt: Record<string, unknown> = {};
+    if (operationId) querymt.session_load_operation_id = operationId;
+    if (this.supportsHistoryWindow()) querymt.loadWindow = { ...DEFAULT_LOAD_WINDOW };
+    return Object.keys(querymt).length > 0 ? { querymt } : undefined;
+  }
+
+  /** Turns preceding a `history.before` token from a load or an earlier history page. */
+  async sessionHistory(sessionId: string, before: string): Promise<SessionHistoryResponse> {
+    if (!this.querymtExtensions) {
+      await this.connect();
+    }
+    this.assertQuerymtFeature('session_history_window');
+    const request: SessionHistoryRequest = { sessionId, before, loadWindow: { ...DEFAULT_LOAD_WINDOW } };
+    return this.querymtExtensions!.sessionHistory(request);
+  }
+
+  /** Complete result or arguments of a tool call whose content a load truncated. */
+  async toolContent(
+    sessionId: string,
+    toolCallId: string,
+    part: SessionToolContentRequest['part']
+  ): Promise<SessionToolContentResponse> {
+    if (!this.querymtExtensions) {
+      await this.connect();
+    }
+    this.assertQuerymtFeature('session_tool_content');
+    return this.querymtExtensions!.sessionToolContent({ sessionId, toolCallId, part });
   }
 
   getInitializeResponse(): InitializeResponse | null {
@@ -874,10 +920,19 @@ export class DesktopAcpClient {
     }
     this.assertQuerymtMethod(QMT_METHOD_REMOTE_ATTACH_SESSION);
     try {
-      return await this.querymtExtensions!.attachRemoteSession(request);
+      return await this.querymtExtensions!.attachRemoteSession(this.withLoadWindow(request));
     } catch (error) {
       throw mapRemoteUpgradeRequired(error);
     }
+  }
+
+  private withLoadWindow(request: AttachRemoteSessionRequest): AttachRemoteSessionRequest {
+    if (!this.supportsHistoryWindow()) return request;
+    const meta = (request._meta ?? {}) as { querymt?: Record<string, unknown> };
+    return {
+      ...request,
+      _meta: { ...meta, querymt: { ...meta.querymt, loadWindow: { ...DEFAULT_LOAD_WINDOW } } }
+    };
   }
 
   async dismissRemoteSession(session_id: string): Promise<RemoteSessionDismissInfo> {

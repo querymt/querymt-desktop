@@ -1,7 +1,7 @@
 import { applyDelegationChildSession, createEmptyActiveSession, normalizeContentBlocks, stringifyOptional, summarizeContentBlocks } from '$lib/domain/session-updates';
 import type { ActiveSessionViewModel, PromptAttachment, SessionContentBlock, SessionToolCallItem, SessionTranscriptItem } from '$lib/domain/types';
-import { appendHistoricalUsage, readAccountingSnapshot } from '$lib/domain/session-usage';
-import type { DelegationUpdateNotification, SessionRuntimeStatus } from '$lib/querymt/generated/types';
+import { appendHistoricalUsage, readAccountingSnapshot, readTokenUsage } from '$lib/domain/session-usage';
+import type { DelegationUpdateNotification, HistoryInfo, SessionHistorySummary, SessionRuntimeStatus, TruncatedEntry } from '$lib/querymt/generated/types';
 
 type SnapshotEvent = {
   seq?: number;
@@ -40,6 +40,10 @@ type SessionLoadSnapshot = {
   accounting?: unknown;
   runtimeStatus?: SessionRuntimeStatus;
   delegationUpdates?: DelegationUpdateNotification[];
+  /** Present only for windowed loads. */
+  history?: HistoryInfo;
+  summary?: SessionHistorySummary;
+  truncated?: TruncatedEntry[];
   audit?: {
     events?: SnapshotEvent[];
   };
@@ -85,6 +89,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
 
   // Present even without historical replay or a known context limit.
   session.usage.accounting = readAccountingSnapshot(snapshot.accounting);
+  const windowSummary = readWindowSummary(snapshot);
 
   const toolCallsById = new Map<string, SessionToolCallItem>();
   const supersededRunIds = new Set<string>();
@@ -307,6 +312,17 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
   }
 
   restoreUnmatchedPrompts(session, snapshot, structuredPrompts, restoredStructuredPrompts, toolCallsById);
+  applyTruncation(toolCallsById, snapshot.truncated);
+  if (windowSummary) {
+    // The window's own events cover only part of the session; whole-session
+    // state comes from the summary instead.
+    applyWindowSummaryUsage(session, windowSummary);
+    for (const link of windowSummary.childSessions ?? []) {
+      if (link.toolCallId && toolCallsById.has(link.toolCallId)) {
+        mergeHistoricalToolCall(toolCallsById, link.toolCallId, { childSessionId: link.childSessionId });
+      }
+    }
+  }
 
   // A later own run proves the earlier run ended, but not that its tools succeeded.
   session.toolCalls = Array.from(toolCallsById.values(), (tool) =>
@@ -316,13 +332,71 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
   return (snapshot.delegationUpdates ?? []).reduce(applyDelegationChildSession, normalizeHistoricalSession(session));
 }
 
+/**
+ * Builds view items for only the events of an older-history page and merges
+ * them in front of the current session. Live state (run state, usage, streaming
+ * turn, optimistic messages) is taken from `current` untouched; ordering is
+ * restored by `eventIndex` when the conversation is built.
+ */
+export function prependOlderHistory(
+  current: ActiveSessionViewModel,
+  page: { events: unknown[]; truncated?: TruncatedEntry[] },
+  /** Initial-window child links by toolCallId; a link derived from the page's own events wins. */
+  childLinks?: ReadonlyMap<string, string>
+): ActiveSessionViewModel {
+  const older = activeSessionFromLoadResponse(current.sessionId ?? '', {
+    _meta: { 'querymt/sessionLoadSnapshot.v1': { audit: { events: page.events }, truncated: page.truncated } }
+  });
+  const transcriptIds = new Set(current.transcript.map((item) => item.id));
+  const toolIds = new Set(current.toolCalls.map((tool) => tool.id));
+  const eventIds = new Set(current.events.map((event) => event.id));
+  return {
+    ...current,
+    transcript: [...older.transcript.filter((item) => !transcriptIds.has(item.id)), ...current.transcript],
+    toolCalls: [
+      ...older.toolCalls
+        .filter((tool) => !toolIds.has(tool.id))
+        .map((tool) => {
+          const childSessionId = childLinks?.get(tool.id);
+          return !tool.childSessionId && childSessionId ? { ...tool, childSessionId } : tool;
+        }),
+      ...current.toolCalls
+    ],
+    events: [...older.events.filter((event) => !eventIds.has(event.id)), ...current.events]
+  };
+}
+
 export function getSnapshotRuntimeStatus(response: unknown): SessionRuntimeStatus | null {
   return readSnapshot(response)?.runtimeStatus ?? null;
 }
 
+/** Where the returned events sit in the session's history; null for loads without a window. */
+export function getSnapshotHistory(response: unknown): HistoryInfo | null {
+  return readSnapshot(response)?.history ?? null;
+}
+
+/** Child session ids of the whole session; windowed loads carry links the window's events omit. */
+export function getSnapshotChildSessionIds(response: unknown): string[] {
+  const summary = readWindowSummary(readSnapshot(response));
+  return summary ? (summary.childSessions ?? []).map((link) => link.childSessionId) : [];
+}
+
+/** Child links of a windowed load keyed by tool call; they cover tool calls outside the window. */
+export function getSnapshotChildToolLinks(response: unknown): Map<string, string> {
+  const links = new Map<string, string>();
+  const summary = readWindowSummary(readSnapshot(response));
+  for (const link of summary?.childSessions ?? []) {
+    if (link.toolCallId && link.childSessionId) links.set(link.toolCallId, link.childSessionId);
+  }
+  return links;
+}
+
 export function getSnapshotInputStates(response: unknown): SnapshotInputState[] {
+  const snapshot = readSnapshot(response);
+  const summary = readWindowSummary(snapshot);
+  if (summary) return summary.pendingInputs.flatMap(summaryInputState);
   const states = new Map<string, SnapshotInputState>();
-  for (const event of readSnapshot(response)?.audit?.events ?? []) {
+  for (const event of snapshot?.audit?.events ?? []) {
     const kind = event.kind?.type;
     const data = event.kind?.data ?? {};
     const inputId = readString(data.input_id) ?? readString(data.inputId);
@@ -390,7 +464,17 @@ export function getSnapshotInputStates(response: unknown): SnapshotInputState[] 
 }
 
 export function getSnapshotProviderChange(response: unknown): SnapshotProviderChange | null {
-  const events = readSnapshot(response)?.audit?.events ?? [];
+  const snapshot = readSnapshot(response);
+  // The last model change may predate the window.
+  const summaryProvider = readWindowSummary(snapshot)?.provider;
+  if (summaryProvider?.provider && summaryProvider.model) {
+    return {
+      provider: summaryProvider.provider,
+      model: summaryProvider.model,
+      providerNodeId: summaryProvider.node ?? null
+    };
+  }
+  const events = snapshot?.audit?.events ?? [];
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
     if (event.kind?.type !== 'provider_changed') continue;
@@ -652,8 +736,68 @@ function mergeHistoricalToolCall(
     isError: update.isError ?? existing?.isError,
     runId: update.runId ?? existing?.runId ?? null,
     eventIndex: mergeEventIndex(existing?.eventIndex, update.eventIndex),
-    childSessionId: update.childSessionId ?? existing?.childSessionId ?? null
+    childSessionId: update.childSessionId ?? existing?.childSessionId ?? null,
+    truncatedResult: update.truncatedResult ?? existing?.truncatedResult,
+    truncatedArguments: update.truncatedArguments ?? existing?.truncatedArguments
   });
+}
+
+function summaryInputState(input: SessionHistorySummary['pendingInputs'][number]): SnapshotInputState[] {
+  const delivery = input.delivery === 'steer' || input.delivery === 'queue' ? input.delivery : null;
+  const state = input.state === 'accepted' || input.state === 'queued' ? input.state : null;
+  if (!input.inputId || !delivery || !state) return [];
+  const blocks = normalizeContentBlocks(input.blocks);
+  return [{
+    sessionId: '',
+    inputId: input.inputId,
+    delivery,
+    state,
+    runId: input.runId ?? undefined,
+    position: input.position ?? undefined,
+    createdAt: readNonNegativeNumber(input.createdAt) ?? undefined,
+    prompt: blocks
+      .filter((block): block is Extract<SessionContentBlock, { type: 'text' }> => block.type === 'text')
+      .map((block) => block.text)
+      .join(''),
+    attachments: blocks.flatMap(blockToPromptAttachment)
+  }];
+}
+
+function applyWindowSummaryUsage(session: ActiveSessionViewModel, summary: SessionHistorySummary) {
+  const usage = summary.usage;
+  const latestRequest = readTokenUsage(usage.latestRequest);
+  const sessionTotals = readTokenUsage(usage.sessionTotals);
+  session.usage.breakdown = latestRequest || sessionTotals
+    ? { latestRequest, sessionTotals, partial: usage.partial === true }
+    : undefined;
+  session.usage.contextUsed = readNonNegativeNumber(usage.contextTokens) ?? session.usage.contextUsed;
+  session.usage.contextLimit = readPositiveNumber(summary.provider?.contextLimit) ?? session.usage.contextLimit;
+}
+
+/** Marks tool calls whose result or string arguments a windowed load shortened. */
+function applyTruncation(toolCallsById: Map<string, SessionToolCallItem>, entries: TruncatedEntry[] | undefined) {
+  for (const entry of entries ?? []) {
+    const tool = toolCallsById.get(entry.tool_call_id);
+    if (!tool || typeof entry.full_bytes !== 'number') continue;
+    if (entry.part === 'result') {
+      tool.truncatedResult = { fullBytes: entry.full_bytes };
+    } else if (entry.part === 'arguments') {
+      const paths = tool.truncatedArguments?.paths ?? [];
+      if (entry.path && !paths.includes(entry.path)) paths.push(entry.path);
+      tool.truncatedArguments = {
+        fullBytes: Math.max(tool.truncatedArguments?.fullBytes ?? 0, entry.full_bytes),
+        paths
+      };
+    }
+  }
+}
+
+/**
+ * The summary of a windowed load. Only trusted when older history exists:
+ * a complete load already carries every event, so events stay authoritative.
+ */
+function readWindowSummary(snapshot: SessionLoadSnapshot | null): SessionHistorySummary | null {
+  return snapshot && snapshot.history?.complete === false && snapshot.summary ? snapshot.summary : null;
 }
 
 

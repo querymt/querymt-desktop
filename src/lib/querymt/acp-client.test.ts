@@ -102,6 +102,75 @@ describe('DesktopAcpClient session metadata', () => {
   });
 });
 
+describe('DesktopAcpClient windowed history', () => {
+  const window = { maxTurns: 20, maxBytes: 1048576, truncateBytes: 32768 };
+
+  function windowClient(features: Record<string, boolean>, methods: string[] = ['querymt/remote/attachSession']) {
+    const client = new DesktopAcpClient({ id: 'agent-1', name: 'Agent', transport: 'stdio', commandLine: 'agent', enabled: true, autoStart: true });
+    const loadSession = vi.fn(async () => ({ configOptions: [] }));
+    const attachRemoteSession = vi.fn(async () => ({ session_id: 's' }));
+    const sessionHistory = vi.fn(async () => ({ events: [], history: { complete: true }, truncated: [] }));
+    const sessionToolContent = vi.fn(async () => ({ content: 'full' }));
+    const internal = client as unknown as Record<string, unknown>;
+    internal.connection = { loadSession };
+    internal.controlCapabilities = { methods, features };
+    internal.querymtExtensions = { attachRemoteSession, sessionHistory, sessionToolContent };
+    return { client, loadSession, attachRemoteSession, sessionHistory, sessionToolContent };
+  }
+
+  it('sends loadWindow on session/load only when session_history_window is advertised', async () => {
+    const advertised = windowClient({ session_history_window: true });
+    await advertised.client.loadSession('s', '/w', 'op-1');
+    expect(advertised.loadSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      _meta: { querymt: { session_load_operation_id: 'op-1', loadWindow: window } }
+    }));
+    await advertised.client.loadSession('s', '/w');
+    expect(advertised.loadSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      _meta: { querymt: { loadWindow: window } }
+    }));
+
+    const missing = windowClient({});
+    await missing.client.loadSession('s', '/w');
+    expect(missing.loadSession).toHaveBeenLastCalledWith(expect.objectContaining({ _meta: undefined }));
+    await missing.client.loadSession('s', '/w', 'op-2');
+    expect(missing.loadSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      _meta: { querymt: { session_load_operation_id: 'op-2' } }
+    }));
+  });
+
+  it('sends loadWindow on remote attach only when advertised and keeps existing meta', async () => {
+    const advertised = windowClient({ session_history_window: true });
+    await advertised.client.attachRemoteSession({ node_id: 'n', session_id: 's' });
+    expect(advertised.attachRemoteSession).toHaveBeenLastCalledWith({
+      node_id: 'n', session_id: 's', _meta: { querymt: { loadWindow: window } }
+    });
+    await advertised.client.attachRemoteSession({ node_id: 'n', session_id: 's', _meta: { other: 1, querymt: { x: 2 } } });
+    expect(advertised.attachRemoteSession).toHaveBeenLastCalledWith({
+      node_id: 'n', session_id: 's', _meta: { other: 1, querymt: { x: 2, loadWindow: window } }
+    });
+
+    const missing = windowClient({});
+    await missing.client.attachRemoteSession({ node_id: 'n', session_id: 's' });
+    expect(missing.attachRemoteSession).toHaveBeenLastCalledWith({ node_id: 'n', session_id: 's' });
+  });
+
+  it('requests older history and tool content only from agents that advertise them', async () => {
+    const missing = windowClient({});
+    await expect(missing.client.sessionHistory('s', 'tok')).rejects.toThrow('session_history_window');
+    await expect(missing.client.toolContent('s', 'call', 'result' as never)).rejects.toThrow('session_tool_content');
+    expect(missing.sessionHistory).not.toHaveBeenCalled();
+    expect(missing.sessionToolContent).not.toHaveBeenCalled();
+
+    const advertised = windowClient({ session_history_window: true, session_tool_content: true });
+    await advertised.client.sessionHistory('s', 'tok');
+    expect(advertised.sessionHistory).toHaveBeenCalledExactlyOnceWith({ sessionId: 's', before: 'tok', loadWindow: window });
+    await advertised.client.toolContent('s', 'call', 'arguments' as never);
+    expect(advertised.sessionToolContent).toHaveBeenCalledExactlyOnceWith({
+      sessionId: 's', toolCallId: 'call', part: 'arguments'
+    });
+  });
+});
+
 function promptClient(capabilities: { image?: boolean; embeddedContext?: boolean }) {
   const client = new DesktopAcpClient({ id: 'agent-1', name: 'Agent', transport: 'stdio', commandLine: 'agent', enabled: true, autoStart: true });
   const prompt = vi.fn(async (_request: unknown) => ({ stopReason: 'end_turn' as const }));

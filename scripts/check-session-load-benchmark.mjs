@@ -5,7 +5,10 @@ const budgets = new Map([
   ['session load 1x::captured ACP replay reduction', 250],
   ['session load 1x::conversation construction', 250],
   ['observed session pipeline 1x::live + response + duplicate sidecar drain', 300],
-  ['session render 1x::ActiveSessionView mount and destroy', 2_000]
+  ['session windowed load 1x::windowed load + one older-history page', 250],
+  ['session render 1x::ActiveSessionView mount and destroy', 2_000],
+  // Was ~9.2 s before list reconciliation became linear; now ~85 ms locally.
+  ['session catalog 2000::catalog load + discovery + routine re-list', 500]
 ]);
 const results = new Map();
 

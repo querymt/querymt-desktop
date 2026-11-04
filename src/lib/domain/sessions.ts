@@ -96,15 +96,20 @@ export function buildListSessionsRequest(input: {
   remoteNodeIds?: string[];
   lifecycle?: SessionLifecycleFilter;
   pinned?: boolean;
+  /** Read only local or only remote sessions (agents advertising `session_source_listing`). */
+  source?: 'local' | 'remote';
 } = {}): ListSessionsRequest {
   const request: ListSessionsRequest = {
     _meta: { session_scope: DEFAULT_SESSION_LIST_SCOPE }
   };
   if (input.remoteNodeIds?.length) request._meta = { ...request._meta, remoteNodeIds: input.remoteNodeIds };
   if (input.pinned !== undefined && input.remoteNodeIds?.length) throw new Error('Pin filtering is only available on directly connected agents.');
-  if (input.lifecycle || input.pinned !== undefined) request._meta = { ...request._meta, querymt: { sessionFilters: {
-    ...input.lifecycle, ...(input.pinned !== undefined ? { pinned: input.pinned } : {})
-  } } };
+  if (input.lifecycle || input.pinned !== undefined || input.source) request._meta = { ...request._meta, querymt: {
+    ...(input.lifecycle || input.pinned !== undefined ? { sessionFilters: {
+      ...input.lifecycle, ...(input.pinned !== undefined ? { pinned: input.pinned } : {})
+    } } : {}),
+    ...(input.source ? { sessionSource: input.source } : {})
+  } };
   if (input.cwd) request.cwd = input.cwd;
   if (input.cursor) request.cursor = input.cursor;
   return request;

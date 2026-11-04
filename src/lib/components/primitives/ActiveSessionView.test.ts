@@ -1014,3 +1014,137 @@ describe('ActiveSessionView turn action settle hold', () => {
     expect(screen.getByRole('button', { name: 'Undo to this prompt' })).toBeInTheDocument();
   });
 });
+
+describe('ActiveSessionView older history', () => {
+  let rectSpy: ReturnType<typeof vi.spyOn> | null = null;
+  afterEach(() => {
+    rectSpy?.mockRestore();
+    rectSpy = null;
+    cleanup();
+  });
+
+  /**
+   * jsdom has no layout: model the scroller plus the first turn's content offset, which is
+   * what the component anchors on (its viewport position is `anchorContentTop - scrollTop`).
+   */
+  function stubScroller(initial: { height: number; top: number; anchorContentTop?: number }) {
+    const el = document.documentElement;
+    const state = { height: initial.height, top: initial.top, anchorContentTop: initial.anchorContentTop ?? 100 };
+    Object.defineProperties(el, {
+      scrollHeight: { configurable: true, get: () => state.height },
+      scrollTop: { configurable: true, get: () => state.top, set: (v: number) => { state.top = v; } },
+      clientHeight: { configurable: true, value: 600 }
+    });
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (!this.hasAttribute('data-turn-id')) return original.call(this);
+      const top = state.anchorContentTop - state.top;
+      return { top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+    });
+    return state;
+  }
+
+  it('shows no control when nothing older exists and never requests on mount', () => {
+    const onLoadOlder = vi.fn();
+    render(ActiveSessionView, { session: createEmptyActiveSession(), olderHistory: { available: false, loading: false, error: null, stale: false }, onLoadOlder });
+    expect(screen.queryByRole('button', { name: /earlier messages/i })).toBeNull();
+    expect(onLoadOlder).not.toHaveBeenCalled();
+  });
+
+  it('keeps the visible content in place after older turns are prepended', async () => {
+    const state = stubScroller({ height: 1000, top: 0 });
+    const onLoadOlder = vi.fn(async () => { state.height = 1800; state.anchorContentTop += 800; });
+    render(ActiveSessionView, {
+      session: sessionWithImages(),
+      olderHistory: { available: true, loading: false, error: null, stale: false },
+      onLoadOlder
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }));
+    await vi.waitFor(() => expect(onLoadOlder).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(state.top).toBe(800));
+  });
+
+  it('ignores growth below the viewport while the request was pending', async () => {
+    const state = stubScroller({ height: 1000, top: 0 });
+    // 800px prepended above the first turn, plus 700px of streaming output below it.
+    const onLoadOlder = vi.fn(async () => { state.height = 2500; state.anchorContentTop += 800; });
+    render(ActiveSessionView, {
+      session: sessionWithImages(),
+      olderHistory: { available: true, loading: false, error: null, stale: false },
+      onLoadOlder
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }));
+    await vi.waitFor(() => expect(onLoadOlder).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(state.top).toBe(800));
+  });
+
+  it('leaves the scroll offset alone when the session changed during the request', async () => {
+    const state = stubScroller({ height: 1000, top: 0 });
+    let rerenderView!: (props: { session: ActiveSessionViewModel }) => Promise<void>;
+    const onLoadOlder = vi.fn(async () => {
+      state.height = 1800;
+      state.anchorContentTop += 800;
+      await rerenderView({ session: { ...sessionWithImages(), sessionId: 'other-session' } });
+    });
+    const view = render(ActiveSessionView, {
+      session: sessionWithImages(),
+      olderHistory: { available: true, loading: false, error: null, stale: false },
+      onLoadOlder
+    });
+    rerenderView = view.rerender as typeof rerenderView;
+    await fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }));
+    await vi.waitFor(() => expect(onLoadOlder).toHaveBeenCalledOnce());
+    await tick();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(state.top).toBe(0);
+  });
+
+  it('keeps a scroll made while the request was pending', async () => {
+    const state = stubScroller({ height: 1000, top: 0 });
+    const onLoadOlder = vi.fn(async () => { state.top = 300; state.height = 1800; state.anchorContentTop += 800; });
+    render(ActiveSessionView, {
+      session: sessionWithImages(),
+      olderHistory: { available: true, loading: false, error: null, stale: false },
+      onLoadOlder
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }));
+    await vi.waitFor(() => expect(onLoadOlder).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(state.top).toBe(1100));
+  });
+
+  it('reports a stale history notice and a retryable error', () => {
+    render(ActiveSessionView, {
+      session: sessionWithImages(),
+      olderHistory: { available: true, loading: false, error: 'boom', stale: true },
+      onLoadOlder: vi.fn()
+    });
+    expect(screen.getByTestId('history-stale')).toBeInTheDocument();
+    expect(screen.getByTestId('older-history-error')).toHaveTextContent('boom');
+    expect(screen.getByRole('button', { name: 'Retry loading earlier messages' })).toBeInTheDocument();
+  });
+});
+
+describe('ActiveSessionView load failure', () => {
+  afterEach(cleanup);
+
+  it('shows a retryable load failure with a Retry action', async () => {
+    const onRetryLoad = vi.fn();
+    render(ActiveSessionView, {
+      session: sessionWithImages(),
+      loadFailure: { message: 'owner timed out', retryable: true },
+      onRetryLoad
+    });
+    expect(screen.getByTestId('load-failure')).toHaveTextContent('owner timed out');
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetryLoad).toHaveBeenCalledOnce();
+  });
+
+  it('offers no Retry for a non-retryable failure', () => {
+    render(ActiveSessionView, {
+      session: sessionWithImages(),
+      loadFailure: { message: 'gone', retryable: false },
+      onRetryLoad: vi.fn()
+    });
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+});

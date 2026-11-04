@@ -42,6 +42,10 @@ import type {
   SessionRuntimeStatus,
   DiscardQueuedInputResult,
   SubmitInputResult,
+  SessionHistoryRequest,
+  SessionHistoryResponse,
+  SessionToolContentRequest,
+  SessionToolContentResponse,
   UndoStackFrameResponse
 } from '$lib/querymt/generated/types';
 import type { ClientSideConnection } from '@agentclientprotocol/sdk';
@@ -130,6 +134,8 @@ export const QMT_METHOD_SESSION_RUNTIME_STATE = 'querymt/session/runtimeState';
 export const QMT_METHOD_SESSION_GET_LIFECYCLE = 'querymt/session/getLifecycle';
 export const QMT_METHOD_SESSION_SET_LIFECYCLE = 'querymt/session/setLifecycle';
 export const QMT_METHOD_SESSION_SET_PINNED = 'querymt/session/setPinned';
+export const QMT_METHOD_SESSION_HISTORY = 'querymt/session/history';
+export const QMT_METHOD_SESSION_TOOL_CONTENT = 'querymt/session/toolContent';
 export const QMT_METHOD_WORKTREE_CREATE = 'querymt/worktree/create';
 export const QMT_METHOD_WORKTREE_HANDOFF = 'querymt/worktree/handoff';
 
@@ -677,6 +683,15 @@ export class QuerymtExtensions {
       session_id,
       input_id
     });
+  }
+
+  async sessionHistory(request: SessionHistoryRequest): Promise<SessionHistoryResponse> {
+    const response = await this.call<SessionHistoryResponse>(QMT_METHOD_SESSION_HISTORY, request);
+    return { ...response, events: response.events ?? [], truncated: response.truncated ?? [] };
+  }
+
+  async sessionToolContent(request: SessionToolContentRequest): Promise<SessionToolContentResponse> {
+    return this.call<SessionToolContentResponse>(QMT_METHOD_SESSION_TOOL_CONTENT, request);
   }
 
   async sessionRuntimeState(session_id: string): Promise<SessionRuntimeStatus> {

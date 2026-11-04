@@ -6,6 +6,7 @@ export interface SessionLoadTelemetryCounters {
   appliedNotifications?: number;
   duplicateNotifications?: number;
   snapshotEvents?: number;
+  snapshotBytes?: number;
   transcriptItems?: number;
   toolCalls?: number;
   debugEvents?: number;

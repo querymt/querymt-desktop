@@ -6,6 +6,7 @@ import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import SessionToolBlock from './SessionToolBlock.svelte';
+import { TOOL_CONTENT_CONTEXT_KEY } from './tool-content-context';
 import { activeSessionFromLoadResponse } from '$lib/domain/session-snapshot';
 import { applyDelegationChildSession } from '$lib/domain/session-updates';
 import type { SessionToolCallItem } from '$lib/domain/types';
@@ -917,5 +918,53 @@ describe('session tool diff viewport', () => {
     );
     expect(sessionToolDiffRule).not.toMatch(/^\s*height:/m);
     expect(sessionToolDiffNoHeaderRule).toContain('--session-tool-diff-chrome: 18px;');
+  });
+});
+
+describe('SessionToolBlock truncated content', () => {
+  const writeArgs = JSON.stringify({ path: 'a.txt', content: 'prefix' });
+  const fullArgs = JSON.stringify({ path: 'a.txt', content: 'prefix and the rest' });
+
+  function renderWith(tool: Record<string, unknown>, fetcher: ((id: string, part: string) => Promise<string>) | null) {
+    return render(SessionToolBlock, {
+      props: { tool: { id: 't1', title: 'write_file', kind: 'write_file', status: 'completed', ...tool } as never },
+      context: new Map([[TOOL_CONTENT_CONTEXT_KEY, () => fetcher]])
+    });
+  }
+
+  it('fetches and shows the full output on demand', async () => {
+    const fetcher = vi.fn(async () => 'FULL OUTPUT TEXT');
+    const { container } = renderWith({
+      title: 'custom_tool', kind: 'custom_tool', arguments: '{}', result: 'short prefix',
+      truncatedResult: { fullBytes: 500000 }
+    }, fetcher);
+    await fireEvent.click(container.querySelector('summary')!);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Show full output' }));
+    expect(fetcher).toHaveBeenCalledWith('t1', 'result');
+    await vi.waitFor(() => expect(screen.getAllByText('FULL OUTPUT TEXT').length).toBeGreaterThan(0));
+    expect(screen.queryByRole('button', { name: 'Show full output' })).toBeNull();
+  });
+
+  it('keeps the prefix and shows an error when the content is not found', async () => {
+    const fetcher = vi.fn(async () => { throw new Error('tool_call_not_found'); });
+    const { container } = renderWith({
+      title: 'custom_tool', kind: 'custom_tool', arguments: '{}', result: 'short prefix',
+      truncatedResult: { fullBytes: 500000 }
+    }, fetcher);
+    await fireEvent.click(container.querySelector('summary')!);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Show full output' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('tool_call_not_found');
+    expect(screen.getAllByText('short prefix').length).toBeGreaterThan(0);
+  });
+
+  it('fetches the full arguments before building a diff from truncated ones', async () => {
+    const fetcher = vi.fn(async () => fullArgs);
+    const { container } = renderWith({
+      arguments: writeArgs, result: 'OK written', truncatedArguments: { fullBytes: 5000000, paths: ['/content'] }
+    }, fetcher);
+    expect(container.querySelector('.session-tool-block-diff')).toBeNull();
+    await fireEvent.click(container.querySelector('summary')!);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledWith('t1', 'arguments'));
+    await vi.waitFor(() => expect(container.querySelector('.session-tool-block-diff')).not.toBeNull());
   });
 });

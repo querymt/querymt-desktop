@@ -135,6 +135,9 @@ const mockClient = vi.hoisted(() => {
       run_started_at_ms: undefined
     })),
     cancelSession: vi.fn(async () => undefined),
+    sessionHistory: vi.fn(async (_sessionId: string, _before: string): Promise<{ events: unknown[]; history: { complete: boolean; before?: string }; truncated: unknown[] }> => ({
+      events: [], history: { complete: true }, truncated: []
+    })),
     supportsQuerymtFeature: vi.fn((_feature: string) => false),
     supportsQuerymtMethod: vi.fn(() => true),
     getUndoStack: vi.fn(async (): Promise<{ undo_stack: Array<{ message_id: string }> }> => ({ undo_stack: [] })),
@@ -1574,6 +1577,12 @@ describe('AgentsStore session lifecycle', () => {
     return { agentId: 'agent-1', agentName: 'QMTCODE', sessionId, title: sessionId, cwd: '/tmp/work', updatedAt: '2026-10-01T00:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'thinking', lifecycle: { session_id: sessionId, resolved: false, archived: false, resolved_at: null, archived_at: null } };
   }
 
+  /** `_meta.querymt.sessionSource` of a recorded `session/list` request. */
+  const sourceOf = (request: { _meta?: unknown } | undefined) =>
+    (request?._meta as { querymt?: { sessionSource?: string } } | undefined)?.querymt?.sessionSource;
+  const peersOf = (request: { _meta?: unknown } | undefined) =>
+    (request?._meta as { remoteNodeIds?: string[] } | undefined)?.remoteNodeIds;
+
   function listed(sessionId: string): SessionInfo {
     return { sessionId, title: sessionId, cwd: '/tmp/work', _meta: { querymt: { lifecycle: summary(sessionId).lifecycle } } } as SessionInfo;
   }
@@ -2403,6 +2412,63 @@ describe('AgentsStore session lifecycle', () => {
       chatPreferencesStore.setRemoteSessionPeer('peer-owner', false);
       chatPreferencesStore.setShowRemoteSessions(false);
     }
+  });
+
+  it('lists local and remote sources in parallel when the agent supports source-scoped listing', async () => {
+    const store = await lifecycleStore();
+    store.sessionsByAgent = {};
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('peer-owner', true);
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'session_source_listing');
+    try {
+      // The local chain stalls on its second page; remote rows must still land first.
+      let releaseLocal!: () => void;
+      const localGate = new Promise<void>((resolve) => { releaseLocal = resolve; });
+      mockClient.listSessions.mockImplementation(async (request) => {
+        const source = sourceOf(request);
+        if (source === 'remote') return { sessions: [listed('remote-1')] };
+        if (request?.cursor === '250') { await localGate; return { sessions: [listed('local-2')] }; }
+        return { sessions: [listed('local-1')], nextCursor: '250' };
+      });
+      const loading = store.refreshSessionCatalog({ resolution: 'any', archive: 'any' });
+      await vi.waitFor(() => expect(store.sessionCatalog.map((session) => session.sessionId)).toContain('remote-1'));
+      expect(store.sessionCatalog.map((session) => session.sessionId)).not.toContain('local-2');
+      releaseLocal();
+      await loading;
+      expect(store.sessionCatalog.map((session) => session.sessionId).sort()).toEqual(['local-1', 'local-2', 'remote-1']);
+      const sources = mockClient.listSessions.mock.calls.map(([request]) => sourceOf(request));
+      expect(sources.sort()).toEqual(['local', 'local', 'remote']);
+      expect(mockClient.listSessions.mock.calls.every(([request]) => peersOf(request)?.[0] === 'peer-owner')).toBe(true);
+    } finally {
+      chatPreferencesStore.setRemoteSessionPeer('peer-owner', false);
+      chatPreferencesStore.setShowRemoteSessions(false);
+    }
+  });
+
+  it('keeps the chained listing for agents without source-scoped listing', async () => {
+    const store = await lifecycleStore();
+    chatPreferencesStore.setShowRemoteSessions(true);
+    chatPreferencesStore.setRemoteSessionPeer('peer-owner', true);
+    try {
+      mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('local-1')], nextCursor: 'remote:0:0:live' })
+        .mockResolvedValueOnce({ sessions: [listed('remote-1')] });
+      await store.refreshSessionCatalog({ resolution: 'any', archive: 'any' });
+      expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+      expect(mockClient.listSessions.mock.calls.every(([request]) => sourceOf(request) === undefined)).toBe(true);
+      expect(store.sessionCatalog.map((session) => session.sessionId).sort()).toEqual(['local-1', 'remote-1']);
+    } finally {
+      chatPreferencesStore.setRemoteSessionPeer('peer-owner', false);
+      chatPreferencesStore.setShowRemoteSessions(false);
+    }
+  });
+
+  it('does not scope listing by source when no remote peers are selected', async () => {
+    const store = await lifecycleStore();
+    mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'session_source_listing');
+    mockClient.listSessions.mockResolvedValueOnce({ sessions: [listed('local-1')] });
+    await store.refreshSessionCatalog({ resolution: 'any', archive: 'any' });
+    expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+    expect(sourceOf(mockClient.listSessions.mock.calls[0][0])).toBeUndefined();
   });
 
   it('confirms the whole catalog is empty before offering first-session recovery', async () => {
@@ -11082,5 +11148,253 @@ describe('AgentsStore pending launches', () => {
     await store.cancelActiveSession();
 
     expect(mockClient.loadSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentsStore older history paging', () => {
+  const windowedLoad = (before: string | null = 'tok-1') => ({
+    response: {
+      configOptions: [],
+      _meta: {
+        'querymt/sessionLoadSnapshot.v1': {
+          audit: { events: [
+            { seq: 10, kind: { type: 'prompt_received', data: { message_id: 'm10', content: 'recent' } } },
+            { seq: 11, kind: { type: 'assistant_message_stored', data: { message_id: 'a11', content: 'recent answer' } } }
+          ] },
+          history: before ? { complete: false, before } : { complete: true }
+        }
+      }
+    },
+    replay: [] as SessionNotification[]
+  });
+  const olderPage = (seq: number, before?: string) => ({
+    events: [
+      { seq, kind: { type: 'prompt_received', data: { message_id: `m${seq}`, content: `old ${seq}` } } },
+      { seq: seq + 1, kind: { type: 'assistant_message_stored', data: { message_id: `a${seq}`, content: `old answer ${seq}` } } }
+    ],
+    history: before ? { complete: false, before } : { complete: true },
+    truncated: []
+  });
+
+  it('requests no older history when a windowed session opens', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce(windowedLoad());
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.sessionHistoryPaging).toMatchObject({ before: 'tok-1', loading: false });
+    expect(mockClient.sessionHistory).not.toHaveBeenCalled();
+  });
+
+  it('merges older pages in front by eventIndex and stops at the session start', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce(windowedLoad());
+    await store.loadSession('agent-1', 'session-1');
+    mockClient.sessionHistory
+      .mockResolvedValueOnce(olderPage(5, 'tok-2'))
+      .mockResolvedValueOnce(olderPage(1));
+
+    await store.loadOlderHistory();
+    await store.loadOlderHistory();
+    await store.loadOlderHistory();
+
+    expect(mockClient.sessionHistory.mock.calls).toEqual([['session-1', 'tok-1'], ['session-1', 'tok-2']]);
+    expect(store.sessionHistoryPaging.before).toBeNull();
+    const turns = buildSessionConversation(store.activeSession);
+    expect(turns.map((turn) => turn.user?.eventIndex)).toEqual([1, 5, 10]);
+  });
+
+  it('allows one request in flight', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce(windowedLoad());
+    await store.loadSession('agent-1', 'session-1');
+    let release!: (value: ReturnType<typeof olderPage>) => void;
+    mockClient.sessionHistory.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = store.loadOlderHistory();
+    await store.loadOlderHistory();
+    expect(mockClient.sessionHistory).toHaveBeenCalledOnce();
+    release(olderPage(1));
+    await first;
+  });
+
+  it('drops a page that arrives after the selection changed', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce(windowedLoad());
+    await store.loadSession('agent-1', 'session-1');
+    let release!: (value: ReturnType<typeof olderPage>) => void;
+    mockClient.sessionHistory.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const pending = store.loadOlderHistory();
+    await store.loadSession('agent-1', 'session-2');
+    release(olderPage(1));
+    await pending;
+    expect(store.activeSession.transcript.some((item) => item.text.startsWith('old'))).toBe(false);
+    expect(store.sessionHistoryPaging.sessionKey).toBe('agent-1:session-2');
+  });
+
+  it('releases its in-flight flag when the client is replaced while a page is pending', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce(windowedLoad());
+    await store.loadSession('agent-1', 'session-1');
+    let release!: (value: ReturnType<typeof olderPage>) => void;
+    mockClient.sessionHistory.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const pending = store.loadOlderHistory();
+    const clients = (store as unknown as { clients: Map<string, object> }).clients;
+    clients.set('agent-1', { ...clients.get('agent-1')! });
+    release(olderPage(1));
+    await pending;
+    expect(store.sessionHistoryPaging).toMatchObject({ before: 'tok-1', loading: false });
+
+    mockClient.sessionHistory.mockResolvedValueOnce(olderPage(1));
+    await store.loadOlderHistory();
+    expect(mockClient.sessionHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('forces a real reload on history_changed even after a remote attach hydrated the session', async () => {
+    const store = createStore();
+    mockClient.attachRemoteSession.mockResolvedValueOnce({
+      session_id: 'session-1', node_id: 'node-1', attached: true, config_options: [],
+      snapshot: { audit: { events: [] }, history: { complete: false, before: 'tok-1' } }
+    } as unknown as RemoteSessionAttachInfo);
+    await store.attachRemoteSession('agent-1', 'node-1', 'session-1');
+    expect(store.sessionHistoryPaging.before).toBe('tok-1');
+
+    mockClient.sessionHistory.mockRejectedValueOnce(new RequestError(-32602, 'changed', { code: 'history_changed' }));
+    mockClient.loadSession.mockResolvedValueOnce(windowedLoad('tok-fresh'));
+    await store.loadOlderHistory();
+    expect(mockClient.loadSession).toHaveBeenCalledTimes(1);
+    expect(store.sessionHistoryPaging).toMatchObject({ before: 'tok-fresh', loading: false });
+  });
+
+  it('keeps live state when older history arrives during a streaming turn', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce(windowedLoad());
+    await store.loadSession('agent-1', 'session-1');
+    store.activeSession.runState = 'streaming';
+    store.activeSession.transcript.push({
+      id: 'live-1', kind: 'agent_message_chunk', text: 'streaming now', blocks: [], messageId: 'live', eventIndex: 12
+    });
+    mockClient.sessionHistory.mockResolvedValueOnce(olderPage(1));
+    await store.loadOlderHistory();
+    expect(store.activeSession.runState).toBe('streaming');
+    expect(store.activeSession.transcript.at(-1)?.text).toBe('streaming now');
+    expect(store.activeSession.transcript.some((item) => item.text === 'old 1')).toBe(true);
+  });
+
+  it('reloads the session when history changed, and keeps the page on other errors', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce(windowedLoad());
+    await store.loadSession('agent-1', 'session-1');
+    mockClient.sessionHistory.mockRejectedValueOnce(new RequestError(-32602, 'changed', { code: 'history_changed' }));
+    mockClient.loadSession.mockResolvedValueOnce(windowedLoad('tok-fresh'));
+    await store.loadOlderHistory();
+    expect(mockClient.loadSession).toHaveBeenCalledTimes(2);
+    expect(store.sessionHistoryPaging.before).toBe('tok-fresh');
+
+    mockClient.sessionHistory.mockRejectedValueOnce(new Error('boom'));
+    await store.loadOlderHistory();
+    expect(store.sessionHistoryPaging).toMatchObject({ before: 'tok-fresh', loading: false, error: 'boom' });
+  });
+});
+
+describe('AgentsStore remote transfer failures and stale history', () => {
+  it('surfaces remote_transfer_failed as a retryable load failure and clears it on retry', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockRejectedValueOnce(new RequestError(-32603, 'transfer failed', {
+      category: 'remote_transfer', code: 'remote_transfer_failed', retryable: true, message: 'owner timed out'
+    }));
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.sessionLoadFailure).toEqual({ sessionKey: 'agent-1:session-1', message: 'owner timed out', retryable: true });
+    expect(store.activeSession.transcript).toEqual([]);
+
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.sessionLoadFailure).toBeNull();
+  });
+
+  it('clears a remote attach load failure once a retry attaches and selects the session', async () => {
+    const store = createStore();
+    mockClient.attachRemoteSession.mockRejectedValueOnce(new RequestError(-32603, 'transfer failed', {
+      category: 'remote_transfer', code: 'remote_transfer_failed', retryable: true, message: 'owner timed out'
+    }));
+    await expect(store.attachRemoteSession('agent-1', 'node-1', 'session-1')).rejects.toThrow();
+    expect(store.sessionLoadFailure).toMatchObject({ sessionKey: 'agent-1:session-1', retryable: true });
+
+    mockClient.attachRemoteSession.mockResolvedValueOnce({
+      session_id: 'session-1', node_id: 'node-1', attached: true, config_options: [],
+      snapshot: { audit: { events: [] } }
+    } as unknown as RemoteSessionAttachInfo);
+    await store.attachRemoteSession('agent-1', 'node-1', 'session-1');
+    expect(store.activeSessionId).toBe('session-1');
+    expect(store.sessionLoadFailure).toBeNull();
+  });
+
+  it('does not mark unrelated load errors as retryable transfer failures', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockRejectedValueOnce(new Error('boom'));
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.sessionLoadFailure).toBeNull();
+    expect(store.error).toBe('boom');
+  });
+
+  it('records history.stale from the load snapshot', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [], _meta: { 'querymt/sessionLoadSnapshot.v1': {
+        audit: { events: [] }, history: { complete: false, before: 'tok', stale: true }
+      } } },
+      replay: []
+    });
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.sessionHistoryPaging).toMatchObject({ before: 'tok', stale: true });
+  });
+});
+
+describe('AgentsStore windowed path parity', () => {
+  const events = [
+    { seq: 10, kind: { type: 'prompt_received', data: { message_id: 'm10', content: 'recent' } } },
+    { seq: 11, kind: { type: 'assistant_message_stored', data: { message_id: 'a11', content: 'answer' } } }
+  ];
+  const historyPage = {
+    events: [{ seq: 1, kind: { type: 'prompt_received', data: { message_id: 'm1', content: 'old' } } }],
+    history: { complete: true }, truncated: []
+  };
+
+  it('pages older history identically after a local load and a remote attach', async () => {
+    const local = createStore();
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [], _meta: { 'querymt/sessionLoadSnapshot.v1': { audit: { events }, history: { complete: false, before: 'tok' } } } },
+      replay: []
+    });
+    await local.loadSession('agent-1', 'session-1');
+
+    const remote = createStore();
+    mockClient.attachRemoteSession.mockResolvedValueOnce({
+      session_id: 'session-1', node_id: 'node-1', attached: true, config_options: [],
+      snapshot: { audit: { events }, history: { complete: false, before: 'tok' } }
+    } as unknown as RemoteSessionAttachInfo);
+    await remote.attachRemoteSession('agent-1', 'node-1', 'session-1');
+
+    expect(remote.sessionHistoryPaging).toEqual(local.sessionHistoryPaging);
+    expect(remote.sessionHistoryPaging.before).toBe('tok');
+
+    for (const store of [local, remote]) {
+      mockClient.sessionHistory.mockResolvedValueOnce(historyPage);
+      await store.loadOlderHistory();
+      expect(store.sessionHistoryPaging.before).toBeNull();
+      expect(store.activeSession.transcript.map((item) => item.text)).toContain('old');
+    }
+    expect(mockClient.sessionHistory).toHaveBeenCalledTimes(2);
+    expect(mockClient.sessionHistory).toHaveBeenNthCalledWith(1, 'session-1', 'tok');
+    expect(mockClient.sessionHistory).toHaveBeenNthCalledWith(2, 'session-1', 'tok');
+  });
+
+  it('renders the full history from an older agent that returns no window fields', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce({
+      response: { configOptions: [], _meta: { 'querymt/sessionLoadSnapshot.v1': { audit: { events: [historyPage.events[0], ...events] } } } },
+      replay: []
+    });
+    await store.loadSession('agent-1', 'session-1');
+    expect(store.sessionHistoryPaging).toMatchObject({ before: null, stale: false });
+    expect(store.activeSession.transcript.map((item) => item.text)).toEqual(expect.arrayContaining(['old', 'recent', 'answer']));
+    await store.loadOlderHistory();
+    expect(mockClient.sessionHistory).not.toHaveBeenCalled();
   });
 });
