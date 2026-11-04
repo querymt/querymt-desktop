@@ -6727,7 +6727,10 @@ summary:focus-visible {
   top: 0;
   bottom: 0;
   z-index: -1;
-  background: color-mix(in srgb, var(--body-bg-base) 78%, transparent);
+  /* Near-opaque on its own: some browsers (e.g. Firefox with certain renderers)
+     report backdrop-filter support but do not draw it, and 78% let sharp
+     transcript text show through. The blur stays on top where it works. */
+  background: color-mix(in srgb, var(--body-bg-base) 94%, transparent);
   backdrop-filter: blur(12px) saturate(140%);
   -webkit-backdrop-filter: blur(12px) saturate(140%);
   box-shadow:
@@ -6743,13 +6746,20 @@ summary:focus-visible {
   background: linear-gradient(
     to bottom,
     var(--body-bg-base),
-    color-mix(in srgb, var(--body-bg-base) 70%, transparent) 40%,
+    color-mix(in srgb, var(--body-bg-base) 85%, transparent) 40%,
     transparent
   );
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
   mask-image: linear-gradient(to bottom, #000 30%, transparent);
   -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent);
+}
+
+/* No backdrop blur at all: make the header glass solid. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .session-header::before {
+    background: var(--body-bg-base);
+  }
 }
 
 /* Same treatment under the docked composer: solid below its top edge, fading

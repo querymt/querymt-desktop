@@ -469,7 +469,7 @@ describe('SessionHeader restyle', () => {
     expect(header).not.toContain('backdrop-filter');
     expect(header).not.toContain('box-shadow');
     const glass = appCss.match(/\n\n\.session-header::before \{([^}]+)\}/)?.[1] ?? '';
-    expect(glass).toContain('background: color-mix(in srgb, var(--body-bg-base) 78%, transparent);');
+    expect(glass).toContain('background: color-mix(in srgb, var(--body-bg-base) 94%, transparent);');
     expect(glass).toContain('backdrop-filter: blur(12px) saturate(140%);');
     expect(glass).toContain('inset 2rem 0 1.25rem -0.5rem var(--body-bg-base)');
     expect(glass).toContain('inset -2rem 0 1.25rem -0.5rem var(--body-bg-base)');
