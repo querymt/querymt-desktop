@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { goto } from '$app/navigation';
+  import { LoaderCircle, RefreshCw } from '@lucide/svelte';
   import DesktopSessionList from '$lib/components/primitives/DesktopSessionList.svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import type { WorkspaceSessionGroup } from '$lib/domain/sessions';
   import type { DesktopSessionSummary } from '$lib/domain/types';
@@ -11,6 +13,11 @@
 
   const connectedAgentCount = $derived(agentsStore.connectedAgents.length);
   const disconnected = $derived(connectedAgentCount === 0);
+  const refreshing = $derived(agentsStore.sessionCatalogLoading);
+
+  function refreshSessions() {
+    return Promise.all([agentsStore.refreshSessionCatalog(), agentsStore.ensurePinnedSessions(true)]).then(() => {});
+  }
   const catalogTrigger = $derived(JSON.stringify([
     agentsStore.sessionBrowser.resolution, agentsStore.sessionBrowser.archive,
     agentsStore.connectedAgents.map((agent) => [agent.id, agentsStore.connectionStates[agent.id] === 'initialized' || agentsStore.connectionStates[agent.id] === 'loading-sessions', agentsStore.canSetSessionLifecycle(agent.id)]),
@@ -68,6 +75,17 @@
 <div class="sessions-page">
   <div class="page-toolbar sessions-page-toolbar">
     <SectionHeader title="Sessions" />
+    <!-- Page-level refresh sits in the header, like Mesh, Agents and Automations. -->
+    <div class="sessions-page-actions">
+      <IconTooltipButton
+        label={refreshing ? 'Refreshing sessions…' : 'Refresh sessions'}
+        icon={refreshing ? LoaderCircle : RefreshCw}
+        iconClass={refreshing ? 'animate-spin' : ''}
+        size={16}
+        busy={refreshing}
+        onclick={() => void refreshSessions()}
+      />
+    </div>
   </div>
   <div class="sessions-unified-panel">
     <DesktopSessionList
@@ -90,8 +108,8 @@
       {disconnected}
       showAgentNames={connectedAgentCount > 1}
       showRemoteSessions={chatPreferencesStore.showRemoteSessions}
-      showToolbarRefresh={true}
-      onRefresh={() => Promise.all([agentsStore.refreshSessionCatalog(), agentsStore.ensurePinnedSessions(true)]).then(() => {})}
+      showToolbarRefresh={false}
+      onRefresh={refreshSessions}
       onCreateSession={() => goto('/')}
       onOpenAgents={() => goto('/agents')}
       onCreateWorkspaceSession={createWorkspaceSession}
