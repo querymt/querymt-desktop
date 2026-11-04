@@ -36,6 +36,11 @@
 
   const selectedCapabilities = $derived.by(() => selectedAgentId ? agentsStore.controlCapabilitiesByAgent[selectedAgentId] ?? null : null);
   const selectedSchedules = $derived.by(() => selectedAgentId ? agentsStore.schedulesByAgent[selectedAgentId]?.schedules ?? [] : []);
+  // Names automation targets by session title and workspace instead of the raw id.
+  const sessionsById = $derived.by(() => {
+    const known = selectedAgentId ? agentsStore.sessionsByAgent?.[selectedAgentId] ?? [] : [];
+    return Object.fromEntries(known.map((session) => [session.sessionId, { title: session.title, cwd: session.cwd }]));
+  });
   const scheduleDataLoaded = $derived(Boolean(selectedAgentId && agentsStore.schedulesByAgent[selectedAgentId]));
   const scheduleGroups = $derived(groupSchedules(selectedSchedules));
   const activeCount = $derived(selectedSchedules.filter((schedule) => classifySchedule(schedule) === 'active').length);
@@ -120,15 +125,19 @@
       {#if scheduleAgents.length > 1}
         <AppSelect bind:value={selectedAgentId} options={scheduleAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Automation agent" />
       {/if}
+      <button class="action-btn" type="button" disabled={!selectedAgentId || !canRun('querymt/schedules/create')} onclick={openScheduleCreate}>
+        <Plus size={15} />New automation
+      </button>
+      <!-- Refresh is the rightmost header control on every page. -->
       <IconTooltipButton
-        label={refreshing ? 'Refreshing automations' : 'Refresh automations'}
+        label={refreshing ? 'Refreshing automations\u2026' : 'Refresh automations'}
         icon={refreshing ? LoaderCircle : RefreshCw}
         iconClass={refreshing ? 'animate-spin' : ''}
         size={16}
-        disabled={!selectedAgentId || refreshing}
+        busy={refreshing}
+        disabled={!refreshing && !selectedAgentId}
         onclick={refreshSchedules}
       />
-      <IconTooltipButton label="Create automation" icon={Plus} size={16} disabled={!selectedAgentId || !canRun('querymt/schedules/create')} onclick={openScheduleCreate} />
     </div>
   </div>
 
@@ -172,13 +181,14 @@
               <strong>{refreshAttempted || scheduleDataLoaded ? 'No automations yet' : 'No automations loaded yet'}</strong>
               <p>Schedule prompts to run against new or existing sessions.</p>
             </div>
-            <button class="action-btn action-btn-primary" type="button" onclick={openScheduleCreate}><Plus size={15} />Create automation</button>
+            <button class="action-btn action-btn-primary" type="button" onclick={openScheduleCreate}><Plus size={15} />New automation</button>
           </div>
         </section>
       {:else}
         {#each scheduleGroups as group (group.id)}
           <AutomationGroup
             {group}
+            sessions={sessionsById}
             {pendingAction}
             errors={scheduleErrors}
             canPause={canRun('querymt/schedules/pause')}

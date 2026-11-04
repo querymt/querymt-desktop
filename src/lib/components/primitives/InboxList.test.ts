@@ -60,4 +60,48 @@ describe('InboxList states', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(onRetry).toHaveBeenCalledOnce();
   });
+
+  it('keeps the first three requests expanded and collapses the rest', () => {
+    const items = Array.from({ length: 4 }, (_, index) => ({
+      ...request,
+      id: `request-${index + 1}`,
+      title: `Request ${index + 1}`,
+      detail: `Detail ${index + 1}`
+    }));
+    render(InboxList, { items, onOpenSession: vi.fn() });
+
+    expect(screen.getByRole('heading', { name: 'Request 1' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Request 3' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Request 4' })).not.toBeInTheDocument();
+    expect(screen.getByText('Detail 4')).toHaveClass('inbox-collapsed-detail');
+    expect(screen.getAllByRole('button', { name: 'Pending' })).toHaveLength(4);
+    expect(screen.getAllByRole('button', { name: 'Open session' })).toHaveLength(4);
+    expect(screen.getAllByRole('button', { name: 'Collapse request' })).toHaveLength(3);
+    expect(screen.getByRole('button', { name: 'Expand request' })).toBeInTheDocument();
+  });
+
+  it('keeps an expanded card open when a new request is prepended', async () => {
+    const items = Array.from({ length: 3 }, (_, index) => ({
+      ...request,
+      id: `request-${index + 1}`,
+      title: `Request ${index + 1}`,
+      detail: `Detail ${index + 1}`
+    }));
+    const onOpenSession = vi.fn();
+    const { rerender } = render(InboxList, { items, onOpenSession });
+
+    expect(screen.getByRole('heading', { name: 'Request 3' })).toBeInTheDocument();
+
+    await rerender({
+      items: [
+        { ...request, id: 'request-0', title: 'Request 0', detail: 'Detail 0' },
+        ...items
+      ],
+      onOpenSession
+    });
+
+    expect(screen.getByRole('heading', { name: 'Request 0' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Request 3' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Collapse request' })).toHaveLength(4);
+  });
 });

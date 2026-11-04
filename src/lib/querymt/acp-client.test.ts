@@ -3,6 +3,7 @@ import { RequestError } from '@agentclientprotocol/sdk';
 import { DesktopAcpClient, clearElicitationResumeAuthorities, clearElicitationResumeAuthoritiesForAgent } from './acp-client';
 import { RemoteNodeUpgradeRequiredError } from '$lib/domain/remote-errors';
 import type { QuerymtExtensionNotification } from './querymt-extensions';
+import type { AnyMessage } from '@agentclientprotocol/sdk/dist/jsonrpc.js';
 
 const beginSessionReplay = vi.fn(() => ({ sessionId: 'session-1', notifications: [] }));
 const completeSessionReplay = vi.fn(() => []);
@@ -420,10 +421,15 @@ describe('DesktopAcpClient forkSession', () => {
   });
 });
 
+/** Real web streams, so the client's stream wrappers (e.g. `pipeThrough`) run as in production. */
 function mockAcpStream() {
+  const readableCancel = vi.fn(async (_reason?: unknown) => undefined);
+  const writableAbort = vi.fn(async (_reason?: unknown) => undefined);
   return {
-    readable: { cancel: vi.fn(async () => undefined) },
-    writable: { abort: vi.fn(async () => undefined) }
+    readable: new ReadableStream<AnyMessage>({ cancel: readableCancel }),
+    writable: new WritableStream<AnyMessage>({ abort: writableAbort }),
+    readableCancel,
+    writableAbort
   };
 }
 
@@ -492,8 +498,8 @@ describe('DesktopAcpClient connect cancellation', () => {
     resolveStream(stream);
     await expectedCancellation;
 
-    expect(stream.readable.cancel).toHaveBeenCalledTimes(1);
-    expect(stream.writable.abort).toHaveBeenCalledTimes(1);
+    expect(stream.readableCancel).toHaveBeenCalledTimes(1);
+    expect(stream.writableAbort).toHaveBeenCalledTimes(1);
     expect(ClientSideConnectionMock).not.toHaveBeenCalled();
     expect(client.getInitializeResponse()).toBeNull();
     expect(client.getControlCapabilities()).toBeNull();
@@ -503,7 +509,7 @@ describe('DesktopAcpClient connect cancellation', () => {
     await expect(client.connect()).resolves.toMatchObject({ protocolVersion: 1 });
     expect(ClientSideConnectionMock).toHaveBeenCalledTimes(1);
     expect(client.getInitializeResponse()).toMatchObject({ protocolVersion: 1 });
-    expect(laterStream.readable.cancel).not.toHaveBeenCalled();
+    expect(laterStream.readableCancel).not.toHaveBeenCalled();
   });
 
   it('does not restore initialize state after disconnect during ACP initialize', async () => {
@@ -531,8 +537,8 @@ describe('DesktopAcpClient connect cancellation', () => {
     await vi.waitFor(() => expect(ClientSideConnectionMock).toHaveBeenCalledTimes(1));
 
     await client.disconnect();
-    expect(stream.readable.cancel).toHaveBeenCalledTimes(1);
-    expect(stream.writable.abort).toHaveBeenCalledTimes(1);
+    expect(stream.readableCancel).toHaveBeenCalledTimes(1);
+    expect(stream.writableAbort).toHaveBeenCalledTimes(1);
 
     resolveInitialize({ protocolVersion: 1, agentCapabilities: {}, authMethods: [] });
     await expectedCancellation;
@@ -565,8 +571,8 @@ describe('DesktopAcpClient connect cancellation', () => {
     expect(createWebSocketAcpStream).toHaveBeenCalledTimes(1);
     expect(ClientSideConnectionMock).toHaveBeenCalledTimes(1);
     expect(ClientSideConnectionMock.mock.instances[0]?.initialize).toHaveBeenCalledTimes(1);
-    expect(stream.readable.cancel).not.toHaveBeenCalled();
-    expect(stream.writable.abort).not.toHaveBeenCalled();
+    expect(stream.readableCancel).not.toHaveBeenCalled();
+    expect(stream.writableAbort).not.toHaveBeenCalled();
   });
 
   it('rejects every overlapping joiner after disconnect without clearing a newer connect', async () => {
@@ -604,10 +610,10 @@ describe('DesktopAcpClient connect cancellation', () => {
     await expectedFirstCancellation;
     await expectedSecondCancellation;
 
-    expect(stream.readable.cancel).toHaveBeenCalledTimes(1);
-    expect(stream.writable.abort).toHaveBeenCalledTimes(1);
-    expect(laterStream.readable.cancel).not.toHaveBeenCalled();
-    expect(laterStream.writable.abort).not.toHaveBeenCalled();
+    expect(stream.readableCancel).toHaveBeenCalledTimes(1);
+    expect(stream.writableAbort).toHaveBeenCalledTimes(1);
+    expect(laterStream.readableCancel).not.toHaveBeenCalled();
+    expect(laterStream.writableAbort).not.toHaveBeenCalled();
     expect(ClientSideConnectionMock).not.toHaveBeenCalled();
     expect(client.getInitializeResponse()).toBeNull();
 
@@ -615,8 +621,8 @@ describe('DesktopAcpClient connect cancellation', () => {
     await expect(laterConnect).resolves.toMatchObject({ protocolVersion: 1 });
     expect(ClientSideConnectionMock).toHaveBeenCalledTimes(1);
     expect(client.getInitializeResponse()).toMatchObject({ protocolVersion: 1 });
-    expect(laterStream.readable.cancel).not.toHaveBeenCalled();
-    expect(laterStream.writable.abort).not.toHaveBeenCalled();
+    expect(laterStream.readableCancel).not.toHaveBeenCalled();
+    expect(laterStream.writableAbort).not.toHaveBeenCalled();
   });
 
   it('does not let a cancelled initialize close a newer same-instance stream', async () => {
@@ -646,8 +652,8 @@ describe('DesktopAcpClient connect cancellation', () => {
     await vi.waitFor(() => expect(ClientSideConnectionMock).toHaveBeenCalledTimes(1));
 
     await client.disconnect();
-    expect(stream.readable.cancel).toHaveBeenCalledTimes(1);
-    expect(stream.writable.abort).toHaveBeenCalledTimes(1);
+    expect(stream.readableCancel).toHaveBeenCalledTimes(1);
+    expect(stream.writableAbort).toHaveBeenCalledTimes(1);
 
     const laterStream = mockAcpStream();
     createWebSocketAcpStream.mockResolvedValueOnce(laterStream);
@@ -673,8 +679,8 @@ describe('DesktopAcpClient connect cancellation', () => {
     await expectedSecondCancellation;
 
     await expect(laterConnect).resolves.toMatchObject({ protocolVersion: 1 });
-    expect(laterStream.readable.cancel).not.toHaveBeenCalled();
-    expect(laterStream.writable.abort).not.toHaveBeenCalled();
+    expect(laterStream.readableCancel).not.toHaveBeenCalled();
+    expect(laterStream.writableAbort).not.toHaveBeenCalled();
     expect(client.getInitializeResponse()).toMatchObject({ protocolVersion: 1 });
   });
 });

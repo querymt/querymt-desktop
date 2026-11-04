@@ -51,6 +51,8 @@
   const showSetApiKey = $derived(canShowSetApiKey(provider, authCapabilities));
   const showClearApiKey = $derived(canShowClearApiKey(provider, authCapabilities));
   const authMethodEditable = $derived(canEditAuthMethod(authCapabilities));
+  // Providers without OAuth or key management (e.g. Izwi) have no actions; skip the empty bar.
+  const hasDetailActions = $derived(provider.supports_oauth || showSetApiKey || showClearApiKey);
 
   function handlePrimaryAction(event: MouseEvent) {
     if (primaryAction === 'reconnect') {
@@ -127,6 +129,7 @@
         </div>
       {/if}
 
+      {#if hasDetailActions}
       <div class="provider-connection-detail-actions">
         {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}
           <button class="action-btn action-btn-compact" type="button" disabled={pending} onclick={(event) => openDialog(event, onSignIn)}><LogIn size={14} />{provider.oauth_status === OAuthStatus.Expired ? 'Reconnect OAuth' : 'Sign in with OAuth'}</button>
@@ -141,6 +144,7 @@
           <button class="action-btn action-btn-compact action-btn-danger" type="button" disabled={pending} onclick={(event) => openDialog(event, onClearApiKey)}><Trash2 size={14} />Clear API key</button>
         {/if}
       </div>
+      {/if}
     </div>
   {/if}
 </article>

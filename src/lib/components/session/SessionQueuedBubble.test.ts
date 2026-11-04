@@ -240,6 +240,20 @@ describe('SessionQueuedBubble', () => {
     expect(bubbleRules).toContain('flex: 0 0 auto;');
   });
 
+  it('keeps the page-colored halo on the activity bar and bubbles at the composer control size and radius', () => {
+    const rules = (selector: string) => appCss.match(new RegExp(`\\.${selector} \\{([^}]+)\\}`))?.[1] ?? '';
+    for (const selector of ['session-activity-bar', 'session-queued-bubble']) {
+      const body = rules(selector);
+      expect(body).toContain('background: var(--body-bg-base);');
+      expect(body).toContain('0 0 0 4px var(--body-bg-base)');
+      expect(body).toContain('border-radius: var(--radius-control);');
+      expect(body).toContain('min-height: var(--control-height-compact);');
+      expect(body).not.toContain('999px');
+      expect(body).not.toContain('bg-panel-strong');
+    }
+    expect(appCss).toMatch(/\.session-scroll-bottom-pill-host ~ \.session-activity-bar-dock \{[^}]*padding-right:/);
+  });
+
   it('anchors the panel above the full activity row without changing its layout and bounds a wrapping, scrollable list', () => {
     const rules = (selector: string) => appCss.match(new RegExp(`\\.${selector} \\{([^}]+)\\}`))?.[1] ?? '';
     const panel = rules('session-queued-panel');

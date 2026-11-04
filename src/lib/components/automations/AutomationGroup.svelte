@@ -1,10 +1,11 @@
 <script lang="ts">
   import AutomationRow from './AutomationRow.svelte';
-  import type { AutomationGroup } from '$lib/domain/automations';
+  import type { AutomationGroup, ScheduleTargetSession } from '$lib/domain/automations';
   import type { ScheduleInfo } from '$lib/querymt/generated/types';
 
   let {
     group,
+    sessions = {},
     pendingAction = null,
     errors = {},
     canPause = false,
@@ -15,6 +16,8 @@
     onDelete
   }: {
     group: AutomationGroup;
+    /** Known sessions of the selected agent, keyed by session id. */
+    sessions?: Record<string, ScheduleTargetSession | undefined>;
     pendingAction?: { scheduleId: string; action: string } | null;
     errors?: Record<string, string | undefined>;
     canPause?: boolean;
@@ -36,6 +39,7 @@
       <AutomationRow
         {schedule}
         group={group.id}
+        session={sessions[schedule.session_public_id] ?? null}
         pendingAction={pendingAction?.scheduleId === schedule.public_id ? pendingAction.action : null}
         error={errors[schedule.public_id]}
         {canPause}

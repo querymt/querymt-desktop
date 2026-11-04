@@ -159,11 +159,12 @@ describe('SessionComposer', () => {
       sessionProfileLabel: 'Default'
     });
 
-    await fireEvent.click(screen.getByLabelText('Session options'));
+    // Nothing else is configurable, so there is no Options button at all.
+    expect(screen.queryByLabelText('Session options')).toBeNull();
     expect(screen.queryByText('Delegate routing')).toBeNull();
   });
 
-  it('keeps launch mode visible and moves reasoning into the model picker', async () => {
+  it('moves launch mode into session options, badges it on the trigger, and keeps reasoning in the model picker', async () => {
     const onLaunchModeChange = vi.fn();
     const onLaunchReasoningChange = vi.fn();
     renderComposer({
@@ -182,11 +183,16 @@ describe('SessionComposer', () => {
       onLaunchReasoningChange
     });
 
+    const optionsTrigger = screen.getByLabelText('Session options');
+    expect(optionsTrigger.querySelector('.composer-mode-badge')).toHaveTextContent('Build');
+    expect(screen.getByRole('button', { name: 'Mode' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reasoning effort' })).not.toBeInTheDocument();
+
+    await fireEvent.click(optionsTrigger);
     const modeSelect = screen.getByRole('button', { name: 'Mode' });
+    expect(modeSelect.closest('.composer-options-host')).not.toBeNull();
     expect(modeSelect).toHaveClass('composer-control-pill');
     expect(modeSelect).toHaveTextContent('Build');
-    expect(screen.queryByLabelText('Session options')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Reasoning effort' })).not.toBeInTheDocument();
     const modelButton = screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic; reasoning effort: Auto' });
     expect(modelButton.querySelector('.composer-reasoning-badge')).toHaveTextContent('Auto');
 
@@ -255,15 +261,104 @@ describe('SessionComposer', () => {
       .getAllByRole('button')
       .filter((button) => button.classList.contains('composer-control-pill') && !button.closest('.composer-options-host'));
     expect(controls.map((button) => button.getAttribute('aria-label') ?? button.textContent?.trim())).toEqual([
-      'Claude Sonnet 4 from anthropic; reasoning effort: Auto',
-      'Mode'
+      'Claude Sonnet 4 from anthropic; reasoning effort: Auto'
     ]);
-    expect(screen.getByRole('button', { name: 'Attach files' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Session options').querySelector('.composer-mode-badge')).toHaveTextContent('Build');
+    expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Attach files' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Image attachment encoding' })).not.toBeInTheDocument();
     expect(screen.queryByText('Native images')).not.toBeInTheDocument();
     expect(screen.queryByText('Image resources')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Session options')).toBeInTheDocument();
     expect(screen.getByLabelText('Session options').closest('.composer-options')).not.toBeNull();
+  });
+
+  it('gives each mode its own badge tone by position in the mode list', () => {
+    const modes = [
+      { id: 'build', label: 'Build' },
+      { id: 'plan', label: 'Plan' },
+      { id: 'review', label: 'Review' }
+    ];
+    const tones = modes.map((mode) => {
+      renderComposer({ launch: true, launchModeOptions: modes, selectedLaunchModeId: mode.id });
+      const badge = screen.getByLabelText('Session options').querySelector('.composer-mode-badge');
+      const tone = badge?.getAttribute('data-tone');
+      cleanup();
+      return tone;
+    });
+
+    expect(tones).toEqual(['0', '1', '2']);
+  });
+
+  it('puts the add menu first in the toolbar with attach files as its only action', async () => {
+    const { container } = renderComposer({ launch: true });
+
+    const controls = container.querySelector('.composer-toolbar-controls');
+    expect(controls?.firstElementChild).toBe(screen.getByRole('button', { name: 'Add' }));
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const pickFiles = vi.spyOn(fileInput, 'click').mockImplementation(() => {});
+
+    await fireEvent.keyDown(screen.getByRole('button', { name: 'Add' }), { key: 'Enter' });
+    const items = await screen.findAllByRole('menuitem');
+    expect(items.map((item) => item.textContent?.trim())).toEqual(['Attach files']);
+    expect(items[0].querySelector('svg')).not.toBeNull();
+
+    await fireEvent.click(items[0]);
+    expect(pickFiles).toHaveBeenCalledOnce();
+  });
+
+  it('renders options as one-line rows without tooltips and with a toned mode icon', async () => {
+    const { container } = renderComposer({
+      launch: true,
+      launchModeOptions: [
+        { id: 'build', label: 'Build' },
+        { id: 'plan', label: 'Plan' }
+      ],
+      selectedLaunchModeId: 'plan'
+    });
+
+    const panel = container.querySelector('.composer-options-panel') as HTMLElement;
+    const row = panel.querySelector('.composer-option-row') as HTMLElement;
+    expect(row.querySelector('.composer-option-copy strong')).toHaveTextContent('Mode');
+    // No second description line and no subtitle in the heading.
+    expect(panel.querySelector('.composer-option-copy small')).toBeNull();
+    expect(panel).not.toHaveTextContent('Fine-tune how this session runs');
+    expect(panel).not.toHaveTextContent('How the agent approaches the next task');
+    // The mode icon takes the same tone as the badge on the Options button.
+    expect(container.querySelector('.composer-options-host')).toHaveAttribute('style', expect.stringContaining('--mode-tone-1'));
+
+    // No custom tooltip on the label and no native title on the select's value.
+    await fireEvent.pointerEnter(row.querySelector('.composer-option-copy') as HTMLElement);
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect(panel.querySelector('[title]')).toBeNull();
+  });
+
+  it('does not list a read-only profile row inside an active session', async () => {
+    const { container } = renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      sessionProfileLabel: 'Default'
+    });
+
+    // The profile is shown in the session header; with no other options, the panel is not rendered.
+    expect(container.querySelector('.composer-options-panel')).toBeNull();
+    expect(container.textContent ?? '').not.toContain('Default');
+    expect(screen.queryByLabelText('Session options')).toBeNull();
+  });
+
+  it('turns the add trigger only when the menu is opened, not on hover', async () => {
+    renderComposer({ launch: true });
+    const trigger = screen.getByRole('button', { name: 'Add' });
+
+    await fireEvent.mouseEnter(trigger);
+    await fireEvent.pointerEnter(trigger);
+    expect(trigger).not.toHaveClass('composer-add-trigger-open');
+
+    await fireEvent.keyDown(trigger, { key: 'Enter' });
+    await screen.findByRole('menuitem', { name: 'Attach files' });
+    expect(trigger).toHaveClass('composer-add-trigger-open');
   });
 
   it('keeps send as the strong primary action', () => {
@@ -272,27 +367,37 @@ describe('SessionComposer', () => {
     expect(screen.getByRole('button', { name: 'Start session' })).toHaveClass('action-btn-primary');
   });
 
-  it('morphs between stable overlaid blank-session and send states', async () => {
-    const { container, rerender } = renderComposer({ launch: true, prompt: '' });
-    const morph = container.querySelector('.composer-action-morph');
-    const createState = container.querySelector('.composer-action-morph-create');
-    const sendState = container.querySelector('.composer-action-morph-send');
-
-    expect(screen.getByRole('button', { name: 'Start blank session' })).toBeInTheDocument();
-    expect(morph).toHaveClass('is-creating');
-    expect(morph).not.toHaveClass('is-sending');
-    expect(createState).toHaveAttribute('aria-hidden', 'false');
-    expect(sendState).toHaveAttribute('aria-hidden', 'true');
-    expect(createState?.querySelector('.lucide-plus')).not.toBeNull();
-    expect(sendState?.querySelector('.lucide-send-horizontal')).not.toBeNull();
+  it('keeps the send button quiet until there is something to send', async () => {
+    const { rerender } = renderComposer({ launch: true, prompt: '' });
+    const button = screen.getByRole('button', { name: 'Start blank session' });
+    expect(button).toHaveClass('composer-send', 'composer-send-idle');
+    expect(button).not.toHaveClass('composer-send-ready');
 
     await rerender({ prompt: 'Fix the failing tests' });
+    const ready = screen.getByRole('button', { name: 'Start session' });
+    expect(ready).toHaveClass('composer-send', 'composer-send-ready');
+    expect(ready).not.toHaveClass('composer-send-idle');
+  });
 
+  it('keeps the same start label and icon nodes when the first character is typed', async () => {
+    const { container, rerender } = renderComposer({ launch: true, prompt: '' });
+    const label = container.querySelector('.composer-action-morph-state > span');
+    const icon = container.querySelector('.composer-action-morph-state svg');
+
+    expect(screen.getByRole('button', { name: 'Start blank session' })).toBeInTheDocument();
+    expect(container.querySelectorAll('.composer-action-morph-state')).toHaveLength(1);
+    expect(label).toHaveTextContent('Start');
+    // The send arrow, never a "+", so it can't be mistaken for the attach menu.
+    expect(icon).toHaveClass('lucide-send-horizontal');
+
+    await rerender({ prompt: 'F' });
+
+    // Same DOM nodes, so nothing crossfades or slides and the text cannot flicker.
     expect(screen.getByRole('button', { name: 'Start session' })).toBeInTheDocument();
-    expect(morph).not.toHaveClass('is-creating');
-    expect(morph).toHaveClass('is-sending');
-    expect(createState).toHaveAttribute('aria-hidden', 'true');
-    expect(sendState).toHaveAttribute('aria-hidden', 'false');
+    expect(container.querySelectorAll('.composer-action-morph-state')).toHaveLength(1);
+    expect(container.querySelector('.composer-action-morph-state > span')).toBe(label);
+    expect(container.querySelector('.composer-action-morph-state svg')).toBe(icon);
+    expect(label).toHaveTextContent('Start');
   });
 
   it('selects the highlighted model with the arrow keys and Enter', async () => {
@@ -330,7 +435,8 @@ describe('SessionComposer', () => {
       onSessionConfigChange
     });
 
-    await fireEvent.click(screen.getByLabelText('Session options'));
+    // Reasoning is not an option row; with nothing else to configure there is no Options button.
+    expect(screen.queryByLabelText('Session options')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Reasoning effort' })).not.toBeInTheDocument();
     expect(screen.queryByText('Adjust reasoning for the next reply')).not.toBeInTheDocument();
 
@@ -541,6 +647,49 @@ describe('SessionComposer', () => {
     expect(queueButton?.getAttribute('aria-label')).toBe('Queue');
   });
 
+  it('keeps the delivery row available while the agent is idle so it never appears and vanishes', async () => {
+    const onInputDeliveryChange = vi.fn();
+    const { container, rerender } = renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      turnControlSupported: true,
+      agentRunning: false,
+      inputDelivery: 'steer',
+      onInputDeliveryChange
+    });
+
+    const switchGroup = screen.getByRole('group', { name: 'Input delivery', hidden: true });
+    expect(container.querySelectorAll('.composer-delivery-switch')).toHaveLength(1);
+    await fireEvent.click(within(switchGroup).getByRole('button', { name: /Queue/, hidden: true }));
+    expect(onInputDeliveryChange).toHaveBeenCalledWith('queue');
+    // The send button still uses the plain idle label and glyph.
+    expect(screen.getByRole('button', { name: 'Send reply' }).querySelector('.lucide-send-horizontal')).not.toBeNull();
+
+    await rerender({ agentRunning: true });
+    expect(container.querySelectorAll('.composer-delivery-switch')).toHaveLength(1);
+    await rerender({ agentRunning: false });
+    expect(container.querySelectorAll('.composer-delivery-switch')).toHaveLength(1);
+  });
+
+  it('shows the saved delivery choice in the switch even when the effective mode is forced to queue', async () => {
+    const onInputDeliveryChange = vi.fn();
+    const { rerender } = renderComposer({
+      activeSessionId: 'session-1',
+      sessionOnly: true,
+      turnControlSupported: true,
+      inputDelivery: 'queue',
+      inputDeliveryPreference: 'steer',
+      onInputDeliveryChange
+    });
+
+    const group = screen.getByRole('group', { name: 'Input delivery', hidden: true });
+    expect(within(group).getByRole('button', { name: /Steer/, hidden: true })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(group).getByRole('button', { name: /Queue/, hidden: true })).toHaveAttribute('aria-pressed', 'false');
+
+    await rerender({ inputDeliveryPreference: 'queue' });
+    expect(within(group).getByRole('button', { name: /Queue/, hidden: true })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('hides the delivery row when the active run does not support turn control', () => {
     const { container } = renderComposer({
       activeSessionId: 'session-1',
@@ -694,6 +843,25 @@ describe('SessionComposer', () => {
     expect(container.querySelector('textarea')).toBeNull();
   });
 
+  it('gives the collapsed composer the same add menu and quiet send button as the expanded one', async () => {
+    const { container, rerender } = renderComposer({ docked: true, collapsed: true, sessionOnly: true, chatView: true, prompt: '' });
+    const bar = container.querySelector('.session-composer-dock-collapsed') as HTMLElement;
+
+    // "+" menu replaces the standalone paperclip and sits before the input.
+    expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Attach files' })).not.toBeInTheDocument();
+    const order = Array.from(bar.querySelectorAll('button, input[type="text"]'));
+    expect(order.indexOf(screen.getByRole('button', { name: 'Add' }))).toBeLessThan(
+      order.indexOf(bar.querySelector('.session-composer-dock-input') as Element)
+    );
+
+    // Send is the compact, quiet button: idle without a draft, ready with one.
+    const send = screen.getByRole('button', { name: /send|reply|start/i, hidden: false });
+    expect(send).toHaveClass('composer-send', 'composer-send-idle', 'icon-btn-compact');
+    await rerender({ prompt: 'hello' });
+    expect(screen.getByRole('button', { name: /send|reply|start/i })).toHaveClass('composer-send-ready');
+  });
+
   it('preserves the prompt while morphing between composer states', async () => {
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
     const prompt = 'Keep this draft';
@@ -735,6 +903,25 @@ describe('SessionComposer', () => {
     expect(transforms.every((transform) => !transform.includes('scale'))).toBe(true);
   });
 
+  it('clips the morph with the shell radius instead of the old pill or 18px radius', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false })));
+    const keyframes = captureAnimationKeyframes();
+    const { rerender } = renderComposer({ docked: true, collapsed: true, sessionOnly: true, chatView: true });
+
+    await rerender({ collapsed: false });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const clips = keyframes
+      .flat()
+      .map((frame) => String((frame as Record<string, unknown>)['clip-path'] ?? (frame as Record<string, unknown>).clipPath ?? ''))
+      .filter(Boolean);
+    expect(clips.length).toBeGreaterThan(0);
+    // jsdom has no stylesheet, so this is the fallback for the real 12px card radius.
+    expect(clips.every((clip) => /round 12px\)?$/.test(clip.trim()))).toBe(true);
+    expect(clips.some((clip) => /round (999|18|38)px/.test(clip))).toBe(false);
+  });
+
   it('renders compact pending image triggers without captions and keeps removal independent', async () => {
     const onRemoveAttachment = vi.fn();
     const { container } = renderComposer({
@@ -748,7 +935,7 @@ describe('SessionComposer', () => {
     });
 
     const trigger = screen.getByRole('button', { name: 'Open photo.png' });
-    expect(trigger).toHaveAttribute('title', 'photo.png');
+    expect(trigger).not.toHaveAttribute('title');
     expect(within(trigger).getByRole('img', { name: 'photo.png' })).toHaveAttribute('src', 'data:image/png;base64,aW1n');
     expect(within(trigger).getByRole('img', { name: 'photo.png' })).toHaveClass('session-image-thumbnail');
     expect(container.querySelector('.session-attachments')).toHaveClass('session-attachments-compact');
@@ -916,6 +1103,76 @@ describe('SessionComposer', () => {
 
     expect(onDismissError).toHaveBeenCalledTimes(1);
   });
+
+  it('hides the composer expand control until the prompt has text', async () => {
+    const { rerender } = renderComposer({ sessionOnly: true, prompt: '' });
+
+    expect(screen.queryByRole('button', { name: 'Expand composer' })).not.toBeInTheDocument();
+
+    await rerender({
+      sessionOnly: true,
+      prompt: 'A longer draft that needs more room',
+      onPromptInput: vi.fn(),
+      onSendPrompt: vi.fn()
+    });
+    const expand = screen.getByRole('button', { name: 'Expand composer' });
+    expect(expand).toHaveAccessibleName('Expand composer');
+    expect(expand).toHaveTextContent('');
+    expect(expand.querySelector('svg')).not.toBeNull();
+  });
+
+  it('expands the composer for long messages and collapses it again', async () => {
+    const { rerender } = renderComposer({
+      sessionOnly: true,
+      prompt: 'A longer draft that needs more room'
+    });
+    const prompt = screen.getByPlaceholderText('Write a reply for this session...');
+    const expand = screen.getByRole('button', { name: 'Expand composer' });
+
+    await fireEvent.click(expand);
+
+    expect(prompt.closest('.composer-prompt-zone')).toHaveClass('composer-prompt-zone-expanded');
+    expect(screen.getByRole('button', { name: 'Collapse composer' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Expand composer' })).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse composer' }));
+    expect(prompt.closest('.composer-prompt-zone')).not.toHaveClass('composer-prompt-zone-expanded');
+    expect(screen.getByRole('button', { name: 'Expand composer' })).toBeInTheDocument();
+
+    await rerender({
+      sessionOnly: true,
+      prompt: '   ',
+      onPromptInput: vi.fn(),
+      onSendPrompt: vi.fn()
+    });
+    expect(screen.queryByRole('button', { name: 'Expand composer' })).not.toBeInTheDocument();
+    expect(prompt.closest('.composer-prompt-zone')).not.toHaveClass('composer-prompt-zone-expanded');
+  });
+
+  it('notifies when the long-draft composer expand state changes', async () => {
+    const onPromptExpandedChange = vi.fn();
+    const { rerender } = renderComposer({
+      sessionOnly: true,
+      prompt: 'A longer draft that needs more room',
+      onPromptExpandedChange
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand composer' }));
+    expect(onPromptExpandedChange).toHaveBeenCalledWith(true);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse composer' }));
+    expect(onPromptExpandedChange).toHaveBeenCalledWith(false);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand composer' }));
+    await rerender({
+      sessionOnly: true,
+      prompt: '',
+      onPromptInput: vi.fn(),
+      onSendPrompt: vi.fn(),
+      onPromptExpandedChange
+    });
+    expect(onPromptExpandedChange).toHaveBeenCalledWith(false);
+  });
 });
 
 describe('SessionComposer workspace focus and suggestions', () => {
@@ -986,6 +1243,24 @@ describe('SessionComposer workspace focus and suggestions', () => {
     expect(onCwdInput).toHaveBeenCalledExactlyOnceWith('/tmp/other-project');
     expect(input).toHaveFocus();
     expect(screen.queryByRole('button', { name: /other-project/ })).not.toBeInTheDocument();
+  });
+
+  it('shows the full suggestion path in a bits-ui tooltip instead of a native title', async () => {
+    renderComposer({ launch: true, recentWorkspaces: ['/tmp/workspace', '/tmp/other-project'] });
+    await tick();
+    const input = screen.getByPlaceholderText('/absolute/path/to/workspace');
+    input.focus();
+    await tick();
+    const suggestion = screen.getByRole('button', { name: /other-project/ });
+
+    expect(suggestion.querySelector('[title]')).toBeNull();
+    expect(suggestion).not.toHaveAttribute('title');
+    // One line per row: name, then the dimmed parent directory.
+    expect(suggestion.querySelector('.workspace-suggestion-name')).toHaveTextContent('other-project');
+    expect(suggestion.querySelector('.workspace-suggestion-path')).toHaveTextContent('/tmp');
+
+    await fireEvent.pointerEnter(suggestion);
+    expect(await screen.findByText('/tmp/other-project', { selector: '.app-tooltip-content' })).toBeInTheDocument();
   });
 
   it('keeps suggestion buttons available while focus moves within the widget', async () => {

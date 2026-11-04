@@ -55,6 +55,27 @@ describe('WorkspaceList states', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Opening folder picker…');
   });
 
+  it('shows the path as a tooltip instead of placeholder status text', async () => {
+    render(WorkspaceList, { items: [workspace] });
+
+    const path = screen.getByText('/projects/querymt-desktop');
+    expect(path).not.toHaveAttribute('title');
+    expect(screen.queryByText(/default runtime/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/indexed/)).not.toBeInTheDocument();
+  });
+
+  it('uses a tooltip, not a native title, on the remove button', () => {
+    render(WorkspaceList, { items: [workspace], onRemoveWorkspace: vi.fn() });
+
+    expect(screen.getByRole('button', { name: 'Remove querymt-desktop from QueryMT' })).not.toHaveAttribute('title');
+  });
+
+  it('uses the add label on the empty-state action', () => {
+    render(WorkspaceList, { items: [], onAddWorkspace: vi.fn(), addLabel: 'Add folder' });
+
+    expect(screen.getByRole('button', { name: 'Add folder' })).toBeInTheDocument();
+  });
+
   it('confirms non-destructive workspace removal', async () => {
     const onRemoveWorkspace = vi.fn();
     render(WorkspaceList, { items: [workspace], onRemoveWorkspace });

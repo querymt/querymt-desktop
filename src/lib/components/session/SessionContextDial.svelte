@@ -1,13 +1,15 @@
 <script lang="ts">
   import type { SessionUsageStats } from '$lib/domain/types';
   import {
+    describeContext,
     formatTokenCount,
     getContextPercent,
-    getContextPressure,
-    getContextRemaining
+    getContextPressure
   } from '$lib/domain/session-usage';
 
-  let { usage }: { usage: SessionUsageStats } = $props();
+  // `inline` is for use inside a control that already names and explains it
+  // (the header's session details trigger): purely visual, no title/role.
+  let { usage, inline = false }: { usage: SessionUsageStats; inline?: boolean } = $props();
 
   // Closed ring: the circle is the window, the arc is used, the gap is what's left.
   // A fixed footprint so a low reading never stretches into an empty track.
@@ -16,19 +18,10 @@
 
   const percent = $derived(getContextPercent(usage));
   const pressure = $derived(getContextPressure(percent));
-  const remaining = $derived(getContextRemaining(usage));
   const roundedPercent = $derived(percent === null ? null : Math.round(percent));
   const usedLabel = $derived(formatTokenCount(usage.contextUsed));
-  const limitLabel = $derived(formatTokenCount(usage.contextLimit));
   const figure = $derived(roundedPercent !== null ? `${roundedPercent}%` : usedLabel);
-  const detail = $derived.by(() => {
-    if (usage.contextUsed === null) return '';
-    if (roundedPercent !== null && usage.contextLimit !== null) {
-      const remainingNote = remaining === null ? '' : `, ${formatTokenCount(remaining)} left`;
-      return `${usedLabel} of ${limitLabel} · ${roundedPercent}% of the context window${remainingNote}`;
-    }
-    return `${usedLabel} in the context window`;
-  });
+  const detail = $derived(describeContext(usage));
   const arcOffset = $derived(
     percent === null ? RING_CIRCUMFERENCE : RING_CIRCUMFERENCE * (1 - percent / 100)
   );
@@ -38,13 +31,14 @@
 {#if usage.contextUsed !== null}
   <span
     class={rootClass}
-    title={detail}
-    aria-label="Context window"
-    aria-valuetext={detail}
-    role={roundedPercent !== null ? 'meter' : 'img'}
-    aria-valuemin={roundedPercent !== null ? 0 : undefined}
-    aria-valuemax={roundedPercent !== null ? 100 : undefined}
-    aria-valuenow={roundedPercent ?? undefined}
+    title={inline ? undefined : detail}
+    aria-hidden={inline ? 'true' : undefined}
+    aria-label={inline ? undefined : 'Context window'}
+    aria-valuetext={inline ? undefined : detail}
+    role={inline ? undefined : roundedPercent !== null ? 'meter' : 'img'}
+    aria-valuemin={!inline && roundedPercent !== null ? 0 : undefined}
+    aria-valuemax={!inline && roundedPercent !== null ? 100 : undefined}
+    aria-valuenow={!inline ? roundedPercent ?? undefined : undefined}
   >
     <svg class="session-context-dial-ring" viewBox="0 0 20 20" aria-hidden="true">
       <circle class="session-context-dial-track" cx="10" cy="10" r={RING_RADIUS} />

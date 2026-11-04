@@ -57,3 +57,8 @@ overrides:
       - libxrandr2
       - xdg-utils
       - xwayland
+    # The folder picker uses the xdg-desktop-portal and falls back to zenity
+    # (tauri-plugin-dialog `xdg-portal`); without either it cannot open.
+    recommends:
+      - xdg-desktop-portal
+      - zenity

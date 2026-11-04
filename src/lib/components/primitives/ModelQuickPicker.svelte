@@ -248,7 +248,7 @@
               {/if}
             </span>
             {#if reasoningBadge}
-              <span class="composer-reasoning-badge" data-level={reasoning?.value.trim().toLowerCase()} aria-hidden="true">
+              <span class="composer-badge composer-reasoning-badge" data-level={reasoning?.value.trim().toLowerCase()} aria-hidden="true">
                 {reasoningBadge.label}
               </span>
             {/if}
@@ -322,26 +322,8 @@
     --reasoning-light: #475569;
     --reasoning-dark: #cbd5e1;
     --reasoning-color: var(--reasoning-light);
-    position: absolute;
-    top: -7px;
-    right: 5px;
-    display: block;
-    text-align: center;
-    box-sizing: border-box;
-    height: 14px;
-    max-width: calc(100% - 10px);
-    overflow: hidden;
-    border: 1px solid color-mix(in srgb, var(--reasoning-color) 45%, var(--bg-card));
-    border-radius: calc(var(--radius-control) / 2);
-    background: color-mix(in srgb, var(--reasoning-color) 14%, var(--bg-card));
-    padding: 0 4px;
-    color: var(--reasoning-color);
-    font-size: 8.25px;
-    font-weight: 600;
-    line-height: 12px;
-    text-transform: lowercase;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* Layout, fill and halo come from the shared .composer-badge in app.css. */
+    --badge-color: var(--reasoning-color);
   }
 
   .composer-reasoning-badge[data-level='low'] {

@@ -1,6 +1,6 @@
 [package]
 name = "querymt-desktop"
-version = "0.1.5"
+version = "0.1.6"
 description = "QueryMT Desktop"
 authors = ["QueryMT"]
 edition = "2021"
@@ -15,7 +15,10 @@ shlex = "2"
 futures-util = "0.3"
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 tauri = { version = "2", default-features = false, features = [] }
-tauri-plugin-dialog = "2"
+# Linux file chooser: use the xdg-desktop-portal instead of the default GTK3 dialog. A GTK3
+# window opened from inside the CEF/Chromium runtime (especially on Wayland) renders as an
+# empty black window. The features only affect Linux; macOS and Windows keep native dialogs.
+tauri-plugin-dialog = { version = "2", default-features = false, features = ["xdg-portal"] }
 tauri-plugin-shell = "2"
 toml = "1.0"
 opentelemetry = "0.33"

@@ -20,6 +20,7 @@ vi.mock('$lib/stores/agents.svelte', () => ({ agentsStore }));
 vi.mock('$lib/stores/inbox.svelte', () => ({ inboxStore }));
 
 import RecentSessionRail from './RecentSessionRail.svelte';
+import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 
 const activeSession: DesktopSessionSummary = {
   agentId: 'agent-1',
@@ -43,10 +44,12 @@ beforeEach(() => {
   agentsStore.agentsNeedingAttention = [];
   agentsStore.meshNodeCount = 0;
   inboxStore.actionableItems = [];
+  chatPreferencesStore.setDeveloperMode(false);
 });
 
 afterEach(() => {
   cleanup();
+  chatPreferencesStore.setDeveloperMode(false);
   delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
   vi.unstubAllGlobals();
 });
@@ -140,10 +143,19 @@ describe('RecentSessionRail pinned sessions', () => {
 });
 
 describe('RecentSessionRail navigation', () => {
+  it.each([false, true])('keeps the current unpinned session in Open sessions and marks it current (compact=%s)', (collapsed) => {
+    const { container } = render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed,
+      currentAgentId: activeSession.agentId, currentSessionId: activeSession.sessionId });
+    const selector = collapsed ? '.session-icon-link' : '.app-sidebar-session';
+    const links = container.querySelectorAll(selector);
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('aria-current', 'page');
+  });
+
   it('keeps unknown execution explicit in existing rail status labels', () => {
     render(RecentSessionRail, { current: 'Sessions', sessions: [{ ...activeSession, status: 'unknown' }] });
     expect(screen.getByRole('link', { name: /^Waiting session, Status unavailable/ })).toBeInTheDocument();
-    expect(screen.getByText('work · Status unavailable')).toBeInTheDocument();
+    expect(document.querySelector('.app-sidebar-session-status-unknown')).not.toBeNull();
   });
   it('defaults to a labeled sidebar with grouped navigation and readable sessions', () => {
     render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession] });
@@ -155,8 +167,23 @@ describe('RecentSessionRail navigation', () => {
     expect(screen.getAllByRole('link', { name: 'Sessions' })).toHaveLength(1);
     expect(screen.queryByRole('link', { name: 'View all' })).not.toBeInTheDocument();
     expect(screen.getByText('Waiting session')).toBeInTheDocument();
-    expect(screen.getByText('work · Waiting')).toBeInTheDocument();
+    expect(screen.getByText('work', { selector: '.app-sidebar-session-workspace' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
+  });
+
+  it.each([false, true])('hides the Automations entry unless developer mode is on (compact=%s)', async (collapsed) => {
+    const { container } = render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed });
+    const automationLinks = () => container.querySelectorAll('a[href="/automations"]');
+
+    expect(automationLinks()).toHaveLength(0);
+    expect(container.querySelector('a[href="/agents"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/mesh"]')).not.toBeNull();
+
+    chatPreferencesStore.setDeveloperMode(true);
+    await waitFor(() => expect(automationLinks()).toHaveLength(1));
+
+    chatPreferencesStore.setDeveloperMode(false);
+    await waitFor(() => expect(automationLinks()).toHaveLength(0));
   });
 
   it('shows more than ten sessions without number badges and maps shortcuts only to the first ten', async () => {
@@ -300,13 +327,72 @@ describe('RecentSessionRail navigation', () => {
     expect(screen.queryByText('Open sessions')).not.toBeInTheDocument();
   });
 
-  it('shows the compact brand subtitle only in the expanded sidebar', () => {
+  it('places the collapse control after Settings in the footer and still toggles the sidebar', async () => {
+    const onToggleCollapsed = vi.fn();
+    const { container } = render(RecentSessionRail, { current: 'Sessions', sessions: [], collapsed: false, onToggleCollapsed });
+    const collapse = screen.getByRole('button', { name: 'Collapse sidebar' });
+    const footer = container.querySelector('.app-sidebar-footer') as HTMLElement;
+    expect(collapse.parentElement).toBe(footer);
+    expect(footer.firstElementChild).toBe(within(footer).getByRole('link', { name: 'Settings' }));
+    expect(footer.lastElementChild).toBe(collapse);
+    expect(container.querySelector('.app-sidebar-header .app-sidebar-collapse')).toBeNull();
+    await fireEvent.click(collapse);
+    expect(onToggleCollapsed).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('uses the shared Bits UI tooltip for the sidebar toggle (collapsed=%s)', async (collapsed) => {
+    const { container } = render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed });
+    const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    const toggle = screen.getByRole('button', { name: label });
+    expect(container.querySelector('[title]')).toBeNull();
+    await fireEvent.pointerEnter(toggle);
+    await waitFor(() => {
+      expect(document.querySelector('.app-tooltip-content')).toHaveTextContent(label);
+    });
+  });
+
+  it('shows the brand name and subtitle only in the expanded sidebar', () => {
     const { rerender } = render(RecentSessionRail, { current: 'Start', sessions: [], collapsed: false });
 
+    expect(screen.getByText('QueryMT').closest('.app-sidebar-brand-copy')).not.toBeNull();
     expect(screen.getByText('Agents command and control').closest('.app-sidebar-brand-copy')).not.toBeNull();
 
     rerender({ current: 'Start', sessions: [], collapsed: true });
+    expect(screen.queryByText('QueryMT')).not.toBeInTheDocument();
     expect(screen.queryByText('Agents command and control')).not.toBeInTheDocument();
+  });
+
+  it('marks the brand as the current Start link and explains it in a tooltip', async () => {
+    const { rerender } = render(RecentSessionRail, { current: 'Start', sessions: [], collapsed: false });
+    const brand = screen.getByRole('link', { name: 'QueryMT, start a new session' });
+    expect(brand).toHaveAttribute('href', '/');
+    expect(brand).toHaveAttribute('aria-current', 'page');
+    expect(brand).toHaveClass('app-sidebar-brand-current');
+
+    await fireEvent.pointerEnter(brand);
+    await waitFor(() => {
+      expect(document.querySelector('.app-tooltip-content')).toHaveTextContent('Start a new session');
+    });
+
+    rerender({ current: 'Sessions', sessions: [], collapsed: false });
+    expect(brand).not.toHaveAttribute('aria-current');
+    expect(brand).not.toHaveClass('app-sidebar-brand-current');
+  });
+
+  it('lays out the row as title + status, then a 16px identicon, workspace and last active time', () => {
+    const { container, rerender } = render(RecentSessionRail, { current: 'Sessions', sessions: [{ ...activeSession, status: 'idle' }] });
+    const row = container.querySelector('.app-sidebar-session')!;
+    expect(row.querySelector('.app-sidebar-session-title')).toHaveTextContent('Waiting session');
+    expect(row.querySelector('.app-sidebar-session-workspace')).toHaveTextContent('work');
+    expect(row.querySelector('.app-sidebar-session-time')?.textContent?.trim()).toBeTruthy();
+    expect(row.querySelector('.app-sidebar-session-avatar svg')?.getAttribute('width')).toBe('16');
+    // Idle sessions leave the status slot empty and never spell out Recent.
+    expect(row.querySelector('.app-sidebar-session-status')?.children).toHaveLength(0);
+    expect(row.textContent).not.toContain('Recent');
+
+    rerender({ current: 'Sessions', sessions: [{ ...activeSession, status: 'unknown' }] });
+    expect(container.querySelector('.app-sidebar-session-status-unknown')).not.toBeNull();
+    expect(container.querySelector('.app-sidebar-session')?.textContent).not.toContain('Status unavailable');
   });
 
   it.each([false, true])('uses only activity and attention circles for active sessions, without a row highlight (collapsed=%s)', (collapsed) => {
@@ -314,7 +400,6 @@ describe('RecentSessionRail navigation', () => {
     render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed });
     const link = screen.getByRole('link', { name: 'Waiting session, Waiting, action required, Ctrl+1' });
     expect(link).not.toHaveClass('app-sidebar-session-active', 'session-icon-link-active');
-    expect(link.querySelector('.app-icon-activity-pill')).toBeNull();
     expect(link.querySelector(collapsed ? '.session-icon-status-active' : '.app-sidebar-session-spinner')).not.toBeNull();
     expect(link.querySelector('.sidebar-attention-dot')).not.toBeNull();
   });
@@ -432,9 +517,9 @@ describe('RecentSessionRail agents count', () => {
   async function openTooltipViaHover(trigger: HTMLElement): Promise<HTMLElement> {
     await fireEvent.pointerEnter(trigger);
     await waitFor(() => {
-      expect(document.querySelector('.app-icon-tooltip')).not.toBeNull();
+      expect(document.querySelector('.app-tooltip-content')).not.toBeNull();
     });
-    return document.querySelector('.app-icon-tooltip') as HTMLElement;
+    return document.querySelector('.app-tooltip-content') as HTMLElement;
   }
 
   it('gives the expanded agents link a concise accessible name and a persistent status description', async () => {
@@ -461,7 +546,7 @@ describe('RecentSessionRail agents count', () => {
 
     agentsLink.focus();
     await waitFor(() => {
-      expect(document.querySelector('.app-icon-tooltip')).not.toBeNull();
+      expect(document.querySelector('.app-tooltip-content')).not.toBeNull();
     });
     expect(agentsLink.getAttribute('aria-describedby')).toBe(statusDescriptionId);
   });
@@ -529,7 +614,7 @@ describe('RecentSessionRail agents count', () => {
     await fireEvent.pointerEnter(agentsLink);
     await new Promise((resolve) => setTimeout(resolve, 250));
 
-    expect(document.querySelector('.app-icon-tooltip')).toBeNull();
+    expect(document.querySelector('.app-tooltip-content')).toBeNull();
     expect(agentsLink.getAttribute('aria-describedby')).toBeNull();
   });
 
@@ -559,12 +644,12 @@ describe('RecentSessionRail Mesh node count', () => {
     expect(document.querySelectorAll(`[id="${statusDescriptionId}"]`)).toHaveLength(1);
     expect(document.getElementById(statusDescriptionId)).toHaveClass('sr-only');
     expect(document.getElementById(statusDescriptionId)).toHaveTextContent(status);
-    expect(document.querySelector('.app-icon-tooltip')).toBeNull();
+    expect(document.querySelector('.app-tooltip-content')).toBeNull();
 
     await fireEvent.pointerEnter(meshLink);
-    await waitFor(() => expect(document.querySelector('.app-icon-tooltip')).toHaveTextContent(status));
-    expect(document.querySelector('.app-icon-tooltip')).toHaveAttribute('data-side', 'right');
-    expect(document.querySelector('.app-icon-tooltip-arrow')).not.toBeNull();
+    await waitFor(() => expect(document.querySelector('.app-tooltip-content')).toHaveTextContent(status));
+    expect(document.querySelector('.app-tooltip-content')).toHaveAttribute('data-side', 'right');
+    expect(document.querySelector('.app-tooltip-content [data-arrow]')).toBeNull();
     expect(meshLink).toHaveAttribute('aria-describedby', statusDescriptionId);
   });
 
@@ -573,7 +658,7 @@ describe('RecentSessionRail Mesh node count', () => {
     render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed });
     const meshLink = screen.getByRole('link', { name: 'Mesh, 2 nodes' });
     meshLink.focus();
-    await waitFor(() => expect(document.querySelector('.app-icon-tooltip'))
+    await waitFor(() => expect(document.querySelector('.app-tooltip-content'))
       .toHaveTextContent(collapsed ? 'Mesh, 2 nodes available' : '2 nodes available'));
     expect(meshLink).toHaveAttribute('aria-describedby', statusDescriptionId);
     expect(document.querySelectorAll(`[id="${statusDescriptionId}"]`)).toHaveLength(1);
@@ -586,7 +671,7 @@ describe('RecentSessionRail Mesh node count', () => {
     expect(document.getElementById(statusDescriptionId)).toBeNull();
     await fireEvent.pointerEnter(meshLink);
     await new Promise((resolve) => setTimeout(resolve, 250));
-    expect(document.querySelector('.app-icon-tooltip')).toBeNull();
+    expect(document.querySelector('.app-tooltip-content')).toBeNull();
   });
 
   it('keeps Mesh and Agents status descriptions distinct', () => {

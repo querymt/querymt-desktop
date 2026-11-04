@@ -8,6 +8,7 @@
     loading = false,
     error = null,
     disconnected = false,
+    showAgentNames = false,
     onRetry = null,
     onOpenAgents = null,
     onAction = null,
@@ -20,6 +21,7 @@
     loading?: boolean;
     error?: string | null;
     disconnected?: boolean;
+    showAgentNames?: boolean;
     onRetry?: (() => void | Promise<void>) | null;
     onOpenAgents?: (() => void | Promise<void>) | null;
     onAction?: ((itemId: string, actionId: string) => void | Promise<void>) | null;
@@ -72,9 +74,11 @@
   {/if}
 
   <div class="space-y-3">
-    {#each items as item}
+    {#each items as item, index (item.id)}
       <InboxRequestCard
         {item}
+        collapsed={index >= 3}
+        {showAgentNames}
         {onAction}
         {onFieldChange}
         {onCustomFieldToggle}

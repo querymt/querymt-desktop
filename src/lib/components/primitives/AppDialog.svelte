@@ -10,7 +10,8 @@
     size = 'standard',
     pending = false,
     showClose = true,
-    divided = true,
+    // Header dividers are opt-in: spacing separates header and body by default.
+    divided = false,
     closeLabel = 'Close dialog',
     portalTarget = undefined,
     contentClass = '',
@@ -80,7 +81,7 @@
         onInteractOutside?.(event);
       }}
     >
-      <header class={`${modelPicker ? 'app-picker-header' : 'app-dialog-header'} ${divided ? '' : 'app-dialog-header-undivided'}`}>
+      <header class={`${modelPicker ? 'app-picker-header' : 'app-dialog-header'} ${divided ? 'app-dialog-header-divided' : ''}`}>
         <div class={modelPicker ? 'app-picker-heading' : 'app-dialog-heading'}>
           <Dialog.Title class={modelPicker ? 'app-picker-title' : 'app-dialog-title'}>{title}</Dialog.Title>
           {#if description}

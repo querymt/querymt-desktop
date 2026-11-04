@@ -3,13 +3,15 @@
   import { SessionSearchClient } from '$lib/domain/session-search-client';
   import type { SessionSearchMatch } from '$lib/domain/session-search';
   import { Accordion, Popover, RadioGroup } from 'bits-ui';
-  import { AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, Clock3, Folder, FolderOpen, FolderSync, GitBranch, GitFork, Info, LoaderCircle, MessageSquarePlus, Network, PlugZap, Pin, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, X } from '@lucide/svelte';
+  import { AlertTriangle, Archive, Bot, Check, ChevronDown, ChevronRight, CircleQuestionMark, Clock3, Folder, FolderOpen, FolderSync, GitBranch, GitFork, Info, LoaderCircle, MessageSquarePlus, Network, PlugZap, Pin, Plus, RefreshCw, Search, SearchX, SlidersHorizontal, X } from '@lucide/svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
+  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
+  import Hint from '$lib/components/primitives/Hint.svelte';
   import CopyTextChip from '$lib/components/primitives/CopyTextChip.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
   import SessionActionsMenu from '$lib/components/primitives/SessionActionsMenu.svelte';
   import SessionLifecycleBadges from '$lib/components/primitives/SessionLifecycleBadges.svelte';
-  import { createSessionBrowserState, SESSION_LIFECYCLE_VIEWS, RECENT_SESSION_GROUP_KEY, PINNED_SESSION_GROUP_KEY, compareSessionsByPin, getSessionKey, getSessionWorkspaceName, isRootSession, sessionMatchesLifecycle, compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
+  import { createSessionBrowserState, SESSION_LIFECYCLE_VIEWS, RECENT_SESSION_GROUP_KEY, PINNED_SESSION_GROUP_KEY, compareSessionsByPin, getSessionKey, getSessionWorkspaceName, isRootSession, sessionMatchesLifecycle, compactRemoteNodeId, formatSessionTimestamp, formatSessionTimestampAbsolute, formatSessionTimestampShort, getSessionStatusTone, getWorkspaceLocation, getWorkspaceRemoteMachines, groupSessionsByWorkspace, type WorkspaceSessionGroup } from '$lib/domain/sessions';
   import Identicon from '$lib/components/primitives/Identicon.svelte';
   import { isWorkspaceArchivedAccess, isWorkspaceUsable, worktreeTooltip } from '$lib/domain/session-workspace';
   import type { DesktopSessionSummary, ExcludedSessionAgent, SessionBrowserState, SessionLifecyclePatch, SessionLifecycleView, SessionStatus } from '$lib/domain/types';
@@ -298,7 +300,11 @@
         browserState.pinnedGroupInitialized = true;
       }
       if (!browserState.recentGroupInitialized && filteredWorkspaceGroups.some((group) => group.kind === 'recent')) {
-        browserState.openGroups = [...new Set([RECENT_SESSION_GROUP_KEY, ...browserState.openGroups])];
+        // Recent mostly repeats rows shown elsewhere, so it starts collapsed
+        // whenever pinned sessions are listed above it.
+        if (!filteredWorkspaceGroups.some((group) => group.kind === 'pinned')) {
+          browserState.openGroups = [...new Set([RECENT_SESSION_GROUP_KEY, ...browserState.openGroups])];
+        }
         browserState.recentGroupInitialized = true;
       }
     }
@@ -395,21 +401,6 @@
     }
   }
 
-  function getStatusTone(status: SessionStatus): string {
-    switch (status) {
-      case 'thinking':
-      case 'cancelling':
-        return 'running';
-      case 'waiting':
-      case 'unknown':
-        return 'warning';
-      case 'completed':
-        return 'success';
-      default:
-        return 'muted';
-    }
-  }
-
   async function copySessionId(sessionId: string) {
 
     try {
@@ -490,12 +481,23 @@
                        </button>
                      {/if}
                     <span class="session-row-identicon" aria-hidden="true">
-                      <Identicon seed={session.sessionId} />
+                      <Identicon seed={session.sessionId} size={16} />
                     </span>
                     <span class="session-row-main">
                        <span class="session-row-title-line">
-                            <span class="session-row-title">{session.title}</span>
-                            {#if session.pin?.pinned && group.kind !== 'pinned'}<Pin size={12} class="session-pin-indicator" aria-label="Pinned" />{/if}
+                         <span class="session-row-title">{session.title}</span>
+                       </span>
+                       <span class="session-row-meta">
+                         {#if !!group.kind}
+                           <Hint text={session.cwd} class="session-row-workspace">
+                             {getSessionWorkspaceName(session.cwd)}{#if session.location === 'remote'} · {session.remoteNodeLabel || compactRemoteNodeId(session.remoteNodeId ?? '')}{/if}
+                           </Hint>
+                         {/if}
+                         {#if showAgentNames}<span>{session.agentName}</span>{/if}
+                         <span class="session-row-status-line">
+                           <SessionIdChip sessionId={session.sessionId} />
+                         </span>
+                         {#if session.pin?.pinned && group.kind !== 'pinned'}<Pin size={12} class="session-pin-indicator" aria-label="Pinned" />{/if}
                            <SessionLifecycleBadges lifecycle={session.lifecycle} showUnavailable={browserState.resolution === 'any' && browserState.archive === 'any'} />
                            {#if session.location === 'remote' && session.remoteConnectionState === 'disconnected'}
                              <span class="session-relationship-badge session-relationship-badge-remote">Remote · disconnected</span>
@@ -515,47 +517,33 @@
                         {/if}
                         {#if session.workspace}
                           {@const usable = isWorkspaceUsable(session.workspace)}
-                          <span class="session-relationship-badge session-relationship-badge-branch" class:session-relationship-badge-warning={!usable}
-                            title={worktreeTooltip(session.workspace)} data-testid="worktree-branch-badge">
+                          <Hint text={worktreeTooltip(session.workspace)} class={`session-relationship-badge session-relationship-badge-branch${usable ? '' : ' session-relationship-badge-warning'}`}
+                            data-testid="worktree-branch-badge">
                             {#if usable}<GitBranch size={11} />{:else}<AlertTriangle size={11} />{/if}{session.workspace.branch ?? 'worktree'}{#if !usable} · {session.workspace.lifecycle}{/if}
-                          </span>
+                          </Hint>
                         {/if}
                         {#if archivedReadOnly}
-                          <span class="session-relationship-badge session-relationship-badge-handoff" title="This worktree was archived; the session is read-only" data-testid="worktree-archived-badge">Archived</span>
+                          <Hint text="This worktree was archived; the session is read-only" class="session-relationship-badge session-relationship-badge-handoff" data-testid="worktree-archived-badge">Archived</Hint>
                         {:else if handedOff}
-                          <span class="session-relationship-badge session-relationship-badge-handoff" title="This worktree was handed off to another session">Handed off</span>
+                          <Hint text="This worktree was handed off to another session" class="session-relationship-badge session-relationship-badge-handoff">Handed off</Hint>
                         {/if}
                         {#if (session.forkCount ?? 0) > 0}
                           <span class="session-relationship-badge session-relationship-badge-count">
                             <GitFork size={11} />{session.forkCount} {session.forkCount === 1 ? 'fork' : 'forks'}
                           </span>
-                        {/if}
-                      </span>
-                      <span class="session-row-meta">
-                        {#if !!group.kind}
-                          <span class="session-row-workspace" title={session.cwd}>
-                            {getSessionWorkspaceName(session.cwd)}{#if session.location === 'remote'} · {session.remoteNodeLabel || compactRemoteNodeId(session.remoteNodeId ?? '')}{/if}
-                          </span>
-                        {/if}
-                        {#if showAgentNames}<span>{session.agentName}</span>{/if}
-                        <span class="session-row-status-line">
-                          <span
-                            class={`session-header-status-dot session-header-status-dot-${getStatusTone(session.status)}`}
-                            aria-label={`Status: ${getStatusLabel(session.status)}`}
-                            title={`Status: ${getStatusLabel(session.status)}`}
-                          ></span>
-                          <SessionIdChip sessionId={session.sessionId} />
-                          <span aria-hidden="true">·</span>
-                          <button
-                            class="session-row-timestamp"
-                            type="button"
-                            title={formatSessionTimestampAbsolute(session.updatedAt)}
-                            onclick={() => onOpenSession?.(session)}
-                          >{formatSessionTimestamp(session.updatedAt)}</button>
-                        </span>
-                      </span>
-                    </span>
-                     <span class="session-row-side">
+                         {/if}
+                       </span>
+                     </span>
+                      <span class="session-row-side">
+                       <span class="session-row-status" role="img" aria-label={`Status: ${getStatusLabel(session.status)}`}>
+                         {#if session.status === 'thinking' || session.status === 'cancelling'}<span class="session-row-status-running"><LoaderCircle size={12} class="animate-spin" /></span>
+                         {:else if session.status === 'waiting'}<span class="session-row-status-waiting"></span>
+                         {:else if session.status === 'unknown'}<span class="session-row-status-unknown"><CircleQuestionMark size={12} /></span>{/if}
+                       </span>
+                       <Hint as="button" text={formatSessionTimestampAbsolute(session.updatedAt)}
+                         class="session-row-timestamp" type="button"
+                         onclick={() => onOpenSession?.(session)}
+                       >{formatSessionTimestampShort(session.updatedAt)}</Hint>
                        <SessionActionsMenu
                          {session}
                           canManage={canManageLifecycle?.(session) ?? false}
@@ -628,9 +616,9 @@
         </Popover.Portal>
       </Popover.Root>
       {#if showToolbarRefresh && onRefresh}
-        <button class="icon-btn" type="button" aria-label={refreshing ? 'Refreshing sessions' : 'Refresh sessions'} disabled={loading} onclick={onRefresh}>
-          {#if refreshing}<LoaderCircle size={16} class="animate-spin" />{:else}<RefreshCw size={16} />{/if}
-        </button>
+        <IconTooltipButton class="session-browser-refresh" label={refreshing ? 'Refreshing sessions…' : 'Refresh sessions'}
+          icon={refreshing ? LoaderCircle : RefreshCw} iconClass={refreshing ? 'animate-spin' : ''} size={15}
+          busy={refreshing} disabled={loading && !refreshing} onclick={() => void onRefresh?.()} />
       {/if}
     </div>
   </div>
@@ -746,34 +734,32 @@
                    <span class="session-workspace-trigger-main">
                       <span class="session-workspace-icon" aria-hidden="true">
                         {#if group.kind === 'pinned'}
-                          <Pin size={22} strokeWidth={1.5} />
+                          <Pin size={16} strokeWidth={1.75} />
                         {:else if group.kind === 'recent'}
-                          <Clock3 size={22} strokeWidth={1.5} />
+                          <Clock3 size={16} strokeWidth={1.75} />
                         {:else if getOpenGroups().includes(group.key)}
-                          <FolderOpen size={22} strokeWidth={1.5} />
+                          <FolderOpen size={16} strokeWidth={1.75} />
                         {:else if group.location === 'remote' || group.location === 'mixed'}
-                          <FolderSync size={22} strokeWidth={1.5} />
+                          <FolderSync size={16} strokeWidth={1.75} />
                         {:else}
-                          <Folder size={22} strokeWidth={1.5} />
+                          <Folder size={16} strokeWidth={1.75} />
                         {/if}
                       </span>
                       <span class="session-workspace-copy">
                         <span class="session-workspace-name">{group.name}</span>
                          <span class="session-workspace-path">
-                           {#if !!group.kind}
-                             <span>{group.kind === 'pinned' ? 'Saved on your agents' : 'Recently opened'}</span>
-                           {:else}
+                           {#if !group.kind}
                              <CopyTextChip value={group.path} title="Copy project path" />
                            {/if}
                            {#if !group.kind && workspaceMachineText(group)}
-                             <span class="session-workspace-machine" title={workspaceMachineTitle(group)}><Network size={12} aria-hidden="true" />{workspaceMachineText(group)}</span>
+                             <Hint text={workspaceMachineTitle(group) ?? ''} disabled={!workspaceMachineTitle(group)} class="session-workspace-machine"><Network size={12} aria-hidden="true" />{workspaceMachineText(group)}</Hint>
                            {/if}
                          </span>
                       </span>
                    </span>
                    <span class="session-workspace-meta">
                      {#if group.loading && !group.initialized}
-                       <span class="badge session-workspace-count-loading" aria-label="Loading sessions" title="Loading sessions"><LoaderCircle size={12} class="animate-spin" aria-hidden="true" /></span>
+                       <span class="badge session-workspace-count-loading" aria-label="Loading sessions"><LoaderCircle size={12} class="animate-spin" aria-hidden="true" /></span>
                      {:else if group.initialized}
                        {@const activeCount = countWorkspaceSessions(group, 'running')}
                        {@const waitingCount = countWorkspaceSessions(group, 'needs-input')}
@@ -782,9 +768,9 @@
                         {@const hasUncountedSessions = !catalogComplete && !group.kind && group.hasMore}
                         <span class="session-workspace-count" aria-label={`${group.totalMatching} loaded session${group.totalMatching === 1 ? '' : 's'}${hasUncountedSessions ? ', more available' : ''}`}>{group.totalMatching}{hasUncountedSessions ? '+' : ''}</span>
                      {:else}
-                       <span class="session-workspace-count session-workspace-count-pending" aria-label="Sessions not loaded" title="Sessions load when opened">—</span>
+                       <Hint text="Sessions load when opened" class="session-workspace-count session-workspace-count-pending" aria-label="Sessions not loaded">—</Hint>
                      {/if}
-                      {#if !group.kind}<span class="session-workspace-updated" title={formatSessionTimestampAbsolute(group.latestActivity)}><Clock3 size={12} /> {formatSessionTimestamp(group.latestActivity)}</span>{/if}
+                      {#if !group.kind}<Hint text={formatSessionTimestampAbsolute(group.latestActivity)} class="session-workspace-updated">{formatSessionTimestampShort(group.latestActivity)}</Hint>{/if}
                      <ChevronDown size={15} class="session-workspace-chevron" />
                    </span>
                  </Accordion.Trigger>
@@ -803,7 +789,7 @@
                       </div>
                     </details>
                   {:else}
-                    <button class="session-workspace-new" type="button" aria-label={`New session in ${group.name}`} title={`New session in ${group.name}`} onclick={() => onCreateWorkspaceSession?.(group)}><Plus size={15} /></button>
+                    <Hint as="button" text={`New session in ${group.name}`} side="left" class="session-workspace-new" type="button" aria-label={`New session in ${group.name}`} onclick={() => onCreateWorkspaceSession?.(group)}><Plus size={15} /></Hint>
                   {/if}
                 {/if}
              </div>
@@ -830,12 +816,8 @@
                       disabled={group.loading}
                       onclick={() => loadMore(group)}
                     >
-                      {#if group.loading}
-                        <LoaderCircle size={14} class="animate-spin" />
-                      {:else}
-                        <ChevronDown size={14} aria-hidden="true" />
-                      {/if}
-                      {group.loading ? 'Loading...' : 'Load 10 more'}
+                      {#if group.loading}<LoaderCircle size={13} class="animate-spin" />{/if}
+                      {group.loading ? 'Loading...' : 'Show 10 more'}
                     </button>
                   </div>
                 {/if}

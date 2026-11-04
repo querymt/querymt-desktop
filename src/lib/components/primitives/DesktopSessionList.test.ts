@@ -5,6 +5,14 @@ import { tick } from 'svelte';
 import { createSessionBrowserState, getSessionKey, RECENT_SESSION_GROUP_KEY } from '$lib/domain/sessions';
 import type { DesktopSessionSummary } from '$lib/domain/types';
 import DesktopSessionList from './DesktopSessionList.svelte';
+
+async function expectHint(element: Element, text: string) {
+  expect(element).not.toHaveAttribute('title');
+  await fireEvent.pointerEnter(element);
+  await waitFor(() => expect([...document.querySelectorAll('.app-tooltip-content')].some((tip) => tip.textContent?.includes(text))).toBe(true));
+  await fireEvent.pointerLeave(element);
+}
+
 import { SessionSearchClient } from '$lib/domain/session-search-client';
 import type { SessionSearchMatch } from '$lib/domain/session-search';
 
@@ -64,7 +72,7 @@ describe('DesktopSessionList pinned sessions', () => {
     expect(pinGroup.getAllByRole('button', { name: /^Open session/ })[0]).toHaveAccessibleName('Open session Pinned task 11');
     expect(within(groups[1]).queryByText('Pinned task 0')).not.toBeInTheDocument();
     expect(pinGroup.queryByTitle('Copy project path')).not.toBeInTheDocument();
-    await fireEvent.click(pinGroup.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(pinGroup.getByRole('button', { name: 'Show 10 more' }));
     expect(pinGroup.getAllByRole('button', { name: /^Open session/ })).toHaveLength(12);
   });
   it('finds old pins not in the activity catalog and honors lifecycle and search filters', async () => {
@@ -105,12 +113,12 @@ describe('DesktopSessionList recent sessions', () => {
     expect(groups[0].querySelector('.session-workspace-icon .lucide-clock-3')).not.toBeNull();
     await fireEvent.click(recent.getByRole('button', { name: 'Open session Recent task 0' }));
     expect(onOpenSession).toHaveBeenCalledWith(catalog[0]);
-    await fireEvent.click(recent.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(recent.getByRole('button', { name: 'Show 10 more' }));
     expect(recent.getAllByRole('button', { name: /^Open session/ })).toHaveLength(20);
     expect(onLoadMoreWorkspace).not.toHaveBeenCalled();
-    await fireEvent.click(recent.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(recent.getByRole('button', { name: 'Show 10 more' }));
     expect(recent.getAllByRole('button', { name: /^Open session/ })).toHaveLength(24);
-    expect(recent.queryByRole('button', { name: 'Load 10 more' })).not.toBeInTheDocument();
+    expect(recent.queryByRole('button', { name: 'Show 10 more' })).not.toBeInTheDocument();
   });
 
   it('filters recents by lifecycle, runtime, location, and workspace search before limiting', async () => {
@@ -468,7 +476,7 @@ describe('DesktopSessionList', () => {
     expect(container.querySelector('.session-agent-chip')).toBeNull();
     const identicon = container.querySelector('.hex-identicon');
     expect(identicon).not.toBeNull();
-    expect(identicon?.querySelector('svg')).toHaveAttribute('viewBox', '0 0 32 32');
+    expect(identicon?.querySelector('svg')).toHaveAttribute('viewBox', '0 0 16 16');
     expect(identicon?.querySelector('polygon')).toHaveAttribute('fill', expect.stringMatching(/^#[0-9a-f]{6}$/i));
     expect(identicon?.querySelector('circle')).toBeNull();
     expect(screen.getAllByText('WS-QMT')).toHaveLength(1);
@@ -508,11 +516,11 @@ describe('DesktopSessionList', () => {
     expect(container.querySelectorAll('.lucide-folder-sync')).toHaveLength(2);
     for (const icon of container.querySelectorAll('.session-workspace-icon')) {
       expect(icon).toHaveAttribute('aria-hidden', 'true');
-      expect(icon.querySelector('svg')).toHaveAttribute('width', '22');
-      expect(icon.querySelector('svg')).toHaveAttribute('stroke-width', '1.5');
+      expect(icon.querySelector('svg')).toHaveAttribute('width', '16');
+      expect(icon.querySelector('svg')).toHaveAttribute('stroke-width', '1.75');
     }
-    expect(screen.getByText('Remote', { selector: '.session-workspace-machine' })).toHaveAttribute('title', 'Remote workspace');
-    expect(screen.getByText('local + remote')).toHaveAttribute('title', 'Local and remote workspace');
+    await expectHint(screen.getByText('Remote', { selector: '.session-workspace-machine' }), 'Remote workspace');
+    await expectHint(screen.getByText('local + remote'), 'Local and remote workspace');
     expect(screen.getByText('Remote', { selector: '.session-workspace-machine' }).closest('.session-workspace-path')).not.toBeNull();
   });
 
@@ -532,7 +540,7 @@ describe('DesktopSessionList', () => {
     expect(triggers[1].querySelector('.lucide-folder-open')).not.toBeNull();
   });
 
-  it('shows the owning machine on remote and mixed workspace path lines', () => {
+  it('shows the owning machine on remote and mixed workspace path lines', async () => {
     const longNodeId = '12D3KooWPtRjf6xSzZKwyRWP2kBA1kZhqYjr4XxEmtHfunWZUT62';
     render(DesktopSessionList, {
       sessions: [
@@ -544,13 +552,10 @@ describe('DesktopSessionList', () => {
       ]
     });
 
-    expect(screen.getByText('sapr')).toHaveAttribute('title', 'Remote workspace on sapr');
+    await expectHint(screen.getByText('sapr'), 'Remote workspace on sapr');
     expect(screen.getByText('sapr').querySelector('.lucide-network')).not.toBeNull();
-    expect(screen.getByText('local + 12D3KooWPtRj...unWZUT62')).toHaveAttribute(
-      'title',
-      'Local workspace and remote workspace on 12D3KooWPtRj...unWZUT62'
-    );
-    expect(screen.getByText('2 machines')).toHaveAttribute('title', 'Remote workspace on alpha, beta');
+    await expectHint(screen.getByText('local + 12D3KooWPtRj...unWZUT62'), 'Local workspace and remote workspace on 12D3KooWPtRj...unWZUT62');
+    await expectHint(screen.getByText('2 machines'), 'Remote workspace on alpha, beta');
     expect(screen.getAllByText(/^(sapr|local \+ 12D3KooWPtRj\.\.\.unWZUT62|2 machines)$/).every((item) => item.querySelector('.lucide-network'))).toBe(true);
   });
 
@@ -591,9 +596,10 @@ describe('DesktopSessionList', () => {
     const remotePills = container.querySelectorAll('.session-relationship-badge-remote');
     expect(remotePills).toHaveLength(1);
     expect(remotePills[0]).toHaveTextContent('Remote');
-    expect(screen.getByText('Mixed remote').closest('.session-row-title-line')?.querySelector('.session-relationship-badge-remote')).not.toBeNull();
-    expect(screen.getByText('Remote only').closest('.session-row-title-line')?.querySelector('.session-relationship-badge-remote')).toBeNull();
-    expect(screen.getByText('Mixed local').closest('.session-row-title-line')?.querySelector('.session-relationship-badge-remote')).toBeNull();
+    expect(remotePills[0].closest('.session-row-meta')).not.toBeNull();
+    expect(screen.getByText('Mixed remote').closest('.session-row')?.querySelector('.session-row-title-line .session-relationship-badge-remote')).toBeNull();
+    expect(screen.getByText('Remote only').closest('.session-row')?.querySelector('.session-relationship-badge-remote')).toBeNull();
+    expect(screen.getByText('Mixed local').closest('.session-row')?.querySelector('.session-relationship-badge-remote')).toBeNull();
   });
 
   it('shows fork relationships and parent fork counts without inferring from titles', async () => {
@@ -610,6 +616,9 @@ describe('DesktopSessionList', () => {
     expect(screen.getByText('Fork')).toBeInTheDocument();
     expect(screen.getByText('Delegate')).toBeInTheDocument();
     expect(screen.getByText('Child')).toBeInTheDocument();
+    for (const label of ['2 forks', 'Fork', 'Delegate', 'Child']) {
+      expect(screen.getByText(label).closest('.session-row-meta')).not.toBeNull();
+    }
   });
 
   it('does not show relationship badges for a root session without hierarchy metadata', async () => {
@@ -765,7 +774,7 @@ describe('DesktopSessionList', () => {
     const catalog = Array.from({ length: 25 }, (_, index) => ({ ...sessions[0], sessionId: `task-${index}`, title: `Task ${index}`, updatedAt: `2026-07-${String(25 - index).padStart(2, '0')}T01:00:00Z` }));
     const first = render(DesktopSessionList, { sessions: catalog, catalogComplete: true });
     expect(screen.queryByText('Task 24')).not.toBeInTheDocument();
-    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }));
     await searchFor('Task 24');
     expect(screen.getByText('Task 24')).toBeInTheDocument();
     first.unmount();
@@ -924,7 +933,7 @@ describe('DesktopSessionList', () => {
     expect(container.querySelectorAll('.session-row')).toHaveLength(10);
     expect(search).not.toHaveBeenCalled();
     expect(onLoadMoreWorkspace).not.toHaveBeenCalled();
-    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }));
     expect(screen.getByLabelText('25 loaded sessions')).toHaveTextContent(/^25$/);
     expect(container.querySelectorAll('.session-row')).toHaveLength(20);
     expect(search).not.toHaveBeenCalled();
@@ -990,7 +999,41 @@ describe('DesktopSessionList', () => {
     expect(within(groups[0] as HTMLElement).getByLabelText('12 loaded sessions')).toHaveTextContent(/^12$/);
     expect(groups[0].querySelectorAll('.session-row')).toHaveLength(10);
     expect(within(groups[1] as HTMLElement).getByLabelText('13 loaded sessions')).toHaveTextContent(/^13$/);
-    expect(groups[1].querySelectorAll('.session-row')).toHaveLength(10);
+    // Recent starts collapsed when pinned sessions are listed above it.
+    expect(groups[1].querySelectorAll('.session-row')).toHaveLength(0);
+  });
+
+  it('opens Recent by default only when there are no pinned sessions', () => {
+    const catalog = Array.from({ length: 3 }, (_, index) => ({ ...sessions[0], sessionId: `r-${index}`, title: `Recent ${index}` }));
+    const first = render(DesktopSessionList, { sessions: catalog, recentSessionKeys: catalog.map(getSessionKey), catalogComplete: true });
+    expect(screen.getByRole('button', { name: /^Recent sessions/ })).toHaveAttribute('aria-expanded', 'true');
+    first.unmount();
+    const pinned = [{ ...catalog[0], pin: { session_id: 'r-0', pinned: true, pinned_at: '2026-10-21T10:00:00Z' } }];
+    render(DesktopSessionList, { sessions: [...pinned, ...catalog.slice(1)], pinnedSessions: pinned,
+      recentSessionKeys: catalog.map(getSessionKey), catalogComplete: true });
+    expect(screen.getByRole('button', { name: /^Pinned sessions/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: /^Recent sessions/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('puts a ghost refresh with the shared tooltip next to Filters', async () => {
+    const onRefresh = vi.fn(async () => {});
+    const { container } = render(DesktopSessionList, { sessions, onRefresh });
+    const refresh = screen.getByRole('button', { name: 'Refresh sessions' });
+    expect(refresh).toHaveClass('session-browser-refresh');
+    expect(refresh.closest('.session-browser-actions')).not.toBeNull();
+    expect(refresh).not.toHaveAttribute('title');
+    await fireEvent.click(refresh);
+    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(container.querySelector('.session-browser-filter-active')).toHaveTextContent('Open');
+  });
+
+  it('shows status, short time and actions on the right of each row', () => {
+    const { container } = render(DesktopSessionList, { sessions: [{ ...sessions[0], status: 'thinking' }, { ...sessions[1], status: 'waiting' }] });
+    const rows = container.querySelectorAll('.session-row');
+    expect(rows[0].querySelector('.session-row-side .session-row-status-running')).not.toBeNull();
+    expect(rows[1].querySelector('.session-row-side .session-row-status-waiting')).not.toBeNull();
+    expect(rows[0].querySelector('.session-row-side .session-row-timestamp')?.textContent?.trim()).not.toMatch(/ago|Yesterday/);
+    expect(container.querySelector('.session-header-status-dot')).toBeNull();
   });
 
   it('opens only the latest workspace by default and creates a session in its context', async () => {
@@ -1050,9 +1093,8 @@ describe('DesktopSessionList', () => {
     render(DesktopSessionList, { workspaceGroups, onOpenWorkspace, onLoadMoreWorkspace });
 
     await waitFor(() => expect(onOpenWorkspace).toHaveBeenCalledWith('/projects/querymt'));
-    const loadMoreButton = screen.getByRole('button', { name: 'Load 10 more' });
+    const loadMoreButton = screen.getByRole('button', { name: 'Show 10 more' });
     expect(loadMoreButton).toHaveClass('session-workspace-load-more');
-    expect(loadMoreButton.querySelector('.lucide-chevron-down')).not.toBeNull();
     await fireEvent.click(loadMoreButton);
 
     expect(onLoadMoreWorkspace).toHaveBeenCalledWith('/projects/querymt');
@@ -1154,21 +1196,21 @@ describe('DesktopSessionList asynchronous search', () => {
     const catalog = Array.from({ length: 65 }, (_, index) => ({ ...sessions[0], sessionId: `task-${index}`, title: `Task ${index}` }));
     const { container } = render(DesktopSessionList, { sessions: catalog, catalogComplete: true });
     for (let count = 20; count <= 60; count += 10) {
-      await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+      await fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }));
       expect(container.querySelectorAll('.session-row')).toHaveLength(count);
       expect(screen.getByText('Task 0')).toBeInTheDocument();
     }
-    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }));
     expect(container.querySelectorAll('.session-row')).toHaveLength(65);
     expect(screen.getByText('Task 64')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Next 30|Previous 30|Load 10 more/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Next 30|Previous 30|Show 10 more/ })).not.toBeInTheDocument();
     await searchFor('Task');
     expect(container.querySelectorAll('.session-row')).toHaveLength(10);
     for (let count = 20; count <= 60; count += 10) {
-      await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+      await fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }));
       expect(container.querySelectorAll('.session-row')).toHaveLength(count);
     }
-    await fireEvent.click(screen.getByRole('button', { name: 'Load 10 more' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }));
     expect(container.querySelectorAll('.session-row')).toHaveLength(65);
     await searchFor('');
     expect(container.querySelectorAll('.session-row')).toHaveLength(65);
@@ -1241,12 +1283,14 @@ describe('DesktopSessionList worktree sessions', () => {
     ...sessions[1], sessionId: 'wt-child', title: 'WT child', cwd: '/w/ws_1', parentSessionId: 'parent', forkOrigin: 'worktree', workspace
   };
 
-  it('marks worktree sessions with a branch badge, tooltip and Worktree relationship', () => {
+  it('marks worktree sessions with a branch badge, tooltip and Worktree relationship', async () => {
     render(DesktopSessionList, { sessions: [worktreeChild], catalogComplete: true });
     expect(screen.getByText('Worktree')).toBeInTheDocument();
     const badge = screen.getByTestId('worktree-branch-badge');
     expect(badge).toHaveTextContent('qmt/ws_1');
-    expect(badge.getAttribute('title')).toContain('Checkout /w/ws_1');
+    expect(badge.closest('.session-row-meta')).not.toBeNull();
+    expect(screen.getByText('Worktree').closest('.session-row-meta')).not.toBeNull();
+    await expectHint(badge, 'Checkout /w/ws_1');
     expect(screen.queryByText('Handed off')).not.toBeInTheDocument();
   });
 

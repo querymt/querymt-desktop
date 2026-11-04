@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Check, Copy, Info } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
+  import Hint from '$lib/components/primitives/Hint.svelte';
   import AppSwitch from '$lib/components/primitives/AppSwitch.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import type { RemoteNodeInfo } from '$lib/querymt/generated/types';
@@ -66,16 +67,17 @@
             <span class="mesh-node-session-count">{node.active_sessions} active</span>
           </div>
           <div class="mesh-item-description mesh-node-description">
-            <button
+            <Hint
+              as="button"
               class="mesh-node-peer-button"
               type="button"
+              text={node.id}
               aria-label={copiedNodeId === node.id ? 'Remote peer ID copied' : `Copy remote peer ID ${node.id}`}
-              title={node.id}
               onclick={() => copyNodeId(node.id)}
             >
               <span>{compactNodeId(node.id)}</span>
               {#if copiedNodeId === node.id}<Check size={11} aria-hidden="true" />{:else}<Copy size={11} aria-hidden="true" />{/if}
-            </button>
+            </Hint>
             {#if visibleTransport(node.transport)}
               <span class="mesh-node-description-separator" aria-hidden="true">·</span>
               <span>{visibleTransport(node.transport)}</span>

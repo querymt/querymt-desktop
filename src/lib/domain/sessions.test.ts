@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionInfo } from '@agentclientprotocol/sdk';
-import { buildListSessionChildrenRequest, getSessionGroupCwd, compareSessionsByPin, readSessionPin, sessionMatchesLifecycle, buildListSessionsRequest, formatSessionTimestamp, getRecentSessionRailItems, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
+import { buildListSessionChildrenRequest, getSessionGroupCwd, compareSessionsByPin, readSessionPin, sessionMatchesLifecycle, buildListSessionsRequest, formatSessionTimestamp, formatSessionTimestampShort, getRecentSessionRailItems, getSessionStatusTone, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 
 function createDesktopSession(input: Partial<DesktopSessionSummary> & { sessionId: string }): DesktopSessionSummary {
@@ -415,6 +415,41 @@ describe('newestTimestamp', () => {
     expect(newestTimestamp('2026-06-17T12:00:00Z', undefined)).toBe('2026-06-17T12:00:00Z');
     expect(newestTimestamp(null, '2026-06-17T12:00:00Z')).toBe('2026-06-17T12:00:00Z');
     expect(newestTimestamp(null, null)).toBeNull();
+  });
+});
+
+describe('getSessionStatusTone', () => {
+  it('maps each status to the tone both the list and the header use', () => {
+    expect(getSessionStatusTone('thinking')).toBe('running');
+    expect(getSessionStatusTone('cancelling')).toBe('running');
+    expect(getSessionStatusTone('waiting')).toBe('warning');
+    expect(getSessionStatusTone('unknown')).toBe('warning');
+    expect(getSessionStatusTone('completed')).toBe('success');
+    expect(getSessionStatusTone('idle')).toBe('muted');
+  });
+});
+
+describe('formatSessionTimestampShort', () => {
+  const now = Date.UTC(2026, 5, 17, 12, 30, 0);
+
+  it('uses compact relative labels and the date after a week', () => {
+    expect(formatSessionTimestampShort('2026-06-17T12:29:30Z', now)).toBe('now');
+    expect(formatSessionTimestampShort('2026-06-17T12:29:00Z', now)).toBe('1m');
+    expect(formatSessionTimestampShort('2026-06-17T12:00:00Z', now)).toBe('30m');
+    expect(formatSessionTimestampShort('2026-06-17T10:00:00Z', now)).toBe('2h');
+    expect(formatSessionTimestampShort('2026-06-14T10:00:00Z', now)).toBe('3d');
+    expect(formatSessionTimestampShort('2026-05-01T10:00:00Z', now)).not.toMatch(/\d+[mhd]$/);
+  });
+
+  it('uses elapsed time, so a few hours across midnight stay in hours', () => {
+    const justAfterMidnight = new Date(2026, 5, 17, 0, 30).getTime();
+    expect(formatSessionTimestampShort(new Date(2026, 5, 16, 22, 30).toISOString(), justAfterMidnight)).toBe('2h');
+    expect(formatSessionTimestampShort(new Date(2026, 5, 15, 23, 30).toISOString(), justAfterMidnight)).toBe('1d');
+  });
+
+  it('handles missing and invalid timestamps', () => {
+    expect(formatSessionTimestampShort(null, now)).toBe('No activity');
+    expect(formatSessionTimestampShort('not-a-date', now)).toBe('not-a-date');
   });
 });
 

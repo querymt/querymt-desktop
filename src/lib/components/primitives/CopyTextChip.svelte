@@ -1,11 +1,13 @@
 <script lang="ts">
   import { Check } from '@lucide/svelte';
+  import Hint from '$lib/components/primitives/Hint.svelte';
 
   let {
     value,
     display = null,
     title = 'Copy',
     as = 'button',
+    tooltip = false,
     class: className = ''
   }: {
     /** Text placed on the clipboard. */
@@ -15,6 +17,8 @@
     title?: string;
     /** Use `span` where a nested `<button>` would be invalid (e.g. inside an accordion trigger). */
     as?: 'button' | 'span';
+    /** Show the hint in a bits-ui tooltip instead of a native title. */
+    tooltip?: boolean;
     class?: string;
   } = $props();
 
@@ -42,17 +46,7 @@
   }
 </script>
 
-<svelte:element
-  this={as}
-  class={`copy-chip ${className}`}
-  title={copied ? 'Copied' : title}
-  aria-label={title}
-  type={as === 'button' ? 'button' : undefined}
-  role={as === 'span' ? 'button' : undefined}
-  tabindex={as === 'span' ? -1 : undefined}
-  onclick={copy}
-  onkeydown={as === 'span' ? handleKeydown : undefined}
->
+{#snippet content()}
   <span class="copy-chip-label">{display ?? value}</span>
   {#if copied}
     <span class="copy-chip-copied" role="status">
@@ -60,4 +54,34 @@
       <span>copied</span>
     </span>
   {/if}
-</svelte:element>
+{/snippet}
+
+{#if tooltip}
+  <Hint
+    text={copied ? 'Copied' : title}
+    as={as}
+    class={`copy-chip ${className}`}
+    aria-label={title}
+    type={as === 'button' ? 'button' : undefined}
+    role={as === 'span' ? 'button' : undefined}
+    tabindex={as === 'span' ? -1 : undefined}
+    onclick={copy}
+    onkeydown={as === 'span' ? handleKeydown : undefined}
+  >
+    {@render content()}
+  </Hint>
+{:else}
+  <svelte:element
+    this={as}
+    class={`copy-chip ${className}`}
+    title={copied ? 'Copied' : title}
+    aria-label={title}
+    type={as === 'button' ? 'button' : undefined}
+    role={as === 'span' ? 'button' : undefined}
+    tabindex={as === 'span' ? -1 : undefined}
+    onclick={copy}
+    onkeydown={as === 'span' ? handleKeydown : undefined}
+  >
+    {@render content()}
+  </svelte:element>
+{/if}

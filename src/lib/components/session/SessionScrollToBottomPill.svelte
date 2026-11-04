@@ -42,7 +42,9 @@
       <IconTooltipButton
         label="Scroll to latest message and follow new content"
         icon={ChevronDown}
+        controlSize="compact"
         size={16}
+        class="session-scroll-bottom-btn"
         onclick={onScrollToBottom}
       />
     </span>

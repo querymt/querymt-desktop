@@ -2,7 +2,7 @@
   import {
     AlertTriangle,
     Bot,
-    CirclePlus,
+    Plus,
     Info,
     Pencil,
     LoaderCircle,
@@ -20,6 +20,7 @@
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
   import AppDialog from '$lib/components/primitives/AppDialog.svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import Hint from '$lib/components/primitives/Hint.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import SidecarLogList from '$lib/components/primitives/SidecarLogList.svelte';
@@ -372,17 +373,22 @@
     />
 
     <div class="compact-toolbar agents-page-actions">
+      {#if !isEmbedded}
+        <!-- Labelled neutral button, like "New automation" and "Add folder". -->
+        <button class="action-btn" type="button" onclick={() => openAddDialog()}>
+          <Plus size={15} />Add agent
+        </button>
+      {/if}
+      <!-- Refresh is the rightmost header control on every page. -->
       <IconTooltipButton
-        label={refreshing ? 'Refreshing agents' : 'Refresh agents'}
+        label={refreshing ? 'Refreshing agent status and connections…' : 'Refresh agents'}
         icon={refreshing ? LoaderCircle : RefreshCw}
         iconClass={refreshing ? 'animate-spin' : ''}
         size={16}
-        disabled={agentsStore.loading}
+        busy={refreshing}
+        disabled={agentsStore.loading && !refreshing}
         onclick={() => refreshAgents()}
       />
-      {#if !isEmbedded}
-        <IconTooltipButton label="Add agent" icon={CirclePlus} size={16} onclick={() => openAddDialog()} />
-      {/if}
     </div>
   </div>
 
@@ -424,7 +430,8 @@
             <button class="action-btn action-btn-compact" type="button" onclick={() => refreshAgents()}>Retry</button>
           </div>
         {:else if refreshing}
-          <div class="state-inline-progress" role="status"><LoaderCircle size={14} class="animate-spin" /><span>Refreshing agent status…</span></div>
+          <!-- The toolbar refresh button spins while refreshing; this only announces it. -->
+          <span class="sr-only" role="status">Refreshing agent status…</span>
         {/if}
         <div class="agent-list">
           {#each agentCards as card}
@@ -442,9 +449,9 @@
                         <span class="badge">auto-start</span>
                       {/if}
                       {#if isAttentionCard(card)}
-                        <button class="agent-issue-chip" type="button" title={getAttentionMessage(card)} onclick={() => openDetails(card.config.id)}>
+                        <Hint as="button" class="agent-issue-chip" type="button" text={getAttentionMessage(card)} onclick={() => openDetails(card.config.id)}>
                           Issue
-                        </button>
+                        </Hint>
                       {/if}
                     </div>
                     <div class="agent-list-endpoint mt-1 truncate text-xs text-[var(--muted)]">{endpointLabel(card.config)}</div>
@@ -628,7 +635,7 @@
               </div>
               <div class="agent-details-overview-context">
                 <span class="agent-details-context-label">Endpoint</span>
-                <code title={endpointLabel(selectedCard.config)}>{endpointLabel(selectedCard.config)}</code>
+                <Hint as="code" text={endpointLabel(selectedCard.config)}>{endpointLabel(selectedCard.config)}</Hint>
                 <span class="agent-details-context-separator" aria-hidden="true"></span>
                 <span>{selectedCard.config.transport}</span>
               </div>

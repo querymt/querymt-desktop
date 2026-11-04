@@ -8,6 +8,7 @@ import type {
   RequestPermissionRequest
 } from '@agentclientprotocol/sdk';
 import type { InboxAction, InboxFormField, InboxFormOption, InboxItem } from '$lib/domain/types';
+import { optionDescriptionsFromMeta } from '$lib/querymt/elicitation-option-meta';
 
 export function mapPermissionRequestToInboxItem(
   request: RequestPermissionRequest,
@@ -42,7 +43,10 @@ export function mapElicitationRequestToInboxItem(
   agentName?: string
 ): InboxItem {
   const allowCustom = allowsCustomResponses(request);
-  const formFields = request.mode === 'form' ? mapElicitationFormFields(request.requestedSchema, allowCustom) : [];
+  const formFields =
+    request.mode === 'form'
+      ? mapElicitationFormFields(request.requestedSchema, allowCustom, optionDescriptionsFromMeta(request._meta))
+      : [];
   const owner = 'sessionId' in request ? request.sessionId : `request ${String(request.requestId)}`;
   const title = request.mode === 'form' ? request.requestedSchema.title || 'Elicitation request' : 'Elicitation request';
 
@@ -102,6 +106,40 @@ export function describeElicitationResolution(response: CreateElicitationRespons
   }
 }
 
+export function describeElicitationAnswers(fields: InboxFormField[]): Array<{ label: string; answer: string }> {
+  const answers: Array<{ label: string; answer: string }> = [];
+  for (const field of fields) {
+    const answer = describeFieldAnswer(field);
+    if (answer) answers.push({ label: field.label, answer });
+  }
+  return answers;
+}
+
+function describeFieldAnswer(field: InboxFormField): string | null {
+  if (field.customActive) {
+    const customValue = field.customValue?.trim() ?? '';
+    return customValue || null;
+  }
+
+  if (field.options?.length) {
+    if (field.kind === 'array' && Array.isArray(field.value)) {
+      const selectedValues = field.value;
+      const labels = field.options
+        .filter((option) => selectedValues.includes(option.value))
+        .map((option) => option.label);
+      return labels.length > 0 ? labels.join(', ') : null;
+    }
+
+    const selected = field.options.find((option) => option.value === field.value);
+    if (selected) return selected.label;
+  }
+
+  if (field.kind === 'boolean') return field.value ? 'Yes' : 'No';
+
+  const value = String(field.value ?? '').trim();
+  return value || null;
+}
+
 export function buildElicitationResponse(actionId: string, fields: InboxFormField[]): CreateElicitationResponse | null {
   if (actionId === 'decline') {
     return { action: 'decline' };
@@ -156,12 +194,16 @@ function mapPermissionOption(option: PermissionOption): InboxAction {
   };
 }
 
-function mapElicitationFormFields(schema: ElicitationSchema, allowCustom: boolean): InboxFormField[] {
+function mapElicitationFormFields(
+  schema: ElicitationSchema,
+  allowCustom: boolean,
+  optionDescriptions: Record<string, Record<string, string>>
+): InboxFormField[] {
   const properties = (schema.properties ?? {}) as Record<string, ElicitationPropertySchema>;
   const required = new Set(schema.required ?? []);
 
   return Object.entries(properties).map(([key, property]) => {
-    const options = mapPropertyOptions(property);
+    const options = mapPropertyOptions(property, optionDescriptions[key]);
     return {
       key,
       label: property.title || key,
@@ -184,10 +226,13 @@ function allowsCustomResponses(request: CreateElicitationRequest): boolean {
   return metadata.source === 'builtin:question' || metadata.allow_custom === true || metadata.allowCustom === true;
 }
 
-function mapPropertyOptions(property: ElicitationPropertySchema): InboxFormOption[] | undefined {
+function mapPropertyOptions(
+  property: ElicitationPropertySchema,
+  optionDescriptions?: Record<string, string>
+): InboxFormOption[] | undefined {
   if (property.type === 'string') {
     if (property.oneOf?.length) {
-      return property.oneOf.map((option) => ({ value: option.const, label: option.title }));
+      return property.oneOf.map((option) => mapTitledOption(option, optionDescriptions?.[option.const]));
     }
 
     if (property.enum?.length) {
@@ -197,13 +242,13 @@ function mapPropertyOptions(property: ElicitationPropertySchema): InboxFormOptio
 
   if (property.type === 'array') {
     const items = property.items as {
-      anyOf?: Array<{ const: string; title: string }>;
-      oneOf?: Array<{ const: string; title: string }>;
+      anyOf?: TitledElicitationOption[];
+      oneOf?: TitledElicitationOption[];
       enum?: string[];
     };
     const titledOptions = items.anyOf ?? items.oneOf;
     if (titledOptions?.length) {
-      return titledOptions.map((option) => ({ value: option.const, label: option.title }));
+      return titledOptions.map((option) => mapTitledOption(option, optionDescriptions?.[option.const]));
     }
 
     if (items.enum?.length) {
@@ -212,6 +257,36 @@ function mapPropertyOptions(property: ElicitationPropertySchema): InboxFormOptio
   }
 
   return undefined;
+}
+
+type TitledElicitationOption = {
+  const: string;
+  title: string;
+  description?: string | null;
+  _meta?: {
+    querymt?: {
+      description?: unknown;
+    };
+  } | null;
+};
+
+function titledOptionDescription(option: TitledElicitationOption, fallback?: string): string | undefined {
+  const candidates = [option.description, option._meta?.querymt?.description, fallback];
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    const description = candidate.trim();
+    if (description && description !== option.title) return description;
+  }
+  return undefined;
+}
+
+function mapTitledOption(option: TitledElicitationOption, fallback?: string): InboxFormOption {
+  const description = titledOptionDescription(option, fallback);
+  return {
+    value: option.const,
+    label: option.title,
+    ...(description ? { description } : {})
+  };
 }
 
 function getDefaultFieldValue(property: ElicitationPropertySchema): InboxFormField['value'] {

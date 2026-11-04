@@ -296,7 +296,6 @@
                 class="session-image-trigger"
                 type="button"
                 aria-label={`Open ${name}`}
-                title={name}
                 onclick={(event) => openImage(event, galleryKey)}
               >
                 <img

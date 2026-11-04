@@ -6,19 +6,24 @@
     icon: Icon,
     label,
     disabled = false,
+    busy = false,
     tone = 'default',
     controlSize = 'standard',
     size = undefined,
     iconClass = '',
+    class: className = '',
     onclick
   }: {
     icon: Component<{ size?: number; strokeWidth?: number; class?: string }>;
     label: string;
     disabled?: boolean;
+    /** Work in progress: clicks are ignored but the tooltip still explains what is happening. */
+    busy?: boolean;
     tone?: 'default' | 'accent' | 'primary' | 'danger';
     controlSize?: 'compact' | 'standard';
     size?: number;
     iconClass?: string;
+    class?: string;
     onclick?: () => void;
   } = $props();
 
@@ -28,11 +33,14 @@
 <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
   <Tooltip.Root disableHoverableContent disabled={disabled}>
     <Tooltip.Trigger
-      class={`icon-btn ${controlSize === 'compact' ? 'icon-btn-compact' : ''} ${tone === 'primary' ? 'icon-btn-primary' : tone === 'accent' ? 'icon-btn-accent' : tone === 'danger' ? 'icon-btn-danger' : ''}`}
+      class={`icon-btn ${controlSize === 'compact' ? 'icon-btn-compact' : ''} ${tone === 'primary' ? 'icon-btn-primary' : tone === 'accent' ? 'icon-btn-accent' : tone === 'danger' ? 'icon-btn-danger' : ''} ${className}`}
       type="button"
       aria-label={label}
+      aria-busy={busy || undefined}
+      aria-disabled={busy || undefined}
+      data-busy={busy || undefined}
       {disabled}
-      onclick={() => onclick?.()}
+      onclick={() => { if (!busy) onclick?.(); }}
     >
       <Icon size={iconSize} strokeWidth={2} class={iconClass} />
     </Tooltip.Trigger>

@@ -24,7 +24,7 @@ const item: InboxItem = {
       kind: 'array',
       required: true,
       options: [
-        { value: 'staging', label: 'Staging' },
+        { value: 'staging', label: 'Staging', description: 'Shared preview environment.' },
         { value: 'prod', label: 'Production environment with a long descriptive option label' }
       ],
       value: []
@@ -139,6 +139,8 @@ describe('InboxRequestCard', () => {
     expect(staging).toHaveClass('elicitation-option-row');
     expect(staging).not.toHaveClass('app-checkbox-pill');
     expect(longOption).toBeInTheDocument();
+    expect(screen.getByText('Shared preview environment.')).toBeInTheDocument();
+    expect(staging).toHaveAccessibleDescription('Shared preview environment.');
 
     await fireEvent.click(staging);
     await fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
@@ -177,7 +179,7 @@ describe('InboxRequestCard', () => {
           kind: 'string',
           required: true,
           options: [
-            { value: 'staging', label: 'Staging' },
+            { value: 'staging', label: 'Staging', description: 'Shared preview environment.' },
             { value: 'prod', label: 'Production environment with a long descriptive option label' }
           ],
           value: '',
@@ -199,6 +201,10 @@ describe('InboxRequestCard', () => {
 
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
     expect(screen.getByRole('radiogroup', { name: 'Target environment*' })).toBeInTheDocument();
+    expect(screen.getByText('Shared preview environment.')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Staging' })).toHaveAccessibleDescription(
+      'Shared preview environment.'
+    );
     await fireEvent.click(screen.getByRole('radio', { name: 'Staging' }));
     expect(onFieldChange).toHaveBeenCalledWith('elicitation-1', 'target', 'staging');
 
@@ -340,5 +346,132 @@ describe('InboxRequestCard', () => {
       'selection',
       'My custom environment'
     );
+  });
+
+  it('drops owner/session dump and keeps session id on Open session', async () => {
+    const onOpenSession = vi.fn();
+    render(InboxRequestCard, {
+      item: { ...item, agentId: 'agent-1', agentName: 'WS', sessionId: 'session-1' },
+      onOpenSession
+    });
+
+    expect(screen.queryByText(/Owner:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Severity:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Session:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('WS')).not.toBeInTheDocument();
+    expect(screen.queryByText('medium')).not.toBeInTheDocument();
+    const openSession = screen.getByRole('button', { name: 'Open session' });
+    expect(openSession).not.toHaveAttribute('title');
+    expect(openSession.querySelector('.lucide-arrow-up-right')).not.toBeNull();
+    await fireEvent.pointerEnter(openSession, { pointerType: 'mouse' });
+    const tooltip = await screen.findByText('session-1', { selector: '.app-tooltip-content' });
+    expect(tooltip).toHaveClass('app-tooltip-content');
+    await fireEvent.click(openSession);
+    expect(onOpenSession).toHaveBeenCalledOnce();
+  });
+
+  it('shows agent and non-default severity chips only when they add information', async () => {
+    const { rerender } = render(InboxRequestCard, {
+      item: { ...item, agentName: 'WS', severity: 'high' }
+    });
+
+    expect(screen.queryByText('WS')).not.toBeInTheDocument();
+    expect(screen.getByText('high')).toBeInTheDocument();
+
+    await rerender({
+      item: { ...item, type: 'permission', agentName: 'WS', severity: 'high' },
+      showAgentNames: true
+    });
+    expect(screen.getByText('WS')).toBeInTheDocument();
+    expect(screen.queryByText('high')).not.toBeInTheDocument();
+  });
+
+  it('shows only the selected disabled option on a submitted elicitation card', async () => {
+    render(InboxRequestCard, {
+      item: {
+        ...item,
+        status: 'resolved',
+        resolution: 'Submitted',
+        actions: [],
+        formFields: [
+          {
+            ...item.formFields![0],
+            kind: 'string',
+            value: 'Looks good',
+            options: [
+              { value: 'Looks good', label: 'Looks good', description: 'Arrow is on the right of Open session.' },
+              { value: 'Needs a tweak', label: 'Needs a tweak' }
+            ]
+          }
+        ]
+      }
+    });
+
+    const selected = screen.getByRole('radio', { name: 'Looks good' });
+    expect(selected).toBeChecked();
+    expect(selected).toBeDisabled();
+    expect(screen.getByText('Arrow is on the right of Open session.')).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Needs a tweak' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Custom answer…' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Submit' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Submitted')).not.toBeInTheDocument();
+    expect(screen.queryByText('elicitation')).not.toBeInTheDocument();
+    const submitted = screen.getByRole('button', { name: 'Submitted' });
+    expect(submitted).not.toHaveAttribute('title');
+    await fireEvent.pointerEnter(submitted, { pointerType: 'mouse' });
+    const tooltip = await screen.findByText('Submitted', { selector: '.app-tooltip-content' });
+    expect(tooltip).toHaveClass('app-tooltip-content');
+  });
+
+  it('collapses to the question and Open session button', async () => {
+    const onOpenSession = vi.fn();
+    render(InboxRequestCard, {
+      item: { ...item, agentId: 'agent-1', sessionId: 'session-1' },
+      collapsed: true,
+      onOpenSession
+    });
+
+    expect(screen.getByText('Choose environments')).toHaveClass('inbox-collapsed-detail');
+    expect(screen.queryByRole('heading', { name: 'Environments' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Submit' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pending' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Submitted' })).not.toBeInTheDocument();
+    const openSession = screen.getByRole('button', { name: 'Open session' });
+    expect(openSession.querySelector('.lucide-arrow-up-right')).not.toBeNull();
+    await fireEvent.click(openSession);
+    expect(onOpenSession).toHaveBeenCalledOnce();
+    await fireEvent.click(screen.getByRole('button', { name: 'Expand request' }));
+    expect(screen.getByRole('heading', { name: 'Environments' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pending' })).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse request' }));
+    expect(screen.queryByRole('heading', { name: 'Environments' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pending' })).toBeInTheDocument();
+  });
+
+  it('shows the pending marker on expanded unanswered cards', async () => {
+    render(InboxRequestCard, { item });
+
+    const pending = screen.getByRole('button', { name: 'Pending' });
+    expect(pending).not.toHaveAttribute('title');
+    expect(screen.queryByRole('button', { name: 'Submitted' })).not.toBeInTheDocument();
+    await fireEvent.pointerEnter(pending, { pointerType: 'mouse' });
+    const tooltip = await screen.findByText('Pending', { selector: '.app-tooltip-content' });
+    expect(tooltip).toHaveClass('app-tooltip-content');
+  });
+
+  it('marks collapsed submitted cards as submitted instead of pending', () => {
+    render(InboxRequestCard, {
+      item: {
+        ...item,
+        status: 'resolved',
+        resolution: 'Submitted',
+        actions: []
+      },
+      collapsed: true
+    });
+
+    expect(screen.getByRole('button', { name: 'Submitted' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pending' })).not.toBeInTheDocument();
   });
 });

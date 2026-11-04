@@ -24,12 +24,14 @@ describe('dark theme palette', () => {
     expect(darkTheme).toContain('--code-bg: #1b1b1b;');
   });
 
-  it('keeps passive panels quiet while the composer retains a subtle hover highlight', () => {
+  it('keeps passive panels quiet and the composer border constant on hover', () => {
     const panelStrong = appCss.match(/\.panel-strong \{([\s\S]*?)\n\}/)?.[1] ?? '';
-    const composerHover = appCss.match(/\.session-composer-dock-expanded:hover \{([\s\S]*?)\n\}/)?.[1] ?? '';
+    const composer = appCss.match(/\.session-composer-dock-expanded \{([\s\S]*?)\n\}/)?.[1] ?? '';
     expect(panelStrong).not.toContain('transition: border-color');
     expect(appCss).not.toContain('.panel:hover,');
-    expect(composerHover).toContain('border-color: color-mix(in srgb, var(--border), var(--border-strong) 42%);');
+    // The composer border does not change on hover or focus; it gets a static inset highlight instead.
+    expect(appCss).not.toContain('.session-composer-dock-expanded:hover');
+    expect(composer).toContain('inset 0 1px 0 rgba(255, 255, 255, 0.04)');
   });
 
   it('uses diff-addition green only for the resolved header icon', () => {
@@ -44,13 +46,32 @@ describe('dark theme palette', () => {
     expect(mobileMetadata).toContain('min-height: 13px;');
   });
 
+  it('centers workspace create controls and reserves fixed date columns', () => {
+    // Check every occurrence so a later duplicate cannot undo the layout.
+    const rules = (selector: string) => [...appCss.matchAll(new RegExp(`\\n${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]+)\\}`, 'g'))].map((match) => match[1]);
+    const createButtons = rules('.session-workspace-new');
+    expect(createButtons.length).toBeGreaterThan(0);
+    for (const rule of createButtons) {
+      expect(rule).toContain('top: 50%;');
+      expect(rule).toContain('transform: translateY(-50%);');
+    }
+    const dates = [
+      ...rules('.session-workspace-updated').filter((rule) => rule.includes('font-variant-numeric')),
+      ...rules('.session-row-side > .session-row-timestamp')
+    ];
+    expect(dates.length).toBeGreaterThanOrEqual(2);
+    for (const rule of dates) {
+      expect(rule).toContain('width: 6rem;');
+      expect(rule).toContain('flex: 0 0 6rem;');
+    }
+  });
+
   it('keeps workspace folders unframed and loading controls neutral', () => {
     const workspaceIcon = appCss.match(/\.session-workspace-icon \{([\s\S]*?)\n\}/)?.[1] ?? '';
     const loadMore = appCss.match(/\.session-workspace-load-more \{([\s\S]*?)\n\}/)?.[1] ?? '';
     expect(workspaceIcon).not.toMatch(/background:|border:|box-shadow:/);
     expect(workspaceIcon).toContain('color: var(--text-muted);');
-    expect(loadMore).toContain('width: 100%;');
-    expect(loadMore).toContain('background: var(--subtle-surface);');
-    expect(loadMore).toContain('color: var(--text-muted);');
+    expect(loadMore).toContain('background: transparent;');
+    expect(loadMore).toContain('color: var(--text-dim);');
   });
 });

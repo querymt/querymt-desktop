@@ -106,6 +106,30 @@ describe('SessionActionsMenu', () => {
   });
 });
 
+describe('SessionActionsMenu debug entry', () => {
+  it('shows the debug entry only when the caller provides a handler and opens it', async () => {
+    const view = render(SessionActionsMenu, { session });
+    await fireEvent.click(screen.getByRole('button', { name: 'Session actions for Lifecycle task' }));
+    expect(screen.queryByRole('menuitem', { name: /Debug events/ })).not.toBeInTheDocument();
+    const onDebug = vi.fn();
+    await view.rerender({ onDebug, debugLabel: 'Debug events (3)' });
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Debug events (3)' }));
+    expect(onDebug).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  });
+
+  it('uses a bits-ui tooltip instead of a native title when asked', async () => {
+    const view = render(SessionActionsMenu, { session, tooltip: true });
+    const trigger = screen.getByRole('button', { name: 'Session actions for Lifecycle task' });
+    expect(trigger).not.toHaveAttribute('title');
+    await fireEvent.pointerEnter(trigger, { pointerType: 'mouse' });
+    expect(await screen.findByText('Session actions', { selector: '.app-tooltip-content' })).toBeInTheDocument();
+    view.unmount();
+    render(SessionActionsMenu, { session });
+    expect(screen.getByRole('button', { name: 'Session actions for Lifecycle task' })).toHaveAttribute('title', 'Session actions');
+  });
+});
+
 describe('SessionActionsMenu worktree entries', () => {
   it('shows worktree actions only when the caller enables them', async () => {
     const view = render(SessionActionsMenu, { session });

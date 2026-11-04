@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { CreateElicitationRequest, ElicitationSchema } from '@agentclientprotocol/sdk';
-import { buildElicitationResponse, mapElicitationRequestToInboxItem } from './inbox';
+import { buildElicitationResponse, describeElicitationAnswers, mapElicitationRequestToInboxItem } from './inbox';
 
-function request(requestedSchema: ElicitationSchema, querymtMeta?: Record<string, unknown>): CreateElicitationRequest {
+// Fixtures carry option `description` and `_meta`, which the SDK's EnumOption type does not
+// declare but agents send; accept loose schemas here and cast once.
+function request(requestedSchema: Record<string, unknown>, querymtMeta?: Record<string, unknown>): CreateElicitationRequest {
   return {
     mode: 'form',
     sessionId: 'session-1',
     message: 'Choose environments',
-    requestedSchema,
+    requestedSchema: requestedSchema as unknown as ElicitationSchema,
     ...(querymtMeta ? { _meta: { querymt: querymtMeta } } : {})
   };
 }
@@ -20,13 +22,19 @@ describe('elicitation inbox mapping', () => {
         properties: {
           target: {
             type: 'string',
-            oneOf: [{ const: 'prod', title: 'Production' }]
+            oneOf: [
+              {
+                const: 'prod',
+                title: 'Production',
+                description: 'Live traffic. Changes take effect immediately.'
+              }
+            ]
           },
           environments: {
             type: 'array',
             items: {
               anyOf: [
-                { const: 'staging', title: 'Staging' },
+                { const: 'staging', title: 'Staging', description: 'Shared preview environment.' },
                 { const: 'prod', title: 'Production' }
               ]
             }
@@ -37,10 +45,108 @@ describe('elicitation inbox mapping', () => {
       'item-1'
     );
 
-    expect(item.formFields?.[0].options).toEqual([{ value: 'prod', label: 'Production' }]);
+    expect(item.formFields?.[0].options).toEqual([
+      {
+        value: 'prod',
+        label: 'Production',
+        description: 'Live traffic. Changes take effect immediately.'
+      }
+    ]);
     expect(item.formFields?.[1].options).toEqual([
-      { value: 'staging', label: 'Staging' },
+      { value: 'staging', label: 'Staging', description: 'Shared preview environment.' },
       { value: 'prod', label: 'Production' }
+    ]);
+  });
+
+  it('maps option descriptions from querymt option meta and hoisted request meta', () => {
+    const fromOptionMeta = mapElicitationRequestToInboxItem(
+      request({
+        type: 'object',
+        properties: {
+          selection: {
+            type: 'string',
+            oneOf: [
+              {
+                const: 'Reject unsupported setup (Recommended)',
+                title: 'Reject unsupported setup (Recommended)',
+                _meta: {
+                  querymt: {
+                    description:
+                      'Return a clear construction error for a non-local planner with local delegation enabled.'
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }),
+      'item-meta'
+    );
+
+    const fromRequestMeta = mapElicitationRequestToInboxItem(
+      request(
+        {
+          type: 'object',
+          properties: {
+            selection: {
+              type: 'string',
+              oneOf: [
+                {
+                  const: 'Preserve remote planner support',
+                  title: 'Preserve remote planner support'
+                }
+              ]
+            }
+          }
+        },
+        {
+          optionDescriptions: {
+            selection: {
+              'Preserve remote planner support':
+                'Pause that part for a compatible design rather than introducing a new construction error.'
+            }
+          }
+        }
+      ),
+      'item-hoisted'
+    );
+
+    expect(fromOptionMeta.formFields?.[0].options).toEqual([
+      {
+        value: 'Reject unsupported setup (Recommended)',
+        label: 'Reject unsupported setup (Recommended)',
+        description: 'Return a clear construction error for a non-local planner with local delegation enabled.'
+      }
+    ]);
+    expect(fromRequestMeta.formFields?.[0].options).toEqual([
+      {
+        value: 'Preserve remote planner support',
+        label: 'Preserve remote planner support',
+        description: 'Pause that part for a compatible design rather than introducing a new construction error.'
+      }
+    ]);
+  });
+
+  it('omits blank or title-identical option descriptions', () => {
+    const item = mapElicitationRequestToInboxItem(
+      request({
+        type: 'object',
+        properties: {
+          target: {
+            type: 'string',
+            oneOf: [
+              { const: 'prod', title: 'Production', description: '   ' },
+              { const: 'staging', title: 'Staging', description: 'Staging' }
+            ]
+          }
+        }
+      }),
+      'item-blank'
+    );
+
+    expect(item.formFields?.[0].options).toEqual([
+      { value: 'prod', label: 'Production' },
+      { value: 'staging', label: 'Staging' }
     ]);
   });
 
@@ -112,5 +218,35 @@ describe('elicitation inbox mapping', () => {
         }
       ])
     ).toEqual({ action: 'accept', content: { environments: ['staging', 'prod'] } });
+  });
+
+  it('summarizes submitted option labels and custom answers', () => {
+    expect(
+      describeElicitationAnswers([
+        {
+          key: 'selection',
+          label: 'Inbox meta',
+          kind: 'string',
+          required: true,
+          options: [
+            { value: 'Looks good', label: 'Looks good' },
+            { value: 'Needs a tweak', label: 'Needs a tweak' }
+          ],
+          value: 'Needs a tweak'
+        },
+        {
+          key: 'notes',
+          label: 'Notes',
+          kind: 'string',
+          required: false,
+          value: '',
+          customActive: true,
+          customValue: 'Move the arrow'
+        }
+      ])
+    ).toEqual([
+      { label: 'Inbox meta', answer: 'Needs a tweak' },
+      { label: 'Notes', answer: 'Move the arrow' }
+    ]);
   });
 });

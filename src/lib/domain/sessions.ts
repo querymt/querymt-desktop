@@ -484,6 +484,47 @@ export function formatSessionTimestamp(updatedAt: string | null, now: Date | num
   return formatSessionDate(value, reference);
 }
 
+export type SessionStatusTone = 'running' | 'warning' | 'success' | 'muted';
+
+/** Status dot tone shared by the session list and the session header, so one status never shows two colors. */
+export function getSessionStatusTone(status: SessionStatus): SessionStatusTone {
+  switch (status) {
+    case 'thinking':
+    case 'cancelling':
+      return 'running';
+    case 'waiting':
+    case 'unknown':
+      return 'warning';
+    case 'completed':
+      return 'success';
+    default:
+      return 'muted';
+  }
+}
+
+/**
+ * Compact relative label for tight spots such as the session header ("now",
+ * "5m", "3h", "2d"). Falls back to the calendar date after a week; the full
+ * date belongs in a tooltip (see formatSessionTimestampAbsolute).
+ */
+export function formatSessionTimestampShort(updatedAt: string | null, now: Date | number = new Date()): string {
+  if (!updatedAt) return 'No activity';
+
+  const value = new Date(updatedAt);
+  if (Number.isNaN(value.getTime())) return updatedAt;
+
+  const reference = now instanceof Date ? now : new Date(now);
+  const elapsed = reference.getTime() - value.getTime();
+  if (elapsed < MINUTE_MS) return 'now';
+  if (elapsed < HOUR_MS) return `${Math.floor(elapsed / MINUTE_MS)}m`;
+
+  // Elapsed time, not calendar days, so 2h ago across midnight still reads "2h".
+  if (elapsed < DAY_MS) return `${Math.floor(elapsed / HOUR_MS)}h`;
+  const days = Math.floor(elapsed / DAY_MS);
+  if (days < 7) return `${days}d`;
+  return formatSessionDate(value, reference);
+}
+
 function calendarDayDifference(a: Date, b: Date): number {
   const aDay = new Date(a.getFullYear(), a.getMonth(), a.getDate()).getTime();
   const bDay = new Date(b.getFullYear(), b.getMonth(), b.getDate()).getTime();

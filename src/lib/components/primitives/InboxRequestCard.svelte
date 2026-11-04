@@ -1,11 +1,15 @@
 <script lang="ts">
-  import { PlugZap } from '@lucide/svelte';
+  import { untrack } from 'svelte';
+  import { ArrowUpRight, ChevronRight, CircleCheckBig, CircleDot, PlugZap } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
   import AppCheckbox from '$lib/components/primitives/AppCheckbox.svelte';
   import type { InboxFormField, InboxItem } from '$lib/domain/types';
 
   let {
     item,
     compact = false,
+    collapsed: collapsedByDefault = false,
+    showAgentNames = false,
     onAction = null,
     onFieldChange = null,
     onCustomFieldToggle = null,
@@ -14,6 +18,8 @@
   }: {
     item: InboxItem;
     compact?: boolean;
+    collapsed?: boolean;
+    showAgentNames?: boolean;
     onAction?: ((itemId: string, actionId: string) => void | Promise<void>) | null;
     onFieldChange?: ((itemId: string, fieldKey: string, value: InboxFormField['value']) => void) | null;
     onCustomFieldToggle?: ((itemId: string, fieldKey: string, active: boolean) => void) | null;
@@ -23,6 +29,42 @@
 
   /** A pending card whose transport dropped: retained but not answerable until recovery. */
   const offline = $derived(item.offline === true && item.status !== 'resolved');
+  const showSeverity = $derived(item.type === 'permission' ? item.severity !== 'high' : item.severity !== 'medium');
+  const severityClass = $derived(
+    item.severity === 'high' ? 'badge-high' : item.severity === 'low' ? 'badge-low' : 'badge-medium'
+  );
+  // The prop only seeds the initial state; later toggles are the user's.
+  let isCollapsed = $state(untrack(() => collapsedByDefault));
+  const canOpenSession = $derived(Boolean(item.sessionId && item.agentId && onOpenSession));
+  const showOpenSession = $derived(!compact && canOpenSession);
+  const showResolvedCheck = $derived(item.status === 'resolved' && item.resolution === 'Submitted');
+  const showPendingMarker = $derived(item.status !== 'resolved');
+  const showActions = $derived(
+    Boolean(item.actions && item.actions.length > 0 && item.status !== 'resolved')
+  );
+  const formLocked = $derived(item.status === 'resolved' || offline);
+  const showForm = $derived(
+    Boolean(
+      item.formFields &&
+        item.formFields.length > 0 &&
+        (item.status !== 'resolved' || item.resolution === 'Submitted')
+    )
+  );
+
+  function visibleOptions(field: InboxFormField) {
+    const options = field.options ?? [];
+    if (item.status !== 'resolved' || item.resolution !== 'Submitted') return options;
+    if (field.customActive) return [];
+    if (field.kind === 'array' && Array.isArray(field.value)) {
+      const selectedValues = field.value;
+      return options.filter((option) => selectedValues.includes(option.value));
+    }
+    return options.filter((option) => option.value === field.value);
+  }
+
+  function showCustomOption(field: InboxFormField) {
+    return Boolean(field.allowCustom && (!formLocked || field.customActive));
+  }
 
   const primaryActionId = $derived.by(() => {
     const actions = item.actions ?? [];
@@ -45,63 +87,121 @@
   }
 </script>
 
-<article class={`surface-muted ${compact ? 'p-3' : 'p-4'}`}>
-  <div class="flex items-start justify-between gap-4">
-    <div>
-      <h3 class="text-sm font-semibold">{item.title}</h3>
-      <p class="muted mt-1 text-sm">{item.detail}</p>
-    </div>
-    <div class="flex items-center gap-2">
-      {#if item.status === 'resolved' && item.resolution}
+{#snippet statusMarker(kind: 'pending' | 'submitted')}
+  {@const label = kind === 'submitted' ? 'Submitted' : 'Pending'}
+  <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+    <Tooltip.Root disableHoverableContent>
+      <Tooltip.Trigger
+        type="button"
+        class={kind === 'submitted' ? 'inbox-resolved-check' : 'inbox-pending-marker'}
+        aria-label={label}
+      >
+        {#if kind === 'submitted'}
+          <CircleCheckBig size={13} aria-hidden="true" />
+        {:else}
+          <CircleDot size={13} aria-hidden="true" />
+        {/if}
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content class="app-tooltip-content" sideOffset={6}>{label}</Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  </Tooltip.Provider>
+{/snippet}
+
+{#snippet openSessionButton()}
+  <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+    <Tooltip.Root disableHoverableContent>
+      <Tooltip.Trigger
+        type="button"
+        class="action-btn action-btn-compact"
+        aria-label="Open session"
+        onclick={() => onOpenSession?.(item)}
+      >
+        Open session
+        <ArrowUpRight size={12} aria-hidden="true" />
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content class="app-tooltip-content" sideOffset={6}>{item.sessionId}</Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  </Tooltip.Provider>
+{/snippet}
+
+<article class={`surface-muted inbox-card ${compact || isCollapsed ? 'p-3' : 'p-4'}`}>
+  <div class={`inbox-card-header ${isCollapsed ? 'inbox-card-header-collapsed' : ''}`}>
+    {#if !compact}
+      <button
+        class="inbox-card-chevron"
+        type="button"
+        aria-expanded={!isCollapsed}
+        aria-label={isCollapsed ? 'Expand request' : 'Collapse request'}
+        onclick={() => (isCollapsed = !isCollapsed)}
+      >
+        <ChevronRight size={14} class={isCollapsed ? '' : 'inbox-card-chevron-open'} aria-hidden="true" />
+      </button>
+    {/if}
+    {#if isCollapsed}
+      <p class="inbox-collapsed-detail">{item.detail}</p>
+    {:else}
+      <div class="inbox-card-copy">
+        <h3 class="text-sm font-semibold">{item.title}</h3>
+        <p class="muted mt-1 text-sm">{item.detail}</p>
+      </div>
+    {/if}
+    <div class="inbox-card-end">
+      {#if !isCollapsed && showAgentNames && item.agentName}
+        <span class="badge">{item.agentName}</span>
+      {/if}
+      {#if !isCollapsed && showSeverity}
+        <span class={`badge ${severityClass}`}>{item.severity}</span>
+      {/if}
+      {#if showResolvedCheck}
+        {@render statusMarker('submitted')}
+      {:else if showPendingMarker}
+        {@render statusMarker('pending')}
+      {:else if item.resolution}
+        <!-- Rejected permissions, declined elicitations and other outcomes. -->
         <span class="badge">{item.resolution}</span>
-      {:else if offline}
+      {/if}
+      {#if offline}
         <span class="badge">Temporarily unavailable</span>
       {/if}
-      <span class="badge">{item.type}</span>
+      {#if showOpenSession}
+        {@render openSessionButton()}
+      {/if}
     </div>
   </div>
 
-  {#if !compact}
-    <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
-      <div class="muted text-xs">
-        {#if item.agentName}<span>Agent: {item.agentName} / </span>{/if}
-        <span>Owner: {item.owner} / Severity: {item.severity}</span>
-        {#if item.sessionId}<span> / Session: {item.sessionId}</span>{/if}
-      </div>
-      {#if item.sessionId && item.agentId && onOpenSession}
-        <button class="action-btn action-btn-compact" type="button" onclick={() => onOpenSession?.(item)}>
-          Open session
-        </button>
-      {/if}
-    </div>
-  {/if}
+  {#if !isCollapsed}
 
-  {#if item.formFields && item.formFields.length > 0 && item.status !== 'resolved'}
+  {#if showForm}
     <div class="mt-4 grid gap-3">
-      {#each item.formFields as field}
+      {#each item.formFields ?? [] as field}
         <div class="grid gap-2">
-          <span id={`${item.id}-${field.key}-label`} class="muted text-xs uppercase tracking-[0.18em]">
+          <span id={`${item.id}-${field.key}-label`} class="muted inbox-field-label text-xs uppercase tracking-[0.18em]">
             {field.label}{#if field.required} *{/if}
           </span>
           {#if field.kind === 'boolean'}
             <AppCheckbox
               checked={Boolean(field.value)}
               ariaLabel={field.label}
-              disabled={offline}
+              disabled={formLocked}
               onCheckedChange={(checked) => {
-                if (!offline) onFieldChange?.(item.id, field.key, checked);
+                if (!formLocked) onFieldChange?.(item.id, field.key, checked);
               }}
             />
           {:else if field.kind === 'array' && field.options}
             <div class="elicitation-option-list" role="group" aria-labelledby={`${item.id}-${field.key}-label`}>
-              {#each field.options as option}
+              {#each visibleOptions(field) as option}
                 <AppCheckbox
                   class="elicitation-option-row"
                   checked={!field.customActive && Array.isArray(field.value) && field.value.includes(option.value)}
                   label={option.label}
-                  disabled={offline}
+                  description={option.description ?? undefined}
+                  disabled={formLocked}
                   onCheckedChange={(checked) => {
-                    if (offline) return;
+                    if (formLocked) return;
                     const current = field.customActive || !Array.isArray(field.value) ? [] : field.value;
                     const next = checked
                       ? [...current, option.value]
@@ -110,16 +210,22 @@
                   }}
                 />
               {/each}
-              {#if field.allowCustom}
-                <AppCheckbox
-                  class="elicitation-option-row"
-                  checked={Boolean(field.customActive)}
-                  label="Custom answer…"
-                  disabled={offline}
-                  onCheckedChange={(checked) => {
-                    if (!offline) onCustomFieldToggle?.(item.id, field.key, checked);
-                  }}
-                />
+              {#if showCustomOption(field)}
+                <div class="elicitation-option-custom">
+                  {#if !formLocked}
+                    <span class="elicitation-option-or">or</span>
+                  {/if}
+                  <AppCheckbox
+                    class="elicitation-option-row elicitation-option-custom-row"
+                    checked={Boolean(field.customActive)}
+                    label="Custom answer…"
+                    description="Type a different response."
+                    disabled={formLocked}
+                    onCheckedChange={(checked) => {
+                      if (!formLocked) onCustomFieldToggle?.(item.id, field.key, checked);
+                    }}
+                  />
+                </div>
               {/if}
             </div>
             {#if field.customActive}
@@ -129,17 +235,18 @@
                 aria-label={`${field.label} custom response`}
                 placeholder="Custom answer…"
                 value={field.customValue ?? ''}
-                disabled={offline}
+                disabled={formLocked}
                 onkeydown={handleCustomAnswerKeydown}
                 oninput={(event) => {
-                  if (!offline)
+                  if (!formLocked)
                     onCustomFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value);
                 }}
               />
             {/if}
           {:else if field.options}
             <div class="elicitation-option-list" role="radiogroup" aria-labelledby={`${item.id}-${field.key}-label`}>
-              {#each field.options as option}
+              {#each visibleOptions(field) as option, optionIndex}
+                {@const descriptionId = option.description ? `${item.id}-${field.key}-option-${optionIndex}-desc` : undefined}
                 <label class="elicitation-option-row">
                   <input
                     class="elicitation-radio-input"
@@ -147,29 +254,45 @@
                     name={`${item.id}-${field.key}`}
                     value={option.value}
                     checked={!field.customActive && field.value === option.value}
-                    disabled={offline}
+                    disabled={formLocked}
+                    aria-label={option.label}
+                    aria-describedby={descriptionId}
                     onchange={() => {
-                      if (!offline) onFieldChange?.(item.id, field.key, option.value);
+                      if (!formLocked) onFieldChange?.(item.id, field.key, option.value);
                     }}
                   />
-                  <span class="elicitation-option-label">{option.label}</span>
+                  <span class="elicitation-option-copy">
+                    <span class="elicitation-option-label">{option.label}</span>
+                    {#if option.description}
+                      <span id={descriptionId} class="elicitation-option-description">{option.description}</span>
+                    {/if}
+                  </span>
                 </label>
               {/each}
-              {#if field.allowCustom}
-                <label class="elicitation-option-row">
-                  <input
-                    class="elicitation-radio-input"
-                    type="radio"
-                    name={`${item.id}-${field.key}`}
-                    value="__querymt_custom__"
-                    checked={Boolean(field.customActive)}
-                    disabled={offline}
-                    onchange={() => {
-                      if (!offline) onCustomFieldToggle?.(item.id, field.key, true);
-                    }}
-                  />
-                  <span class="elicitation-option-label">Custom answer…</span>
-                </label>
+              {#if showCustomOption(field)}
+                <div class="elicitation-option-custom">
+                  {#if !formLocked}
+                    <span class="elicitation-option-or">or</span>
+                  {/if}
+                  <label class="elicitation-option-row elicitation-option-custom-row">
+                    <input
+                      class="elicitation-radio-input"
+                      type="radio"
+                      name={`${item.id}-${field.key}`}
+                      value="__querymt_custom__"
+                      checked={Boolean(field.customActive)}
+                      disabled={formLocked}
+                      aria-label="Custom answer…"
+                      onchange={() => {
+                        if (!formLocked) onCustomFieldToggle?.(item.id, field.key, true);
+                      }}
+                    />
+                    <span class="elicitation-option-copy">
+                      <span class="elicitation-option-label">Custom answer…</span>
+                      <span class="elicitation-option-description">Type a different response.</span>
+                    </span>
+                  </label>
+                </div>
               {/if}
             </div>
             {#if field.customActive}
@@ -179,10 +302,10 @@
                 aria-label={`${field.label} custom response`}
                 placeholder="Custom answer…"
                 value={field.customValue ?? ''}
-                disabled={offline}
+                disabled={formLocked}
                 onkeydown={handleCustomAnswerKeydown}
                 oninput={(event) => {
-                  if (!offline)
+                  if (!formLocked)
                     onCustomFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value);
                 }}
               />
@@ -193,9 +316,9 @@
               type="number"
               aria-label={field.label}
               value={String(field.value)}
-              disabled={offline}
+              disabled={formLocked}
               onchange={(event) => {
-                if (!offline)
+                if (!formLocked)
                   onFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value);
               }}
             />
@@ -205,9 +328,9 @@
               type="text"
               aria-label={field.label}
               value={String(field.value)}
-              disabled={offline}
+              disabled={formLocked}
               onchange={(event) => {
-                if (!offline)
+                if (!formLocked)
                   onFieldChange?.(item.id, field.key, (event.currentTarget as HTMLInputElement).value);
               }}
             />
@@ -234,20 +357,21 @@
     <div class="alert-error mt-4">{item.error}</div>
   {/if}
 
-  {#if item.actions && item.actions.length > 0 && item.status !== 'resolved'}
-    <div class="mt-4 flex flex-wrap gap-2">
-      {#each item.actions as action}
-        <button
-          class={`action-btn ${action.id === primaryActionId ? 'action-btn-primary' : ''}`}
-          type="button"
-          disabled={offline}
-          onclick={() => {
-            if (!offline) onAction?.(item.id, action.id);
-          }}
-        >
-          {action.label}
-        </button>
-      {/each}
+  {#if showActions}
+    <div class="mt-4 flex flex-wrap items-center gap-2">
+      {#each item.actions ?? [] as action}
+          <button
+            class={`action-btn ${action.id === primaryActionId ? 'action-btn-primary' : ''}`}
+            type="button"
+            disabled={offline}
+            onclick={() => {
+              if (!offline) onAction?.(item.id, action.id);
+            }}
+          >
+            {action.label}
+          </button>
+        {/each}
     </div>
+  {/if}
   {/if}
 </article>

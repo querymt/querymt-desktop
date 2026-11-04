@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionConfigOption, SessionConfigSelectGroup, SessionConfigSelectOption } from '@agentclientprotocol/sdk';
-import { getSessionContextTone, SESSION_CONTEXT_TONE_COUNT } from './session-mode-tone';
+import { getModeToneIndex, getSessionContextTone, SESSION_CONTEXT_TONE_COUNT } from './session-mode-tone';
 
 function modeOption(values: string[], currentValue?: string): SessionConfigOption {
   return {
@@ -26,6 +26,20 @@ function groupedModeOption(groups: string[][], currentValue: string): SessionCon
     options
   } as SessionConfigOption;
 }
+
+describe('getModeToneIndex', () => {
+  it('colors modes by their position in the advertised list', () => {
+    const ids = ['build', 'plan', 'review'];
+    expect(ids.map((id) => getModeToneIndex(ids, id))).toEqual([0, 1, 2]);
+  });
+
+  it('keeps unknown ids inside the palette and stable', () => {
+    const tone = getModeToneIndex(['build'], 'mystery');
+    expect(tone).toBeGreaterThanOrEqual(0);
+    expect(tone).toBeLessThan(SESSION_CONTEXT_TONE_COUNT);
+    expect(getModeToneIndex(['build'], 'mystery')).toBe(tone);
+  });
+});
 
 describe('getSessionContextTone', () => {
   it('returns null when the session exposes no mode information', () => {

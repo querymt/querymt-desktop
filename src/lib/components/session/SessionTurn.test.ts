@@ -170,6 +170,33 @@ describe('SessionTurn', () => {
     expect(container.querySelector('.session-message-user')).not.toHaveTextContent('key: secret');
   });
 
+  it('renders user attachments before the prompt text', () => {
+    const attachmentTurn: SessionConversationTurn = {
+      id: 'attachments-before-text',
+      forkMessageId: null,
+      user: {
+        id: 'user-attachments-before-text',
+        messageId: 'u-attachments-before-text',
+        text: 'Inspect the screenshot',
+        html: '<p>Inspect the screenshot</p>',
+        blocks: [
+          { type: 'text', text: 'Inspect the screenshot' },
+          { type: 'image', data: 'aW1n', mimeType: 'image/png', name: 'photo.png' }
+        ]
+      },
+      content: []
+    };
+    const { container } = render(SessionTurn, { turn: attachmentTurn });
+    const bubble = container.querySelector('.session-message-user');
+    const attachments = container.querySelector('.session-user-message-attachments');
+    const body = container.querySelector('.session-message-body');
+
+    expect(attachments).not.toBeNull();
+    expect(body).not.toBeNull();
+    expect(bubble?.contains(attachments)).toBe(false);
+    expect(attachments!.compareDocumentPosition(bubble!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
   it('shows a neutral placeholder for metadata-only messages', () => {
     const { container, queryByRole, getByText } = render(SessionTurn, { turn: metadataMessage('---\nkey: secret\n---') });
     expect(getByText('No message body')).toBeInTheDocument();
@@ -369,7 +396,7 @@ describe('SessionTurn', () => {
     const { container, getByRole, getByText, queryByRole } = render(SessionTurn, { turn: attachmentTurn });
 
     const trigger = getByRole('button', { name: 'Open photo.png' });
-    expect(trigger).toHaveAttribute('title', 'photo.png');
+    expect(trigger).not.toHaveAttribute('title');
     expect(within(trigger).getByRole('img', { name: 'photo.png' })).toHaveAttribute('src', 'data:image/png;base64,aW1n');
     expect(within(trigger).getByRole('img', { name: 'photo.png' })).toHaveClass('session-image-thumbnail');
     expect(container.querySelector('figcaption')).toBeNull();

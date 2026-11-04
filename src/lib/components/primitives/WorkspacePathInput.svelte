@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { FolderSearch } from '@lucide/svelte';
+  import { Folder, FolderSearch } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
   import { onDestroy } from 'svelte';
   import { suggestWorkspacePaths } from '$native';
   import type { WorkspaceSuggestion } from '$lib/domain/types';
@@ -11,25 +12,72 @@
     value = '',
     disabled = false,
     recentPaths = [],
+    scrollIntoViewOnOpen = false,
     onInput
   }: {
     value?: string;
     disabled?: boolean;
     recentPaths?: string[];
+    /** Scroll the nearest scrollable ancestor so the whole suggestion list is visible (for forms in scrolling dialogs). */
+    scrollIntoViewOnOpen?: boolean;
     onInput: (value: string) => void;
   } = $props();
 
   let suggestions = $state<WorkspaceSuggestion[]>([]);
   let open = $state(false);
   let highlightedIndex = $state(0);
+  let keyboardNavigating = $state(false);
   let loading = $state(false);
   let requestToken = 0;
   let containerElement: HTMLDivElement | null = null;
   let inputElement: HTMLInputElement | null = null;
+  let popoverElement = $state<HTMLDivElement | null>(null);
+  let revealedForThisOpening = false;
   let selectingSuggestion = false;
   let restoringInputFocus = false;
 
   onDestroy(() => { requestToken += 1; });
+
+  /**
+   * Scroll only the dialog body (never overflow:hidden ancestors, which scrollIntoView would
+   * also move) so the bottom of the list clears the pinned footer.
+   */
+  function revealInDialogBody(element: HTMLElement) {
+    const body = element.closest<HTMLElement>('.app-dialog-body');
+    if (!body) return;
+    const overshoot = element.getBoundingClientRect().bottom - body.getBoundingClientRect().bottom + 16;
+    if (overshoot > 0) body.scrollTo?.({ top: body.scrollTop + overshoot, behavior: 'smooth' });
+  }
+
+  // Once per opening, bring the whole list into view. Without this only the highlighted
+  // (first) row is revealed and the rest is left under a dialog footer.
+  $effect(() => {
+    const isOpen = open && suggestions.length > 0;
+    if (!isOpen) {
+      revealedForThisOpening = false;
+      return;
+    }
+    if (scrollIntoViewOnOpen && popoverElement && !revealedForThisOpening) {
+      revealedForThisOpening = true;
+      revealInDialogBody(popoverElement);
+    }
+  });
+
+  // The popover scrolls once it is height-capped; keep the arrow-key highlight visible.
+  $effect(() => {
+    if (!open) return;
+    const index = highlightedIndex;
+    // Track the result set too: a new list with the same index must still reveal the row.
+    void suggestions;
+    const popover = popoverElement;
+    const row = popover?.querySelectorAll<HTMLElement>('.workspace-suggestion-row')[index];
+    if (!popover || !row) return;
+    // Scroll only the popover; scrollIntoView would also move clipping ancestors (e.g. a dialog).
+    const popoverRect = popover.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    if (rowRect.top < popoverRect.top) popover.scrollTop -= popoverRect.top - rowRect.top;
+    else if (rowRect.bottom > popoverRect.bottom) popover.scrollTop += rowRect.bottom - popoverRect.bottom;
+  });
 
   function closeSuggestions() {
     selectingSuggestion = false;
@@ -121,8 +169,17 @@
 
   function formatSuggestionName(suggestion: WorkspaceSuggestion): string {
     return suggestion.name.startsWith(RECENT_PREFIX)
-      ? suggestion.path.split('/').filter(Boolean).pop() ?? suggestion.path
+      ? suggestion.path.split(/[\\/]/).filter(Boolean).pop() ?? suggestion.path
       : suggestion.name;
+  }
+
+  /** Directory containing the suggestion, shown dimmed after the name on the same line. */
+  function formatSuggestionParent(suggestion: WorkspaceSuggestion): string {
+    // Accept both separators so Windows-style paths split correctly too.
+    const trimmed = suggestion.path.replace(/[\\/]+$/, '');
+    const cut = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+    if (cut < 0) return '';
+    return trimmed.slice(0, cut) || trimmed.charAt(cut);
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -137,12 +194,14 @@
 
     if (event.key === 'ArrowDown') {
       event.preventDefault();
+      keyboardNavigating = true;
       highlightedIndex = Math.min(highlightedIndex + 1, suggestions.length - 1);
       return;
     }
 
     if (event.key === 'ArrowUp') {
       event.preventDefault();
+      keyboardNavigating = true;
       highlightedIndex = Math.max(highlightedIndex - 1, 0);
       return;
     }
@@ -183,21 +242,47 @@
   {/if}
 
   {#if open && suggestions.length > 0}
-    <div class="workspace-suggestion-popover">
-      {#each suggestions as suggestion, index}
-        <button
-          class="workspace-suggestion-row"
-          class:model-picker-row-selected={highlightedIndex === index}
-          type="button"
-          onpointerdown={beginSuggestionPointer}
-          onmousedown={(event) => event.preventDefault()}
-          onclick={() => applySuggestion(suggestion.path)}
-          onmousemove={() => (highlightedIndex = index)}
-        >
-          <div class="truncate text-sm font-medium">{formatSuggestionName(suggestion)}</div>
-          <div class="muted truncate text-xs">{suggestion.path}</div>
-        </button>
-      {/each}
+    <div class="workspace-suggestion-popover" bind:this={popoverElement}>
+      <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+        {#each suggestions as suggestion, index}
+          <Tooltip.Root disableHoverableContent>
+            <Tooltip.Trigger>
+              {#snippet child({ props })}
+                <!-- The tooltip owns pointerdown/click on this row too, so chain our handlers after it. -->
+                <button
+                  {...props}
+                  class="workspace-suggestion-row"
+                  data-highlighted={highlightedIndex === index ? '' : undefined}
+                  data-keyboard-highlighted={keyboardNavigating && highlightedIndex === index ? '' : undefined}
+                  type="button"
+                  onpointerdown={(event) => {
+                    (props.onpointerdown as ((e: PointerEvent) => void) | undefined)?.(event);
+                    beginSuggestionPointer(event);
+                  }}
+                  onmousedown={(event) => event.preventDefault()}
+                  onclick={(event) => {
+                    (props.onclick as ((e: MouseEvent) => void) | undefined)?.(event);
+                    applySuggestion(suggestion.path);
+                  }}
+                  onmousemove={() => {
+                    keyboardNavigating = false;
+                    highlightedIndex = index;
+                  }}
+                >
+                  <Folder class="workspace-suggestion-icon" size={15} strokeWidth={2} />
+                  <span class="workspace-suggestion-name">{formatSuggestionName(suggestion)}</span>
+                  <span class="workspace-suggestion-path">{formatSuggestionParent(suggestion)}</span>
+                </button>
+              {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class="app-tooltip-content" side="bottom" align="start" sideOffset={6}>
+                {suggestion.path}
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+        {/each}
+      </Tooltip.Provider>
     </div>
   {/if}
 </div>

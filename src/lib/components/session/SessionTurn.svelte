@@ -76,13 +76,20 @@
     const segments = contentSegments(turn.user?.blocks, turn.user?.text ?? '');
     const firstTextIndex = segments.findIndex((segment) => segment.type === 'text');
     const first = segments[firstTextIndex];
-    if (first?.type !== 'text') return { segments, frontMatter: null };
-    const { body, frontMatter } = extractMessageFrontMatter(first.block.text);
-    if (frontMatter) {
-      if (body.trim()) segments[firstTextIndex] = { type: 'text', block: { type: 'text', text: body } };
-      else segments.splice(firstTextIndex, 1);
+    let frontMatter = null;
+    if (first?.type === 'text') {
+      const extracted = extractMessageFrontMatter(first.block.text);
+      frontMatter = extracted.frontMatter;
+      if (frontMatter) {
+        if (extracted.body.trim()) segments[firstTextIndex] = { type: 'text', block: { type: 'text', text: extracted.body } };
+        else segments.splice(firstTextIndex, 1);
+      }
     }
-    return { segments, frontMatter };
+    return {
+      attachmentSegments: segments.filter((segment) => segment.type === 'attachments'),
+      textSegments: segments.filter((segment) => segment.type === 'text'),
+      frontMatter
+    };
   });
   const metadataKey = $derived(userPresentation.frontMatter ? `${turn.user?.id}\u0000${userPresentation.frontMatter.source}` : null);
   const metadataOpen = $derived(chatPreferencesStore.developerMode && metadataKey !== null && metadataOpenKey === metadataKey);
@@ -176,22 +183,26 @@
 <article class:session-turn-reverted={reverted} class="session-turn" data-turn-id={turn.id}>
   {#if turn.user}
     <section class="session-user-message-shell">
-      <div class="session-message session-message-user">
-        {#if userPresentation.frontMatter && userPresentation.segments.length === 0}
+      {#each userPresentation.attachmentSegments as segment}
+        <div class="session-user-message-attachments">
+          <SessionAttachmentPreview blocks={segment.blocks} gallery={imageGallery} {failedImageKeys} {onImageFailure} />
+        </div>
+      {/each}
+      {#if userPresentation.frontMatter && userPresentation.textSegments.length === 0}
+        <div class="session-message session-message-user">
           <p class="muted">No message body</p>
-        {/if}
-        {#each userPresentation.segments as segment}
-          {#if segment.type === 'text'}
+        </div>
+      {:else if userPresentation.textSegments.length > 0}
+        <div class="session-message session-message-user">
+          {#each userPresentation.textSegments as segment}
             {@const parts = markdownParts(userPresentation.frontMatter ? undefined : turn.user.html, segment.block.text, false, turn.user.text)}
             <div class="session-message-body markdown-body" use:enhanceCodeBlocks>
               {#if parts.frozenHtml}<div class="session-message-body-frozen">{@html parts.frozenHtml}</div>{/if}
               {#if parts.tailText}<div class="session-message-body-tail">{parts.tailText}</div>{/if}
             </div>
-          {:else}
-            <SessionAttachmentPreview blocks={segment.blocks} gallery={imageGallery} {failedImageKeys} {onImageFailure} />
-          {/if}
-        {/each}
-      </div>
+          {/each}
+        </div>
+      {/if}
 
       <div class="session-message-actions session-user-message-actions" aria-label="User message actions">
         {#if turn.user.text}<button

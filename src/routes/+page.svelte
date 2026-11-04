@@ -2,13 +2,97 @@
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
   import { FolderOpen } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import { agentsStore, LAUNCH_MODE_OPTIONS, LAUNCH_REASONING_OPTIONS } from '$lib/stores/agents.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { WORKSPACE_MODE_OPTIONS, type ComposerWorkspaceMode } from '$lib/domain/session-workspace';
   import { inboxStore } from '$lib/stores/inbox.svelte';
+  import { workspacesStore } from '$lib/stores/workspaces.svelte';
+  import { mergeWorkspaceSuggestions } from '$lib/domain/workspace-suggestions';
+  import { formatSessionTimestampShort, getSessionWorkspaceName, isActiveSessionStatus, isRootSession, sessionMatchesLifecycle } from '$lib/domain/sessions';
+  import type { DesktopSessionSummary, InboxItem } from '$lib/domain/types';
+
+  const NEEDS_YOU_LIMIT = 3;
+
+  type NeedsYouEntry = {
+    key: string;
+    title: string;
+    detail: string;
+    workspace: string | null;
+    updatedAt: string | null;
+    href: string;
+    action: 'Reply' | 'Open';
+    running?: boolean;
+  };
+
+  // Ticking reference so the relative times advance on their own.
+  let relativeTimeNow = $state(Date.now());
+  $effect(() => {
+    const timer = setInterval(() => (relativeTimeNow = Date.now()), 30_000);
+    return () => clearInterval(timer);
+  });
+
+  // One entry per session that is waiting on the user; requests without a
+  // session (e.g. auth) link to the Inbox instead.
+  const needsYou = $derived.by((): NeedsYouEntry[] => {
+    const items: InboxItem[] = inboxStore.actionableItems ?? [];
+    const sessions: DesktopSessionSummary[] = agentsStore.sessions ?? [];
+    const seen = new Set<string>();
+    const entries: NeedsYouEntry[] = [];
+    for (const item of items) {
+      if (item.offline) continue;
+      // Elicitations collapse into one row per session; every permission request keeps its own row.
+      const key = item.type === 'elicitation' && item.agentId && item.sessionId
+        ? `${item.agentId}:${item.sessionId}`
+        : `inbox:${item.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const session = item.agentId && item.sessionId
+        ? sessions.find((candidate) => candidate.agentId === item.agentId && candidate.sessionId === item.sessionId)
+        : undefined;
+      entries.push({
+        key,
+        title: session?.title ?? item.title,
+        detail: item.title,
+        workspace: session?.cwd ? getSessionWorkspaceName(session.cwd) : null,
+        updatedAt: session?.updatedAt ?? null,
+        // Only elicitations can be answered in the session; permissions are handled in the Inbox.
+        href: session && item.type === 'elicitation' ? `/sessions/${encodeURIComponent(session.agentId)}/${encodeURIComponent(session.sessionId)}` : '/inbox',
+        action: item.type === 'elicitation' ? 'Reply' : 'Open'
+      });
+    }
+    return entries;
+  });
+
+  // When nothing is waiting, the same slot offers the most recently active open
+  // sessions so the page always has something to act on.
+  const recentEntries = $derived.by((): NeedsYouEntry[] => {
+    const sessions: DesktopSessionSummary[] = agentsStore.sessions ?? [];
+    return sessions
+      .filter((session) => isRootSession(session) && sessionMatchesLifecycle(session.lifecycle, { resolution: 'open', archive: 'excluded' }))
+      .slice()
+      .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+      .slice(0, NEEDS_YOU_LIMIT)
+      .map((session) => ({
+        key: `${session.agentId}:${session.sessionId}`,
+        title: session.title,
+        detail: session.title,
+        workspace: session.cwd ? getSessionWorkspaceName(session.cwd) : null,
+        updatedAt: session.updatedAt ?? null,
+        href: `/sessions/${encodeURIComponent(session.agentId)}/${encodeURIComponent(session.sessionId)}`,
+        action: 'Open' as const,
+        running: isActiveSessionStatus(session.status)
+      }));
+  });
+
+  const showNeedsYou = $derived(needsYou.length > 0);
+  // Offline requests cannot be answered right now, so they do not "need input".
+  const onlineRequestCount = $derived((inboxStore.actionableItems ?? []).filter((item) => !item.offline).length);
+  const stripEntries = $derived(showNeedsYou ? needsYou.slice(0, NEEDS_YOU_LIMIT) : recentEntries);
 
   const onlineAgents = $derived(agentsStore.connectedAgents);
+  const configuredAgentCount = $derived(agentsStore.configs.filter((config) => config.enabled).length);
 
   const primaryAgentId = $derived(
     agentsStore.configs.find((config) => config.enabled && config.id === agentsStore.composerAgentId)?.id ??
@@ -67,7 +151,24 @@
   }
 </script>
 
-<div class="start-launch-page flex min-h-[calc(100vh-7rem)] w-full items-center justify-center px-4">
+{#snippet overviewLink(href: string, hint: string, label: import('svelte').Snippet)}
+  <Tooltip.Root disableHoverableContent>
+    <Tooltip.Trigger>
+      {#snippet child({ props })}
+        <a {...props} class="status-item status-item-link" {href}>{@render label()}</a>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Tooltip.Portal>
+      <Tooltip.Content class="app-tooltip-content" sideOffset={6}>{hint}</Tooltip.Content>
+    </Tooltip.Portal>
+  </Tooltip.Root>
+{/snippet}
+
+{#snippet sessionsLabel()}<strong>{activeNowCount}</strong> {activeNowCount === 1 ? 'session' : 'sessions'} running{/snippet}
+{#snippet agentsLabel()}<strong>{onlineAgents.length}/{configuredAgentCount}</strong> {configuredAgentCount === 1 ? 'agent' : 'agents'} connected{/snippet}
+{#snippet inboxLabel()}<strong>{onlineRequestCount}</strong> {onlineRequestCount === 1 ? 'request needs' : 'requests need'} input{/snippet}
+
+<div class="start-launch-page flex min-h-[calc(100vh-7rem)] w-full items-start justify-center px-4">
   <section class="mx-auto w-full max-w-4xl space-y-6">
     <div class="space-y-3 text-center">
       <div class="section-eyebrow">New session</div>
@@ -113,7 +214,7 @@
       recentModels={primaryAgentId ? agentsStore.getRecentModels(primaryAgentId) : []}
       modelLoading={primaryAgentId ? !!agentsStore.modelLoadingByAgent[primaryAgentId] : false}
       agentLabel={showAgentBadges && primaryAgentId ? (agentsStore.configs.find((config) => config.id === primaryAgentId)?.name ?? primaryAgentId) : null}
-      recentWorkspaces={agentsStore.getRecentWorkspaces()}
+      recentWorkspaces={mergeWorkspaceSuggestions(workspacesStore.items, agentsStore.getRecentWorkspaces())}
       attachments={agentsStore.promptAttachments}
       profileOptions={agentsStore.getProfileOptions(primaryAgentId)}
       selectedProfileId={agentsStore.composerProfileId}
@@ -147,10 +248,37 @@
       onSendPrompt={() => startSessionFromLauncher()}
     />
 
-    <div class="flex flex-wrap items-center justify-center gap-3 text-sm text-[var(--muted)]">
-      <span class="status-item"><strong>{activeNowCount}</strong> active</span>
-      <span class="status-item"><strong>{onlineAgents.length}</strong> online</span>
-      <span class="status-item"><strong>{inboxStore.pendingCount}</strong> inbox</span>
-    </div>
+    {#if stripEntries.length}
+      <section class="start-needs-you" class:start-needs-you-recent={!showNeedsYou} aria-labelledby="start-needs-you-heading">
+        <h2 id="start-needs-you-heading" class="start-needs-you-heading">{showNeedsYou ? 'Needs you' : 'Continue where you left off'}</h2>
+        <ul class="start-needs-you-list">
+          {#each stripEntries as entry (entry.key)}
+            <li>
+              <a class="start-needs-you-row" href={entry.href}>
+                <span class="start-needs-you-dot" class:start-needs-you-dot-running={entry.running} aria-hidden="true"></span>
+                <span class="start-needs-you-copy">
+                  <strong>{entry.title}</strong>
+                  {#if entry.detail !== entry.title}<small>{entry.detail}</small>{/if}
+                </span>
+                {#if entry.workspace}<span class="start-needs-you-meta">{entry.workspace}</span>{/if}
+                {#if entry.updatedAt}<span class="start-needs-you-meta start-needs-you-time">{formatSessionTimestampShort(entry.updatedAt, relativeTimeNow)}</span>{/if}
+                <span class="start-needs-you-action">{entry.action}</span>
+              </a>
+            </li>
+          {/each}
+        </ul>
+        {#if showNeedsYou && needsYou.length > NEEDS_YOU_LIMIT}
+          <a class="start-needs-you-more" href="/inbox">{needsYou.length - NEEDS_YOU_LIMIT} more in Inbox</a>
+        {/if}
+      </section>
+    {/if}
+
+    <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+      <nav class="flex flex-wrap items-center justify-center gap-3 text-sm text-[var(--muted)]" aria-label="Overview">
+        {@render overviewLink('/sessions', 'Sessions currently running on this machine or the mesh', sessionsLabel)}
+        {@render overviewLink('/agents', 'Agents connected and ready to start sessions', agentsLabel)}
+        {@render overviewLink('/inbox', 'Requests waiting for your answer', inboxLabel)}
+      </nav>
+    </Tooltip.Provider>
   </section>
 </div>

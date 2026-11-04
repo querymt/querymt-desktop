@@ -1,12 +1,15 @@
 import type { CommandPalettePrefill } from '$lib/domain/types';
 
-export type CommandPaletteMode = 'commands' | 'schedule' | 'remote-create' | 'remote-attach';
+export type CommandPaletteMode = 'commands' | 'remote-create' | 'remote-attach';
 
 class CommandPaletteStore {
   open = $state(false);
   mode = $state<CommandPaletteMode>('commands');
   query = $state('');
   prefill = $state<CommandPalettePrefill | null>(null);
+  /** The create-automation dialog is its own surface, not a palette mode. */
+  scheduleOpen = $state(false);
+  schedulePrefill = $state<CommandPalettePrefill | null>(null);
 
   openCommands(prefill: CommandPalettePrefill | null = null) {
     this.open = true;
@@ -16,10 +19,14 @@ class CommandPaletteStore {
   }
 
   openSchedule(prefill: CommandPalettePrefill | null = null) {
-    this.open = true;
-    this.mode = 'schedule';
-    this.query = '';
-    this.prefill = prefill;
+    this.close();
+    this.scheduleOpen = true;
+    this.schedulePrefill = prefill;
+  }
+
+  closeSchedule() {
+    this.scheduleOpen = false;
+    this.schedulePrefill = null;
   }
 
   openRemoteCreate(prefill: CommandPalettePrefill | null = null) {

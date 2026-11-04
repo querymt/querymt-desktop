@@ -32,6 +32,8 @@
   --row-surface: rgba(255, 255, 255, 0.74);
   --row-surface-hover: rgba(36, 31, 49, 0.055);
   --icon-surface: rgba(94, 92, 100, 0.08);
+  --composer-pill-surface: rgba(94, 92, 100, 0.07);
+  --composer-pill-surface-hover: rgba(94, 92, 100, 0.13);
   --selected-surface: rgba(249, 115, 22, 0.13);
   --selected-border: rgba(249, 115, 22, 0.32);
   --status-running: #9a6700;
@@ -134,6 +136,8 @@
   --row-surface: #222222;
   --row-surface-hover: rgba(255, 255, 255, 0.055);
   --icon-surface: #202020;
+  --composer-pill-surface: rgba(255, 255, 255, 0.045);
+  --composer-pill-surface-hover: rgba(255, 255, 255, 0.09);
   --selected-surface: rgba(255, 122, 26, 0.1);
   --selected-border: rgba(255, 122, 26, 0.28);
   --status-running: #ffd27a;
@@ -286,8 +290,102 @@ select {
   gap: 1.45rem;
 }
 
+/* Agents page controls: faint fills and ghost icon buttons instead of borders,
+   like dialogs ("Dialog controls"). The details panel and log viewer are
+   portaled, so they are listed explicitly. See TODO(restyle) on .action-btn. */
+:is(.agents-page, .agent-details-panel, .agent-log-viewer, .sessions-page-actions) .icon-btn:not(.icon-btn-primary, .icon-btn-accent) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+:is(.agents-page, .agent-details-panel, .agent-log-viewer, .sessions-page-actions) .icon-btn:not(.icon-btn-primary, .icon-btn-accent, .icon-btn-danger):hover:enabled {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+:is(.agents-page, .agent-details-panel, .agent-log-viewer, .sessions-page-actions) .icon-btn-danger:hover:enabled {
+  border-color: transparent;
+}
+
+:is(.agents-page, .agent-details-panel, .agent-log-viewer) .action-btn:not(.action-btn-primary, .action-btn-accent, .action-btn-danger) {
+  border-color: transparent;
+  background: var(--composer-pill-surface);
+}
+
+:is(.agents-page, .agent-details-panel, .agent-log-viewer) .action-btn:not(.action-btn-primary, .action-btn-accent, .action-btn-danger):hover:enabled {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+}
+
+.agents-page .badge {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text-dim);
+}
+
 .settings-page > * + * {
   margin-top: 1.1rem;
+}
+
+/* Settings controls: ghost icon buttons, faint-fill buttons, selects and inputs,
+   like dialogs and the Agents page. Row groups keep their card surface so the
+   page does not go fully flat. See TODO(restyle) on .action-btn. */
+.settings-page .icon-btn:not(.icon-btn-primary, .icon-btn-accent) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.settings-page .icon-btn:not(.icon-btn-primary, .icon-btn-accent, .icon-btn-danger):hover:enabled {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.settings-page .action-btn:not(.action-btn-primary, .action-btn-accent, .action-btn-danger) {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+}
+
+.settings-page .action-btn:not(.action-btn-primary, .action-btn-accent, .action-btn-danger):hover:enabled {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--composer-pill-surface-hover), var(--text) 6%);
+}
+
+.settings-page .action-btn-danger {
+  border-color: transparent;
+}
+
+.settings-page :is(.input-shell, .select-shell, .app-select-trigger) {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  box-shadow: none;
+}
+
+.settings-page .app-select-trigger:is(:hover, [data-highlighted]) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--composer-pill-surface-hover), var(--text) 6%);
+}
+
+.settings-page :is(.input-shell, .select-shell):focus,
+.settings-page .app-select-trigger:is(:focus-visible, [data-state='open']) {
+  border-color: var(--subtle-border-strong);
+  box-shadow: none;
+}
+
+/* Inline notices: a borderless tint, like the rest of the restyled pages.
+   TODO(restyle): drop the border from the base .state-inline-* rules once every page is done. */
+.settings-page :is(.state-inline-error, .state-inline-progress) {
+  border-color: transparent;
+  border-radius: var(--radius-control);
+}
+
+.settings-page .badge {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text-dim);
 }
 
 .settings-unified-panel {
@@ -350,13 +448,15 @@ select {
 
 .settings-subnav-item:hover,
 .settings-subnav-item:focus-visible {
-  background: var(--subtle-surface);
+  background: var(--composer-pill-surface);
   color: var(--text);
   outline: none;
 }
 
-.settings-subnav-item-current {
-  background: var(--selected-surface);
+/* Same current state as the sidebar links: a neutral fill, accent icon only. */
+.settings-subnav-item-current,
+.settings-subnav-item-current:hover {
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
 }
 
@@ -515,7 +615,6 @@ select {
 
 .provider-overview {
   overflow: hidden;
-  border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-card);
 }
@@ -531,7 +630,7 @@ select {
 }
 
 .provider-overview-stat + .provider-overview-stat {
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--subtle-border);
 }
 
 .provider-overview-stat span {
@@ -673,12 +772,12 @@ select {
 .workspace-add-input {
   width: auto;
   min-width: 0;
-  height: 2.75rem;
+  height: var(--control-height-standard);
   flex: 1 1 auto;
 }
 
 .workspace-add-action {
-  min-height: 2.75rem;
+  min-height: var(--control-height-standard);
   flex: 0 0 auto;
   white-space: nowrap;
 }
@@ -1072,6 +1171,18 @@ html:has(.app-shell-custom-titlebar) body {
   color: var(--muted);
 }
 
+.badge-high {
+  border-color: var(--status-danger-border);
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
+}
+
+.badge-medium {
+  border-color: var(--status-warn-border);
+  background: var(--status-warn-bg);
+  color: var(--status-warn);
+}
+
 .alert-error,
 .alert-success {
   border-radius: var(--radius);
@@ -1101,6 +1212,10 @@ html:has(.app-shell-custom-titlebar) body {
   text-transform: uppercase;
 }
 
+/* TODO(restyle): buttons are being restyled area by area (faint fills, no borders).
+   Dialogs, pickers, the Agents page and Settings already override it ("Dialog
+   controls", "Agents page controls", "Settings controls"); move the rest of the app over part by part, then
+   fold those overrides back in here. */
 .action-btn {
   display: inline-flex;
   height: var(--control-height-standard);
@@ -1152,29 +1267,9 @@ html:has(.app-shell-custom-titlebar) body {
   justify-content: center;
   gap: 0.5rem;
   white-space: nowrap;
-  transition: opacity 140ms ease, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.composer-action-morph-create,
-.composer-action-morph.is-sending .composer-action-morph-send {
-  opacity: 1;
-  transform: translateX(0);
-}
-
-.composer-action-morph-send {
-  opacity: 0;
-  transform: translateX(0.35rem);
-  pointer-events: none;
-}
-
-.composer-action-morph.is-sending .composer-action-morph-create {
-  opacity: 0;
-  transform: translateX(-0.35rem);
-  pointer-events: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .composer-action-morph-state,
   .composer-options-chevron {
     transition: none;
   }
@@ -1244,6 +1339,11 @@ html:has(.app-shell-custom-titlebar) body {
   height: var(--control-height-compact);
 }
 
+/* Busy: still hoverable so its tooltip can say what is in progress. */
+.icon-btn[data-busy] {
+  cursor: progress;
+}
+
 .icon-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -1258,6 +1358,59 @@ html:has(.app-shell-custom-titlebar) body {
 .icon-btn-primary:hover:enabled {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+}
+
+/* Composer send/start button. Quiet by design: faint fill with muted content
+   while there is nothing to send, an accent tint once there is, and solid
+   accent only on hover/press. Scoped so the global primary buttons (and Stop)
+   keep their solid look. */
+.composer-send.action-btn-primary,
+.composer-send.icon-btn-primary {
+  height: var(--control-height-compact);
+  border-color: transparent;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.composer-send.icon-btn-primary {
+  width: var(--control-height-compact);
+}
+
+.composer-send.action-btn-primary {
+  padding-inline: 0.8rem;
+  font-size: 0.78rem;
+}
+
+.composer-send-idle.action-btn-primary,
+.composer-send-idle.icon-btn-primary {
+  background: var(--composer-pill-surface);
+  color: var(--text-dim);
+}
+
+.composer-send-ready.action-btn-primary,
+.composer-send-ready.icon-btn-primary {
+  background: color-mix(in srgb, var(--accent) 20%, var(--bg-card));
+  color: var(--accent);
+}
+
+.composer-send.action-btn-primary:hover:enabled,
+.composer-send.icon-btn-primary:hover:enabled,
+.composer-send.action-btn-primary:active:enabled,
+.composer-send.icon-btn-primary:active:enabled {
+  border-color: transparent;
+}
+
+.composer-send-idle.action-btn-primary:hover:enabled,
+.composer-send-idle.icon-btn-primary:hover:enabled {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.composer-send-ready.action-btn-primary:hover:enabled,
+.composer-send-ready.icon-btn-primary:hover:enabled,
+.composer-send-ready.action-btn-primary:active:enabled,
+.composer-send-ready.icon-btn-primary:active:enabled {
+  background: var(--accent);
+  color: #ffffff;
 }
 
 .icon-btn-accent {
@@ -1286,6 +1439,8 @@ html:has(.app-shell-custom-titlebar) body {
   font-size: 0.75rem;
 }
 
+/* TODO(restyle): inputs still use the bordered look outside dialogs; see
+   "Dialog controls" for the faint-fill version to roll out part by part. */
 .input-shell {
   border-radius: var(--radius-control);
   border: 1px solid var(--border);
@@ -1650,12 +1805,12 @@ summary:focus-visible {
   }
 
   .provider-overview-stat:nth-child(3) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
     border-left: 0;
   }
 
   .provider-overview-stat:nth-child(4) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
   }
 
   .profile-row-details-content div {
@@ -1799,10 +1954,6 @@ summary:focus-visible {
   .mesh-section-header > .icon-btn {
     flex: 0 0 auto;
   }
-
-  .mesh-created-invite .action-btn {
-    justify-content: center;
-  }
 }
 
 .panel-stat {
@@ -1853,6 +2004,150 @@ summary:focus-visible {
   font-size: 0.78rem;
 }
 
+/* New-session page sits a bit above center so the "Needs you" strip fits below
+   the composer without the page feeling stacked. */
+.start-launch-page {
+  padding-top: clamp(2rem, 16vh, 9rem);
+}
+
+.start-needs-you {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.start-needs-you-heading {
+  margin: 0;
+  padding: 0 0.6rem;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 560;
+}
+
+.start-needs-you-list {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.start-needs-you-row {
+  display: grid;
+  grid-template-columns: 0.5rem minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 0.7rem;
+  border-radius: var(--radius-control);
+  padding: 0.45rem 0.6rem;
+  color: var(--text);
+  text-decoration: none;
+  transition: background 0.15s ease;
+}
+
+.start-needs-you-row:hover,
+.start-needs-you-row:focus-visible {
+  background: var(--row-surface-hover);
+  outline: none;
+}
+
+.start-needs-you-row:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.start-needs-you-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* Recent-session fallback: quieter dot, green while the session is running. */
+.start-needs-you-recent .start-needs-you-dot {
+  background: var(--text-dim);
+}
+
+.start-needs-you-recent .start-needs-you-dot.start-needs-you-dot-running {
+  background: var(--success);
+}
+
+.start-needs-you-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.start-needs-you-copy strong,
+.start-needs-you-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start-needs-you-copy strong {
+  font-size: 0.85rem;
+  font-weight: 560;
+}
+
+.start-needs-you-copy small {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
+.start-needs-you-meta {
+  color: var(--text-dim);
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
+.start-needs-you-time {
+  min-width: 2rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.start-needs-you-action {
+  border-radius: 999px;
+  background: var(--composer-pill-surface-hover);
+  padding: 0.2rem 0.65rem;
+  color: var(--text);
+  font-size: 0.74rem;
+  font-weight: 560;
+}
+
+.start-needs-you-more {
+  justify-self: start;
+  padding: 0 0.6rem;
+  color: var(--text-dim);
+  font-size: 0.74rem;
+}
+
+.start-needs-you-more:hover,
+.start-needs-you-more:focus-visible {
+  color: var(--text);
+}
+
+/* Borderless faint-fill pill, matching the composer pills. */
+.status-item-link {
+  border: 0;
+  background: var(--composer-pill-surface-hover);
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.status-item-link strong {
+  color: var(--text);
+}
+
+.status-item-link:hover,
+.status-item-link:focus-visible {
+  background: var(--subtle-border-strong);
+  color: var(--text);
+}
+
+.status-item-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .empty-state {
   border: 1px solid var(--border);
   background: var(--bg-card);
@@ -1866,15 +2161,14 @@ summary:focus-visible {
   align-items: center;
   gap: 0.8rem;
   min-height: 5.25rem;
-  border: 1px dashed var(--border-strong);
+  /* Card surface, no frame: the same placeholder on every page. */
+  border: 1px solid transparent;
   border-radius: var(--radius);
-  background: var(--subtle-surface);
+  background: var(--bg-card);
   padding: 0.9rem 1rem;
 }
 
 .state-panel-error {
-  border-style: solid;
-  border-color: var(--status-danger-border);
   background: var(--status-danger-bg);
 }
 
@@ -1937,7 +2231,7 @@ summary:focus-visible {
 
 .state-skeleton-list {
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius);
   background: var(--bg-card);
 }
@@ -2174,9 +2468,141 @@ summary:focus-visible {
   }
 }
 
+/* Inbox page polish: faint-fill cards, plain field labels and soft selected rows, like the
+   other restyled pages. Scoped to .inbox-page because the same card is shown in the session
+   transcript, which is restyled separately.
+   TODO(restyle): drop the .inbox-page scope when the transcript is restyled. */
+.inbox-page .inbox-card {
+  border-color: transparent;
+  background: var(--composer-pill-surface);
+}
+
+.inbox-page .inbox-field-label {
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.inbox-page :is(.input-shell, .select-shell) {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  box-shadow: none;
+}
+
+.inbox-page .input-shell:focus {
+  border-color: var(--subtle-border-strong);
+  box-shadow: none;
+}
+
+.inbox-page .elicitation-option-row:hover:not(:has(:disabled)),
+.inbox-page .app-checkbox-control.elicitation-option-row:hover:not(:disabled) {
+  background: var(--composer-pill-surface-hover);
+}
+
+.inbox-page .elicitation-option-row:has(:checked),
+.inbox-page .app-checkbox-control.elicitation-option-row[data-state='checked'] {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+}
+
+.inbox-page .inbox-empty-state {
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--composer-pill-surface);
+  padding: 0.9rem 1rem;
+}
+
+.inbox-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+}
+
+.inbox-card-header-collapsed {
+  min-height: var(--control-height-compact);
+  align-items: center;
+}
+
+.inbox-card-chevron {
+  display: inline-flex;
+  width: 1.2rem;
+  height: 1.2rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.12rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+  cursor: pointer;
+}
+
+.inbox-card-header-collapsed .inbox-card-chevron {
+  margin-top: 0;
+}
+
+.inbox-card-chevron:hover {
+  background: var(--row-surface-hover);
+  color: var(--text);
+}
+
+.inbox-card-chevron-open {
+  transform: rotate(90deg);
+}
+
+.inbox-card-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.inbox-card-end {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.inbox-resolved-check,
+.inbox-pending-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.inbox-resolved-check {
+  color: var(--status-success);
+}
+
+.inbox-pending-marker {
+  color: var(--status-running);
+}
+
+.inbox-collapsed-detail {
+  display: -webkit-box;
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
 .elicitation-option-list {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.12rem;
   min-width: 0;
 }
 
@@ -2187,20 +2613,92 @@ summary:focus-visible {
   min-width: 0;
   align-items: flex-start;
   gap: 0.6rem;
-  padding: 0.15rem 0;
+  padding: 0.38rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
   cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.elicitation-option-row:hover:not(:has(:disabled)),
+.app-checkbox-control.elicitation-option-row:hover:not(:disabled) {
+  background: var(--row-surface-hover);
+}
+
+.elicitation-option-row:has(:checked),
+.app-checkbox-control.elicitation-option-row[data-state='checked'] {
+  background: var(--selected-surface);
+  border-color: var(--selected-border);
+}
+
+.elicitation-option-row:has(:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.elicitation-radio-input:checked:disabled {
+  box-shadow: inset 0 0 0 3px var(--bg-card), inset 0 0 0 8px var(--accent);
 }
 
 .elicitation-option-row .app-checkbox-box {
   margin-top: 0.08rem;
 }
 
+.elicitation-option-copy,
+.elicitation-option-row .app-checkbox-copy {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
 .elicitation-option-label,
 .elicitation-option-row .app-checkbox-label {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.elicitation-option-description,
+.elicitation-option-row .app-checkbox-description {
+  min-width: 0;
+  overflow-wrap: break-word;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  font-weight: 400;
   line-height: 1.4;
+}
+
+.elicitation-option-custom {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.elicitation-option-or {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.elicitation-option-or::before,
+.elicitation-option-or::after {
+  content: '';
+  height: 1px;
+  background: var(--subtle-border);
+}
+
+.elicitation-option-custom-row .elicitation-option-label,
+.elicitation-option-custom-row .app-checkbox-label {
+  font-weight: 450;
 }
 
 .elicitation-radio-input {
@@ -2241,11 +2739,12 @@ summary:focus-visible {
   gap: 0.45rem;
 }
 
+/* Overview block: one faint-fill surface with subtle dividers, like Mesh and the
+   agent details overview. No card border. */
 .automation-overview {
   overflow: hidden;
-  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
 }
 
 .automation-overview-stats {
@@ -2259,7 +2758,7 @@ summary:focus-visible {
 }
 
 .automation-overview-stat + .automation-overview-stat {
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--subtle-border);
 }
 
 .automation-overview-stat span {
@@ -2287,7 +2786,7 @@ summary:focus-visible {
 }
 
 .automation-overview-warning {
-  border-top: 1px solid var(--status-warn-border);
+  border-top: 1px solid var(--subtle-border);
   padding: 0.55rem 1rem;
   background: var(--status-warn-bg);
   color: var(--status-warn);
@@ -2298,11 +2797,14 @@ summary:focus-visible {
   min-height: 1.7rem;
 }
 
+/* Rows sit on one faint-fill surface (no border or separators) so the list reads
+   as a group, like the agents and mesh lists; hovered rows get a stronger fill. */
 .automation-list {
-  overflow: visible;
-  border: 1px solid var(--border);
+  display: grid;
+  gap: 0.1rem;
   border-radius: var(--radius);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
+  padding: 0.3rem;
 }
 
 .automation-row {
@@ -2311,22 +2813,15 @@ summary:focus-visible {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 1rem;
-  padding: 0.78rem 0.9rem;
-  background: var(--bg-card);
-  transition: background 0.15s ease;
-}
-
-.automation-row + .automation-row {
-  border-top: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 0.65rem 0.75rem;
+  background: transparent;
+  transition: background 0.12s ease;
 }
 
 .automation-row:hover,
 .automation-row:focus-within {
-  background: var(--bg-card-hover);
-}
-
-.automation-row-attention {
-  box-shadow: inset 2px 0 var(--danger);
+  background: var(--composer-pill-surface-hover);
 }
 
 .automation-row-main {
@@ -2343,24 +2838,26 @@ summary:focus-visible {
 .automation-row-title {
   overflow: hidden;
   color: var(--text);
-  font-size: 0.88rem;
-  font-weight: 650;
+  font-size: 0.86rem;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Borderless faint pill; only the attention chip keeps a status tint. */
 .automation-state-chip {
   flex: 0 0 auto;
   border-radius: 999px;
-  background: var(--status-muted-bg);
-  color: var(--muted);
-  padding: 0.12rem 0.42rem;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text-muted);
+  padding: 0.1rem 0.45rem;
   font-size: 0.66rem;
+  font-weight: 560;
 }
 
 .automation-state-chip-danger {
-  background: var(--status-error-bg);
-  color: var(--danger);
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
 }
 
 .automation-row-timing,
@@ -2381,78 +2878,6 @@ summary:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-}
-
-.automation-row-menu {
-  position: relative;
-}
-
-.automation-row-menu > summary {
-  list-style: none;
-}
-
-.automation-row-menu > summary::-webkit-details-marker {
-  display: none;
-}
-
-.automation-row-menu-trigger {
-  display: inline-flex;
-  width: var(--control-height-compact);
-  height: var(--control-height-compact);
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-control);
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.automation-row-menu-trigger:hover,
-.automation-row-menu-trigger:focus-visible,
-.automation-row-menu[open] .automation-row-menu-trigger {
-  background: var(--subtle-surface);
-  color: var(--text);
-  outline: none;
-}
-
-.automation-row-menu-content {
-  position: absolute;
-  top: calc(100% + 0.3rem);
-  right: 0;
-  z-index: 20;
-  display: grid;
-  min-width: 11rem;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-panel-strong);
-  padding: 0.25rem;
-  box-shadow: var(--shadow-lg);
-}
-
-.automation-row-menu-content button {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  border-radius: 6px;
-  color: var(--text-muted);
-  padding: 0.48rem 0.55rem;
-  font-size: 0.73rem;
-  text-align: left;
-}
-
-.automation-row-menu-content button:hover,
-.automation-row-menu-content button:focus-visible {
-  background: var(--subtle-surface);
-  color: var(--text);
-  outline: none;
-}
-
-.automation-row-menu-content button:disabled {
-  opacity: 0.45;
-}
-
-.automation-row-menu-content .automation-row-menu-danger {
-  color: var(--danger);
 }
 
 .automation-row-error,
@@ -2480,9 +2905,8 @@ summary:focus-visible {
 
 .automation-row-details dt {
   color: var(--text-dim);
-  font-size: 0.66rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  font-weight: 550;
 }
 
 .automation-row-details dd {
@@ -2495,18 +2919,20 @@ summary:focus-visible {
   white-space: nowrap;
 }
 
-.mesh-page-actions {
+.mesh-page-actions,
+.sessions-page-actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 0.45rem;
 }
 
+/* Overview block: one faint-fill surface with subtle dividers, like the agent
+   details overview. No card border. */
 .mesh-overview {
   overflow: hidden;
-  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
 }
 
 .mesh-overview-stats {
@@ -2520,7 +2946,7 @@ summary:focus-visible {
 }
 
 .mesh-overview-stat + .mesh-overview-stat {
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--subtle-border);
 }
 
 .mesh-overview-stat span {
@@ -2552,9 +2978,9 @@ summary:focus-visible {
   min-width: 0;
   align-items: center;
   overflow: hidden;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--subtle-border);
   padding: 0.5rem 1rem;
-  background: color-mix(in srgb, var(--bg-panel), var(--bg-card) 54%);
+  background: transparent;
   color: var(--text-dim);
   font-size: 0.68rem;
   white-space: nowrap;
@@ -2574,8 +3000,7 @@ summary:focus-visible {
   height: 0.75rem;
   flex: 0 0 auto;
   margin-inline: 0.75rem;
-  background: var(--border-strong);
-  opacity: 0.65;
+  background: var(--subtle-border-strong);
 }
 
 .mesh-overview-peer {
@@ -2585,7 +3010,7 @@ summary:focus-visible {
 .mesh-overview-context-label {
   flex: 0 0 auto;
   color: var(--muted);
-  font-weight: 550;
+  font-weight: 560;
 }
 
 .mesh-overview-context-value,
@@ -2603,8 +3028,8 @@ summary:focus-visible {
   min-width: 0;
   align-items: center;
   gap: 0.3rem;
-  border-radius: 4px;
-  padding: 0.1rem 0.2rem;
+  border-radius: var(--radius-control);
+  padding: 0.1rem 0.3rem;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -2621,7 +3046,7 @@ summary:focus-visible {
 
 .mesh-overview-peer-button:hover,
 .mesh-overview-peer-button:focus-visible {
-  background: var(--subtle-surface-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
   outline: none;
 }
@@ -2644,10 +3069,9 @@ summary:focus-visible {
 }
 
 .mesh-empty-row {
-  border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.9rem 1rem;
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
   color: var(--muted);
   font-size: 0.8rem;
 }
@@ -2656,10 +3080,9 @@ summary:focus-visible {
   display: flex;
   align-items: flex-start;
   gap: 0.8rem;
-  border: 1px solid color-mix(in srgb, var(--status-success), var(--border) 72%);
   border-radius: var(--radius);
   padding: 0.9rem 1rem;
-  background: color-mix(in srgb, var(--status-success-bg), var(--bg-card) 74%);
+  background: var(--status-success-bg);
 }
 
 .mesh-invite-result-icon {
@@ -2670,7 +3093,7 @@ summary:focus-visible {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--status-success-bg);
+  background: color-mix(in srgb, var(--status-success) 16%, transparent);
   color: var(--status-success);
 }
 
@@ -2688,7 +3111,8 @@ summary:focus-visible {
 
 .mesh-invite-result-main strong {
   color: var(--text);
-  font-size: 0.9rem;
+  font-size: 0.88rem;
+  font-weight: 600;
 }
 
 .mesh-invite-result-main span {
@@ -2698,11 +3122,14 @@ summary:focus-visible {
   font-size: 0.74rem;
 }
 
+/* Rows sit on one faint-fill surface (no border or separators) so the list reads
+   as a group, like the agents list; hovered rows get a stronger fill. */
 .mesh-item-list {
-  overflow: hidden;
-  border: 1px solid var(--border);
+  display: grid;
+  gap: 0.1rem;
   border-radius: var(--radius);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
+  padding: 0.3rem;
 }
 
 .mesh-item-row {
@@ -2710,16 +3137,14 @@ summary:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.9rem 1rem;
-  background: var(--bg-card);
+  border-radius: var(--radius-control);
+  padding: 0.65rem 0.75rem;
+  background: transparent;
+  transition: background 0.12s ease;
 }
 
-.mesh-item-row + .mesh-item-row {
-  border-top: 1px solid var(--border);
-}
-
-.mesh-item-list:not(.mesh-node-list) .mesh-item-row:hover {
-  background: var(--bg-card-hover);
+.mesh-item-row:hover {
+  background: var(--composer-pill-surface-hover);
 }
 
 .mesh-item-row-stacked {
@@ -2733,9 +3158,8 @@ summary:focus-visible {
 
 .mesh-item-title {
   color: var(--text);
-  font-size: 0.9rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: 0.86rem;
+  font-weight: 600;
 }
 
 .mesh-node-title-line {
@@ -2755,10 +3179,11 @@ summary:focus-visible {
 .mesh-node-session-count {
   flex: 0 0 auto;
   border-radius: 999px;
-  background: var(--status-muted-bg);
-  color: var(--muted);
-  padding: 0.12rem 0.42rem;
-  font-size: 0.68rem;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text-muted);
+  padding: 0.1rem 0.45rem;
+  font-size: 0.66rem;
+  font-weight: 560;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2790,10 +3215,10 @@ summary:focus-visible {
   flex: 0 1 auto;
   align-items: center;
   gap: 0.3rem;
-  border-radius: 4px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   font-family: var(--font-mono);
-  padding: 0.05rem 0.16rem;
+  padding: 0.05rem 0.3rem;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -2810,7 +3235,7 @@ summary:focus-visible {
 
 .mesh-node-peer-button:hover,
 .mesh-node-peer-button:focus-visible {
-  background: var(--subtle-surface-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
   outline: none;
 }
@@ -2850,14 +3275,15 @@ summary:focus-visible {
   height: 1.5rem;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-control);
   color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .mesh-node-inclusion-info:hover,
 .mesh-node-inclusion-info:focus-visible {
   color: var(--text);
-  background: var(--subtle-surface-hover);
+  background: var(--composer-pill-surface-hover);
 }
 
 .mesh-node-inclusion-info:focus-visible {
@@ -2880,21 +3306,21 @@ summary:focus-visible {
   }
 
   .mesh-overview-stat:nth-child(3) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
     border-left: 0;
   }
 
   .mesh-overview-stat:nth-child(4) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
   }
 
   .automation-overview-stat:nth-child(3) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
     border-left: 0;
   }
 
   .automation-overview-stat:nth-child(4) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
   }
 
   .automation-row {
@@ -2925,7 +3351,7 @@ summary:focus-visible {
     align-items: center;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 0.6rem;
-    padding: 0.75rem;
+    padding: 0.65rem 0.6rem;
   }
 }
 
@@ -2993,7 +3419,7 @@ summary:focus-visible {
 }
 
 .provider-connection-row-attention .provider-connection-action {
-  border-color: var(--status-warn-border);
+  color: var(--status-warn);
 }
 
 .provider-connection-feedback,
@@ -3094,6 +3520,22 @@ summary:focus-visible {
   font-size: 0.75rem;
   line-height: 1;
   box-shadow: var(--shadow-md);
+  /* Long unbroken text (e.g. file paths) wraps inside the viewport; short hints are unchanged. */
+  max-width: min(32rem, calc(100vw - 2rem));
+  overflow-wrap: anywhere;
+}
+
+/* Multi-line hints (worktree details, cost notes) and an optional dimmed second line. */
+.app-tooltip-multiline {
+  max-width: min(22rem, calc(100vw - 2rem));
+  white-space: pre-line;
+  line-height: 1.4;
+}
+
+.app-tooltip-detail {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--text-dim);
 }
 
 .icon-btn-danger:hover {
@@ -3131,6 +3573,8 @@ summary:focus-visible {
   }
 }
 
+/* TODO(restyle): selects keep the bordered look outside dialogs; see
+   "Dialog controls" for the faint-fill version to roll out part by part. */
 .app-select-trigger {
   display: inline-flex;
   min-width: 12rem;
@@ -3186,39 +3630,20 @@ summary:focus-visible {
   align-items: center;
   gap: 0;
   border-radius: var(--radius-control);
-  border: 1px solid var(--border);
-  background: var(--bg-card);
+  /* Transparent border keeps the pill metrics; the faint fill is the affordance. */
+  border: 1px solid transparent;
+  background: var(--composer-pill-surface);
   color: var(--text);
   padding: 0.28rem 0.6rem 0.28rem 0.3rem;
   font-size: 0.75rem;
   line-height: 1rem;
   outline: none;
   box-shadow: none;
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 
 .composer-split-pill {
   max-width: 14rem;
-}
-
-/* Read-only session profile value; same metrics as the pill selects but muted,
-   since profiles are locked after session start. */
-.composer-option-value-locked {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 0.3rem;
-  border-radius: var(--radius-control);
-  border: 1px solid var(--border);
-  background: var(--bg-card);
-  color: var(--muted);
-  padding: 0.28rem 0.6rem;
-  font-size: 0.75rem;
-  line-height: 1rem;
-}
-
-.composer-option-value-locked svg {
-  color: var(--text-dim);
 }
 
 .composer-model-pill {
@@ -3227,13 +3652,13 @@ summary:focus-visible {
 
 .composer-split-pill:hover,
 .composer-split-pill[data-highlighted],
+.composer-split-pill[data-state='open'],
 .composer-model-pill:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
 }
 
+/* The ring is keyboard-only; mouse clicks no longer leave an accent outline. */
 .composer-split-pill:focus-visible,
-.composer-split-pill[data-state='open'],
 .composer-model-pill:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-dim);
@@ -3280,9 +3705,9 @@ summary:focus-visible {
   display: inline-flex;
   flex: none;
   gap: 0.15rem;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-control);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
   padding: 0.15rem;
 }
 
@@ -3302,12 +3727,8 @@ summary:focus-visible {
 
 .composer-delivery-switch button:hover,
 .composer-delivery-switch button.active {
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
-}
-
-.composer-delivery-switch button.active {
-  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 .composer-options-host {
@@ -3329,26 +3750,26 @@ summary:focus-visible {
 }
 
 .composer-options-trigger {
+  position: relative;
   display: inline-flex;
   min-height: 2rem;
   max-width: 18rem;
   align-items: center;
   gap: 0.42rem;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-control);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
   padding: 0.3rem 0.55rem;
   color: var(--text-muted);
   font-size: 0.75rem;
   font-weight: 550;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .composer-options-trigger:hover,
 .composer-options[open] .composer-options-trigger {
-  border-color: var(--border-strong);
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
 }
 
@@ -3356,6 +3777,108 @@ summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* "+" menu trigger: bare at rest, faint fill on hover, and the plus turns into an x while open. */
+.composer-add-trigger {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.composer-add-trigger:hover:enabled,
+.composer-add-trigger-open {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.composer-add-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.composer-add-trigger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.composer-add-trigger .composer-add-icon {
+  transition: transform 0.2s ease;
+}
+
+/* Rotates on click (menu open), not on hover. */
+.composer-add-trigger-open .composer-add-icon {
+  transform: rotate(45deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-add-trigger .composer-add-icon {
+    transition: none;
+  }
+}
+
+.composer-add-content {
+  min-width: 11rem;
+}
+
+.composer-add-item-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+/* Shared tag attached to the top edge of a composer pill (reasoning on the model
+   button, mode on Options). Borderless: a tinted fill plus a card-colored halo
+   notches it out of the pill behind it. Set --badge-color on the element. */
+.composer-badge {
+  --badge-color: var(--accent);
+  position: absolute;
+  top: -7px;
+  right: 5px;
+  display: block;
+  box-sizing: border-box;
+  height: 14px;
+  max-width: calc(100% - 10px);
+  overflow: hidden;
+  border: 0;
+  border-radius: calc(var(--radius-control) / 2);
+  background: color-mix(in srgb, var(--badge-color) 19%, var(--bg-card));
+  box-shadow: 0 0 0 2px var(--bg-panel-strong);
+  padding: 0 4px;
+  color: var(--badge-color);
+  font-size: 8.25px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: lowercase;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Current mode, attached to the Options button like the model reasoning badge. */
+.composer-mode-badge {
+  --mode-color: var(--accent);
+  --badge-color: var(--mode-color);
+}
+
+/* --mode-tone-* is theme-aware and indexed by the mode's position in the agent's list. */
+.composer-mode-badge[data-tone='0'] { --mode-color: var(--mode-tone-0); }
+.composer-mode-badge[data-tone='1'] { --mode-color: var(--mode-tone-1); }
+.composer-mode-badge[data-tone='2'] { --mode-color: var(--mode-tone-2); }
+.composer-mode-badge[data-tone='3'] { --mode-color: var(--mode-tone-3); }
+.composer-mode-badge[data-tone='4'] { --mode-color: var(--mode-tone-4); }
+.composer-mode-badge[data-tone='5'] { --mode-color: var(--mode-tone-5); }
+.composer-mode-badge[data-tone='6'] { --mode-color: var(--mode-tone-6); }
+.composer-mode-badge[data-tone='7'] { --mode-color: var(--mode-tone-7); }
 
 .composer-options-trigger small {
   min-width: 0;
@@ -3381,54 +3904,52 @@ summary:focus-visible {
   display: none;
 }
 
+/* Same menu language as the "+" menu and workspace suggestions: a bordered
+   floating surface with inset, rounded, one-line rows and no inner borders. */
 .composer-options-panel {
   position: absolute;
   bottom: calc(100% + 0.65rem);
   left: 0;
   z-index: 45;
-  width: min(27rem, calc(100vw - 2rem));
+  width: min(21rem, calc(100vw - 2rem));
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-panel-strong);
-  padding: 0.85rem;
-  box-shadow: var(--shadow-lg);
+  padding: 0.3rem;
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .composer-options-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0 0.1rem 0.65rem;
+  padding: 0.35rem 0.6rem 0.2rem;
 }
 
 .composer-options-heading strong {
-  font-size: 0.82rem;
-}
-
-.composer-options-heading span {
-  color: var(--muted);
+  color: var(--text-dim);
   font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .composer-options-list {
   display: grid;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  gap: 0.1rem;
 }
 
 .composer-option-row {
   display: flex;
   min-width: 0;
+  min-height: var(--control-height-standard);
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
-  padding: 0.65rem;
+  gap: 0.75rem;
+  border-radius: var(--radius-control);
+  padding: 0.15rem 0.3rem 0.15rem 0.6rem;
+  transition: background 0.12s ease;
 }
 
-.composer-option-row + .composer-option-row {
-  border-top: 1px solid var(--border);
+.composer-option-row:hover {
+  background: var(--composer-pill-surface);
 }
 
 .composer-option-copy {
@@ -3436,39 +3957,50 @@ summary:focus-visible {
   min-width: 0;
   align-items: center;
   gap: 0.55rem;
-  color: var(--text-muted);
-}
-
-.composer-option-copy > span {
-  display: grid;
-  min-width: 0;
+  color: var(--text-dim);
 }
 
 .composer-option-copy strong {
-  color: var(--text);
-  font-size: 0.76rem;
-  font-weight: 600;
-}
-
-.composer-option-copy small {
   overflow: hidden;
-  color: var(--muted);
-  font-size: 0.67rem;
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The mode row's icon carries the same tone as the badge on the Options button. */
+.composer-option-copy-mode {
+  --option-tone: var(--accent);
+}
+
+.composer-option-copy-mode svg {
+  color: var(--option-tone, var(--accent));
+}
+
 .composer-option-row .composer-split-pill {
-  min-width: 7.5rem;
-  max-width: 11rem;
+  min-width: 7rem;
+  max-width: 10rem;
   justify-content: flex-start;
 }
 
-.composer-option-action {
+/* Delegate routing action: same faint-fill recipe as the pills, no outline. */
+.composer-option-action.action-btn {
   flex: 0 0 auto;
-  min-height: 2rem;
+  height: auto;
+  min-height: var(--control-height-compact);
+  border-color: transparent;
+  background: var(--composer-pill-surface);
   padding: 0.38rem 0.62rem;
+  color: var(--text-dim);
   font-size: 0.72rem;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.composer-option-action.action-btn:hover:enabled {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
 }
 
 .composer-split-pill-divider {
@@ -3476,7 +4008,8 @@ summary:focus-visible {
   align-self: stretch;
   width: 1px;
   margin: 0.2rem 0.4rem;
-  background: var(--border);
+  /* Softer now that the pill is a faint fill instead of an outlined box. */
+  background: color-mix(in srgb, var(--border) 55%, transparent);
 }
 
 .composer-split-pill-label,
@@ -3565,6 +4098,93 @@ summary:focus-visible {
   opacity: 1;
 }
 
+/* Compact AppSelect menu, opt-in via AppSelect's contentClass. Same recipe as the session
+   actions menu: small inset rows, soft hover fill, no accent tint.
+   TODO(restyle): EVERY other AppSelect (trigger and menu) should look like this one. The
+   plain .app-select-trigger / .app-select-content / .app-select-item rules above are the
+   old bordered, oversized style. Once all consumers are checked, move these rules onto the
+   base classes, delete this variant and the contentClass prop, and fold the time zone
+   trigger below into the default (or pill) trigger. */
+.app-select-content.app-select-content-compact {
+  /* Fixed and narrow on purpose: every option is rendered, so sizing to content would make
+     the menu as wide as the rarest long name (e.g. America/Argentina/ComodRivadavia).
+     Those few names are ellipsized instead. */
+  width: 13.5rem;
+  min-width: var(--bits-select-anchor-width);
+  max-width: min(20rem, calc(100vw - 1rem));
+  max-height: min(16rem, var(--bits-select-content-available-height, 16rem));
+}
+
+.app-select-content-compact .app-select-viewport {
+  padding: 0.3rem;
+}
+
+.app-select-content-compact .app-select-item {
+  min-height: var(--control-height-compact);
+  gap: 0.55rem;
+  border-radius: var(--radius-control);
+  padding: 0.2rem 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  transition: background 0.12s ease;
+}
+
+.app-select-content-compact .app-select-item[data-highlighted] {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.app-select-content-compact .app-select-item[data-selected] {
+  color: var(--text);
+}
+
+.app-select-content-compact .app-select-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-select-content-compact .app-select-item-indicator {
+  width: 0.9rem;
+  color: var(--text-muted);
+}
+
+/* Time zone trigger: a small faint pill beside the frequency switch (see the TODO above). */
+.app-select-trigger.schedule-timezone-trigger {
+  min-width: 0;
+  max-width: 13rem;
+  min-height: var(--control-height-compact);
+  height: var(--control-height-compact);
+  gap: 0.4rem;
+  border-color: transparent;
+  background: var(--composer-pill-surface);
+  padding: 0 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  box-shadow: none;
+}
+
+.app-select-trigger.schedule-timezone-trigger:hover,
+.app-select-trigger.schedule-timezone-trigger[data-state='open'] {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.app-select-trigger.schedule-timezone-trigger:focus-visible {
+  border-color: var(--subtle-border-strong);
+  box-shadow: none;
+}
+
+.app-select-trigger.schedule-timezone-trigger .app-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .app-picker-backdrop {
   position: fixed;
   inset: 0;
@@ -3583,7 +4203,8 @@ summary:focus-visible {
   margin: auto;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border);
+  /* Solid on purpose: frosted surfaces are reserved for special cases. */
+  border: 1px solid var(--subtle-border-strong);
   border-radius: var(--radius);
   background: var(--dialog-bg);
   color: var(--text);
@@ -3611,16 +4232,20 @@ summary:focus-visible {
   flex: 0 0 auto;
   align-items: flex-start;
   gap: 0.75rem;
-  padding: 1.1rem 1.25rem 0.95rem;
+  padding: 1rem 1rem 0.5rem 1.25rem;
 }
 
-.app-picker-header::after {
+.app-picker-header.app-dialog-header-divided {
+  padding-bottom: 0.85rem;
+}
+
+.app-picker-header.app-dialog-header-divided::after {
   position: absolute;
   right: 1.25rem;
   bottom: 0;
   left: 1.25rem;
   height: 1px;
-  background: color-mix(in srgb, var(--border), transparent 35%);
+  background: var(--subtle-border);
   content: '';
 }
 
@@ -3645,8 +4270,8 @@ summary:focus-visible {
 
 .app-picker-header-action {
   display: inline-flex;
-  width: var(--control-height-compact);
-  height: var(--control-height-compact);
+  width: 2rem;
+  height: 2rem;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
@@ -3654,10 +4279,11 @@ summary:focus-visible {
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .app-picker-header-action:hover:enabled {
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
 }
 
@@ -3670,10 +4296,19 @@ summary:focus-visible {
 .app-picker-command-bar {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--border), transparent 35%);
-  padding: 0.85rem 1rem 0.85rem 1.2rem;
+  gap: 0.6rem;
+  margin: 0.6rem 0.6rem 0.2rem;
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
+  padding: 0.6rem 0.8rem;
   color: var(--muted);
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: box-shadow 0.15s ease;
+}
+
+.app-picker-command-bar:focus-within,
+.app-picker-search-shell:focus-within {
+  box-shadow: inset 0 0 0 1px var(--subtle-border-strong);
 }
 
 .app-picker-search-input {
@@ -3695,11 +4330,13 @@ summary:focus-visible {
   min-height: 2.7rem;
   align-items: center;
   gap: 0.65rem;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--bg-card), transparent 35%);
+  background: var(--composer-pill-surface);
   padding: 0 0.8rem;
   color: var(--muted);
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: box-shadow 0.15s ease;
 }
 
 .app-picker-scroll-frame {
@@ -3720,16 +4357,14 @@ summary:focus-visible {
 }
 
 .app-picker-group + .app-picker-group {
-  margin-top: 0.7rem;
+  margin-top: 0.5rem;
 }
 
 .app-picker-group-heading {
-  padding: 0.45rem 0.7rem 0.3rem;
+  padding: 0.45rem 0.75rem 0.25rem;
   color: var(--text-dim);
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 0.72rem;
+  font-weight: 550;
 }
 
 .app-picker-list {
@@ -3768,45 +4403,27 @@ summary:focus-visible {
   position: relative;
   display: flex;
   width: 100%;
-  min-height: 3.25rem;
+  min-height: 3rem;
   align-items: center;
   gap: 0.75rem;
   border: 0;
   border-radius: var(--radius-control);
   background: transparent;
-  padding: 0.65rem 0.75rem;
+  padding: 0.55rem 0.75rem;
   color: var(--text);
   text-align: left;
   outline: none;
-}
-
-.app-picker-row + .app-picker-row::before {
-  position: absolute;
-  top: 0;
-  right: 0.75rem;
-  left: 0.75rem;
-  height: 1px;
-  background: color-mix(in srgb, var(--border), transparent 45%);
-  content: '';
+  transition: background 0.12s ease;
 }
 
 .app-picker-row:hover,
 .app-picker-row[data-selected],
 .app-picker-row-highlighted {
-  background: var(--bg-card-hover);
-}
-
-.app-picker-row:hover::before,
-.app-picker-row[data-selected]::before,
-.app-picker-row-highlighted::before,
-.app-picker-row:hover + .app-picker-row::before,
-.app-picker-row[data-selected] + .app-picker-row::before,
-.app-picker-row-highlighted + .app-picker-row::before {
-  opacity: 0;
+  background: var(--row-surface-hover);
 }
 
 .app-picker-row:focus-visible {
-  box-shadow: inset 0 0 0 1px var(--selected-border);
+  box-shadow: inset 0 0 0 1px var(--subtle-border-strong);
 }
 
 .app-picker-row[aria-disabled='true'],
@@ -3945,7 +4562,8 @@ summary:focus-visible {
   transform: translate(-50%, -50%);
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border);
+  /* Solid on purpose: frosted surfaces are reserved for special cases. */
+  border: 1px solid var(--subtle-border-strong);
   border-radius: var(--radius);
   background: var(--dialog-bg);
   color: var(--text);
@@ -3983,22 +4601,22 @@ summary:focus-visible {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1.25rem;
-  padding: 1.25rem 1.5rem 1rem;
+  padding: 1.15rem 1.25rem 0.5rem 1.5rem;
 }
 
-.app-dialog-header::after {
+/* Header dividers are opt-in (`divided` on AppDialog); spacing separates by default. */
+.app-dialog-header.app-dialog-header-divided {
+  padding-bottom: 0.9rem;
+}
+
+.app-dialog-header.app-dialog-header-divided::after {
   position: absolute;
   right: 1.5rem;
   bottom: 0;
   left: 1.5rem;
   height: 1px;
-  background: color-mix(in srgb, var(--border), transparent 35%);
+  background: var(--subtle-border);
   content: '';
-}
-
-.app-dialog-header-undivided::after,
-.app-confirm-dialog-header::after {
-  display: none;
 }
 
 .app-dialog-heading {
@@ -4028,15 +4646,16 @@ summary:focus-visible {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  margin: -0.45rem -0.55rem 0 0;
+  margin: -0.3rem 0 0 0;
   border: 0;
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .app-dialog-close:hover:enabled {
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
 }
 
@@ -4146,8 +4765,57 @@ summary:focus-visible {
 }
 
 .app-dialog-disclosure {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--subtle-border);
   padding-top: 0.85rem;
+}
+
+/* Dialog controls: faint fills instead of borders, scoped to dialogs and
+   pickers until the rest of the app is restyled (see TODO(restyle) on
+   .action-btn, .input-shell and .app-select-trigger). Primary, accent and
+   danger buttons keep their tones. */
+:is(.app-dialog, .app-picker) .action-btn:not(.action-btn-primary, .action-btn-accent, .action-btn-danger) {
+  border-color: transparent;
+  background: var(--composer-pill-surface);
+}
+
+:is(.app-dialog, .app-picker) .action-btn:not(.action-btn-primary, .action-btn-accent, .action-btn-danger):hover:enabled {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+}
+
+:is(.app-dialog, .app-picker) .action-btn-accent {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent-dim), transparent 20%);
+}
+
+:is(.app-dialog, .app-picker) .action-btn-accent:hover:enabled {
+  border-color: transparent;
+  background: var(--accent-dim);
+}
+
+:is(.app-dialog, .app-picker) .action-btn-danger {
+  border-color: transparent;
+}
+
+:is(.app-dialog, .app-picker) .action-btn-danger:hover:enabled {
+  border-color: transparent;
+}
+
+:is(.app-dialog, .app-picker) :is(.input-shell, .select-shell, .app-select-trigger) {
+  border-color: transparent;
+  background: var(--composer-pill-surface);
+  box-shadow: none;
+}
+
+:is(.app-dialog, .app-picker) :is(.input-shell, .select-shell):focus,
+:is(.app-dialog, .app-picker) .app-select-trigger:is(:focus-visible, [data-state='open']) {
+  border-color: var(--subtle-border-strong);
+  box-shadow: none;
+}
+
+:is(.app-dialog, .app-picker) .app-select-trigger:is(:hover, [data-highlighted]) {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
 }
 
 .app-dialog-disclosure summary {
@@ -4213,8 +4881,8 @@ summary:focus-visible {
 
 .delegate-model-notice {
   gap: 0.65rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
   padding: 0.65rem 0.75rem;
   color: var(--text-muted);
   font-size: 0.76rem;
@@ -4241,27 +4909,24 @@ summary:focus-visible {
 }
 
 .delegate-model-notice-warning {
-  border-color: var(--status-warn-border);
   background: var(--status-warn-bg);
   color: var(--status-warn);
 }
 
 .delegate-model-notice-error {
-  border-color: var(--status-danger-border);
   background: var(--status-danger-bg);
   color: var(--status-danger);
 }
 
 .delegate-model-notice-neutral {
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
 }
 
+/* Flat list like the sidebar and sessions rows: hover fills, no card or separators. */
 .delegate-model-list {
   display: grid;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-card);
+  gap: 0.1rem;
+  margin-inline: -0.5rem;
 }
 
 .delegate-model-row {
@@ -4269,15 +4934,17 @@ summary:focus-visible {
   justify-content: stretch;
   gap: 0.75rem;
   border: 0;
+  border-radius: var(--radius-control);
   background: transparent;
-  padding: 0.78rem;
+  padding: 0.65rem 0.5rem;
   color: inherit;
   text-align: left;
   cursor: pointer;
+  transition: background 0.12s ease;
 }
 
-.delegate-model-row + .delegate-model-row {
-  border-top: 1px solid var(--border);
+.delegate-model-list .delegate-model-row:hover:enabled {
+  background: var(--row-surface-hover);
 }
 
 .delegate-model-row:hover:enabled,
@@ -4286,6 +4953,11 @@ summary:focus-visible {
 .delegate-model-choice:hover:enabled,
 .delegate-model-choice-highlighted {
   background: var(--bg-card-hover);
+}
+
+.delegate-model-picker-list .delegate-model-choice:hover:enabled,
+.delegate-model-picker-list .delegate-model-choice-highlighted {
+  background: var(--row-surface-hover);
 }
 
 .delegate-model-row:focus-visible,
@@ -4325,8 +4997,8 @@ summary:focus-visible {
 }
 
 .delegate-model-choice-icon {
-  border: 1px solid color-mix(in srgb, var(--accent), var(--border) 65%);
-  background: color-mix(in srgb, var(--accent-dim), transparent 30%);
+  border: 0;
+  background: var(--accent-dim);
   color: var(--accent);
 }
 
@@ -4409,16 +5081,13 @@ summary:focus-visible {
 
 .delegate-model-source {
   flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--accent), var(--border) 55%);
   border-radius: 999px;
-  padding: 0.06rem 0.28rem;
-  background: color-mix(in srgb, var(--accent-dim), transparent 36%);
+  padding: 0.08rem 0.4rem;
+  background: var(--accent-dim);
   color: var(--accent);
-  font-size: 0.5rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
+  font-size: 0.64rem;
+  font-weight: 550;
   line-height: 1.25;
-  text-transform: uppercase;
 }
 
 .delegate-model-row-unavailable .delegate-model-route-label {
@@ -4431,8 +5100,8 @@ summary:focus-visible {
   place-items: center;
   align-content: center;
   gap: 0.35rem;
-  border: 1px dashed var(--border);
   border-radius: var(--radius);
+  background: var(--composer-pill-surface);
   padding: 1.5rem;
   color: var(--muted);
   text-align: center;
@@ -4451,13 +5120,13 @@ summary:focus-visible {
 
 .delegate-model-empty-compact {
   min-height: 8rem;
-  border: 0;
+  background: transparent;
 }
 
 .delegate-model-orphans {
   display: grid;
   gap: 0.55rem;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--subtle-border);
   padding-top: 0.8rem;
 }
 
@@ -4478,8 +5147,8 @@ summary:focus-visible {
 .delegate-model-orphan {
   justify-content: stretch;
   gap: 0.6rem;
-  border: 1px solid var(--status-warn-border);
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: var(--radius-control);
   background: color-mix(in srgb, var(--status-warn-bg), transparent 35%);
   padding: 0.55rem 0.65rem;
   color: var(--status-warn);
@@ -4533,9 +5202,8 @@ summary:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 0.9rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-card);
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
   padding: 0.65rem 0.75rem;
 }
 
@@ -4565,8 +5233,8 @@ summary:focus-visible {
 .delegate-model-orphan-detail,
 .delegate-model-default-choice {
   gap: 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: var(--radius-control);
   padding: 0.72rem;
 }
 
@@ -4585,7 +5253,7 @@ summary:focus-visible {
 
 .delegate-model-default-choice {
   width: 100%;
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
   color: var(--text);
   text-align: left;
   cursor: pointer;
@@ -4615,8 +5283,7 @@ summary:focus-visible {
 }
 
 .delegate-model-choice-selected {
-  border-color: color-mix(in srgb, var(--accent), var(--border) 42%) !important;
-  background: color-mix(in srgb, var(--accent-dim), var(--bg-card) 72%);
+  background: color-mix(in srgb, var(--accent-dim), transparent 40%);
 }
 
 .delegate-model-choice-name {
@@ -4660,15 +5327,12 @@ summary:focus-visible {
   min-height: 0;
   max-height: min(24rem, 50vh);
   overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  /* Match sticky titles so Chromium cannot show a 1px lighter strip
-     above the header inside a rounded overflow container. */
-  background: var(--bg-panel-strong);
+  /* Flat list: no card edge; sticky titles sit on the dialog surface. */
+  background: var(--dialog-bg);
 }
 
 .delegate-model-picker-group + .delegate-model-picker-group {
-  border-top: 1px solid var(--border);
+  margin-top: 0.35rem;
 }
 
 .delegate-model-picker-group-title {
@@ -4679,13 +5343,11 @@ summary:focus-visible {
   align-items: center;
   gap: 0.4rem;
   padding: 0.38rem 0.7rem;
-  background: var(--bg-panel-strong);
-  box-shadow: 0 -1px 0 var(--bg-panel-strong);
-  color: var(--muted);
-  font-size: 0.62rem;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  background: var(--dialog-bg);
+  box-shadow: 0 -1px 0 var(--dialog-bg);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 550;
 }
 
 .model-picker-provider-icon {
@@ -4699,21 +5361,17 @@ summary:focus-visible {
   justify-content: stretch;
   gap: 0.8rem;
   border: 0;
-  border-top: 1px solid color-mix(in srgb, var(--border), transparent 28%);
-  background: var(--bg-card);
-  padding: 0.68rem 0.72rem;
+  border-radius: var(--radius-control);
+  background: transparent;
+  padding: 0.6rem 0.72rem;
   color: var(--text);
   text-align: left;
   cursor: pointer;
 }
 
-.delegate-model-choice:first-of-type {
-  border-top: 0;
-}
-
 .delegate-model-choice-unavailable,
 .delegate-model-choice-unavailable:hover:enabled {
-  background: var(--bg-card);
+  background: transparent;
   color: var(--muted);
   cursor: not-allowed;
 }
@@ -4877,7 +5535,7 @@ summary:focus-visible {
 
 .dialog-row + .dialog-row,
 .dialog-row-group + .dialog-row-group {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--subtle-border);
 }
 
 .dialog-row-main {
@@ -4921,72 +5579,6 @@ summary:focus-visible {
   color: var(--muted);
   padding: 0.7rem 0.85rem;
   font-size: 0.84rem;
-}
-
-.dialog-segmented {
-  display: grid;
-  gap: 0.45rem;
-}
-
-.dialog-segmented-two {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.dialog-segmented-four {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.dialog-segmented-button {
-  justify-content: center;
-  min-height: 2.65rem;
-  background: var(--bg-card);
-  font-size: 0.9rem;
-}
-
-.dialog-segmented-button-active {
-  border-color: var(--selected-border);
-  background: color-mix(in srgb, var(--accent-dim), var(--bg-card) 45%);
-  color: var(--accent);
-}
-
-.dialog-advanced summary {
-  list-style: none;
-}
-
-.dialog-advanced summary::-webkit-details-marker {
-  display: none;
-}
-
-.dialog-advanced:not([open]) {
-  gap: 0;
-}
-
-.dialog-advanced-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.dialog-advanced-chevron {
-  flex: 0 0 auto;
-  color: var(--muted);
-  transition: transform 0.15s ease, color 0.15s ease;
-}
-
-.dialog-advanced[open] .dialog-advanced-chevron {
-  transform: rotate(180deg);
-}
-
-.dialog-advanced-summary:hover .dialog-advanced-chevron {
-  color: var(--text);
-}
-
-.dialog-advanced-fields {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
-  margin-top: 0;
 }
 
 .dialog-modal-panel {
@@ -5037,6 +5629,507 @@ summary:focus-visible {
   padding-top: 0.4rem;
 }
 
+/* New automation dialog: prompt first, then two compact fields. Pills and inputs use
+   the dialog faint-fill recipe; the accent is reserved for the selected option. */
+/* This dialog is taller than a standard one (prompt, frequency, target, limits), so it gets
+   more room before the body scrolls. The footer stays pinned below the scrolling body. */
+.app-dialog.schedule-dialog {
+  max-height: min(88vh, 54rem);
+}
+
+.schedule-dialog .app-dialog-body {
+  padding-bottom: 1.25rem;
+}
+
+/* No divider line: the dialog is short enough now that the body rarely scrolls. */
+.schedule-dialog .app-dialog-footer {
+  padding-top: 0.9rem;
+}
+
+.schedule-form {
+  gap: 1.15rem;
+}
+
+/* Workspace suggestions sit in the flow under the input (like the session picker) instead of
+   floating over the form: the dialog body grows and scrolls, so the list is never cut off by
+   the pinned footer. */
+.schedule-dialog .workspace-suggestion-popover {
+  position: static;
+  max-height: min(11rem, 28vh);
+  margin-top: 0.4rem;
+  box-shadow: none;
+  background: var(--composer-pill-surface);
+  border-color: transparent;
+}
+
+.schedule-prompt {
+  min-height: 5rem;
+  width: 100%;
+  resize: vertical;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+/* Selectors reuse .composer-delivery-switch (the Steer / Queue control). These rules only
+   add what the dialog needs: a larger size, a disabled state, and the row layout. */
+.schedule-switch-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* Switch on the left, time zone pill pushed to the right end of the same row. */
+.schedule-switch-row-split {
+  flex-wrap: nowrap;
+  justify-content: space-between;
+}
+
+.schedule-switch-row-split > .schedule-switch {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+@media (max-width: 640px) {
+  .schedule-switch-row-split {
+    flex-wrap: wrap;
+  }
+}
+
+.schedule-switch.composer-delivery-switch button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.78rem;
+}
+
+.schedule-switch.composer-delivery-switch button.active {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.schedule-switch.composer-delivery-switch button:disabled {
+  background: transparent;
+  color: var(--text-dim);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* "Every [ 30 ] minutes": one inline sentence on a faint surface instead of a separate
+   label, a boxed number field and a trailing word. */
+.schedule-interval {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  /* The field is a grid: justify-self (not align-self) stops it stretching full width. */
+  justify-self: start;
+  width: fit-content;
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
+  padding: 0.3rem 0.4rem 0.3rem 0.8rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.schedule-interval-input {
+  box-sizing: border-box;
+  width: 4rem;
+  border: 0;
+  border-radius: calc(var(--radius-control) - 2px);
+  background: var(--composer-pill-surface-hover);
+  padding: 0.3rem 0.5rem;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: center;
+  outline: none;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.schedule-interval-input::-webkit-inner-spin-button,
+.schedule-interval-input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.schedule-interval-input:focus-visible {
+  box-shadow: 0 0 0 1px var(--subtle-border-strong);
+}
+
+.schedule-timezone {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-dim);
+}
+
+.schedule-time-input {
+  width: min(100%, 10rem);
+}
+
+.schedule-cron-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.schedule-cron-input {
+  min-width: 0;
+  flex: 1;
+  font-family: var(--font-mono);
+}
+
+/* Limits live in the footer, left of Cancel / Create. The button is a quiet ghost control;
+   its panel opens upward so nothing in the form moves. */
+.schedule-limits-trigger {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 60%;
+  align-items: center;
+  gap: 0.4rem;
+  margin-right: auto;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  padding: 0.4rem 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 560;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.schedule-limits-trigger:hover,
+.schedule-limits-trigger:focus-visible,
+.schedule-limits-trigger[data-state='open'] {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+  outline: none;
+}
+
+.schedule-limits-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-weight: 450;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schedule-limits-value-error {
+  color: var(--danger);
+}
+
+.schedule-limits-panel {
+  z-index: 2000;
+  width: min(24rem, calc(100vw - 2rem));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel-strong);
+  padding: 0.9rem 1rem;
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* One labelled row per limit (label and help on the left, a fixed-width input on the
+   right). Rows avoid the cramped three-column grid, where number inputs overflowed. */
+.schedule-limits-fields {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.schedule-limit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 9.5rem;
+  align-items: center;
+  gap: 0.25rem 1rem;
+}
+
+.schedule-limit-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.schedule-limit-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.schedule-limit-input::-webkit-inner-spin-button,
+.schedule-limit-input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.schedule-limit-error {
+  grid-column: 1 / -1;
+  justify-self: end;
+}
+
+@media (max-width: 520px) {
+  .schedule-limit-row {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-limit-error {
+    justify-self: start;
+  }
+}
+
+.schedule-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.schedule-error-summary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.schedule-error-dismiss {
+  display: inline-flex;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: inherit;
+  opacity: 0.75;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.schedule-error-dismiss:hover,
+.schedule-error-dismiss:focus-visible {
+  background: var(--composer-pill-surface-hover);
+  opacity: 1;
+}
+
+.schedule-error-copy {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.3rem;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  padding: 0.15rem 0.4rem;
+  color: inherit;
+  font-size: 0.75rem;
+  font-weight: 560;
+  opacity: 0.85;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.schedule-error-copy:hover,
+.schedule-error-copy:focus-visible {
+  background: var(--composer-pill-surface-hover);
+  opacity: 1;
+}
+
+.schedule-label-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.schedule-help-trigger {
+  display: inline-flex;
+  width: 1.35rem;
+  height: 1.35rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.schedule-help-trigger:hover,
+.schedule-help-trigger:focus-visible,
+.schedule-help-trigger[data-state='open'] {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.schedule-help-content {
+  z-index: 2000;
+  max-width: min(20rem, calc(100vw - 2rem));
+  padding: 0.6rem 0.75rem;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.schedule-help-body {
+  color: var(--text);
+}
+
+.schedule-help-body code {
+  border-radius: 4px;
+  background: var(--composer-pill-surface-hover);
+  padding: 0.05rem 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.schedule-help-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin-top: 0.5rem;
+}
+
+.schedule-help-links a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.schedule-help-links a:hover {
+  color: var(--text);
+}
+
+.schedule-help-error {
+  margin: 0.4rem 0 0;
+  color: var(--danger);
+}
+
+/* Searchable session list: search field on top, faint-fill list below. */
+.session-picker {
+  display: grid;
+  gap: 0.4rem;
+  /* Keeps the help line below the list visible when the picker is scrolled into view. */
+  scroll-margin-bottom: 2.5rem;
+}
+
+.session-picker-search {
+  display: flex;
+  height: var(--control-height-standard);
+  align-items: center;
+  gap: 0.55rem;
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
+  padding: 0 0.7rem;
+  color: var(--text-dim);
+  transition: background 0.15s ease;
+}
+
+.session-picker-search:hover,
+.session-picker-search:focus-within {
+  background: var(--composer-pill-surface-hover);
+}
+
+.session-picker-input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.session-picker-input::placeholder {
+  color: var(--text-dim);
+}
+
+.session-picker-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.session-picker-list {
+  display: grid;
+  /* About four rows: short enough that the dialog body rarely has to scroll as well. */
+  max-height: min(10.5rem, 26vh);
+  overscroll-behavior: contain;
+  align-content: start;
+  gap: 0.1rem;
+  overflow-y: auto;
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
+  padding: 0.25rem;
+}
+
+.session-picker-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.9rem;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  padding: 0.5rem 0.65rem;
+  color: var(--text-muted);
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+/* Highlight is state-driven only (keyboard and mouse both set it). A CSS :hover here would
+   light a second row when the pointer rests on one while arrow keys move the highlight. */
+.session-picker-row-highlighted {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.session-picker-row-selected,
+.session-picker-row-selected:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.session-picker-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.84rem;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-picker-meta {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: 0.6rem;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.session-picker-meta > span:first-child:not(:last-child) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-picker-id {
+  font-family: var(--font-mono);
+}
+
+.session-picker-empty {
+  margin: 0;
+  padding: 0.7rem 0.65rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 @media (max-width: 640px) {
   .app-picker-header,
   .app-picker-body {
@@ -5079,18 +6172,26 @@ summary:focus-visible {
   display: flex;
   box-sizing: border-box;
   min-width: 0;
-  height: 2.75rem;
+  height: var(--control-height-standard);
   align-items: center;
-  gap: 0.65rem;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--bg-card);
-  padding: 0.54rem 0.54rem 0.54rem 0.9rem;
-  color: var(--muted);
+  gap: 0.55rem;
+  border-radius: var(--radius-control);
+  /* Same recipe as the composer pills: transparent border keeps the metrics,
+     a faint fill is the affordance, and hover/focus strengthen the fill. */
+  border: 1px solid transparent;
+  background: var(--composer-pill-surface);
+  padding: 0.3rem 0.6rem;
+  color: var(--text-dim);
+  transition: background 0.15s ease;
+}
+
+.workspace-input-shell:hover,
+.workspace-input-shell:focus-within {
+  background: var(--composer-pill-surface-hover);
 }
 
 .workspace-input-shell:focus-within {
-  border-color: var(--border-strong);
+  color: var(--text-muted);
 }
 
 .workspace-input {
@@ -5102,36 +6203,94 @@ summary:focus-visible {
   color: var(--text);
   outline: none;
   font: inherit;
+  font-size: 0.875rem;
+}
+
+.workspace-input::placeholder {
+  color: var(--text-dim);
 }
 
 .workspace-input-loading {
   flex: 0 0 auto;
 }
 
+/* Same menu language as the composer's other popovers (app-select-content):
+   inset rounded rows, a soft highlight, and no divider lines between rows. */
 .workspace-suggestion-popover {
   position: absolute;
   z-index: 30;
-  margin-top: 0.5rem;
+  margin-top: 0.4rem;
   width: 100%;
-  overflow: hidden;
+  max-height: min(16rem, calc(100vh - 2rem));
+  overflow-y: auto;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--bg-panel-strong);
+  padding: 0.3rem;
   box-shadow: var(--shadow-md);
 }
 
 .workspace-suggestion-row {
-  display: block;
+  display: flex;
   width: 100%;
-  padding: 0.75rem 0.9rem;
+  min-height: var(--control-height-compact);
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.2rem 0.6rem;
   text-align: left;
   border: 0;
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--text);
+  cursor: pointer;
+  outline: none;
+  transition: background 0.12s ease;
 }
 
-.workspace-suggestion-row + .workspace-suggestion-row {
-  border-top: 1px solid var(--border);
+/* State-driven only: mousemove sets data-highlighted, so :hover would double-highlight. */
+.workspace-suggestion-row[data-highlighted] {
+  background: var(--composer-pill-surface-hover);
+}
+
+.workspace-suggestion-icon {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+.workspace-suggestion-row[data-highlighted] .workspace-suggestion-icon {
+  color: var(--text-muted);
+}
+
+/* One line per row: the name keeps its width (up to a cap) and the dimmed
+   parent directory takes the remaining space and truncates. */
+.workspace-suggestion-name {
+  flex: 0 1 auto;
+  max-width: 55%;
+  overflow: hidden;
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-suggestion-path {
+  min-width: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  line-height: 1.25rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Arrow-key navigation keeps focus in the input, so the hover tooltip never
+   opens; show the highlighted row's full path in place instead. */
+.workspace-suggestion-row[data-keyboard-highlighted] .workspace-suggestion-name,
+.workspace-suggestion-row[data-keyboard-highlighted] .workspace-suggestion-path {
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .markdown-body {
@@ -5539,19 +6698,133 @@ summary:focus-visible {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  min-height: 3.5rem;
-  gap: 0.4rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--nav-bg);
-  padding: 0.5rem 0.6rem;
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: var(--surface-blur);
-  -webkit-backdrop-filter: var(--surface-blur);
+  min-height: 3rem;
+  gap: 0.4rem 0.6rem;
+  /* Borderless. The frosted glass lives on ::before, not here: a backdrop blur
+     on the header itself would make it a backdrop root and stop the ::after
+     dissolve zone from blurring the transcript. */
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.35rem 0.4rem;
+}
+
+/* ::before is the header's frosted glass (behind its content). Page-coloured
+   inset shadows, stronger on the left and right, hide the bar's sharp corners;
+   the outer shadow shifted upward is the solid strip covering the gap above
+   the header. ::after is the frosted dissolve zone below it: text lightly blurs
+   and fades out over 1.5rem, and the mask tapers the blur so it has no hard edge. */
+.session-header::before,
+.session-header::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+
+.session-header::before {
+  top: 0;
+  bottom: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--body-bg-base) 78%, transparent);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  box-shadow:
+    inset 2rem 0 1.25rem -0.5rem var(--body-bg-base),
+    inset -2rem 0 1.25rem -0.5rem var(--body-bg-base),
+    inset 0 0 12px 6px var(--body-bg-base),
+    0 calc(-1 * (var(--app-sticky-top) + 1rem)) 0 0 var(--body-bg-base);
+}
+
+.session-header::after {
+  top: 100%;
+  height: 1.125rem;
+  background: linear-gradient(
+    to bottom,
+    var(--body-bg-base),
+    color-mix(in srgb, var(--body-bg-base) 70%, transparent) 40%,
+    transparent
+  );
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  mask-image: linear-gradient(to bottom, #000 30%, transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent);
+}
+
+/* Same treatment under the docked composer: solid below its top edge, fading
+   out just above it, so text never shows through around the dock. */
+.session-composer-fade {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  z-index: 33;
+  width: min(var(--session-chat-max), calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+  height: calc(
+    var(
+      --session-composer-live-top,
+      calc(var(--session-composer-bottom-offset) + var(--control-height-standard))
+    ) + 1.25rem
+  );
+  transform: translateX(-50%);
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--body-bg-base) 1.25rem);
+  transition: height 180ms ease;
+}
+
+/* Stay inside the rounded window frame instead of painting the transparent margin. */
+.app-shell-custom-titlebar:not(.app-shell-maximized) .session-composer-fade {
+  bottom: 13px;
 }
 
 .session-header-back {
   flex: 0 0 auto;
+}
+
+/* Ghost 2rem header buttons: transparent at rest, the composer's faint fill on
+   hover/open, keyboard focus keeps its ring. Outranks the global .icon-btn. */
+.session-header .session-header-btn {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.session-header .session-header-btn:hover:enabled,
+.session-header .session-header-btn[data-state='open'],
+.session-header-details[open] > .session-header-btn {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.session-header .session-header-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Session details merged with the context ring: the ring and its percentage
+   sit inside the button, which grows from a square to a short pill. The ring
+   keeps its pressure colors (warm/tight/full) so the button doubles as the
+   context readout. */
+.session-header .session-header-details-trigger-context {
+  width: auto;
+  min-width: var(--control-height-compact);
+  gap: 0.3rem;
+  padding: 0 0.5rem;
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+.session-header-details-trigger-context .session-context-dial {
+  pointer-events: none;
+}
+
+.session-header-details-trigger-context .session-context-dial-ring {
+  width: 14px;
+  height: 14px;
 }
 
 .session-header-identity {
@@ -5562,7 +6835,9 @@ summary:focus-visible {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 0.4rem;
+  /* The dot's column is as wide as the first icon below it (see the status-wrap
+     rule), so this small gap keeps the title where it was. */
+  gap: 0.05rem;
 }
 
 .session-header-title-line h1 {
@@ -5570,8 +6845,23 @@ summary:focus-visible {
   min-width: 0;
 }
 
+/* The dot is centred in a column the width of the first metadata icon (13px for
+   the pin/resolved/archived icons), so the dot and that icon share one centre line. */
 .session-header-title-line > .session-header-status-wrap {
   flex: 0 0 auto;
+  width: 13px;
+  justify-content: center;
+  /* The dot is centred on the line box, but lowercase text sits lower (its
+     x-height centre is ~1.6px below the box centre), so nudge the dot down. */
+  transform: translateY(1px);
+}
+
+/* When the remote-host indicator (1.125rem) is the first item, match its width. */
+.session-header-identity:has(> .session-header-meta > .session-header-remote-indicator:first-child)
+  .session-header-title-line > .session-header-status-wrap,
+.session-header-identity:has(> .session-header-mobile-meta > .session-header-remote-indicator:first-child)
+  .session-header-title-line > .session-header-status-wrap {
+  width: 1.125rem;
 }
 
 .session-header-identity h1 {
@@ -5579,8 +6869,8 @@ summary:focus-visible {
   margin: 0;
   color: var(--text);
   font-family: var(--font-display);
-  font-size: 0.94rem;
-  font-weight: 660;
+  font-size: 0.875rem;
+  font-weight: 600;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5593,10 +6883,16 @@ summary:focus-visible {
   min-width: 0;
   align-items: center;
   justify-content: flex-start;
-  gap: 0.35rem;
-  margin-top: 0.15rem;
+  /* No dot separators: spacing alone separates the items. */
+  gap: 0.75rem;
+  margin-top: 0.1rem;
+  /* Inline padding gives the first chip's pill room inside the clip box; the
+     matching negative margin keeps the text on the title's left edge. */
+  padding-inline: 0.35rem;
+  margin-inline: -0.35rem;
+  max-width: calc(100% + 0.7rem);
   overflow: hidden;
-  color: var(--muted);
+  color: var(--text-dim);
   font-size: 0.72rem;
   line-height: 1.2;
   white-space: nowrap;
@@ -5668,22 +6964,16 @@ summary:focus-visible {
   margin-right: -0.15rem;
 }
 
-.session-header-meta span:not([aria-hidden]):not(.session-context-dial):not(.session-context-dial-figure) {
+.session-header-meta span:not([aria-hidden]) {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.session-header-meta > .session-header-session-id,
-.session-header-meta > .session-header-context-slot,
-.session-header-mobile-meta > .session-context-dial {
+/* The chips' hover fill is wider than their text (negative margins keep the text
+   aligned), so the wrapper must not clip it or the pill loses its corners. */
+.session-header-meta > span.session-header-session-id {
   flex: 0 0 auto;
-}
-
-.session-header-context-slot {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 0.35rem;
+  overflow: visible;
 }
 
 .session-header-meta-desktop,
@@ -5691,7 +6981,7 @@ summary:focus-visible {
   display: inline-flex;
   min-width: 0;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.75rem;
   font-size: inherit;
   line-height: inherit;
 }
@@ -5700,15 +6990,44 @@ summary:focus-visible {
    font-size, line-height, and padding and the row grows to the tallest. */
 .session-header-meta .session-id-chip,
 .session-header-meta .copy-chip,
-.session-header-meta .session-context-dial,
 .session-header-meta .session-header-profile {
   font-size: inherit;
   line-height: inherit;
 }
 
+/* Plain dim text at rest; the faint pill fill only appears on hover, like the
+   composer pills. Negative margins keep the text aligned to the row's left edge. */
 .session-header-meta .session-id-chip,
 .session-header-meta .copy-chip {
-  padding-block: 0;
+  padding: 0.1rem 0.35rem;
+  margin-inline: -0.35rem;
+  color: inherit;
+}
+
+.session-header-meta .session-id-chip:hover,
+.session-header-meta .copy-chip:hover {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+/* One regular font for the whole row; only the session id stays monospace. */
+.session-header-meta .session-id-chip {
+  min-width: 0;
+}
+
+.session-header-meta .session-header-worktree {
+  font-family: inherit;
+  color: inherit;
+}
+
+.session-header-meta .session-header-worktree-warning {
+  color: var(--status-warning, #d97706);
+}
+
+/* Decorative icons sit dimmer than the text; state icons (lifecycle, remote) keep full strength. */
+.session-header-meta .session-header-worktree svg,
+.session-header-meta .session-header-profile svg {
+  opacity: 0.55;
 }
 
 .session-header-meta .session-header-profile svg {
@@ -5723,13 +7042,12 @@ summary:focus-visible {
 }
 
 .session-header-controls {
-  gap: 0.45rem;
+  gap: 0.25rem;
 }
 
+/* No divider: the ghost buttons need no separation from the title. */
 .session-header-action-group {
-  gap: 0.2rem;
-  border-left: 1px solid var(--border);
-  padding-left: 0.45rem;
+  gap: 0.1rem;
 }
 
 .session-id-chip {
@@ -5875,19 +7193,21 @@ summary:focus-visible {
   display: none;
 }
 
+/* Same floating-menu language as the composer's Options panel and the actions
+   menu: bordered, calm shadow with the inset top highlight, tight padding. */
 .session-header-details-panel {
   position: absolute;
   top: calc(100% + 0.6rem);
-  right: -4.6rem;
+  right: 0;
   z-index: 40;
-  width: min(28rem, calc(100vw - 2rem));
+  width: min(26rem, calc(100vw - 2rem));
   max-height: calc(100dvh - 8rem);
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-panel-strong);
-  padding: 0.9rem;
-  box-shadow: var(--shadow-lg);
+  padding: 0.5rem 0.6rem 0.6rem;
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   user-select: none;
   -webkit-user-select: none;
 }
@@ -5900,7 +7220,11 @@ summary:focus-visible {
 }
 
 .session-header-details-heading strong {
-  font-size: 0.84rem;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .session-header-details-status {
@@ -5915,7 +7239,7 @@ summary:focus-visible {
 .session-header-details-list {
   display: grid;
   gap: 0.45rem;
-  margin: 0.8rem 0 0;
+  margin: 0.6rem 0 0;
 }
 
 .session-header-details-list > div {
@@ -6006,6 +7330,11 @@ summary:focus-visible {
   gap: 0.9rem;
 }
 
+/* Clear the session header's 1.5rem dissolve zone (::after) so it never fades the empty-state card. */
+.session-conversation > .empty-state {
+  margin-top: 0.85rem;
+}
+
 .session-history-notice {
   margin: 0;
   font-size: 0.8rem;
@@ -6034,15 +7363,20 @@ summary:focus-visible {
   pointer-events: none;
 }
 
+/* Activity bar and its queue/delegate bubbles keep the halo look: a page-colored
+   fill with a feathered page-colored glow that fades the transcript behind
+   them, at the same 2rem control height and corner radius as the composer. */
 .session-activity-bar {
+  box-sizing: border-box;
   display: inline-flex;
   width: fit-content;
   max-width: 100%;
   min-width: 0;
+  min-height: var(--control-height-compact);
   align-items: center;
-  gap: 0.55rem;
-  padding: 0.3rem 0.7rem;
-  border-radius: 999px;
+  gap: 0.5rem;
+  padding: 0 0.7rem;
+  border-radius: var(--radius-control);
   background: var(--body-bg-base);
   color: var(--muted);
   pointer-events: auto;
@@ -6072,6 +7406,12 @@ summary:focus-visible {
   transition: bottom 180ms ease;
 }
 
+/* The scroll-to-latest button is pinned to the dock's right end, so keep the
+   dock's content (bar and bubbles) clear of it while it is shown. */
+.session-scroll-bottom-pill-host ~ .session-activity-bar-dock {
+  padding-right: calc(var(--control-height-compact) + 1rem);
+}
+
 .session-delegates-bubble ~ .session-activity-bar .session-activity-meta {
   min-width: 0;
   flex-shrink: 1;
@@ -6085,8 +7425,8 @@ summary:focus-visible {
   align-items: start;
   min-width: 0;
   gap: 0.5rem;
-  border-radius: calc(var(--radius-control) - 2px);
-  background: var(--bg-card);
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
   padding: 0.4rem 0.5rem;
   color: var(--text);
   font-size: 0.74rem;
@@ -6095,7 +7435,7 @@ summary:focus-visible {
 }
 
 a.session-delegate-session:hover {
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
 }
 
 .session-delegate-copy {
@@ -6122,7 +7462,16 @@ a.session-delegate-session:hover {
 }
 
 .session-activity-bar-failed {
+  background: color-mix(in srgb, var(--status-danger) 10%, var(--body-bg-base));
   color: var(--status-danger);
+}
+
+.session-activity-bar-attention {
+  background: color-mix(in srgb, var(--accent) 10%, var(--body-bg-base));
+}
+
+.session-activity-bar-attention .session-activity-indicator {
+  color: var(--accent);
 }
 
 .session-activity-indicator {
@@ -6143,16 +7492,61 @@ a.session-delegate-session:hover {
   white-space: nowrap;
 }
 
+/* Running tool: the name stays prominent; the command is dimmed and is the
+   part that truncates first. The tooltip carries the full command. */
+.session-activity-preview,
+.session-activity-extra {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+/* Only the command clips; the tool name and the "+N active" count stay visible. */
+.session-activity-title-tool {
+  display: flex;
+  align-items: baseline;
+}
+
+.session-activity-title-tool > .session-activity-label,
+.session-activity-title-tool > .session-activity-extra {
+  flex: 0 0 auto;
+}
+
+.session-activity-title-tool > .session-activity-preview {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.session-activity-tooltip-preview {
+  display: block;
+  max-width: min(32rem, 80vw);
+  font-family: var(--font-mono);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.session-activity-tooltip-hint {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--text-dim);
+  line-height: 1.2;
+}
+
 .session-queued-bubble {
+  box-sizing: border-box;
   display: inline-flex;
   flex: 0 0 auto;
   width: fit-content;
   min-width: 0;
+  min-height: var(--control-height-compact);
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.3rem 0.7rem;
+  gap: 0.4rem;
+  padding: 0 0.6rem;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-control);
   background: var(--body-bg-base);
   color: var(--muted);
   font-family: inherit;
@@ -6163,11 +7557,19 @@ a.session-delegate-session:hover {
     0 0 0 4px var(--body-bg-base),
     0 0 12px 4px color-mix(in srgb, var(--body-bg-base) 85%, transparent),
     0 0 28px 9px color-mix(in srgb, var(--body-bg-base) 50%, transparent);
+  transition: color 0.15s ease;
 }
 
+/* Same faint overlay as the composer pills; the base color stays opaque. */
 .session-queued-bubble:hover,
 .session-queued-bubble.open {
+  background-image: linear-gradient(var(--composer-pill-surface-hover), var(--composer-pill-surface-hover));
   color: var(--text);
+}
+
+.session-queued-bubble:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .session-queued-bubble svg {
@@ -6196,9 +7598,9 @@ a.session-delegate-session:hover {
   min-width: 0;
   max-width: 100%;
   border: 1px solid var(--border);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius);
   background: var(--bg-panel-strong);
-  padding: 0.4rem;
+  padding: 0.3rem;
   box-shadow: var(--shadow-lg);
 }
 
@@ -6220,8 +7622,8 @@ a.session-delegate-session:hover {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.5rem;
-  border-radius: calc(var(--radius-control) - 2px);
-  background: var(--bg-card);
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
   padding: 0.25rem 0.375rem 0.25rem 0.5rem;
 }
 
@@ -6700,13 +8102,6 @@ a.session-delegate-session:hover {
     flex: 0 0 auto;
   }
 
-  .composer-option-value-locked {
-    max-width: 9rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .session-header {
     grid-template-columns: auto minmax(0, 1fr) auto;
     backdrop-filter: none;
@@ -6951,16 +8346,16 @@ a.session-delegate-session:hover {
 }
 
 .session-image-preview {
-  width: fit-content;
-  max-width: 100%;
-  flex: 0 1 auto;
+  width: 3rem;
+  height: 3rem;
+  flex: 0 0 auto;
   overflow: hidden;
 }
 
 .session-image-trigger {
   display: block;
-  width: fit-content;
-  max-width: 100%;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   border: 0;
   border-radius: calc(var(--radius) - 1px);
@@ -6972,10 +8367,9 @@ a.session-delegate-session:hover {
 
 .session-image-thumbnail {
   display: block;
-  width: auto;
-  max-width: 100%;
-  height: 4rem;
-  object-fit: contain;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   background: var(--bg-surface);
 }
 
@@ -7006,11 +8400,28 @@ a.session-delegate-session:hover {
 }
 
 .session-attachment-fallback {
-  width: min(12rem, 100%);
-  min-height: 4rem;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
   justify-content: center;
+  gap: 0.15rem;
+  padding: 0.2rem;
+  overflow: hidden;
   text-align: center;
+}
+
+/* The thumbnail is too small for the copy; keep the name and status in the
+   accessibility tree instead of removing them. */
+.session-image-preview .session-attachment-fallback span,
+.session-image-preview .session-attachment-fallback small {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .session-file-card-copy {
@@ -7230,19 +8641,22 @@ a.session-delegate-session:hover {
   font-weight: 650;
 }
 
-.session-message-user .session-attachments {
-  padding: 0;
+.session-user-message-attachments {
+  max-width: min(44rem, 86%);
 }
 
-.session-attachments-compact .session-image-thumbnail {
-  height: 3.5rem;
+.session-user-message-attachments .session-attachments {
+  width: auto;
+  padding: 0;
+  justify-content: flex-end;
+}
+
+.session-attachments-compact .session-image-preview {
+  width: 2.625rem;
+  height: 2.625rem;
 }
 
 @media (max-width: 560px) {
-  .session-image-thumbnail {
-    height: 3.5rem;
-  }
-
   .session-file-card {
     max-width: 100%;
   }
@@ -8680,27 +10094,22 @@ a.session-delegate-session:hover {
   justify-content: flex-end;
 }
 
+/* The expanded sidebar floats as a bordered card; the collapsed rail is
+   transparent. Rows inside get a faint fill instead of outlines. */
 .app-sidebar {
-  --rail-item-radius-rest: 999px;
-  --rail-item-radius-hover: 14px;
-  --rail-item-morph-duration: 180ms;
-  --rail-item-morph-easing: cubic-bezier(0.22, 1, 0.36, 1);
   position: fixed;
-  top: 1rem;
+  top: var(--session-composer-bottom-offset);
+  bottom: var(--session-composer-bottom-offset);
   left: 0.5rem;
   z-index: 40;
   display: flex;
-  height: calc(100dvh - 2rem);
-  max-height: calc(100dvh - 2rem);
+  height: auto;
+  max-height: none;
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--nav-bg);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: var(--surface-blur);
-  -webkit-backdrop-filter: var(--surface-blur);
+  border: 0;
+  background: transparent;
   transition: width var(--app-panel-duration) var(--app-panel-easing), transform var(--app-panel-duration) var(--app-panel-easing);
 }
 
@@ -8708,15 +10117,19 @@ a.session-delegate-session:hover {
   width: var(--app-sidebar-collapsed-width);
   align-items: center;
   gap: 0.65rem;
-  border-color: transparent;
-  background: transparent;
   padding: 0.45rem 0;
-  box-shadow: none;
-  backdrop-filter: none;
 }
 
+/* Floating card with the composer's radius and surface (border, soft shadow
+   and blur as before the restyle). */
 .app-sidebar-expanded {
   width: var(--app-sidebar-expanded-width);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel-strong);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: var(--surface-blur);
+  -webkit-backdrop-filter: var(--surface-blur);
   padding: 0.65rem;
 }
 
@@ -8725,8 +10138,31 @@ a.session-delegate-session:hover {
   flex: 0 0 auto;
   align-items: center;
   gap: 0.5rem;
-  border-bottom: 1px solid var(--border);
-  padding: 0.1rem 0.1rem 0.7rem;
+  padding: 0.1rem 0.1rem 0.4rem;
+}
+
+/* 2rem ghost button, like the session header buttons. */
+.app-sidebar-footer .app-sidebar-collapse {
+  flex: 0 0 auto;
+  width: var(--control-height-compact);
+  height: var(--control-height-compact);
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.app-sidebar-footer .app-sidebar-collapse:hover,
+.app-sidebar-footer .app-sidebar-collapse:focus-visible {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.app-sidebar-footer .app-sidebar-collapse:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .app-sidebar-brand {
@@ -8735,8 +10171,25 @@ a.session-delegate-session:hover {
   flex: 1;
   align-items: center;
   gap: 0.65rem;
+  /* Padding with a matching negative margin gives the hover fill room
+     without moving the logo. */
+  margin: -0.3rem;
+  border-radius: var(--radius-control);
+  padding: 0.3rem;
   color: var(--text);
   text-decoration: none;
+  transition: background 0.15s ease;
+}
+
+/* Same feedback as the nav rows below, so the logo reads as the Start link. */
+.app-sidebar-brand:hover,
+.app-sidebar-brand:focus-visible {
+  background: var(--row-surface-hover);
+  outline: none;
+}
+
+.app-sidebar-brand-current {
+  background: var(--composer-pill-surface-hover);
 }
 
 .app-sidebar-brand > span:first-child {
@@ -8747,10 +10200,6 @@ a.session-delegate-session:hover {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-control);
-  background: var(--accent);
-  color: white;
-  font-size: 0.78rem;
-  font-weight: 800;
 }
 
 .app-sidebar-brand-copy {
@@ -8760,24 +10209,23 @@ a.session-delegate-session:hover {
   line-height: 1;
 }
 
-.app-sidebar-brand strong,
-.app-sidebar-brand small {
+.app-sidebar-brand strong {
   overflow: hidden;
+  font-size: 0.9rem;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.app-sidebar-brand strong {
-  font-size: 0.88rem;
-  font-weight: 700;
-}
-
 .app-sidebar-brand small {
+  overflow: hidden;
   color: var(--text-dim);
   font-size: 0.58rem;
   font-weight: 550;
   line-height: calc(1em + 2px);
   letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-sidebar-navigation {
@@ -8792,17 +10240,16 @@ a.session-delegate-session:hover {
   gap: 0.16rem;
 }
 
+/* Quiet sentence-case labels instead of loud uppercase headings. */
 .app-sidebar-group-label,
 .app-sidebar-section-heading {
-  color: var(--muted);
-  font-size: 0.66rem;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 
 .app-sidebar-group-label {
-  padding: 0.25rem 0.55rem;
+  padding: 0.25rem 0.5rem;
 }
 
 .app-sidebar-link {
@@ -8827,19 +10274,11 @@ a.session-delegate-session:hover {
   outline: none;
 }
 
+/* Current rows share one neutral faint fill (nav and sessions); the accent shows
+   only in the nav icon. */
 .app-sidebar-link-current {
-  background: var(--selected-surface);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
-}
-
-.app-sidebar-link-current::before {
-  position: absolute;
-  left: -0.66rem;
-  width: 0.2rem;
-  height: 1.2rem;
-  border-radius: 999px;
-  background: var(--accent);
-  content: '';
 }
 
 .app-sidebar-link {
@@ -8859,8 +10298,9 @@ a.session-delegate-session:hover {
 }
 
 .app-sidebar-link small {
-  color: var(--muted);
-  font-size: 0.65rem;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Shared visually-hidden utility. Markup already uses it for accessible-only text
@@ -8891,15 +10331,20 @@ a.session-delegate-session:hover {
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
-  border-top: 1px solid var(--border);
-  padding-top: 0.65rem;
+  border-top: 1px solid var(--subtle-border);
+  padding-top: 0.35rem;
 }
 
+/* Headings stay pinned to the top of the list so the zone is always labelled. */
 .app-sidebar-section-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.25rem 0.55rem 0.45rem;
+  background: var(--bg-panel-strong);
+  padding: 0.4rem 0.5rem 0.3rem;
 }
 
 .session-pin-indicator {
@@ -8926,7 +10371,7 @@ a.session-delegate-session:hover {
 }
 
 .app-sidebar-session[aria-current='page'] {
-  background: var(--row-surface-hover);
+  background: var(--composer-pill-surface-hover);
 }
 
 .app-sidebar-session-list {
@@ -8934,18 +10379,28 @@ a.session-delegate-session:hover {
   align-content: start;
   gap: 0.18rem;
   overflow-y: auto;
-  padding: 0 0.1rem;
+  /* Rows fade out above the footer; the bottom padding lets the last row scroll
+     clear of the fade. */
+  padding: 0 0.1rem 1.25rem;
   scrollbar-width: thin;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.25rem), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.25rem), transparent);
 }
 
 .app-sidebar-session {
   display: grid;
-  grid-template-columns: 1.75rem minmax(0, 1fr);
+  /* Two lines: title + status slot, then a 16px identicon + workspace + last
+     active time. The status slot has a fixed width so titles never shift when
+     a session starts or stops running. */
+  grid-template-columns: 1rem minmax(0, 1fr) auto;
+  grid-template-areas:
+    'title title title'
+    'icon workspace time';
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.18rem 0.4rem;
   border-radius: var(--radius-control);
   color: var(--text);
-  padding: 0.38rem 0.45rem;
+  padding: 0.38rem 0.5rem;
   text-decoration: none;
   transition: background 0.15s ease;
 }
@@ -8956,58 +10411,95 @@ a.session-delegate-session:hover {
   outline: none;
 }
 
-.app-sidebar-session-avatar {
+/* The title spans the whole first line and dissolves at its end instead of
+   ending in an ellipsis. Without a status icon the fade runs almost to the
+   edge; with one (below) the same fade ends just before the icon, so no text
+   shows next to it. Short titles never reach the fade. */
+.app-sidebar-session-title {
+  grid-area: title;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+  mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), rgb(0 0 0 / 40%) calc(100% - 1.1rem), transparent calc(100% - 0.25rem));
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), rgb(0 0 0 / 40%) calc(100% - 1.1rem), transparent calc(100% - 0.25rem));
+  font-size: 0.79rem;
+  font-weight: 560;
+}
+
+.app-sidebar-session:has(.app-sidebar-session-status > *) .app-sidebar-session-title {
+  mask-image: linear-gradient(to right, #000 calc(100% - 3.5rem), rgb(0 0 0 / 40%) calc(100% - 2.1rem), transparent calc(100% - 1.25rem));
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 3.5rem), rgb(0 0 0 / 40%) calc(100% - 2.1rem), transparent calc(100% - 1.25rem));
+}
+
+.app-sidebar-session-status {
+  grid-area: title;
   position: relative;
-  display: inline-flex;
-  width: 1.75rem;
-  height: 1.75rem;
-  align-items: center;
-  justify-content: center;
-  overflow: visible;
-}
-
-.app-sidebar-session-avatar svg {
-  width: 100%;
-  height: 100%;
-  border-radius: inherit;
-}
-
-.app-sidebar-session-spinner {
-  position: absolute;
-  top: -0.2rem;
-  right: -0.2rem;
+  z-index: 1;
   display: inline-flex;
   width: 0.85rem;
   height: 0.85rem;
   align-items: center;
   justify-content: center;
-  border: 2px solid var(--bg-panel-strong);
-  border-radius: 999px;
-  background: var(--success);
-  color: white;
+  gap: 0.2rem;
+  justify-self: end;
 }
 
-.app-sidebar-session-copy {
-  display: grid;
-  min-width: 0;
+.app-sidebar-session-spinner {
+  display: inline-flex;
+  color: var(--success);
 }
 
-.app-sidebar-session-copy strong,
-.app-sidebar-session-copy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.app-sidebar-session-status-unknown {
+  display: inline-flex;
+  color: var(--text-dim);
+}
+
+.sidebar-attention-dot.sidebar-attention-dot-inline {
+  position: static;
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 0;
+}
+
+/* A running session that also needs input shows only the attention dot. */
+.app-sidebar-session-spinner:has(+ .sidebar-attention-dot-inline) {
+  display: none;
+}
+
+.app-sidebar-session-avatar {
+  grid-area: icon;
+  display: inline-flex;
+  width: 1rem;
+  height: 1rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-sidebar-session-avatar svg {
+  width: 100%;
+  height: 100%;
+}
+
+.app-sidebar-session-workspace,
+.app-sidebar-session-time {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  line-height: 1rem;
   white-space: nowrap;
 }
 
-.app-sidebar-session-copy strong {
-  font-size: 0.75rem;
-  font-weight: 580;
+.app-sidebar-session-workspace {
+  grid-area: workspace;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.app-sidebar-session-copy small {
-  margin-top: 0.08rem;
-  color: var(--muted);
-  font-size: 0.64rem;
+.app-sidebar-session-time {
+  grid-area: time;
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
 }
 
 .app-sidebar-empty {
@@ -9017,18 +10509,31 @@ a.session-delegate-session:hover {
 }
 
 .app-sidebar-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
   flex: 0 0 auto;
-  border-top: 1px solid var(--border);
-  padding-top: 0.55rem;
+  border-top: 1px solid var(--subtle-border);
+  padding-top: 0.4rem;
 }
 
 .app-sidebar-footer .app-sidebar-link {
+  flex: 1;
+  min-width: 0;
   grid-template-columns: 1.75rem minmax(0, 1fr);
 }
 
 .app-sidebar-toggle-compact {
-  border: 1px solid var(--subtle-border);
-  background: var(--bg-card);
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.app-sidebar-toggle-compact:hover,
+.app-sidebar-toggle-compact:focus-visible {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
 }
 
 .app-icon-rail-top,
@@ -9056,6 +10561,11 @@ a.session-delegate-session:hover {
   align-content: start;
   margin-top: -0.43rem;
   overflow: visible;
+  /* Same dissolve as the expanded list: icons fade out above the expand and
+     Settings buttons, and anything past the bottom edge is masked away instead
+     of drawing over them. */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.25rem), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.25rem), transparent);
 }
 
 .session-icon-rail-list {
@@ -9073,21 +10583,27 @@ a.session-delegate-session:hover {
   width: 2.4rem;
   height: 2.4rem;
   flex: 0 0 auto;
-  border-radius: var(--rail-item-radius-rest);
+  border-radius: var(--radius-control);
   color: var(--text);
   text-decoration: none;
   outline: none;
-  transition: border-radius var(--rail-item-morph-duration) var(--rail-item-morph-easing), transform 160ms ease, box-shadow 160ms ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
+/* Collapsed rail is flat: ghost icons that take the faint fill on hover, no
+   shape morph, lift or shadows. Identicons keep their own colors. */
 .app-icon-link:hover,
 .app-icon-link:focus-visible {
-  border-radius: var(--rail-item-radius-hover);
-  transform: translateY(-1px);
+  background: var(--composer-pill-surface-hover);
+}
+
+.app-icon-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .session-icon-link {
-  transition: background 160ms ease;
+  transition: background 0.15s ease;
 }
 
 .session-icon-link:hover,
@@ -9100,20 +10616,30 @@ a.session-delegate-session:hover {
   outline-offset: 3px;
 }
 
-.app-icon-home {
-  border: 1px solid var(--selected-border);
-  background: var(--accent);
-  color: #ffffff;
-  box-shadow: 0 10px 24px rgba(249, 115, 22, 0.18);
-  font-size: 0.88rem;
-  font-weight: 800;
-  letter-spacing: -0.05em;
+.app-brand-icon {
+  display: inline-flex;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-control);
 }
 
-.app-icon-home:hover,
-.app-icon-home:focus-visible,
-.app-icon-home.app-icon-link-current {
-  box-shadow: 0 14px 30px rgba(249, 115, 22, 0.24);
+.app-brand-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.app-brand-icon .app-brand-icon-dark {
+  display: none;
+}
+
+:root[data-theme='dark'] .app-brand-icon-light {
+  display: none;
+}
+
+:root[data-theme='dark'] .app-brand-icon-dark {
+  display: block;
 }
 
 .app-nav-icon-surface {
@@ -9124,12 +10650,9 @@ a.session-delegate-session:hover {
   width: 2.4rem;
   height: 2.4rem;
   overflow: hidden;
-  border-radius: var(--rail-item-radius-rest);
-  border: 1px solid var(--subtle-border);
-  background: var(--bg-card);
+  border-radius: var(--radius-control);
   color: var(--text-dim);
-  box-shadow: var(--shadow-sm);
-  transition: border-radius var(--rail-item-morph-duration) var(--rail-item-morph-easing), border-color 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+  transition: color 0.15s ease;
 }
 
 .app-nav-icon-surface {
@@ -9152,9 +10675,8 @@ a.session-delegate-session:hover {
   height: 2.4rem;
   align-items: center;
   justify-content: center;
-  border-radius: var(--rail-item-radius-rest);
+  border-radius: var(--radius-control);
   overflow: visible;
-  transition: border-radius var(--rail-item-morph-duration) var(--rail-item-morph-easing);
 }
 
 .session-identicon-svg {
@@ -9167,36 +10689,16 @@ a.session-delegate-session:hover {
 
 .app-icon-link:hover .app-nav-icon-surface,
 .app-icon-link:focus-visible .app-nav-icon-surface {
-  border-color: var(--border-strong);
   color: var(--text);
-  box-shadow: var(--shadow-md);
 }
 
-.app-icon-link:hover .app-nav-icon-surface,
-.app-icon-link:focus-visible .app-nav-icon-surface {
-  border-radius: var(--rail-item-radius-hover);
-}
-
-.app-icon-link-current .app-icon-activity-pill {
-  height: 1.45rem;
-  opacity: 1;
-  transform: scaleY(1);
-}
-
-.app-icon-link-current .app-icon-activity-pill {
-  background: var(--accent);
+/* Current section: the same faint fill as the expanded rows, accent icon. */
+.app-icon-link-current:not(.app-icon-home) {
+  background: var(--composer-pill-surface-hover);
 }
 
 .app-icon-link-current .app-nav-icon-surface {
-  border-color: var(--selected-border);
-  background: var(--selected-surface);
   color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-dim);
-}
-
-:root[data-theme='dark'] .app-icon-link-current .app-nav-icon-surface {
-  background: #202020;
-  border-color: var(--subtle-border);
 }
 
 .app-icon-agent-count {
@@ -9208,7 +10710,7 @@ a.session-delegate-session:hover {
   justify-content: center;
   min-width: 1.12rem;
   height: 1.12rem;
-  border: 2px solid var(--bg);
+  border: 2px solid var(--body-bg-base);
   border-radius: 999px;
   background: var(--success);
   color: white;
@@ -9227,10 +10729,9 @@ a.session-delegate-session:hover {
   aspect-ratio: 1;
   flex: 0 0 auto;
   padding: 0;
-  border: 2px solid var(--bg);
+  border: 2px solid var(--body-bg-base);
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-dim), 0 6px 16px rgba(249, 115, 22, 0.28);
   line-height: 0;
 }
 
@@ -9248,7 +10749,7 @@ a.session-delegate-session:hover {
   width: 1.8rem;
   height: 1px;
   border-radius: 999px;
-  background: var(--subtle-border-strong);
+  background: var(--subtle-border);
 }
 
 .session-icon-avatar svg {
@@ -9256,24 +10757,6 @@ a.session-delegate-session:hover {
   width: 100%;
   height: 100%;
   shape-rendering: geometricPrecision;
-}
-
-.app-icon-activity-pill {
-  position: absolute;
-  left: -0.38rem;
-  width: 0.22rem;
-  height: 0.7rem;
-  border-radius: 999px;
-  background: var(--text-dim);
-  opacity: 0;
-  transform: scaleY(0.65);
-  transition: height 0.16s ease, opacity 0.16s ease, transform 0.16s ease;
-}
-
-.app-icon-link:hover .app-icon-activity-pill,
-.app-icon-link:focus-visible .app-icon-activity-pill {
-  opacity: 0.55;
-  transform: scaleY(1);
 }
 
 .session-icon-status {
@@ -9284,7 +10767,7 @@ a.session-delegate-session:hover {
   width: 0.9rem;
   height: 0.9rem;
   border-radius: 999px;
-  border: 2px solid var(--bg);
+  border: 2px solid var(--body-bg-base);
 }
 
 .session-icon-status-active {
@@ -9336,17 +10819,13 @@ a.session-delegate-session:hover {
 
 @media (min-width: 1024px) {
   .app-shell-custom-titlebar .app-sidebar {
-    top: calc(12px + 3.5rem);
+    top: calc(12px + 2.5rem + var(--session-composer-bottom-offset));
     left: calc(12px + 0.75rem);
-    height: calc(100dvh - 24px - 5rem);
-    max-height: calc(100dvh - 24px - 5rem);
   }
 
   .app-shell-custom-titlebar.app-shell-maximized .app-sidebar {
-    top: 3.5rem;
+    top: calc(2.5rem + var(--session-composer-bottom-offset));
     left: 0.75rem;
-    height: calc(100dvh - 5rem);
-    max-height: calc(100dvh - 5rem);
   }
 }
 
@@ -9357,8 +10836,7 @@ a.session-delegate-session:hover {
   .session-icon-link,
   .app-nav-icon-surface,
   .session-icon-surface,
-  .session-icon-avatar,
-  .app-icon-activity-pill {
+  .session-icon-avatar {
     transition: none;
   }
 }
@@ -9374,26 +10852,30 @@ a.session-delegate-session:hover {
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-control);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
   padding: 0 0.75rem;
   color: var(--text-muted);
   font-size: 0.76rem;
   white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .session-filter-trigger:hover,
 .session-filter-trigger[data-state='open'] {
-  border-color: var(--border-strong);
-  background: var(--bg-card-hover);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
 }
 
+/* Active filter count sits inside the pill as a small neutral badge. */
 .session-filter-count {
-  border-left: 1px solid var(--border);
-  padding-left: 0.45rem;
-  color: var(--accent);
+  min-width: 1.1rem;
+  border-radius: 999px;
+  background: var(--composer-pill-surface-hover);
+  padding: 0 0.35rem;
+  color: var(--text);
+  text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
@@ -9515,7 +10997,7 @@ a.session-delegate-session:hover {
 }
 
 .session-browser-search:focus-within {
-  border-color: var(--border-strong);
+  background: var(--composer-pill-surface-hover);
 }
 
 .session-browser-viewbar {
@@ -9634,9 +11116,9 @@ a.session-delegate-session:hover {
   flex-shrink: 0;
   align-items: center;
   gap: 0.25rem;
-  border: 1px solid var(--subtle-border);
-  border-radius: var(--radius-control);
-  background: var(--subtle-surface);
+  border: 0;
+  border-radius: 999px;
+  background: var(--composer-pill-surface-hover);
   color: var(--text-muted);
   padding: 0.1rem 0.35rem;
   font-size: 0.64rem;
@@ -9653,27 +11135,36 @@ a.session-delegate-session:hover {
   min-width: 12rem;
   max-width: min(20rem, calc(100vw - 1rem));
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: var(--bg-panel-strong);
-  padding: 0.25rem;
-  box-shadow: var(--shadow-lg);
+  padding: 0.3rem;
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .session-actions-content [role='menuitem'] {
   display: flex;
+  min-height: var(--control-height-compact);
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.55rem;
   border-radius: var(--radius-control);
   color: var(--text-muted);
-  padding: 0.55rem;
-  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.78rem;
   cursor: pointer;
   outline: none;
 }
 
+.session-actions-content [role='menuitem'] svg {
+  color: var(--text-dim);
+}
+
 .session-actions-content [role='menuitem'][data-highlighted] {
-  background: var(--selected-surface);
+  background: var(--composer-pill-surface-hover);
   color: var(--text);
+}
+
+.session-actions-content [role='menuitem'][data-highlighted] svg {
+  color: var(--text-muted);
 }
 
 .session-actions-content [role='menuitem'][data-disabled] {
@@ -9710,17 +11201,27 @@ a.session-delegate-session:hover {
   min-width: 0;
 }
 
+/* Small "more" hint: on hover or focus it takes the place of the last-active
+   time on the second line, so nothing in the row shifts. Right-click and the
+   context-menu key open the same menu. */
 .session-rail-entry:not(.session-rail-entry-compact) > .session-row-menu-trigger {
   position: absolute;
-  top: 50%;
-  right: 0.3rem;
-  transform: translateY(-50%);
+  right: 0.35rem;
+  bottom: 0.32rem;
+  width: 1.35rem;
+  height: 1.05rem;
+  border-radius: 4px;
 }
 
-.session-rail-entry:not(.session-rail-entry-compact):hover .app-sidebar-session,
-.session-rail-entry:not(.session-rail-entry-compact):focus-within .app-sidebar-session,
-.session-rail-entry-menu-open .app-sidebar-session {
-  padding-right: 2.4rem;
+.session-rail-entry:not(.session-rail-entry-compact) > .session-row-menu-trigger svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.session-rail-entry:not(.session-rail-entry-compact):hover .app-sidebar-session-time,
+.session-rail-entry:not(.session-rail-entry-compact):focus-within .app-sidebar-session-time,
+.session-rail-entry-menu-open .app-sidebar-session-time {
+  visibility: hidden;
 }
 
 .session-rail-entry > .session-row-menu-trigger {
@@ -9808,11 +11309,24 @@ a.session-delegate-session:hover {
   gap: 0.55rem;
   min-width: 0;
   border-radius: var(--radius-control);
-  border: 1px solid var(--border);
-  background: var(--bg-card);
+  border: 0;
+  background: var(--composer-pill-surface);
   color: var(--muted);
   height: 2.5rem;
   padding: 0 0.75rem;
+  transition: background 0.15s ease;
+}
+
+/* Ghost refresh next to Filters: no frame until hovered. */
+.session-browser-toolbar .session-browser-refresh {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.session-browser-toolbar .session-browser-refresh:hover:enabled {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
 }
 
 .session-browser-search input {
@@ -9850,8 +11364,9 @@ a.session-delegate-session:hover {
   color: var(--text);
 }
 
+/* Neutral underline: the accent is reserved for "needs you". */
 .session-browser-filter-active {
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--text);
 }
 
 .session-browser-filter:focus-visible {
@@ -9899,13 +11414,13 @@ a.session-delegate-session:hover {
   gap: 0;
 }
 
+/* Groups are separated by spacing, not rules, like the sidebar sections. */
 .session-workspace-item {
   overflow: visible;
-  border-top: 1px solid var(--border);
 }
 
-.session-workspace-item:last-child {
-  border-bottom: 1px solid var(--border);
+.session-workspace-item + .session-workspace-item {
+  margin-top: 0.35rem;
 }
 
 .session-workspace-heading {
@@ -9922,31 +11437,33 @@ a.session-delegate-session:hover {
   gap: 1rem;
   width: calc(100% - 0.4rem);
   margin: 0.2rem;
-  border-radius: var(--radius-sm);
-  padding: 0.68rem 2.8rem 0.68rem 0.55rem;
+  border-radius: var(--radius-control);
+  padding: 0.42rem 2.6rem 0.42rem 0.55rem;
   text-align: left;
   transition: background 0.15s ease;
 }
 
 .session-workspace-trigger:hover,
 .session-workspace-trigger:focus-visible {
-  background: var(--subtle-surface-hover);
+  background: var(--row-surface-hover);
   outline: none;
 }
 
 .session-workspace-new {
   position: absolute;
+  top: 50%;
   right: 0.65rem;
+  transform: translateY(-50%);
   z-index: 2;
   display: inline-flex;
-  width: 2rem;
-  height: 2rem;
+  width: 1.6rem;
+  height: 1.6rem;
   align-items: center;
   justify-content: center;
   border: 0;
   border-radius: var(--radius-control);
   background: transparent;
-  color: var(--muted);
+  color: var(--text-dim);
 }
 
 .session-workspace-new:hover,
@@ -10008,22 +11525,25 @@ a.session-delegate-session:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.9rem;
-  height: 1.9rem;
+  width: 1rem;
+  height: 1rem;
   flex: 0 0 auto;
   color: var(--text-muted);
 }
 
+/* One line: name, then the muted path / machine, truncated. */
 .session-workspace-copy {
-  display: grid;
+  display: flex;
   min-width: 0;
-  gap: 0.2rem;
+  align-items: baseline;
+  gap: 0.6rem;
 }
 
 .session-workspace-name {
+  flex: 0 0 auto;
   color: var(--text);
-  font-size: 0.92rem;
-  font-weight: 650;
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .session-workspace-path {
@@ -10031,8 +11551,8 @@ a.session-delegate-session:hover {
   gap: 0.5rem;
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
-  font-size: 0.76rem;
+  color: var(--text-dim);
+  font-size: 0.72rem;
   white-space: nowrap;
 }
 
@@ -10057,7 +11577,8 @@ a.session-delegate-session:hover {
 }
 
 .session-workspace-updated {
-  min-width: 8.5rem;
+  width: 6rem;
+  flex: 0 0 6rem;
   justify-content: flex-end;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -10091,9 +11612,10 @@ a.session-delegate-session:hover {
   display: inline-flex;
   align-items: center;
   padding: 0.12rem 0.45rem;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius-control);
-  background: var(--bg-elevated);
+  background: var(--composer-pill-surface-hover);
+  box-shadow: inset 0 -1px 0 var(--subtle-border-strong);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 0.72rem;
@@ -10156,17 +11678,19 @@ a.session-delegate-session:hover {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition: border-color 0.14s ease, color 0.14s ease;
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
 }
 
 .theme-card:hover {
-  border-color: var(--border-strong);
+  border-color: var(--subtle-border-strong);
+  background: var(--composer-pill-surface);
   color: var(--text);
 }
 
 .theme-card-selected,
 .theme-card-selected:hover {
-  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent), transparent 35%);
+  background: color-mix(in srgb, var(--accent-dim), transparent 55%);
   color: var(--text);
 }
 
@@ -10182,60 +11706,115 @@ a.session-delegate-session:hover {
   aspect-ratio: 16 / 9;
   border-radius: calc(var(--radius) - 4px);
   overflow: hidden;
+  isolation: isolate;
+}
+
+/* One even edge drawn above both halves, so the dark preview still reads on a
+   dark page without uneven light lines at the top and bottom. */
+.theme-card-preview::after {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--subtle-border);
+  content: '';
+  pointer-events: none;
 }
 
 .theme-mini {
   position: absolute;
   inset: 0;
   display: flex;
-  gap: 7%;
-  padding: 8% 9%;
 }
 
 .theme-mini[data-scheme='light'] {
-  background: #f3f2f1;
+  --mini-bg: #f6f5f4;
+  --mini-rail: #ecebe9;
+  --mini-ink: #dad8d5;
+  --mini-ink-strong: #c9c6c2;
+  --mini-bubble: #e6e4e1;
+  --mini-composer: #ffffff;
+  --mini-composer-edge: rgba(0, 0, 0, 0.07);
+  background: var(--mini-bg);
 }
 
 .theme-mini[data-scheme='dark'] {
-  background: #191919;
+  --mini-bg: #191919;
+  --mini-rail: #141414;
+  --mini-ink: #333333;
+  --mini-ink-strong: #454545;
+  --mini-bubble: #2a2a2a;
+  --mini-composer: #242424;
+  --mini-composer-edge: rgba(255, 255, 255, 0.07);
+  background: var(--mini-bg);
 }
 
-.theme-mini-overlay {
+.theme-mini-half-start {
+  clip-path: inset(0 50% 0 0);
+}
+
+.theme-mini-half-end {
   clip-path: inset(0 0 0 50%);
+}
+
+.theme-mini i {
+  display: block;
+  border-radius: 999px;
 }
 
 .theme-mini-rail {
   display: flex;
+  width: 27%;
   flex-direction: column;
-  gap: 14%;
-  width: 24%;
+  gap: 7%;
+  background: var(--mini-rail);
+  padding: 7% 5%;
 }
 
-.theme-mini-rail i {
-  display: block;
-  height: 11%;
-  border-radius: 999px;
+.theme-mini-brand {
+  width: 18%;
+  aspect-ratio: 1;
+  margin-bottom: 6%;
+  border-radius: 30% !important;
+  background: var(--mini-ink-strong);
 }
 
-.theme-mini[data-scheme='light'] .theme-mini-rail i {
-  background: #dedddb;
+.theme-mini-rail-row {
+  height: 9%;
+  background: var(--mini-ink);
 }
 
-.theme-mini[data-scheme='dark'] .theme-mini-rail i {
-  background: #333333;
+.theme-mini-rail-row:nth-child(3) {
+  width: 82%;
+}
+
+.theme-mini-rail-row:nth-child(4) {
+  width: 64%;
+}
+
+.theme-mini-rail-row-current {
+  background: var(--mini-ink-strong);
 }
 
 .theme-mini-main {
-  flex: 1;
   display: flex;
+  flex: 1;
   flex-direction: column;
-  gap: 9%;
+  gap: 7%;
+  padding: 8% 9% 7%;
+}
+
+.theme-mini-bubble {
+  align-self: flex-end;
+  width: 44%;
+  height: 13%;
+  border-radius: 0.3rem !important;
+  background: var(--mini-bubble);
 }
 
 .theme-mini-line {
-  display: block;
-  height: 9%;
-  border-radius: 999px;
+  height: 7%;
+  background: var(--mini-ink);
 }
 
 .theme-mini-w80 {
@@ -10246,42 +11825,21 @@ a.session-delegate-session:hover {
   width: 60%;
 }
 
-.theme-mini-w45 {
-  width: 45%;
-}
-
-.theme-mini[data-scheme='light'] .theme-mini-line {
-  background: #dcdbd8;
-}
-
-.theme-mini[data-scheme='dark'] .theme-mini-line {
-  background: #3a3a3a;
-}
-
 .theme-mini-composer {
-  margin-top: auto;
   display: flex;
+  height: 22%;
   align-items: center;
   justify-content: flex-end;
-  height: 24%;
-  padding-inline: 6%;
-  border-radius: 999px;
-}
-
-.theme-mini[data-scheme='light'] .theme-mini-composer {
-  background: #ffffff;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
-}
-
-.theme-mini[data-scheme='dark'] .theme-mini-composer {
-  background: #2a2a2a;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  margin-top: auto;
+  border-radius: 0.35rem;
+  background: var(--mini-composer);
+  box-shadow: inset 0 0 0 1px var(--mini-composer-edge);
+  padding-inline: 4%;
 }
 
 .theme-mini-dot {
-  width: 16%;
+  width: 9%;
   aspect-ratio: 1;
-  border-radius: 999px;
   background: var(--accent);
 }
 
@@ -10320,7 +11878,7 @@ a.session-delegate-session:hover {
 
 .session-workspace-content {
   background: transparent;
-  padding: 0 0.2rem 0.4rem 2.5rem;
+  padding: 0 0.2rem 0.3rem 1.6rem;
 }
 
 @media (max-width: 800px) {
@@ -10339,15 +11897,9 @@ a.session-delegate-session:hover {
   border-top: 0;
 }
 
+/* Rows are separated by spacing and the hover fill only, like the sidebar. */
 .session-workspace-session-list .session-row + .session-row::before {
-  position: absolute;
-  top: -0.12rem;
-  right: 0.55rem;
-  left: 0.55rem;
-  height: 1px;
-  background: var(--subtle-border);
-  content: '';
-  pointer-events: none;
+  content: none;
 }
 
 .session-workspace-loading,
@@ -10362,29 +11914,28 @@ a.session-delegate-session:hover {
 }
 
 .session-workspace-pagination {
-  border-top: 1px solid var(--subtle-border);
-  padding: 0;
+  justify-content: flex-start;
+  padding: 0.15rem 0 0.2rem;
 }
 
+/* Quiet text link aligned with the row titles, like "Show more" in the sidebar. */
 .session-workspace-load-more {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-  width: 100%;
-  min-height: 3rem;
+  gap: 0.4rem;
   border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--subtle-surface);
-  color: var(--text-muted);
+  border-radius: var(--radius-control);
+  background: transparent;
+  padding: 0.3rem 0.55rem;
+  color: var(--text-dim);
   font: inherit;
-  font-size: 0.78rem;
+  font-size: 0.74rem;
   transition: background 150ms ease, color 150ms ease;
 }
 
 .session-workspace-load-more:hover:enabled,
 .session-workspace-load-more:focus-visible {
-  background: var(--bg-card-hover);
+  background: var(--row-surface-hover);
   color: var(--text);
   outline: none;
 }
@@ -10406,10 +11957,10 @@ a.session-delegate-session:hover {
   position: relative;
   justify-content: space-between;
   gap: 0.75rem;
-  margin: 0.12rem 0;
-  border-radius: var(--radius-sm);
+  margin: 0.06rem 0;
+  border-radius: var(--radius-control);
   background: transparent;
-  padding: 0.64rem 0.55rem;
+  padding: 0.45rem 0.55rem;
 }
 
 .session-row:hover,
@@ -10443,8 +11994,8 @@ a.session-delegate-session:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.85rem;
-  height: 1.85rem;
+  width: 1rem;
+  height: 1rem;
   flex: 0 0 auto;
 }
 
@@ -10473,57 +12024,28 @@ a.session-delegate-session:hover {
   overflow: hidden;
   min-width: 0;
   color: var(--text);
-  font-size: 0.9rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: 0.84rem;
+  font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Relationship badges are borderless faint-fill pills in muted text, like the
+   launcher pills. Only a broken worktree keeps a warning colour; the accent
+   stays reserved for "needs you". */
 .session-relationship-badge {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
   gap: 0.2rem;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 999px;
-  padding: 0.08rem 0.38rem;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 0.62rem;
-  font-weight: 650;
-  letter-spacing: 0.02em;
+  background: var(--composer-pill-surface-hover);
+  padding: 0.04rem 0.42rem;
+  color: var(--text-muted);
+  font-size: 0.64rem;
+  font-weight: 560;
   line-height: 1rem;
-}
-
-.session-relationship-badge-fork {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-  color: var(--accent);
-}
-
-.session-relationship-badge-delegate {
-  border-color: color-mix(in srgb, var(--status-running) 42%, var(--border));
-  background: color-mix(in srgb, var(--status-running) 9%, transparent);
-  color: var(--status-running);
-}
-
-.session-relationship-badge-remote {
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-  color: var(--accent);
-}
-
-.session-relationship-badge-child,
-.session-relationship-badge-count {
-  background: var(--status-muted-bg);
-}
-
-.session-relationship-badge-worktree,
-.session-relationship-badge-branch {
-  border-color: color-mix(in srgb, var(--status-success, var(--accent)) 40%, var(--border));
-  background: color-mix(in srgb, var(--status-success, var(--accent)) 9%, transparent);
-  color: var(--status-success, var(--accent));
 }
 
 .session-relationship-badge-branch {
@@ -10534,13 +12056,8 @@ a.session-delegate-session:hover {
 }
 
 .session-relationship-badge-warning {
-  border-color: color-mix(in srgb, var(--status-warning, #d97706) 50%, var(--border));
-  background: color-mix(in srgb, var(--status-warning, #d97706) 10%, transparent);
+  background: color-mix(in srgb, var(--status-warning, #d97706) 14%, transparent);
   color: var(--status-warning, #d97706);
-}
-
-.session-relationship-badge-handoff {
-  background: var(--status-muted-bg);
 }
 
 .session-header-worktree {
@@ -10603,9 +12120,10 @@ a.session-delegate-session:hover {
 
 .session-row-meta {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.25rem 0.45rem;
   color: var(--muted);
   font-size: 0.72rem;
   line-height: 1.35;
@@ -10695,19 +12213,83 @@ a.session-delegate-session:hover {
   white-space: nowrap;
 }
 
-.session-row-meta > span + span::before {
+.session-row-meta > span + span:not(.session-relationship-badge):not(.session-lifecycle-badge)::before {
   content: '·';
   margin-right: 0.45rem;
   color: var(--text-dim);
 }
 
+.session-row-meta .session-relationship-badge,
+.session-row-meta .session-row-workspace {
+  pointer-events: auto;
+}
+
+/* Right side: status slot (spinner / needs-input dot / unknown), short last
+   active time, and the actions button that only shows on hover or focus. */
 .session-row-side {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 0.5rem;
   flex: 0 0 auto;
-  color: var(--muted);
+  color: var(--text-dim);
+}
+
+.session-row-status {
+  display: inline-flex;
+  width: 0.85rem;
+  height: 0.85rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.session-row-status-running {
+  display: inline-flex;
+  color: var(--success);
+}
+
+.session-row-status-waiting {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.session-row-status-unknown {
+  display: inline-flex;
+  color: var(--text-dim);
+}
+
+.session-row-side > .session-row-timestamp {
+  width: 6rem;
+  flex: 0 0 6rem;
+  pointer-events: auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* The small actions button takes the time's place on hover or focus, so the
+   row never shifts; right-click still opens the same menu. */
+.session-row-side > .session-row-menu-trigger {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: 1.5rem;
+  height: 1.5rem;
+  transform: translateY(-50%);
+}
+
+.session-row:hover .session-row-side > .session-row-timestamp,
+.session-row:focus-within .session-row-side > .session-row-timestamp,
+.session-row:has(.session-row-menu-trigger[data-state='open']) .session-row-side > .session-row-timestamp {
+  visibility: hidden;
 }
 
 .session-row-menu {
@@ -10822,7 +12404,8 @@ a.session-delegate-session:hover {
   height: 100%;
   flex-direction: column;
   overflow: hidden;
-  border-left: 1px solid var(--border);
+  /* Solid like dialogs, with the same subtle edge. */
+  border-left: 1px solid var(--subtle-border-strong);
   background: var(--bg-panel-strong);
   color: var(--text);
   box-shadow: var(--shadow-lg);
@@ -10835,8 +12418,7 @@ a.session-delegate-session:hover {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  border-bottom: 1px solid var(--border);
-  padding: 1.15rem 1.35rem 1rem;
+  padding: 1.15rem 1.1rem 0.5rem 1.35rem;
   background: var(--bg-panel-strong);
 }
 
@@ -10891,9 +12473,8 @@ a.session-delegate-session:hover {
 
 .agent-details-overview {
   overflow: hidden;
-  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
 }
 
 .agent-details-overview-stats {
@@ -10907,7 +12488,7 @@ a.session-delegate-session:hover {
 }
 
 .agent-details-overview-stat + .agent-details-overview-stat {
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--subtle-border);
 }
 
 @media (max-width: 800px) {
@@ -10916,12 +12497,12 @@ a.session-delegate-session:hover {
   }
 
   .agent-details-overview-stat:nth-child(3) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
     border-left: 0;
   }
 
   .agent-details-overview-stat:nth-child(4) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
   }
 }
 
@@ -10967,9 +12548,9 @@ a.session-delegate-session:hover {
   min-width: 0;
   align-items: center;
   gap: 0.5rem;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--subtle-border);
   padding: 0.52rem 0.85rem;
-  background: color-mix(in srgb, var(--bg-panel), var(--bg-card) 54%);
+  background: transparent;
   color: var(--text-dim);
   font-size: 0.68rem;
 }
@@ -11050,9 +12631,8 @@ a.session-delegate-session:hover {
 .agent-details-capability-list {
   overflow: hidden;
   margin: 0;
-  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
 }
 
 .agent-details-list > div,
@@ -11095,9 +12675,9 @@ a.session-delegate-session:hover {
 .agent-details-state {
   display: inline-flex;
   align-items: center;
-  border: 1px solid var(--status-muted-border);
+  border: 0;
   border-radius: 999px;
-  background: var(--status-muted-bg);
+  background: var(--composer-pill-surface-hover);
   color: var(--muted);
   padding: 0.16rem 0.46rem;
   font-size: 0.68rem;
@@ -11106,19 +12686,16 @@ a.session-delegate-session:hover {
 }
 
 .agent-details-state-success {
-  border-color: var(--status-success-border);
   background: var(--status-success-bg);
   color: var(--status-success);
 }
 
 .agent-details-state-warning {
-  border-color: var(--status-warn-border);
   background: var(--status-warn-bg);
   color: var(--status-warn);
 }
 
 .agent-details-state-danger {
-  border-color: var(--status-danger-border);
   background: var(--status-danger-bg);
   color: var(--danger);
 }
@@ -11142,9 +12719,9 @@ a.session-delegate-session:hover {
 .agent-details-chip {
   display: inline-flex;
   align-items: center;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 999px;
-  background: var(--status-muted-bg);
+  background: var(--composer-pill-surface-hover);
   color: var(--text-muted);
   padding: 0.17rem 0.46rem;
   font-size: 0.68rem;
@@ -11152,10 +12729,9 @@ a.session-delegate-session:hover {
 }
 
 .agent-details-empty {
-  border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.85rem;
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
   color: var(--muted);
   font-size: 0.76rem;
 }
@@ -11424,7 +13000,7 @@ a.session-delegate-session:hover {
   height: min(48rem, calc(100vh - 4rem));
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--subtle-border-strong);
   border-radius: var(--radius-lg);
   background: var(--bg-panel-strong);
   box-shadow: var(--shadow-lg);
@@ -11436,7 +13012,7 @@ a.session-delegate-session:hover {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--subtle-border);
   padding: 0.9rem 1rem;
 }
 
@@ -11476,12 +13052,12 @@ a.session-delegate-session:hover {
   }
 
   .agent-details-overview-stat:nth-child(3) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
     border-left: 0;
   }
 
   .agent-details-overview-stat:nth-child(4) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
   }
 
   .sidecar-log-toolbar {
@@ -11573,9 +13149,8 @@ a.session-delegate-session:hover {
 .agent-attention-list,
 .agent-message-list {
   overflow: hidden;
-  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
 }
 
 .agent-attention-row,
@@ -11584,8 +13159,8 @@ a.session-delegate-session:hover {
   align-items: center;
   justify-content: space-between;
   gap: 0.9rem;
-  background: var(--row-surface);
-  padding: 0.78rem 1rem;
+  background: transparent;
+  padding: 0.7rem 0.9rem;
 }
 
 .agent-attention-row + .agent-attention-row,
@@ -11598,12 +13173,12 @@ a.session-delegate-session:hover {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  border: 1px solid var(--rail);
+  border: 0;
   border-radius: 999px;
   background: var(--accent-dim);
-  color: var(--accent-strong);
+  color: var(--accent);
   font-size: 0.7rem;
-  font-weight: 650;
+  font-weight: 550;
   line-height: 1;
 }
 
@@ -11627,8 +13202,7 @@ a.session-delegate-session:hover {
 
 .agent-issue-chip:hover,
 .agent-issue-chip:focus-visible {
-  border-color: var(--accent);
-  background: var(--bg-card);
+  background: color-mix(in srgb, var(--accent-dim), var(--accent) 12%);
   color: var(--accent);
 }
 
@@ -11652,28 +13226,28 @@ a.session-delegate-session:hover {
   word-break: break-word;
 }
 
+/* Rows sit on one faint-fill surface (no border or separators) so the list reads
+   as a group; hovered rows get a slightly stronger fill. */
 .agent-list {
-  overflow: hidden;
-  border: 1px solid var(--border);
+  display: grid;
+  gap: 0.1rem;
   border-radius: var(--radius);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
+  padding: 0.3rem;
 }
 
 .agent-list-row {
-  background: var(--row-surface);
-  transition: background 0.15s ease;
-}
-
-.agent-list-row + .agent-list-row {
-  border-top: 1px solid var(--subtle-border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  transition: background 0.12s ease;
 }
 
 .agent-list-row:hover {
-  background: var(--subtle-surface-hover);
+  background: var(--composer-pill-surface-hover);
 }
 
 .agent-list-row-inner {
-  padding: 0.9rem 1rem;
+  padding: 0.6rem 0.55rem;
 }
 
 .session-scroll-bottom-pill-host {
@@ -11697,13 +13271,31 @@ a.session-delegate-session:hover {
   right: 0.55rem;
   bottom: 0;
   display: inline-flex;
-  opacity: 0.8;
-  transition: opacity 0.15s ease;
   pointer-events: auto;
 }
 
-.session-scroll-bottom-slot:hover {
-  opacity: 1;
+/* Floats over the transcript, so it keeps the composer card's opaque surface,
+   border, radius and shadow; hover adds the same faint fill as the pills. */
+/* Same page-colored halo as the activity bar and its bubbles. */
+.session-scroll-bottom-slot .session-scroll-bottom-btn {
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--body-bg-base);
+  color: var(--muted);
+  box-shadow:
+    0 0 0 4px var(--body-bg-base),
+    0 0 12px 4px color-mix(in srgb, var(--body-bg-base) 85%, transparent),
+    0 0 28px 9px color-mix(in srgb, var(--body-bg-base) 50%, transparent);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.session-scroll-bottom-slot .session-scroll-bottom-btn:hover:enabled,
+.session-scroll-bottom-slot .session-scroll-bottom-btn:focus-visible {
+  /* Re-assert the base color: the global .icon-btn:hover would otherwise put
+     --bg-card-hover underneath the overlay. */
+  background-color: var(--body-bg-base);
+  background-image: linear-gradient(var(--composer-pill-surface-hover), var(--composer-pill-surface-hover));
+  color: var(--text);
 }
 
 .session-composer-dock {
@@ -11719,11 +13311,9 @@ a.session-delegate-session:hover {
 }
 
 .session-composer-dock-expanded {
+  position: relative;
   filter: drop-shadow(0 -0.75rem 1.75rem var(--body-bg-base));
-}
-
-.session-composer-dock-expanded:hover {
-  border-color: color-mix(in srgb, var(--border), var(--border-strong) 42%);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .session-composer-morph-shell {
@@ -11737,17 +13327,18 @@ a.session-delegate-session:hover {
   position: relative;
 }
 
+/* Collapsed bar shares the expanded card's surface, radius, border and shadow. */
 .session-composer-dock-collapsed {
   display: flex;
+  min-height: 3rem;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
   border: 1px solid var(--border);
-  background: var(--nav-bg);
-  backdrop-filter: var(--surface-blur);
-  -webkit-backdrop-filter: var(--surface-blur);
-  border-radius: 999px;
-  padding: 0.45rem 0.55rem 0.45rem 0.85rem;
-  box-shadow: var(--shadow-md);
+  background: var(--bg-panel-strong);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.5rem;
+  filter: drop-shadow(0 -0.75rem 1.75rem var(--body-bg-base));
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .session-composer-dock-input {
@@ -11759,6 +13350,57 @@ a.session-delegate-session:hover {
   outline: none;
   font: inherit;
   font-size: 0.875rem;
+}
+
+.session-composer-inner-well {
+  position: relative;
+}
+
+.session-composer-inner-well::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 0.75rem;
+  pointer-events: none;
+  z-index: 1;
+  border-radius: inherit;
+  background: linear-gradient(to bottom, var(--bg-panel-strong), transparent);
+}
+
+.composer-prompt-zone {
+  position: relative;
+}
+
+.session-composer-dock-expanded .composer-prompt-zone {
+  padding-right: 2.1rem;
+}
+
+/* Positioned against the prompt zone, so it never overlaps fields above the textarea. */
+.composer-prompt-expand {
+  position: absolute;
+  top: 0;
+  right: 0.1rem;
+  z-index: 2;
+}
+
+.composer-prompt-expand .icon-btn {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.composer-prompt-expand .icon-btn:hover:enabled {
+  border-color: transparent;
+  background: var(--row-surface-hover);
+  color: var(--text);
+}
+
+.composer-prompt-zone-expanded textarea {
+  min-height: min(50vh, 24rem) !important;
+  max-height: min(70vh, 36rem);
+  overflow-y: auto;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -12089,8 +13731,6 @@ a.session-delegate-session:hover {
     border-left: 0;
     border-radius: 0;
     padding: 0.15rem 0.4rem;
-    background: var(--nav-bg);
-    box-shadow: none;
   }
 
   .app-shell-active-session .session-header-controls,
@@ -12110,6 +13750,12 @@ a.session-delegate-session:hover {
     border-radius: 0.7rem;
     background: transparent;
     box-shadow: none;
+  }
+
+  .app-shell-active-session .session-header .session-header-details-trigger-context {
+    width: auto;
+    min-width: 2.5rem;
+    padding: 0 0.55rem;
   }
 
   .app-shell-active-session .session-header .icon-btn:hover:enabled,
@@ -12143,11 +13789,6 @@ a.session-delegate-session:hover {
     font-size: 0.64rem;
     line-height: 1.2;
     white-space: nowrap;
-  }
-
-  .app-shell-active-session .session-header-mobile-meta .session-context-dial {
-    font-size: inherit;
-    line-height: inherit;
   }
 
   .app-shell-active-session .session-header-mobile-workspace,
@@ -12298,6 +13939,11 @@ a.session-delegate-session:hover {
     font-size: 0.9rem;
   }
 
+  .start-launch-page .composer-prompt-zone-expanded textarea {
+    min-height: min(50vh, 24rem) !important;
+    max-height: min(70vh, 36rem);
+  }
+
   .start-launch-page .composer-toolbar {
     position: relative;
     display: grid;
@@ -12338,7 +13984,7 @@ a.session-delegate-session:hover {
     padding: 0;
   }
 
-  .start-launch-page .composer-options-trigger > span,
+  .start-launch-page .composer-options-trigger > span:not(.composer-mode-badge),
   .start-launch-page .composer-options-trigger > small,
   .start-launch-page .composer-options-chevron {
     display: none;
@@ -12373,6 +14019,7 @@ a.session-delegate-session:hover {
   }
 
   .app-shell-active-session .session-composer-dock,
+  .app-shell-active-session .session-composer-fade,
   .app-shell-active-session .session-activity-bar-dock,
   .app-shell-active-session .session-scroll-bottom-pill-host {
     right: 0.5rem;
@@ -12383,14 +14030,7 @@ a.session-delegate-session:hover {
   }
 
   .app-shell-active-session .session-composer-dock-collapsed {
-    min-height: 3.5rem;
     border-radius: 1rem;
-    padding: 0.45rem 0.5rem 0.45rem 0.8rem;
-  }
-
-  .app-shell-active-session .session-composer-dock .icon-btn {
-    width: 2.5rem;
-    height: 2.5rem;
   }
 
   .app-shell-active-session .session-composer-dock-expanded {
@@ -12409,6 +14049,11 @@ a.session-delegate-session:hover {
     min-height: 3rem !important;
     max-height: 7rem;
     padding-block: 0.65rem;
+  }
+
+  .app-shell-active-session .composer-prompt-zone-expanded textarea {
+    min-height: min(50vh, 24rem) !important;
+    max-height: min(70vh, 36rem);
   }
 
   .app-shell-active-session .composer-toolbar {
@@ -12465,7 +14110,7 @@ a.session-delegate-session:hover {
     width: auto;
   }
 
-  .app-shell-active-session .composer-toolbar-controls .composer-options-trigger > span,
+  .app-shell-active-session .composer-toolbar-controls .composer-options-trigger > span:not(.composer-mode-badge),
   .app-shell-active-session .composer-toolbar-controls .composer-options-trigger > small,
   .app-shell-active-session .composer-toolbar-controls .composer-options-chevron {
     display: none;
@@ -12481,6 +14126,11 @@ a.session-delegate-session:hover {
 
   .app-shell-active-session .session-activity-bar-dock {
     padding-inline: 0.2rem;
+  }
+
+  /* Keep the gutter for the scroll-to-latest button on narrow windows too. */
+  .app-shell-active-session .session-scroll-bottom-pill-host ~ .session-activity-bar-dock {
+    padding-right: calc(var(--control-height-compact) + 1rem);
   }
 }
 

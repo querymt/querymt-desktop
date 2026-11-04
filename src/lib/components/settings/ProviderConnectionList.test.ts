@@ -109,6 +109,18 @@ describe('ProviderConnectionList', () => {
     expect(screen.queryByRole('button', { name: 'Clear API key' })).not.toBeInTheDocument();
   });
 
+  it('omits the empty actions bar for providers without OAuth or key management', async () => {
+    const { container } = render(ProviderConnectionList, {
+      providers: [provider({ provider: 'izwi', display_name: 'Izwi', supports_oauth: false, env_var_name: undefined })],
+      ...handlers
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
+
+    expect(screen.getByText('Provider ID')).toBeInTheDocument();
+    expect(container.querySelector('.provider-connection-detail-actions')).toBeNull();
+  });
+
   it('keeps pending state local to the affected provider', () => {
     render(ProviderConnectionList, {
       providers: [
