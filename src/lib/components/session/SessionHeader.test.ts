@@ -476,7 +476,7 @@ describe('SessionHeader restyle', () => {
     expect(glass).toContain('inset 0 0 12px 6px var(--body-bg-base)');
     const fade = appCss.match(/\n\n\.session-header::after \{([^}]+)\}/)?.[1] ?? '';
     expect(fade).toContain('backdrop-filter: blur(3px);');
-    expect(fade).toContain('height: 1.5rem;');
+    expect(fade).toContain('height: 1.125rem;');
     expect(fade).toContain('mask-image: linear-gradient(to bottom, #000 30%, transparent);');
     expect(header).not.toContain('--shadow-sm');
     expect(header).not.toContain('--nav-bg');
