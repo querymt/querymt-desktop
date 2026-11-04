@@ -518,9 +518,10 @@ export function formatSessionTimestampShort(updatedAt: string | null, now: Date 
   if (elapsed < MINUTE_MS) return 'now';
   if (elapsed < HOUR_MS) return `${Math.floor(elapsed / MINUTE_MS)}m`;
 
-  const dayDiff = calendarDayDifference(reference, value);
-  if (dayDiff === 0) return `${Math.floor(elapsed / HOUR_MS)}h`;
-  if (dayDiff < 7) return `${dayDiff}d`;
+  // Elapsed time, not calendar days, so 2h ago across midnight still reads "2h".
+  if (elapsed < DAY_MS) return `${Math.floor(elapsed / HOUR_MS)}h`;
+  const days = Math.floor(elapsed / DAY_MS);
+  if (days < 7) return `${days}d`;
   return formatSessionDate(value, reference);
 }
 

@@ -441,6 +441,12 @@ describe('formatSessionTimestampShort', () => {
     expect(formatSessionTimestampShort('2026-05-01T10:00:00Z', now)).not.toMatch(/\d+[mhd]$/);
   });
 
+  it('uses elapsed time, so a few hours across midnight stay in hours', () => {
+    const justAfterMidnight = new Date(2026, 5, 17, 0, 30).getTime();
+    expect(formatSessionTimestampShort(new Date(2026, 5, 16, 22, 30).toISOString(), justAfterMidnight)).toBe('2h');
+    expect(formatSessionTimestampShort(new Date(2026, 5, 15, 23, 30).toISOString(), justAfterMidnight)).toBe('1d');
+  });
+
   it('handles missing and invalid timestamps', () => {
     expect(formatSessionTimestampShort(null, now)).toBe('No activity');
     expect(formatSessionTimestampShort('not-a-date', now)).toBe('not-a-date');
