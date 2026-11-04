@@ -2,7 +2,7 @@
   import {
     AlertTriangle,
     Bot,
-    CirclePlus,
+    Plus,
     Info,
     Pencil,
     LoaderCircle,
@@ -383,7 +383,10 @@
         onclick={() => refreshAgents()}
       />
       {#if !isEmbedded}
-        <IconTooltipButton label="Add agent" icon={CirclePlus} size={16} onclick={() => openAddDialog()} />
+        <!-- Labelled neutral button, like "New automation" and "Add folder". -->
+        <button class="action-btn" type="button" onclick={() => openAddDialog()}>
+          <Plus size={15} />Add agent
+        </button>
       {/if}
     </div>
   </div>
