@@ -1,7 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { FolderPlus, LoaderCircle } from '@lucide/svelte';
-  import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import WorkspaceList from '$lib/components/primitives/WorkspaceList.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
   import type { WorkspaceItem } from '$lib/domain/types';
@@ -31,14 +30,16 @@
       description={isEmbedded ? 'Server paths available as context when starting a session.' : 'Folders available as context when starting a session.'}
     />
     {#if !isEmbedded}
-      <IconTooltipButton
-        label={workspacesStore.loading ? 'Opening folder picker' : 'Pick folder'}
-        icon={workspacesStore.loading ? LoaderCircle : FolderPlus}
-        iconClass={workspacesStore.loading ? 'animate-spin' : ''}
-        size={16}
-        disabled={workspacesStore.loading}
-        onclick={() => workspacesStore.addWorkspaceFromDialog()}
-      />
+      <!-- Labelled neutral button like "New automation"; stays enabled while the picker is open
+           so focus does not jump, and ignores clicks until it closes. -->
+      <button
+        class="action-btn"
+        type="button"
+        aria-busy={workspacesStore.loading || undefined}
+        onclick={() => { if (!workspacesStore.loading) void workspacesStore.addWorkspaceFromDialog(); }}
+      >
+        {#if workspacesStore.loading}<LoaderCircle size={15} class="animate-spin" />Opening folder picker…{:else}<FolderPlus size={15} />Add folder{/if}
+      </button>
     {/if}
   </div>
 
@@ -48,7 +49,7 @@
         <label class="app-dialog-field-label" for="workspace-server-path">Workspace path on qmtcode server</label>
         <div class="workspace-add-row">
           <input id="workspace-server-path" class="input-shell workspace-add-input" placeholder="/path/on/qmtcode/server" bind:value={workspacePath} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} />
-          <button class="action-btn action-btn-primary workspace-add-action" type="submit" disabled={!workspacePath.trim()}>Add server path</button>
+          <button class="action-btn workspace-add-action" type="submit" disabled={!workspacePath.trim()}>Add server path</button>
         </div>
       </form>
     {/if}
@@ -56,6 +57,7 @@
       items={workspacesStore.items}
       loading={workspacesStore.loading}
       error={workspacesStore.error}
+      addLabel="Add folder"
       emptyDescription={isEmbedded ? 'Add an absolute path from the qmtcode server to use it when starting a session.' : 'Add a folder to use it as context when starting a session.'}
       onAddWorkspace={isEmbedded ? null : () => workspacesStore.addWorkspaceFromDialog()}
       onRetry={isEmbedded ? null : () => workspacesStore.addWorkspaceFromDialog()}

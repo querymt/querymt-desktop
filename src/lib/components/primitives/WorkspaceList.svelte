@@ -2,6 +2,7 @@
   import { AlertTriangle, FolderOpen, LoaderCircle, Trash2 } from '@lucide/svelte';
   import { getContext } from 'svelte';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
+  import Hint from '$lib/components/primitives/Hint.svelte';
   import type { WorkspaceItem } from '$lib/domain/types';
 
   let {
@@ -81,8 +82,7 @@
         <article class="mesh-item-row">
           <div class="mesh-item-main">
             <div class="mesh-item-title">{item.name}</div>
-            <div class="mesh-item-description">{item.path}</div>
-            <div class="mesh-item-meta">{item.status} · default runtime {item.defaultRuntime}</div>
+            <Hint as="div" class="mesh-item-description" text={item.path} side="bottom" align="start">{item.path}</Hint>
           </div>
           {#if onUseWorkspace || onRemoveWorkspace}
             <div class="mesh-item-actions">
@@ -90,9 +90,9 @@
                 <button class="action-btn" type="button" onclick={() => onUseWorkspace?.(item)}>Use</button>
               {/if}
               {#if onRemoveWorkspace}
-                <button class="icon-btn icon-btn-danger" type="button" aria-label={`Remove ${item.name} from QueryMT`} title="Remove from QueryMT" onclick={() => (pendingRemoval = item)}>
+                <Hint as="button" class="icon-btn icon-btn-danger" type="button" text="Remove from QueryMT" aria-label={`Remove ${item.name} from QueryMT`} onclick={() => (pendingRemoval = item)}>
                   <Trash2 size={15} />
-                </button>
+                </Hint>
               {/if}
             </div>
           {/if}

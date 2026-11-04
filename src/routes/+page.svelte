@@ -8,6 +8,8 @@
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import { WORKSPACE_MODE_OPTIONS, type ComposerWorkspaceMode } from '$lib/domain/session-workspace';
   import { inboxStore } from '$lib/stores/inbox.svelte';
+  import { workspacesStore } from '$lib/stores/workspaces.svelte';
+  import { mergeWorkspaceSuggestions } from '$lib/domain/workspace-suggestions';
   import { formatSessionTimestampShort, getSessionWorkspaceName, isActiveSessionStatus, isRootSession, sessionMatchesLifecycle } from '$lib/domain/sessions';
   import type { DesktopSessionSummary, InboxItem } from '$lib/domain/types';
 
@@ -206,7 +208,7 @@
       recentModels={primaryAgentId ? agentsStore.getRecentModels(primaryAgentId) : []}
       modelLoading={primaryAgentId ? !!agentsStore.modelLoadingByAgent[primaryAgentId] : false}
       agentLabel={showAgentBadges && primaryAgentId ? (agentsStore.configs.find((config) => config.id === primaryAgentId)?.name ?? primaryAgentId) : null}
-      recentWorkspaces={agentsStore.getRecentWorkspaces()}
+      recentWorkspaces={mergeWorkspaceSuggestions(workspacesStore.items, agentsStore.getRecentWorkspaces())}
       attachments={agentsStore.promptAttachments}
       profileOptions={agentsStore.getProfileOptions(primaryAgentId)}
       selectedProfileId={agentsStore.composerProfileId}
