@@ -2483,6 +2483,52 @@ summary:focus-visible {
   }
 }
 
+/* Inbox page polish: faint-fill cards, plain field labels and soft selected rows, like the
+   other restyled pages. Scoped to .inbox-page because the same card is shown in the session
+   transcript, which is restyled separately.
+   TODO(restyle): drop the .inbox-page scope when the transcript is restyled. */
+.inbox-page .inbox-card {
+  border-color: transparent;
+  background: var(--composer-pill-surface);
+}
+
+.inbox-page .inbox-field-label {
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.inbox-page :is(.input-shell, .select-shell) {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  box-shadow: none;
+}
+
+.inbox-page .input-shell:focus {
+  border-color: var(--subtle-border-strong);
+  box-shadow: none;
+}
+
+.inbox-page .elicitation-option-row:hover:not(:has(:disabled)),
+.inbox-page .app-checkbox-control.elicitation-option-row:hover:not(:disabled) {
+  background: var(--composer-pill-surface-hover);
+}
+
+.inbox-page .elicitation-option-row:has(:checked),
+.inbox-page .app-checkbox-control.elicitation-option-row[data-state='checked'] {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+}
+
+.inbox-page .inbox-empty-state {
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--composer-pill-surface);
+  padding: 0.9rem 1rem;
+}
+
 .inbox-card-header {
   display: flex;
   align-items: flex-start;

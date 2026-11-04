@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { CreateElicitationRequest, ElicitationSchema } from '@agentclientprotocol/sdk';
 import { buildElicitationResponse, describeElicitationAnswers, mapElicitationRequestToInboxItem } from './inbox';
 
-function request(requestedSchema: ElicitationSchema, querymtMeta?: Record<string, unknown>): CreateElicitationRequest {
+// Fixtures carry option `description` and `_meta`, which the SDK's EnumOption type does not
+// declare but agents send; accept loose schemas here and cast once.
+function request(requestedSchema: Record<string, unknown>, querymtMeta?: Record<string, unknown>): CreateElicitationRequest {
   return {
     mode: 'form',
     sessionId: 'session-1',
     message: 'Choose environments',
-    requestedSchema,
+    requestedSchema: requestedSchema as unknown as ElicitationSchema,
     ...(querymtMeta ? { _meta: { querymt: querymtMeta } } : {})
   };
 }

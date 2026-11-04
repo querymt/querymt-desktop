@@ -18,7 +18,7 @@
   }
 </script>
 
-<div class="agents-page">
+<div class="agents-page inbox-page">
   <div class="page-toolbar">
     <SectionHeader
       title="Inbox"
