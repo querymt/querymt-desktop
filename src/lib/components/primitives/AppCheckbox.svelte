@@ -45,9 +45,9 @@
         <Check size={12} strokeWidth={3} />
       {/if}
     </span>
-    {#if label}
+    {#if label || description}
       <span class="app-checkbox-copy">
-        <span class="app-checkbox-label">{label}</span>
+        {#if label}<span class="app-checkbox-label">{label}</span>{/if}
         {#if description}
           <span id={descriptionId} class="app-checkbox-description">{description}</span>
         {/if}

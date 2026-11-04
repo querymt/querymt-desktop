@@ -299,13 +299,14 @@
               </span>
               <span class="delegate-model-choice-meta">
                 {#if nodeLabel}
-                  <Hint as="small" text={unavailableHint} disabled={!unavailable} aria-label={`Mesh node ${nodeLabel}`}>
+                  <Hint as="small" tabindex={-1} text={unavailableHint} disabled={!unavailable} aria-label={`Mesh node ${nodeLabel}`}>
                     <Network class={unavailable ? 'model-availability-warning' : undefined} size={11} />{nodeLabel}
                   </Hint>
                 {/if}
               </span>
               <span class="app-picker-row-detail delegate-model-choice-detail">
                 <Hint
+                  tabindex={-1}
                   class="app-picker-row-context"
                   side="left"
                   text={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
@@ -321,6 +322,7 @@
                   {#each displayedInputModalities(model, modelInfo) as modality}
                     {@const ModalityIcon = modalityIcon(modality)}
                     <Hint
+                      tabindex={-1}
                       class="app-picker-model-modality"
                       side="left"
                       text={modalityLabel(modality, knownModalities.length > 0)}

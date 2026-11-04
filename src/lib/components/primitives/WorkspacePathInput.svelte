@@ -69,9 +69,14 @@
     const index = highlightedIndex;
     // Track the result set too: a new list with the same index must still reveal the row.
     void suggestions;
-    containerElement
-      ?.querySelectorAll<HTMLElement>('.workspace-suggestion-row')[index]
-      ?.scrollIntoView?.({ block: 'nearest' });
+    const popover = popoverElement;
+    const row = popover?.querySelectorAll<HTMLElement>('.workspace-suggestion-row')[index];
+    if (!popover || !row) return;
+    // Scroll only the popover; scrollIntoView would also move clipping ancestors (e.g. a dialog).
+    const popoverRect = popover.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    if (rowRect.top < popoverRect.top) popover.scrollTop -= popoverRect.top - rowRect.top;
+    else if (rowRect.bottom > popoverRect.bottom) popover.scrollTop += rowRect.bottom - popoverRect.bottom;
   });
 
   function closeSuggestions() {

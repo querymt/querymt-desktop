@@ -178,7 +178,19 @@
     if (limit > 0 && current && !visible.includes(current)) return [...visible.slice(0, limit - 1), current];
     return visible;
   });
-  const railItems = $derived(compact ? [...visiblePinnedItems, ...openRailItems].slice(0, sessionIconLimit) : [...visiblePinnedItems, ...openRailItems]);
+  const railItems = $derived.by(() => {
+    const items = [...visiblePinnedItems, ...openRailItems];
+    if (!compact) return items;
+    const visible = items.slice(0, sessionIconLimit);
+    // Reserve the last compact slot for the current unpinned session, like the current pin above.
+    const isCurrent = (session: { agentId: string; sessionId: string }) =>
+      session.agentId === currentAgentId && session.sessionId === currentSessionId;
+    if (sessionIconLimit <= 0 || visible.some((item) => isCurrent(item.session))) return visible;
+    const currentSession = visibleSessions.find(isCurrent);
+    if (!currentSession) return visible;
+    const [current] = getRecentSessionRailItems([currentSession], { attentionSessionKeys, actionRequiredSessionKeys, limit: 1 });
+    return current ? [...visible.slice(0, sessionIconLimit - 1), current] : visible;
+  });
 
   $effect(() => {
     onVisibleSessionItemsChange?.(railItems.slice(0, MAX_SESSION_ICONS));
