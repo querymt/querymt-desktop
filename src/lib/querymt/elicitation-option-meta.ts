@@ -30,7 +30,8 @@ function collectPropertyOptionDescriptions(property: unknown): Record<string, st
     collections.push(property.items.anyOf, property.items.oneOf);
   }
 
-  const descriptions: Record<string, string> = {};
+  // Null-prototype maps: option values and field names come from the agent and may be "__proto__".
+  const descriptions: Record<string, string> = Object.create(null);
   for (const collection of collections) {
     if (!Array.isArray(collection)) continue;
     for (const option of collection) {
@@ -52,7 +53,7 @@ export function hoistElicitationOptionDescriptions(message: AnyMessage): AnyMess
     return message;
   }
 
-  const optionDescriptions: Record<string, Record<string, string>> = {};
+  const optionDescriptions: Record<string, Record<string, string>> = Object.create(null);
   for (const [key, property] of Object.entries(params.requestedSchema.properties)) {
     const descriptions = collectPropertyOptionDescriptions(property);
     if (descriptions) optionDescriptions[key] = descriptions;
@@ -97,10 +98,10 @@ export function optionDescriptionsFromMeta(meta: unknown): Record<string, Record
   }
 
   const raw = meta.querymt[QUERYMT_OPTION_DESCRIPTIONS_KEY];
-  const result: Record<string, Record<string, string>> = {};
+  const result: Record<string, Record<string, string>> = Object.create(null);
   for (const [fieldKey, descriptions] of Object.entries(raw)) {
     if (!isRecord(descriptions)) continue;
-    const mapped: Record<string, string> = {};
+    const mapped: Record<string, string> = Object.create(null);
     for (const [value, description] of Object.entries(descriptions)) {
       if (typeof description === 'string' && description.trim()) mapped[value] = description.trim();
     }
