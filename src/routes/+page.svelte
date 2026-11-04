@@ -54,7 +54,8 @@
         detail: item.title,
         workspace: session?.cwd ? getSessionWorkspaceName(session.cwd) : null,
         updatedAt: session?.updatedAt ?? null,
-        href: session ? `/sessions/${encodeURIComponent(session.agentId)}/${encodeURIComponent(session.sessionId)}` : '/inbox',
+        // Only elicitations can be answered in the session; permissions are handled in the Inbox.
+        href: session && item.type === 'elicitation' ? `/sessions/${encodeURIComponent(session.agentId)}/${encodeURIComponent(session.sessionId)}` : '/inbox',
         action: item.type === 'elicitation' ? 'Reply' : 'Open'
       });
     }
