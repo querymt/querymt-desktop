@@ -120,6 +120,31 @@ describe('SessionActivityBar', () => {
     expect(preview.closest('.app-tooltip-content')).toHaveTextContent('Double Esc to cancel');
   });
 
+  it('shows the untruncated shell command and its arguments in the tooltip', async () => {
+    const command = `rg --hidden --glob '!node_modules' ${'very/long/path/segment/'.repeat(8)}needle`;
+    render(SessionActivityBar, {
+      session: session({
+        runState: 'tool-running',
+        activeToolCallId: 'shell-1',
+        toolCalls: [
+          {
+            id: 'shell-1',
+            title: 'Run shell',
+            kind: 'shell',
+            status: 'in_progress',
+            arguments: JSON.stringify({ command: 'bash', args: ['-lc', command] })
+          }
+        ]
+      })
+    });
+
+    const bar = screen.getByRole('status');
+    expect(bar.querySelector('.session-activity-preview')?.textContent).toContain('…');
+    await fireEvent.pointerEnter(bar, { pointerType: 'mouse' });
+    const preview = await screen.findByText(/needle$/, { selector: '.session-activity-tooltip-preview' });
+    expect(preview.textContent).toBe(`bash -lc ${command}`);
+  });
+
   it('announces failures as alerts', () => {
     render(SessionActivityBar, { session: session({ runState: 'failed', lastError: 'shell failed.' }) });
 

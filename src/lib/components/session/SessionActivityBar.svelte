@@ -1,7 +1,7 @@
 <script lang="ts">
   import { AlertTriangle, LoaderCircle, MessageCircleQuestion } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
-  import { getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
+  import { getSessionShellCommand, getSessionToolName, getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
 
   let {
@@ -50,8 +50,14 @@
     if (session.runState === 'submitting') return plain('Sending prompt…');
     return plain('');
   });
-  // The bar truncates long commands, so the tooltip carries the full preview.
-  const tooltipPreview = $derived(status.preview);
+  // The bar truncates long commands, and `preview` is itself compacted, so the
+  // tooltip carries the untruncated shell command when there is one.
+  const tooltipPreview = $derived.by(() => {
+    if (!status.preview) return null;
+    const toolName = activeTool ? getSessionToolName(activeTool) : '';
+    const fullCommand = activeTool && (toolName === 'shell' || toolName === 'execute') ? getSessionShellCommand(activeTool) : null;
+    return fullCommand ?? status.preview;
+  });
 </script>
 
 {#if isVisible}
