@@ -42,7 +42,10 @@
     const entries: NeedsYouEntry[] = [];
     for (const item of items) {
       if (item.offline) continue;
-      const key = item.agentId && item.sessionId ? `${item.agentId}:${item.sessionId}` : `inbox:${item.id}`;
+      // Elicitations collapse into one row per session; every permission request keeps its own row.
+      const key = item.type === 'elicitation' && item.agentId && item.sessionId
+        ? `${item.agentId}:${item.sessionId}`
+        : `inbox:${item.id}`;
       if (seen.has(key)) continue;
       seen.add(key);
       const session = item.agentId && item.sessionId
@@ -84,6 +87,8 @@
   });
 
   const showNeedsYou = $derived(needsYou.length > 0);
+  // Offline requests cannot be answered right now, so they do not "need input".
+  const onlineRequestCount = $derived((inboxStore.actionableItems ?? []).filter((item) => !item.offline).length);
   const stripEntries = $derived(showNeedsYou ? needsYou.slice(0, NEEDS_YOU_LIMIT) : recentEntries);
 
   const onlineAgents = $derived(agentsStore.connectedAgents);
@@ -161,7 +166,7 @@
 
 {#snippet sessionsLabel()}<strong>{activeNowCount}</strong> {activeNowCount === 1 ? 'session' : 'sessions'} running{/snippet}
 {#snippet agentsLabel()}<strong>{onlineAgents.length}/{configuredAgentCount}</strong> {configuredAgentCount === 1 ? 'agent' : 'agents'} connected{/snippet}
-{#snippet inboxLabel()}<strong>{inboxStore.pendingCount}</strong> {inboxStore.pendingCount === 1 ? 'request needs' : 'requests need'} input{/snippet}
+{#snippet inboxLabel()}<strong>{onlineRequestCount}</strong> {onlineRequestCount === 1 ? 'request needs' : 'requests need'} input{/snippet}
 
 <div class="start-launch-page flex min-h-[calc(100vh-7rem)] w-full items-start justify-center px-4">
   <section class="mx-auto w-full max-w-4xl space-y-6">

@@ -7,7 +7,8 @@
   import { inboxStore } from '$lib/stores/inbox.svelte';
 
   const disconnected = $derived(agentsStore.connectedAgents.length === 0);
-  const showAgentNames = $derived(agentsStore.connectedAgents.length > 1);
+  // Count agents in the requests themselves, so names stay visible after an agent disconnects.
+  const showAgentNames = $derived(new Set(inboxStore.items.map((item) => item.agentId).filter(Boolean)).size > 1);
 
   async function openSession(item: InboxItem) {
     if (!item.agentId || !item.sessionId) {

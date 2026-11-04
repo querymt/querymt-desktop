@@ -164,7 +164,7 @@
         <!-- Rejected permissions, declined elicitations and other outcomes. -->
         <span class="badge">{item.resolution}</span>
       {/if}
-      {#if !isCollapsed && offline}
+      {#if offline}
         <span class="badge">Temporarily unavailable</span>
       {/if}
       {#if showOpenSession}
