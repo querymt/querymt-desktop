@@ -112,11 +112,13 @@
   });
 
   function hydrate(prefill: CommandPalettePrefill | null) {
-    agentId = prefill?.agentId && agents.some((agent) => agent.id === prefill.agentId) ? prefill.agentId : agents[0]?.id ?? '';
+    const prefilledAgentAvailable = Boolean(prefill?.agentId && agents.some((agent) => agent.id === prefill.agentId));
+    agentId = prefilledAgentAvailable ? prefill!.agentId! : agents[0]?.id ?? '';
     prompt = prefill?.prompt ?? '';
     workspace = prefill?.cwd ?? agentsStore.composerCwd ?? '';
-    sessionId = prefill?.sessionId ?? '';
-    mode = prefill?.sessionId ? 'existing' : 'new';
+    // A session belongs to its agent; never hand it to the fallback agent.
+    sessionId = prefilledAgentAvailable ? prefill?.sessionId ?? '' : '';
+    mode = sessionId ? 'existing' : 'new';
     preset = 'hourly';
     time = DEFAULT_SCHEDULE_TIME;
     customCron = '';
@@ -160,6 +162,7 @@
     const targetAgent = agentId;
     const cwd = workspace.trim();
     let createdId: string | null = null;
+    let scheduleCreated = false;
     let stage = 'create session';
     let request: Record<string, unknown> | null = null;
 
@@ -182,10 +185,16 @@
         ...parsedLimits.limits
       };
       await agentsStore.createSchedule(targetAgent, request as unknown as Parameters<typeof agentsStore.createSchedule>[1]);
+      scheduleCreated = true;
       leftover = null;
       commandPaletteStore.closeSchedule();
       await goto('/automations');
     } catch (error) {
+      // The automation exists and points at the session; only navigation failed.
+      if (scheduleCreated) {
+        console.error('[automations] created automation but failed to open the automations page', error);
+        return;
+      }
       formError = describeError(error, 'Failed to create the automation.', {
         action: 'querymt/schedules/create',
         stage,

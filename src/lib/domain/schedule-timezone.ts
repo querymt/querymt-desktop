@@ -28,9 +28,10 @@ export function listTimeZones(): string[] {
 }
 
 /** The zone the user picked last time, falling back to the system zone. */
-export function loadScheduleTimeZone(storage: Pick<Storage, 'getItem'> | undefined = globalThis.localStorage): string {
+export function loadScheduleTimeZone(storage?: Pick<Storage, 'getItem'>): string {
   try {
-    const saved = storage?.getItem(STORAGE_KEY);
+    // Reading `localStorage` itself can throw (e.g. a SecurityError), so resolve it here.
+    const saved = (storage ?? globalThis.localStorage)?.getItem(STORAGE_KEY);
     if (saved && isValidTimeZone(saved)) return saved;
   } catch {
     // Storage can be unavailable (private mode); fall through to the system zone.
@@ -38,10 +39,10 @@ export function loadScheduleTimeZone(storage: Pick<Storage, 'getItem'> | undefin
   return systemTimeZone();
 }
 
-export function saveScheduleTimeZone(zone: string, storage: Pick<Storage, 'setItem'> | undefined = globalThis.localStorage): void {
+export function saveScheduleTimeZone(zone: string, storage?: Pick<Storage, 'setItem'>): void {
   if (!isValidTimeZone(zone)) return;
   try {
-    storage?.setItem(STORAGE_KEY, zone);
+    (storage ?? globalThis.localStorage)?.setItem(STORAGE_KEY, zone);
   } catch {
     // Not being able to remember the choice is not worth surfacing.
   }
