@@ -7341,6 +7341,11 @@ summary:focus-visible {
   gap: 0.9rem;
 }
 
+/* Clear the session header's 1.5rem dissolve zone (::after) so it never fades the empty-state card. */
+.session-conversation > .empty-state {
+  margin-top: 0.85rem;
+}
+
 .session-history-notice {
   margin: 0;
   font-size: 0.8rem;
