@@ -375,20 +375,6 @@ select {
   box-shadow: none;
 }
 
-/* Empty and error states: a card surface instead of the dashed frame. */
-.settings-page .state-panel {
-  border: 1px solid transparent;
-  background: var(--bg-card);
-}
-
-.settings-page .state-panel-error {
-  background: var(--status-danger-bg);
-}
-
-.settings-page .state-skeleton-list {
-  border-color: transparent;
-}
-
 /* Inline notices: a borderless tint, like the rest of the restyled pages.
    TODO(restyle): drop the border from the base .state-inline-* rules once every page is done. */
 .settings-page :is(.state-inline-error, .state-inline-progress) {
@@ -2175,15 +2161,14 @@ summary:focus-visible {
   align-items: center;
   gap: 0.8rem;
   min-height: 5.25rem;
-  border: 1px dashed var(--border-strong);
+  /* Card surface, no frame: the same placeholder on every page. */
+  border: 1px solid transparent;
   border-radius: var(--radius);
-  background: var(--subtle-surface);
+  background: var(--bg-card);
   padding: 0.9rem 1rem;
 }
 
 .state-panel-error {
-  border-style: solid;
-  border-color: var(--status-danger-border);
   background: var(--status-danger-bg);
 }
 
@@ -2246,7 +2231,7 @@ summary:focus-visible {
 
 .state-skeleton-list {
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius);
   background: var(--bg-card);
 }
