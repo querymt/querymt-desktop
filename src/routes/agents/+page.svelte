@@ -373,6 +373,13 @@
     />
 
     <div class="compact-toolbar agents-page-actions">
+      {#if !isEmbedded}
+        <!-- Labelled neutral button, like "New automation" and "Add folder". -->
+        <button class="action-btn" type="button" onclick={() => openAddDialog()}>
+          <Plus size={15} />Add agent
+        </button>
+      {/if}
+      <!-- Refresh is the rightmost header control on every page. -->
       <IconTooltipButton
         label={refreshing ? 'Refreshing agent status and connections…' : 'Refresh agents'}
         icon={refreshing ? LoaderCircle : RefreshCw}
@@ -382,12 +389,6 @@
         disabled={agentsStore.loading && !refreshing}
         onclick={() => refreshAgents()}
       />
-      {#if !isEmbedded}
-        <!-- Labelled neutral button, like "New automation" and "Add folder". -->
-        <button class="action-btn" type="button" onclick={() => openAddDialog()}>
-          <Plus size={15} />Add agent
-        </button>
-      {/if}
     </div>
   </div>
 

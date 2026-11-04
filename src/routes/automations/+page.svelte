@@ -125,6 +125,10 @@
       {#if scheduleAgents.length > 1}
         <AppSelect bind:value={selectedAgentId} options={scheduleAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Automation agent" />
       {/if}
+      <button class="action-btn" type="button" disabled={!selectedAgentId || !canRun('querymt/schedules/create')} onclick={openScheduleCreate}>
+        <Plus size={15} />New automation
+      </button>
+      <!-- Refresh is the rightmost header control on every page. -->
       <IconTooltipButton
         label={refreshing ? 'Refreshing automations\u2026' : 'Refresh automations'}
         icon={refreshing ? LoaderCircle : RefreshCw}
@@ -134,9 +138,6 @@
         disabled={!refreshing && !selectedAgentId}
         onclick={refreshSchedules}
       />
-      <button class="action-btn" type="button" disabled={!selectedAgentId || !canRun('querymt/schedules/create')} onclick={openScheduleCreate}>
-        <Plus size={15} />New automation
-      </button>
     </div>
   </div>
 
