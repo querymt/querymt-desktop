@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { ArrowUpRight, ChevronRight, CircleCheckBig, CircleDot, PlugZap } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
   import AppCheckbox from '$lib/components/primitives/AppCheckbox.svelte';
@@ -32,7 +33,8 @@
   const severityClass = $derived(
     item.severity === 'high' ? 'badge-high' : item.severity === 'low' ? 'badge-low' : 'badge-medium'
   );
-  let isCollapsed = $state(collapsedByDefault);
+  // The prop only seeds the initial state; later toggles are the user's.
+  let isCollapsed = $state(untrack(() => collapsedByDefault));
   const canOpenSession = $derived(Boolean(item.sessionId && item.agentId && onOpenSession));
   const showOpenSession = $derived(!compact && canOpenSession);
   const showResolvedCheck = $derived(item.status === 'resolved' && item.resolution === 'Submitted');
@@ -126,7 +128,7 @@
   </Tooltip.Provider>
 {/snippet}
 
-<article class={`surface-muted ${compact || isCollapsed ? 'p-3' : 'p-4'}`}>
+<article class={`surface-muted inbox-card ${compact || isCollapsed ? 'p-3' : 'p-4'}`}>
   <div class={`inbox-card-header ${isCollapsed ? 'inbox-card-header-collapsed' : ''}`}>
     {#if !compact}
       <button
@@ -174,7 +176,7 @@
     <div class="mt-4 grid gap-3">
       {#each item.formFields ?? [] as field}
         <div class="grid gap-2">
-          <span id={`${item.id}-${field.key}-label`} class="muted text-xs uppercase tracking-[0.18em]">
+          <span id={`${item.id}-${field.key}-label`} class="muted inbox-field-label text-xs uppercase tracking-[0.18em]">
             {field.label}{#if field.required} *{/if}
           </span>
           {#if field.kind === 'boolean'}
