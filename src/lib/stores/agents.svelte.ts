@@ -4783,10 +4783,19 @@ export class AgentsStore {
     const generation = this.sessionSelectionGeneration;
     const isCurrent = () => generation === this.sessionSelectionGeneration &&
       this.isSelectedSession(agentId, sessionId) && this.clients.get(agentId) === record;
+    const pagingKey = paging.sessionKey;
     this.sessionHistoryPaging = { ...paging, loading: true, error: null };
+    // A stale result must still release its own in-flight flag. Only one request can be
+    // in flight (loading gate), so matching generation, selection and key means it is ours.
+    const releasePending = () => {
+      if (generation === this.sessionSelectionGeneration && this.isSelectedSession(agentId, sessionId) &&
+        this.sessionHistoryPaging.sessionKey === pagingKey && this.sessionHistoryPaging.loading) {
+        this.sessionHistoryPaging = { ...this.sessionHistoryPaging, loading: false };
+      }
+    };
     try {
       const page = await record.client.sessionHistory(sessionId, paging.before);
-      if (!isCurrent()) return;
+      if (!isCurrent()) return releasePending();
       this.activeSession = prependOlderHistory(this.activeSession, page);
       this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
       this.sessionHistoryPaging = {
@@ -4796,11 +4805,14 @@ export class AgentsStore {
         error: null
       };
     } catch (error) {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return releasePending();
       const data = error instanceof RequestError ? error.data : (error as { data?: unknown } | null)?.data;
       if (data && typeof data === 'object' && (data as Record<string, unknown>).code === 'history_changed') {
-        // An undo rewrote the history: the position is void, so reload from scratch.
-        this.sessionHistoryPaging = { ...paging, loading: false };
+        // An undo rewrote the history: the cursor is void, so drop it and force a real reload
+        // (a cached hydration would otherwise short-circuit loadSession).
+        this.hydratedRemoteSessionKeys.delete(pagingKey);
+        this.freshlyCreatedSessionKeys.delete(pagingKey);
+        this.sessionHistoryPaging = { ...paging, before: null, loading: false };
         await this.loadSession(agentId, sessionId);
         return;
       }

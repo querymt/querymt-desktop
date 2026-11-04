@@ -1049,6 +1049,19 @@ describe('ActiveSessionView older history', () => {
     await vi.waitFor(() => expect(state.top).toBe(800));
   });
 
+  it('keeps a scroll made while the request was pending', async () => {
+    const state = stubScroller({ height: 1000, top: 0 });
+    const onLoadOlder = vi.fn(async () => { state.top = 300; state.height = 1800; });
+    render(ActiveSessionView, {
+      session: sessionWithImages(),
+      olderHistory: { available: true, loading: false, error: null, stale: false },
+      onLoadOlder
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }));
+    await vi.waitFor(() => expect(onLoadOlder).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(state.top).toBe(1100));
+  });
+
   it('reports a stale history notice and a retryable error', () => {
     render(ActiveSessionView, {
       session: sessionWithImages(),

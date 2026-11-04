@@ -194,14 +194,19 @@
     loadingOlderAnchor = true;
     const { element } = resolveScrollViewport();
     const previousHeight = element.scrollHeight;
-    const previousTop = element.scrollTop;
+    // Browser scroll anchoring would also compensate for the prepended content; turn it off
+    // for this load so the single manual adjustment below cannot be double-counted.
+    const previousAnchor = element.style.overflowAnchor;
+    element.style.overflowAnchor = 'none';
     try {
       await onLoadOlder();
       await tick();
       const grown = element.scrollHeight - previousHeight;
-      if (grown > 0) element.scrollTop = previousTop + grown;
+      // Use the offset now, not the one before the request, to keep any scroll made while it was pending.
+      if (grown > 0) element.scrollTop = element.scrollTop + grown;
       syncViewport();
     } finally {
+      element.style.overflowAnchor = previousAnchor;
       loadingOlderAnchor = false;
     }
   }

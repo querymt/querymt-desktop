@@ -11229,6 +11229,40 @@ describe('AgentsStore older history paging', () => {
     expect(store.sessionHistoryPaging.sessionKey).toBe('agent-1:session-2');
   });
 
+  it('releases its in-flight flag when the client is replaced while a page is pending', async () => {
+    const store = createStore();
+    mockClient.loadSession.mockResolvedValueOnce(windowedLoad());
+    await store.loadSession('agent-1', 'session-1');
+    let release!: (value: ReturnType<typeof olderPage>) => void;
+    mockClient.sessionHistory.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const pending = store.loadOlderHistory();
+    const clients = (store as unknown as { clients: Map<string, object> }).clients;
+    clients.set('agent-1', { ...clients.get('agent-1')! });
+    release(olderPage(1));
+    await pending;
+    expect(store.sessionHistoryPaging).toMatchObject({ before: 'tok-1', loading: false });
+
+    mockClient.sessionHistory.mockResolvedValueOnce(olderPage(1));
+    await store.loadOlderHistory();
+    expect(mockClient.sessionHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('forces a real reload on history_changed even after a remote attach hydrated the session', async () => {
+    const store = createStore();
+    mockClient.attachRemoteSession.mockResolvedValueOnce({
+      session_id: 'session-1', node_id: 'node-1', attached: true, config_options: [],
+      snapshot: { audit: { events: [] }, history: { complete: false, before: 'tok-1' } }
+    } as unknown as RemoteSessionAttachInfo);
+    await store.attachRemoteSession('agent-1', 'node-1', 'session-1');
+    expect(store.sessionHistoryPaging.before).toBe('tok-1');
+
+    mockClient.sessionHistory.mockRejectedValueOnce(new RequestError(-32602, 'changed', { code: 'history_changed' }));
+    mockClient.loadSession.mockResolvedValueOnce(windowedLoad('tok-fresh'));
+    await store.loadOlderHistory();
+    expect(mockClient.loadSession).toHaveBeenCalledTimes(1);
+    expect(store.sessionHistoryPaging).toMatchObject({ before: 'tok-fresh', loading: false });
+  });
+
   it('keeps live state when older history arrives during a streaming turn', async () => {
     const store = createStore();
     mockClient.loadSession.mockResolvedValueOnce(windowedLoad());
