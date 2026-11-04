@@ -23,6 +23,7 @@
   } from '$lib/domain/sessions';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { inboxStore } from '$lib/stores/inbox.svelte';
+  import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
   import Identicon from '$lib/components/primitives/Identicon.svelte';
   import type { DesktopSessionSummary, SessionLifecyclePatch, SessionStatus } from '$lib/domain/types';
 
@@ -102,9 +103,17 @@
   const AGENTS_STATUS_DESCRIPTION_ID = 'app-sidebar-agents-status-description';
   const MESH_STATUS_DESCRIPTION_ID = 'app-sidebar-mesh-status-description';
   const workSections: SectionName[] = ['Inbox', 'Sessions', 'Workspaces'];
-  const manageSections: SectionName[] = ['Agents', 'Automations', 'Mesh'];
+  // TODO(beta-mode): Automations is not ready for general use, so for now it is only shown in
+  // developer mode. Once a "beta mode" setting exists (it would reveal features that are not
+  // ready yet), gate Automations on that instead and stop tying it to developer mode.
+  const automationsVisible = $derived(chatPreferencesStore.developerMode);
+  const manageSections = $derived<SectionName[]>(
+    automationsVisible ? ['Agents', 'Automations', 'Mesh'] : ['Agents', 'Mesh']
+  );
   const mobilePrimarySections: SectionName[] = ['Start', 'Inbox', 'Sessions', 'Agents'];
-  const mobileMoreSections: SectionName[] = ['Workspaces', 'Automations', 'Mesh', 'Settings'];
+  const mobileMoreSections = $derived<SectionName[]>(
+    automationsVisible ? ['Workspaces', 'Automations', 'Mesh', 'Settings'] : ['Workspaces', 'Mesh', 'Settings']
+  );
   const SettingsIcon = sectionIcons.Settings;
 
   let sessionListElement = $state<HTMLElement | null>(null);

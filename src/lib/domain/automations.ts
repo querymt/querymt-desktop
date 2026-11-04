@@ -1,3 +1,4 @@
+import type { DesktopSessionSummary } from '$lib/domain/types';
 import type { ScheduleInfo } from '$lib/querymt/generated/types';
 
 export type AutomationGroupId = 'attention' | 'active' | 'paused' | 'completed';
@@ -56,13 +57,45 @@ export function scheduleTriggerExpression(schedule: ScheduleInfo): string | null
   return typeof expression === 'string' ? expression : null;
 }
 
+function clockTime(hour: string, minute: string): string | null {
+  const h = Number(hour);
+  const m = Number(minute);
+  if (!Number.isInteger(h) || !Number.isInteger(m) || h > 23 || m > 59) return null;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/** Plain-language form of the cron shapes the create dialog produces; anything else stays raw. */
+export function describeCronExpression(expression: string): string {
+  const normalized = expression.trim().replace(/\s+/g, ' ');
+  if (normalized === '0 * * * *') return 'Every hour';
+  const daily = /^(\d{1,2}) (\d{1,2}) \* \* \*$/.exec(normalized);
+  const dailyTime = daily ? clockTime(daily[2], daily[1]) : null;
+  if (dailyTime) return `Every day at ${dailyTime}`;
+  const weekdays = /^(\d{1,2}) (\d{1,2}) \* \* 1-5$/.exec(normalized);
+  const weekdayTime = weekdays ? clockTime(weekdays[2], weekdays[1]) : null;
+  if (weekdayTime) return `Weekdays at ${weekdayTime}`;
+  return `Cron: ${expression}`;
+}
+
+export function describeIntervalSeconds(seconds: number): string {
+  const unit = (count: number, name: string) => (count === 1 ? `Every ${name}` : `Every ${count} ${name}s`);
+  if (seconds % 86400 === 0) return unit(seconds / 86400, 'day');
+  if (seconds % 3600 === 0) return unit(seconds / 3600, 'hour');
+  if (seconds % 60 === 0) return unit(seconds / 60, 'minute');
+  return unit(seconds, 'second');
+}
+
 export function scheduleTriggerLabel(schedule: ScheduleInfo): string {
+  const trigger = schedule.trigger as { type?: unknown; seconds?: unknown; at?: unknown } | null;
+  if (trigger && typeof trigger === 'object') {
+    if (trigger.type === 'interval' && typeof trigger.seconds === 'number' && trigger.seconds > 0) {
+      return describeIntervalSeconds(trigger.seconds);
+    }
+    if (trigger.type === 'once_at' && typeof trigger.at === 'string') return `Once on ${formatTimestamp(trigger.at)}`;
+  }
   const expression = scheduleTriggerExpression(schedule);
   if (!expression) return 'Scheduled automation';
-  if (expression === '0 * * * *') return 'Every hour';
-  if (expression === '0 9 * * *') return 'Every day at 09:00';
-  if (expression === '0 9 * * 1-5') return 'Weekdays at 09:00';
-  return `Cron: ${expression}`;
+  return describeCronExpression(expression);
 }
 
 export function relativeTime(value?: string, now = Date.now()): string | null {
@@ -95,6 +128,34 @@ export function scheduleTimingSummary(schedule: ScheduleInfo, now = Date.now()):
   return nextRun ? `Next run ${nextRun}` : 'Next run unavailable';
 }
 
-export function scheduleTargetLabel(schedule: ScheduleInfo): string {
-  return `${schedule.node_id ? `Node ${schedule.node_id} · ` : ''}Session ${schedule.session_public_id}`;
+/** Last two path segments, enough to recognise a workspace without the full path. */
+export function compactPath(path: string): string {
+  const segments = path.split('/').filter(Boolean);
+  return segments.length <= 2 ? path : segments.slice(-2).join('/');
+}
+
+export type ScheduleTargetSession = Pick<DesktopSessionSummary, 'title' | 'cwd'>;
+
+/** Names the target by session title and workspace when the session is known, else by raw id. */
+export function scheduleTargetLabel(schedule: ScheduleInfo, session: ScheduleTargetSession | null = null): string {
+  const node = schedule.node_id ? `Node ${schedule.node_id} · ` : '';
+  if (!session) return `${node}Session ${schedule.session_public_id}`;
+  const workspace = session.cwd ? ` · ${compactPath(session.cwd)}` : '';
+  return `${node}${session.title || 'Untitled session'}${workspace}`;
+}
+
+export function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 'None';
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours}h ${rest}m` : `${hours}h`;
+}
+
+export function formatTimestamp(value?: string): string {
+  if (!value) return 'Unavailable';
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : value;
 }

@@ -12,11 +12,14 @@
     value = '',
     disabled = false,
     recentPaths = [],
+    scrollIntoViewOnOpen = false,
     onInput
   }: {
     value?: string;
     disabled?: boolean;
     recentPaths?: string[];
+    /** Scroll the nearest scrollable ancestor so the whole suggestion list is visible (for forms in scrolling dialogs). */
+    scrollIntoViewOnOpen?: boolean;
     onInput: (value: string) => void;
   } = $props();
 
@@ -27,10 +30,37 @@
   let requestToken = 0;
   let containerElement: HTMLDivElement | null = null;
   let inputElement: HTMLInputElement | null = null;
+  let popoverElement = $state<HTMLDivElement | null>(null);
+  let revealedForThisOpening = false;
   let selectingSuggestion = false;
   let restoringInputFocus = false;
 
   onDestroy(() => { requestToken += 1; });
+
+  /**
+   * Scroll only the dialog body (never overflow:hidden ancestors, which scrollIntoView would
+   * also move) so the bottom of the list clears the pinned footer.
+   */
+  function revealInDialogBody(element: HTMLElement) {
+    const body = element.closest<HTMLElement>('.app-dialog-body');
+    if (!body) return;
+    const overshoot = element.getBoundingClientRect().bottom - body.getBoundingClientRect().bottom + 16;
+    if (overshoot > 0) body.scrollTo?.({ top: body.scrollTop + overshoot, behavior: 'smooth' });
+  }
+
+  // Once per opening, bring the whole list into view. Without this only the highlighted
+  // (first) row is revealed and the rest is left under a dialog footer.
+  $effect(() => {
+    const isOpen = open && suggestions.length > 0;
+    if (!isOpen) {
+      revealedForThisOpening = false;
+      return;
+    }
+    if (scrollIntoViewOnOpen && popoverElement && !revealedForThisOpening) {
+      revealedForThisOpening = true;
+      revealInDialogBody(popoverElement);
+    }
+  });
 
   // The popover scrolls once it is height-capped; keep the arrow-key highlight visible.
   $effect(() => {
@@ -201,7 +231,7 @@
   {/if}
 
   {#if open && suggestions.length > 0}
-    <div class="workspace-suggestion-popover">
+    <div class="workspace-suggestion-popover" bind:this={popoverElement}>
       <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
         {#each suggestions as suggestion, index}
           <Tooltip.Root disableHoverableContent>

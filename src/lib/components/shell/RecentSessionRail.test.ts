@@ -20,6 +20,7 @@ vi.mock('$lib/stores/agents.svelte', () => ({ agentsStore }));
 vi.mock('$lib/stores/inbox.svelte', () => ({ inboxStore }));
 
 import RecentSessionRail from './RecentSessionRail.svelte';
+import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 
 const activeSession: DesktopSessionSummary = {
   agentId: 'agent-1',
@@ -43,10 +44,12 @@ beforeEach(() => {
   agentsStore.agentsNeedingAttention = [];
   agentsStore.meshNodeCount = 0;
   inboxStore.actionableItems = [];
+  chatPreferencesStore.setDeveloperMode(false);
 });
 
 afterEach(() => {
   cleanup();
+  chatPreferencesStore.setDeveloperMode(false);
   delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
   vi.unstubAllGlobals();
 });
@@ -166,6 +169,21 @@ describe('RecentSessionRail navigation', () => {
     expect(screen.getByText('Waiting session')).toBeInTheDocument();
     expect(screen.getByText('work', { selector: '.app-sidebar-session-workspace' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument();
+  });
+
+  it.each([false, true])('hides the Automations entry unless developer mode is on (compact=%s)', async (collapsed) => {
+    const { container } = render(RecentSessionRail, { current: 'Sessions', sessions: [activeSession], collapsed });
+    const automationLinks = () => container.querySelectorAll('a[href="/automations"]');
+
+    expect(automationLinks()).toHaveLength(0);
+    expect(container.querySelector('a[href="/agents"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/mesh"]')).not.toBeNull();
+
+    chatPreferencesStore.setDeveloperMode(true);
+    await waitFor(() => expect(automationLinks()).toHaveLength(1));
+
+    chatPreferencesStore.setDeveloperMode(false);
+    await waitFor(() => expect(automationLinks()).toHaveLength(0));
   });
 
   it('shows more than ten sessions without number badges and maps shortcuts only to the first ten', async () => {

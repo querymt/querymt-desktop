@@ -16,6 +16,7 @@
     ariaLabel = undefined,
     pill = false,
     class: className = '',
+    contentClass = '',
     onValueChange = undefined
   }: {
     value: string;
@@ -25,6 +26,11 @@
     ariaLabel?: string;
     pill?: boolean;
     class?: string;
+    /**
+     * Extra class for the popover. `app-select-content-compact` is the current style.
+     * TODO(restyle): make that style the default for every AppSelect and drop this prop.
+     */
+    contentClass?: string;
     onValueChange?: (value: string) => void;
   } = $props();
 
@@ -43,7 +49,7 @@
   </Select.Trigger>
 
   <Select.Portal>
-    <Select.Content class="app-select-content" sideOffset={6}>
+    <Select.Content class={`app-select-content ${contentClass}`} sideOffset={6} collisionPadding={12}>
       <Select.Viewport class="app-select-viewport">
         {#each options as option}
           <Select.Item class="app-select-item" value={option.value} disabled={option.disabled} label={option.label}>
