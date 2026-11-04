@@ -6296,6 +6296,14 @@ summary:focus-visible {
   white-space: nowrap;
 }
 
+/* Arrow-key navigation keeps focus in the input, so the hover tooltip never
+   opens; show the highlighted row's full path in place instead. */
+.workspace-suggestion-row[data-keyboard-highlighted] .workspace-suggestion-name,
+.workspace-suggestion-row[data-keyboard-highlighted] .workspace-suggestion-path {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .markdown-body {
   max-width: 100%;
   min-width: 0;
@@ -8390,9 +8398,17 @@ a.session-delegate-session:hover {
   text-align: center;
 }
 
+/* The thumbnail is too small for the copy; keep the name and status in the
+   accessibility tree instead of removing them. */
 .session-image-preview .session-attachment-fallback span,
 .session-image-preview .session-attachment-fallback small {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .session-file-card-copy {
@@ -13891,6 +13907,11 @@ a.session-delegate-session:hover {
     max-height: 8rem;
     padding-block: 0.55rem;
     font-size: 0.9rem;
+  }
+
+  .start-launch-page .composer-prompt-zone-expanded textarea {
+    min-height: min(50vh, 24rem) !important;
+    max-height: min(70vh, 36rem);
   }
 
   .start-launch-page .composer-toolbar {

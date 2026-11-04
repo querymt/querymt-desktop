@@ -26,6 +26,7 @@
   let suggestions = $state<WorkspaceSuggestion[]>([]);
   let open = $state(false);
   let highlightedIndex = $state(0);
+  let keyboardNavigating = $state(false);
   let loading = $state(false);
   let requestToken = 0;
   let containerElement: HTMLDivElement | null = null;
@@ -66,6 +67,8 @@
   $effect(() => {
     if (!open) return;
     const index = highlightedIndex;
+    // Track the result set too: a new list with the same index must still reveal the row.
+    void suggestions;
     containerElement
       ?.querySelectorAll<HTMLElement>('.workspace-suggestion-row')[index]
       ?.scrollIntoView?.({ block: 'nearest' });
@@ -185,12 +188,14 @@
 
     if (event.key === 'ArrowDown') {
       event.preventDefault();
+      keyboardNavigating = true;
       highlightedIndex = Math.min(highlightedIndex + 1, suggestions.length - 1);
       return;
     }
 
     if (event.key === 'ArrowUp') {
       event.preventDefault();
+      keyboardNavigating = true;
       highlightedIndex = Math.max(highlightedIndex - 1, 0);
       return;
     }
@@ -242,6 +247,7 @@
                   {...props}
                   class="workspace-suggestion-row"
                   data-highlighted={highlightedIndex === index ? '' : undefined}
+                  data-keyboard-highlighted={keyboardNavigating && highlightedIndex === index ? '' : undefined}
                   type="button"
                   onpointerdown={(event) => {
                     (props.onpointerdown as ((e: PointerEvent) => void) | undefined)?.(event);
@@ -252,7 +258,10 @@
                     (props.onclick as ((e: MouseEvent) => void) | undefined)?.(event);
                     applySuggestion(suggestion.path);
                   }}
-                  onmousemove={() => (highlightedIndex = index)}
+                  onmousemove={() => {
+                    keyboardNavigating = false;
+                    highlightedIndex = index;
+                  }}
                 >
                   <Folder class="workspace-suggestion-icon" size={15} strokeWidth={2} />
                   <span class="workspace-suggestion-name">{formatSuggestionName(suggestion)}</span>
