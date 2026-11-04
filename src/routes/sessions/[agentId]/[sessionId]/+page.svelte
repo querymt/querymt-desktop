@@ -425,6 +425,8 @@
   }
 
   function disconnectScrollTracking() {
+    clearUserScrollIntentTimer();
+    pendingUserScrollIntent = false;
     viewportEventTarget?.removeEventListener('scroll', handleViewportScroll);
     viewportEventTarget?.removeEventListener('wheel', handleViewportWheel);
     viewportEventTarget?.removeEventListener('touchmove', markUserScrollIntent);
@@ -533,10 +535,24 @@
     }
   }
 
+  // An input that never scrolls the viewport must not leave intent behind for a later layout scroll.
+  const USER_SCROLL_INTENT_MS = 250;
+  let userScrollIntentTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearUserScrollIntentTimer() {
+    if (userScrollIntentTimer) clearTimeout(userScrollIntentTimer);
+    userScrollIntentTimer = null;
+  }
+
   function markUserScrollIntent(event?: Event) {
     if (event && isSessionChromeEvent(event)) return;
     programmaticScroll = false;
     pendingUserScrollIntent = true;
+    clearUserScrollIntentTimer();
+    userScrollIntentTimer = setTimeout(() => {
+      pendingUserScrollIntent = false;
+      userScrollIntentTimer = null;
+    }, USER_SCROLL_INTENT_MS);
   }
 
   function armProgrammaticScroll() {
