@@ -10163,8 +10163,25 @@ a.session-delegate-session:hover {
   flex: 1;
   align-items: center;
   gap: 0.65rem;
+  /* Padding with a matching negative margin gives the hover fill room
+     without moving the logo. */
+  margin: -0.3rem;
+  border-radius: var(--radius-control);
+  padding: 0.3rem;
   color: var(--text);
   text-decoration: none;
+  transition: background 0.15s ease;
+}
+
+/* Same feedback as the nav rows below, so the logo reads as the Start link. */
+.app-sidebar-brand:hover,
+.app-sidebar-brand:focus-visible {
+  background: var(--row-surface-hover);
+  outline: none;
+}
+
+.app-sidebar-brand-current {
+  background: var(--composer-pill-surface-hover);
 }
 
 .app-sidebar-brand > span:first-child {

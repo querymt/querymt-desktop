@@ -505,10 +505,17 @@
       </div>
     {:else}
       <div class="app-sidebar-header">
-        <a class="app-sidebar-brand" href="/" aria-label="Start">
-          <span class="app-brand-icon" aria-hidden="true"><img class="app-brand-icon-light" src={brandLight} alt="" /><img class="app-brand-icon-dark" src={brandDark} alt="" /></span>
-          <span class="app-sidebar-brand-copy"><strong>QueryMT</strong><small>Agents command and control</small></span>
-        </a>
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            {#snippet child({ props })}
+              <a {...props} class={`app-sidebar-brand ${current === 'Start' ? 'app-sidebar-brand-current' : ''}`} href="/" aria-current={current === 'Start' ? 'page' : undefined} aria-label="QueryMT, start a new session">
+                <span class="app-brand-icon" aria-hidden="true"><img class="app-brand-icon-light" src={brandLight} alt="" /><img class="app-brand-icon-dark" src={brandDark} alt="" /></span>
+                <span class="app-sidebar-brand-copy"><strong>QueryMT</strong><small>Agents command and control</small></span>
+              </a>
+            {/snippet}
+          </Tooltip.Trigger>
+          <Tooltip.Portal><Tooltip.Content class="app-tooltip-content" side="right" sideOffset={6}>Start a new session</Tooltip.Content></Tooltip.Portal>
+        </Tooltip.Root>
       </div>
 
       <div class="app-sidebar-navigation">

@@ -362,6 +362,23 @@ describe('RecentSessionRail navigation', () => {
     expect(screen.queryByText('Agents command and control')).not.toBeInTheDocument();
   });
 
+  it('marks the brand as the current Start link and explains it in a tooltip', async () => {
+    const { rerender } = render(RecentSessionRail, { current: 'Start', sessions: [], collapsed: false });
+    const brand = screen.getByRole('link', { name: 'QueryMT, start a new session' });
+    expect(brand).toHaveAttribute('href', '/');
+    expect(brand).toHaveAttribute('aria-current', 'page');
+    expect(brand).toHaveClass('app-sidebar-brand-current');
+
+    await fireEvent.pointerEnter(brand);
+    await waitFor(() => {
+      expect(document.querySelector('.app-tooltip-content')).toHaveTextContent('Start a new session');
+    });
+
+    rerender({ current: 'Sessions', sessions: [], collapsed: false });
+    expect(brand).not.toHaveAttribute('aria-current');
+    expect(brand).not.toHaveClass('app-sidebar-brand-current');
+  });
+
   it('lays out the row as title + status, then a 16px identicon, workspace and last active time', () => {
     const { container, rerender } = render(RecentSessionRail, { current: 'Sessions', sessions: [{ ...activeSession, status: 'idle' }] });
     const row = container.querySelector('.app-sidebar-session')!;
