@@ -3520,6 +3520,9 @@ summary:focus-visible {
   font-size: 0.75rem;
   line-height: 1;
   box-shadow: var(--shadow-md);
+  /* Long unbroken text (e.g. file paths) wraps inside the viewport; short hints are unchanged. */
+  max-width: min(32rem, calc(100vw - 2rem));
+  overflow-wrap: anywhere;
 }
 
 /* Multi-line hints (worktree details, cost notes) and an optional dimmed second line. */
@@ -7495,6 +7498,25 @@ a.session-delegate-session:hover {
 .session-activity-extra {
   color: var(--text-dim);
   font-weight: 400;
+}
+
+/* Only the command clips; the tool name and the "+N active" count stay visible. */
+.session-activity-title-tool {
+  display: flex;
+  align-items: baseline;
+}
+
+.session-activity-title-tool > .session-activity-label,
+.session-activity-title-tool > .session-activity-extra {
+  flex: 0 0 auto;
+}
+
+.session-activity-title-tool > .session-activity-preview {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
 }
 
 .session-activity-tooltip-preview {
