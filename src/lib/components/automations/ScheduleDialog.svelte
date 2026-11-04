@@ -28,6 +28,8 @@
   import { listTimeZones, loadScheduleTimeZone, saveScheduleTimeZone } from '$lib/domain/schedule-timezone';
   import type { CommandPalettePrefill } from '$lib/domain/types';
   import { agentsStore } from '$lib/stores/agents.svelte';
+  import { workspacesStore } from '$lib/stores/workspaces.svelte';
+  import { mergeWorkspaceSuggestions } from '$lib/domain/workspace-suggestions';
   import { commandPaletteStore } from '$lib/stores/command-palette.svelte';
 
   let { portalTarget = null }: { portalTarget?: HTMLElement | null } = $props();
@@ -273,7 +275,7 @@
         <SegmentedSwitch ariaLabel="Session target" options={whereOptions} bind:value={mode} />
       </div>
       {#if mode === 'new'}
-        <WorkspacePathInput scrollIntoViewOnOpen value={workspace} recentPaths={agentsStore.getRecentWorkspaces()} onInput={(next) => (workspace = next)} />
+        <WorkspacePathInput scrollIntoViewOnOpen value={workspace} recentPaths={mergeWorkspaceSuggestions(workspacesStore.items, agentsStore.getRecentWorkspaces())} onInput={(next) => (workspace = next)} />
         <span class="app-dialog-field-help">Creates a dedicated session in this workspace.</span>
       {:else}
         <SessionPicker sessions={agentSessions} bind:value={sessionId} />
