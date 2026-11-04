@@ -293,19 +293,19 @@ select {
 /* Agents page controls: faint fills and ghost icon buttons instead of borders,
    like dialogs ("Dialog controls"). The details panel and log viewer are
    portaled, so they are listed explicitly. See TODO(restyle) on .action-btn. */
-:is(.agents-page, .agent-details-panel, .agent-log-viewer) .icon-btn:not(.icon-btn-primary, .icon-btn-accent) {
+:is(.agents-page, .agent-details-panel, .agent-log-viewer, .sessions-page-actions) .icon-btn:not(.icon-btn-primary, .icon-btn-accent) {
   border-color: transparent;
   background: transparent;
   color: var(--text-dim);
 }
 
-:is(.agents-page, .agent-details-panel, .agent-log-viewer) .icon-btn:not(.icon-btn-primary, .icon-btn-accent, .icon-btn-danger):hover:enabled {
+:is(.agents-page, .agent-details-panel, .agent-log-viewer, .sessions-page-actions) .icon-btn:not(.icon-btn-primary, .icon-btn-accent, .icon-btn-danger):hover:enabled {
   border-color: transparent;
   background: var(--composer-pill-surface-hover);
   color: var(--text);
 }
 
-:is(.agents-page, .agent-details-panel, .agent-log-viewer) .icon-btn-danger:hover:enabled {
+:is(.agents-page, .agent-details-panel, .agent-log-viewer, .sessions-page-actions) .icon-btn-danger:hover:enabled {
   border-color: transparent;
 }
 
