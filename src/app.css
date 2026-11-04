@@ -2701,11 +2701,12 @@ summary:focus-visible {
   gap: 0.45rem;
 }
 
+/* Overview block: one faint-fill surface with subtle dividers, like Mesh and the
+   agent details overview. No card border. */
 .automation-overview {
   overflow: hidden;
-  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
 }
 
 .automation-overview-stats {
@@ -2719,7 +2720,7 @@ summary:focus-visible {
 }
 
 .automation-overview-stat + .automation-overview-stat {
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--subtle-border);
 }
 
 .automation-overview-stat span {
@@ -2747,7 +2748,7 @@ summary:focus-visible {
 }
 
 .automation-overview-warning {
-  border-top: 1px solid var(--status-warn-border);
+  border-top: 1px solid var(--subtle-border);
   padding: 0.55rem 1rem;
   background: var(--status-warn-bg);
   color: var(--status-warn);
@@ -2758,11 +2759,14 @@ summary:focus-visible {
   min-height: 1.7rem;
 }
 
+/* Rows sit on one faint-fill surface (no border or separators) so the list reads
+   as a group, like the agents and mesh lists; hovered rows get a stronger fill. */
 .automation-list {
-  overflow: visible;
-  border: 1px solid var(--border);
+  display: grid;
+  gap: 0.1rem;
   border-radius: var(--radius);
-  background: var(--bg-card);
+  background: var(--composer-pill-surface);
+  padding: 0.3rem;
 }
 
 .automation-row {
@@ -2771,22 +2775,15 @@ summary:focus-visible {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 1rem;
-  padding: 0.78rem 0.9rem;
-  background: var(--bg-card);
-  transition: background 0.15s ease;
-}
-
-.automation-row + .automation-row {
-  border-top: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 0.65rem 0.75rem;
+  background: transparent;
+  transition: background 0.12s ease;
 }
 
 .automation-row:hover,
 .automation-row:focus-within {
-  background: var(--bg-card-hover);
-}
-
-.automation-row-attention {
-  box-shadow: inset 2px 0 var(--danger);
+  background: var(--composer-pill-surface-hover);
 }
 
 .automation-row-main {
@@ -2803,24 +2800,26 @@ summary:focus-visible {
 .automation-row-title {
   overflow: hidden;
   color: var(--text);
-  font-size: 0.88rem;
-  font-weight: 650;
+  font-size: 0.86rem;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Borderless faint pill; only the attention chip keeps a status tint. */
 .automation-state-chip {
   flex: 0 0 auto;
   border-radius: 999px;
-  background: var(--status-muted-bg);
-  color: var(--muted);
-  padding: 0.12rem 0.42rem;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text-muted);
+  padding: 0.1rem 0.45rem;
   font-size: 0.66rem;
+  font-weight: 560;
 }
 
 .automation-state-chip-danger {
-  background: var(--status-error-bg);
-  color: var(--danger);
+  background: var(--status-danger-bg);
+  color: var(--status-danger);
 }
 
 .automation-row-timing,
@@ -2841,78 +2840,6 @@ summary:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-}
-
-.automation-row-menu {
-  position: relative;
-}
-
-.automation-row-menu > summary {
-  list-style: none;
-}
-
-.automation-row-menu > summary::-webkit-details-marker {
-  display: none;
-}
-
-.automation-row-menu-trigger {
-  display: inline-flex;
-  width: var(--control-height-compact);
-  height: var(--control-height-compact);
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-control);
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.automation-row-menu-trigger:hover,
-.automation-row-menu-trigger:focus-visible,
-.automation-row-menu[open] .automation-row-menu-trigger {
-  background: var(--subtle-surface);
-  color: var(--text);
-  outline: none;
-}
-
-.automation-row-menu-content {
-  position: absolute;
-  top: calc(100% + 0.3rem);
-  right: 0;
-  z-index: 20;
-  display: grid;
-  min-width: 11rem;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-panel-strong);
-  padding: 0.25rem;
-  box-shadow: var(--shadow-lg);
-}
-
-.automation-row-menu-content button {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  border-radius: 6px;
-  color: var(--text-muted);
-  padding: 0.48rem 0.55rem;
-  font-size: 0.73rem;
-  text-align: left;
-}
-
-.automation-row-menu-content button:hover,
-.automation-row-menu-content button:focus-visible {
-  background: var(--subtle-surface);
-  color: var(--text);
-  outline: none;
-}
-
-.automation-row-menu-content button:disabled {
-  opacity: 0.45;
-}
-
-.automation-row-menu-content .automation-row-menu-danger {
-  color: var(--danger);
 }
 
 .automation-row-error,
@@ -2940,9 +2867,8 @@ summary:focus-visible {
 
 .automation-row-details dt {
   color: var(--text-dim);
-  font-size: 0.66rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  font-weight: 550;
 }
 
 .automation-row-details dd {
@@ -3350,12 +3276,12 @@ summary:focus-visible {
   }
 
   .automation-overview-stat:nth-child(3) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
     border-left: 0;
   }
 
   .automation-overview-stat:nth-child(4) {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--subtle-border);
   }
 
   .automation-row {
@@ -4130,6 +4056,93 @@ summary:focus-visible {
   opacity: 1;
 }
 
+/* Compact AppSelect menu, opt-in via AppSelect's contentClass. Same recipe as the session
+   actions menu: small inset rows, soft hover fill, no accent tint.
+   TODO(restyle): EVERY other AppSelect (trigger and menu) should look like this one. The
+   plain .app-select-trigger / .app-select-content / .app-select-item rules above are the
+   old bordered, oversized style. Once all consumers are checked, move these rules onto the
+   base classes, delete this variant and the contentClass prop, and fold the time zone
+   trigger below into the default (or pill) trigger. */
+.app-select-content.app-select-content-compact {
+  /* Fixed and narrow on purpose: every option is rendered, so sizing to content would make
+     the menu as wide as the rarest long name (e.g. America/Argentina/ComodRivadavia).
+     Those few names are ellipsized instead. */
+  width: 13.5rem;
+  min-width: var(--bits-select-anchor-width);
+  max-width: min(20rem, calc(100vw - 1rem));
+  max-height: min(16rem, var(--bits-select-content-available-height, 16rem));
+}
+
+.app-select-content-compact .app-select-viewport {
+  padding: 0.3rem;
+}
+
+.app-select-content-compact .app-select-item {
+  min-height: var(--control-height-compact);
+  gap: 0.55rem;
+  border-radius: var(--radius-control);
+  padding: 0.2rem 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  transition: background 0.12s ease;
+}
+
+.app-select-content-compact .app-select-item[data-highlighted] {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.app-select-content-compact .app-select-item[data-selected] {
+  color: var(--text);
+}
+
+.app-select-content-compact .app-select-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-select-content-compact .app-select-item-indicator {
+  width: 0.9rem;
+  color: var(--text-muted);
+}
+
+/* Time zone trigger: a small faint pill beside the frequency switch (see the TODO above). */
+.app-select-trigger.schedule-timezone-trigger {
+  min-width: 0;
+  max-width: 13rem;
+  min-height: var(--control-height-compact);
+  height: var(--control-height-compact);
+  gap: 0.4rem;
+  border-color: transparent;
+  background: var(--composer-pill-surface);
+  padding: 0 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  box-shadow: none;
+}
+
+.app-select-trigger.schedule-timezone-trigger:hover,
+.app-select-trigger.schedule-timezone-trigger[data-state='open'] {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.app-select-trigger.schedule-timezone-trigger:focus-visible {
+  border-color: var(--subtle-border-strong);
+  box-shadow: none;
+}
+
+.app-select-trigger.schedule-timezone-trigger .app-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .app-picker-backdrop {
   position: fixed;
   inset: 0;
@@ -4744,12 +4757,6 @@ summary:focus-visible {
 
 :is(.app-dialog, .app-picker) .action-btn-danger:hover:enabled {
   border-color: transparent;
-}
-
-:is(.app-dialog, .app-picker) .dialog-segmented-button-active {
-  border-color: transparent;
-  background: var(--accent-dim);
-  color: var(--accent);
 }
 
 :is(.app-dialog, .app-picker) :is(.input-shell, .select-shell, .app-select-trigger) {
@@ -5532,72 +5539,6 @@ summary:focus-visible {
   font-size: 0.84rem;
 }
 
-.dialog-segmented {
-  display: grid;
-  gap: 0.45rem;
-}
-
-.dialog-segmented-two {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.dialog-segmented-four {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.dialog-segmented-button {
-  justify-content: center;
-  min-height: 2.65rem;
-  background: var(--bg-card);
-  font-size: 0.9rem;
-}
-
-.dialog-segmented-button-active {
-  border-color: var(--selected-border);
-  background: color-mix(in srgb, var(--accent-dim), var(--bg-card) 45%);
-  color: var(--accent);
-}
-
-.dialog-advanced summary {
-  list-style: none;
-}
-
-.dialog-advanced summary::-webkit-details-marker {
-  display: none;
-}
-
-.dialog-advanced:not([open]) {
-  gap: 0;
-}
-
-.dialog-advanced-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.dialog-advanced-chevron {
-  flex: 0 0 auto;
-  color: var(--muted);
-  transition: transform 0.15s ease, color 0.15s ease;
-}
-
-.dialog-advanced[open] .dialog-advanced-chevron {
-  transform: rotate(180deg);
-}
-
-.dialog-advanced-summary:hover .dialog-advanced-chevron {
-  color: var(--text);
-}
-
-.dialog-advanced-fields {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.75rem;
-  margin-top: 0;
-}
-
 .dialog-modal-panel {
   width: min(42rem, calc(100vw - 2rem));
   overflow: hidden;
@@ -5644,6 +5585,507 @@ summary:focus-visible {
   justify-content: flex-end;
   gap: 0.65rem;
   padding-top: 0.4rem;
+}
+
+/* New automation dialog: prompt first, then two compact fields. Pills and inputs use
+   the dialog faint-fill recipe; the accent is reserved for the selected option. */
+/* This dialog is taller than a standard one (prompt, frequency, target, limits), so it gets
+   more room before the body scrolls. The footer stays pinned below the scrolling body. */
+.app-dialog.schedule-dialog {
+  max-height: min(88vh, 54rem);
+}
+
+.schedule-dialog .app-dialog-body {
+  padding-bottom: 1.25rem;
+}
+
+/* No divider line: the dialog is short enough now that the body rarely scrolls. */
+.schedule-dialog .app-dialog-footer {
+  padding-top: 0.9rem;
+}
+
+.schedule-form {
+  gap: 1.15rem;
+}
+
+/* Workspace suggestions sit in the flow under the input (like the session picker) instead of
+   floating over the form: the dialog body grows and scrolls, so the list is never cut off by
+   the pinned footer. */
+.schedule-dialog .workspace-suggestion-popover {
+  position: static;
+  max-height: min(11rem, 28vh);
+  margin-top: 0.4rem;
+  box-shadow: none;
+  background: var(--composer-pill-surface);
+  border-color: transparent;
+}
+
+.schedule-prompt {
+  min-height: 5rem;
+  width: 100%;
+  resize: vertical;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+/* Selectors reuse .composer-delivery-switch (the Steer / Queue control). These rules only
+   add what the dialog needs: a larger size, a disabled state, and the row layout. */
+.schedule-switch-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* Switch on the left, time zone pill pushed to the right end of the same row. */
+.schedule-switch-row-split {
+  flex-wrap: nowrap;
+  justify-content: space-between;
+}
+
+.schedule-switch-row-split > .schedule-switch {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+@media (max-width: 640px) {
+  .schedule-switch-row-split {
+    flex-wrap: wrap;
+  }
+}
+
+.schedule-switch.composer-delivery-switch button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.78rem;
+}
+
+.schedule-switch.composer-delivery-switch button.active {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.schedule-switch.composer-delivery-switch button:disabled {
+  background: transparent;
+  color: var(--text-dim);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* "Every [ 30 ] minutes": one inline sentence on a faint surface instead of a separate
+   label, a boxed number field and a trailing word. */
+.schedule-interval {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  /* The field is a grid: justify-self (not align-self) stops it stretching full width. */
+  justify-self: start;
+  width: fit-content;
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
+  padding: 0.3rem 0.4rem 0.3rem 0.8rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.schedule-interval-input {
+  box-sizing: border-box;
+  width: 4rem;
+  border: 0;
+  border-radius: calc(var(--radius-control) - 2px);
+  background: var(--composer-pill-surface-hover);
+  padding: 0.3rem 0.5rem;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: center;
+  outline: none;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.schedule-interval-input::-webkit-inner-spin-button,
+.schedule-interval-input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.schedule-interval-input:focus-visible {
+  box-shadow: 0 0 0 1px var(--subtle-border-strong);
+}
+
+.schedule-timezone {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-dim);
+}
+
+.schedule-time-input {
+  width: min(100%, 10rem);
+}
+
+.schedule-cron-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.schedule-cron-input {
+  min-width: 0;
+  flex: 1;
+  font-family: var(--font-mono);
+}
+
+/* Limits live in the footer, left of Cancel / Create. The button is a quiet ghost control;
+   its panel opens upward so nothing in the form moves. */
+.schedule-limits-trigger {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 60%;
+  align-items: center;
+  gap: 0.4rem;
+  margin-right: auto;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  padding: 0.4rem 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 560;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.schedule-limits-trigger:hover,
+.schedule-limits-trigger:focus-visible,
+.schedule-limits-trigger[data-state='open'] {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+  outline: none;
+}
+
+.schedule-limits-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-weight: 450;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schedule-limits-value-error {
+  color: var(--danger);
+}
+
+.schedule-limits-panel {
+  z-index: 2000;
+  width: min(24rem, calc(100vw - 2rem));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel-strong);
+  padding: 0.9rem 1rem;
+  box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* One labelled row per limit (label and help on the left, a fixed-width input on the
+   right). Rows avoid the cramped three-column grid, where number inputs overflowed. */
+.schedule-limits-fields {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.schedule-limit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 9.5rem;
+  align-items: center;
+  gap: 0.25rem 1rem;
+}
+
+.schedule-limit-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.schedule-limit-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.schedule-limit-input::-webkit-inner-spin-button,
+.schedule-limit-input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.schedule-limit-error {
+  grid-column: 1 / -1;
+  justify-self: end;
+}
+
+@media (max-width: 520px) {
+  .schedule-limit-row {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-limit-error {
+    justify-self: start;
+  }
+}
+
+.schedule-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.schedule-error-summary {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.schedule-error-dismiss {
+  display: inline-flex;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: inherit;
+  opacity: 0.75;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.schedule-error-dismiss:hover,
+.schedule-error-dismiss:focus-visible {
+  background: var(--composer-pill-surface-hover);
+  opacity: 1;
+}
+
+.schedule-error-copy {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.3rem;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  padding: 0.15rem 0.4rem;
+  color: inherit;
+  font-size: 0.75rem;
+  font-weight: 560;
+  opacity: 0.85;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.schedule-error-copy:hover,
+.schedule-error-copy:focus-visible {
+  background: var(--composer-pill-surface-hover);
+  opacity: 1;
+}
+
+.schedule-label-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.schedule-help-trigger {
+  display: inline-flex;
+  width: 1.35rem;
+  height: 1.35rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.schedule-help-trigger:hover,
+.schedule-help-trigger:focus-visible,
+.schedule-help-trigger[data-state='open'] {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.schedule-help-content {
+  z-index: 2000;
+  max-width: min(20rem, calc(100vw - 2rem));
+  padding: 0.6rem 0.75rem;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.schedule-help-body {
+  color: var(--text);
+}
+
+.schedule-help-body code {
+  border-radius: 4px;
+  background: var(--composer-pill-surface-hover);
+  padding: 0.05rem 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.schedule-help-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin-top: 0.5rem;
+}
+
+.schedule-help-links a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.schedule-help-links a:hover {
+  color: var(--text);
+}
+
+.schedule-help-error {
+  margin: 0.4rem 0 0;
+  color: var(--danger);
+}
+
+/* Searchable session list: search field on top, faint-fill list below. */
+.session-picker {
+  display: grid;
+  gap: 0.4rem;
+  /* Keeps the help line below the list visible when the picker is scrolled into view. */
+  scroll-margin-bottom: 2.5rem;
+}
+
+.session-picker-search {
+  display: flex;
+  height: var(--control-height-standard);
+  align-items: center;
+  gap: 0.55rem;
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
+  padding: 0 0.7rem;
+  color: var(--text-dim);
+  transition: background 0.15s ease;
+}
+
+.session-picker-search:hover,
+.session-picker-search:focus-within {
+  background: var(--composer-pill-surface-hover);
+}
+
+.session-picker-input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.session-picker-input::placeholder {
+  color: var(--text-dim);
+}
+
+.session-picker-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.session-picker-list {
+  display: grid;
+  /* About four rows: short enough that the dialog body rarely has to scroll as well. */
+  max-height: min(10.5rem, 26vh);
+  overscroll-behavior: contain;
+  align-content: start;
+  gap: 0.1rem;
+  overflow-y: auto;
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
+  padding: 0.25rem;
+}
+
+.session-picker-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.9rem;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  padding: 0.5rem 0.65rem;
+  color: var(--text-muted);
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+/* Highlight is state-driven only (keyboard and mouse both set it). A CSS :hover here would
+   light a second row when the pointer rests on one while arrow keys move the highlight. */
+.session-picker-row-highlighted {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.session-picker-row-selected,
+.session-picker-row-selected:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.session-picker-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.84rem;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-picker-meta {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: 0.6rem;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.session-picker-meta > span:first-child:not(:last-child) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-picker-id {
+  font-family: var(--font-mono);
+}
+
+.session-picker-empty {
+  margin: 0;
+  padding: 0.7rem 0.65rem;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 @media (max-width: 640px) {
@@ -5763,8 +6205,8 @@ summary:focus-visible {
   transition: background 0.12s ease;
 }
 
-.workspace-suggestion-row[data-highlighted],
-.workspace-suggestion-row:hover {
+/* State-driven only: mousemove sets data-highlighted, so :hover would double-highlight. */
+.workspace-suggestion-row[data-highlighted] {
   background: var(--composer-pill-surface-hover);
 }
 

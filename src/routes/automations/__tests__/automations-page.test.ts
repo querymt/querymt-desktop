@@ -52,6 +52,7 @@ function createAgentsStore() {
         ]
       }
     } as Record<string, { schedules: ScheduleInfo[] }>,
+    sessionsByAgent: {} as Record<string, Array<{ sessionId: string; title: string; cwd: string }>>,
     refreshSchedulesForAgent: vi.fn(async () => undefined),
     runScheduleAction: vi.fn(async () => undefined)
   };
@@ -92,8 +93,8 @@ describe('Automations page', () => {
   it('opens create from the neutral header action with clean selected-agent context', async () => {
     render(AutomationsPage);
 
-    const createButton = screen.getByRole('button', { name: 'Create automation' });
-    expect(createButton).not.toHaveClass('icon-btn-primary');
+    const createButton = screen.getByRole('button', { name: 'New automation' });
+    expect(createButton).not.toHaveClass('action-btn-primary');
     await fireEvent.click(createButton);
     expect(commandPaletteStore.openSchedule).toHaveBeenCalledWith({ agentId: 'agent-1', sessionId: null, cwd: null, prompt: null, nodeId: null });
   });
@@ -117,7 +118,7 @@ describe('Automations page', () => {
     render(AutomationsPage);
 
     await fireEvent.click(screen.getByLabelText('More actions for Every hour'));
-    await fireEvent.click(screen.getByRole('button', { name: 'Delete Every hour' }));
+    await fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete Every hour' }));
     expect(screen.getByRole('alertdialog')).toHaveTextContent('Delete Every hour?');
     expect(agentsStore.runScheduleAction).not.toHaveBeenCalled();
 
@@ -130,9 +131,37 @@ describe('Automations page', () => {
     render(AutomationsPage);
 
     expect(screen.getByText('No automations yet')).toBeInTheDocument();
-    const createButtons = screen.getAllByRole('button', { name: 'Create automation' });
+    const createButtons = screen.getAllByRole('button', { name: 'New automation' });
     expect(createButtons).toHaveLength(2);
     expect(createButtons.filter((button) => button.classList.contains('action-btn-primary'))).toHaveLength(1);
+  });
+
+  it('names the target by session title and workspace when the session is known', () => {
+    agentsStore.sessionsByAgent = { 'agent-1': [{ sessionId: 'session-1', title: 'Nightly review', cwd: '/home/me/projects/querymt' }] };
+    render(AutomationsPage);
+
+    expect(screen.getAllByText('Nightly review \u00b7 projects/querymt')).toHaveLength(3);
+    expect(screen.queryByText('Session session-1')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the raw session id when the session is unknown', () => {
+    render(AutomationsPage);
+
+    expect(screen.getAllByText('Session session-1')).toHaveLength(3);
+  });
+
+  it('keeps the refresh button busy with a descriptive label while refreshing', async () => {
+    let finish: () => void = () => undefined;
+    agentsStore.refreshSchedulesForAgent.mockImplementationOnce(() => new Promise<undefined>((resolve) => { finish = () => resolve(undefined); }));
+    render(AutomationsPage);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh automations' }));
+    const busy = await screen.findByRole('button', { name: 'Refreshing automations\u2026' });
+    expect(busy).toHaveAttribute('aria-busy', 'true');
+    expect(busy).not.toBeDisabled();
+
+    finish();
+    expect(await screen.findByRole('button', { name: 'Refresh automations' })).not.toHaveAttribute('aria-busy');
   });
 
   it('shows a focused unavailable state when no agents support schedules', () => {

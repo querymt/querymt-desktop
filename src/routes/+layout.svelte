@@ -6,6 +6,7 @@
   import { Maximize, Minimize, X } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
   import RecentSessionRail from '$lib/components/shell/RecentSessionRail.svelte';
+  import ScheduleDialog from '$lib/components/automations/ScheduleDialog.svelte';
   import CommandPalette from '$lib/components/shell/CommandPalette.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { appearanceStore } from '$lib/stores/appearance.svelte';
@@ -389,6 +390,7 @@
           {@render children?.()}
         </main>
         <CommandPalette portalTarget={overlayPortalTarget} />
+        <ScheduleDialog portalTarget={overlayPortalTarget} />
       </div>
 
     </div>
