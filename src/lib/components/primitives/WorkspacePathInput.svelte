@@ -169,16 +169,17 @@
 
   function formatSuggestionName(suggestion: WorkspaceSuggestion): string {
     return suggestion.name.startsWith(RECENT_PREFIX)
-      ? suggestion.path.split('/').filter(Boolean).pop() ?? suggestion.path
+      ? suggestion.path.split(/[\\/]/).filter(Boolean).pop() ?? suggestion.path
       : suggestion.name;
   }
 
   /** Directory containing the suggestion, shown dimmed after the name on the same line. */
   function formatSuggestionParent(suggestion: WorkspaceSuggestion): string {
-    const trimmed = suggestion.path.replace(/\/+$/, '');
-    const cut = trimmed.lastIndexOf('/');
+    // Accept both separators so Windows-style paths split correctly too.
+    const trimmed = suggestion.path.replace(/[\\/]+$/, '');
+    const cut = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
     if (cut < 0) return '';
-    return trimmed.slice(0, cut) || '/';
+    return trimmed.slice(0, cut) || trimmed.charAt(cut);
   }
 
   function handleKeydown(event: KeyboardEvent) {

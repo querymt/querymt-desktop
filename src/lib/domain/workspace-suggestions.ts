@@ -15,7 +15,8 @@ export function mergeWorkspaceSuggestions(
   for (const raw of [...saved.map((item) => item.path), ...recent]) {
     const path = raw.trim();
     if (!path) continue;
-    const key = path.length > 1 ? path.replace(/\/+$/, '') : path;
+    // Trim trailing `/` and `\`, but keep roots such as `/` and `C:\`.
+    const key = /^([a-z]:)?[\\/]$/i.test(path) ? path : path.replace(/[\\/]+$/, '');
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push(path);

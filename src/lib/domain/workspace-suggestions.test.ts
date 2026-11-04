@@ -14,6 +14,10 @@ describe('mergeWorkspaceSuggestions', () => {
     expect(mergeWorkspaceSuggestions([{ path: '  ' }, { path: '/' }], ['', '/'])).toEqual(['/']);
   });
 
+  it('treats trailing backslashes like slashes and keeps drive roots', () => {
+    expect(mergeWorkspaceSuggestions([{ path: 'C:\\work\\' }], ['C:\\work', 'C:\\', 'C:\\'])).toEqual(['C:\\work\\', 'C:\\']);
+  });
+
   it('caps the list', () => {
     const saved = Array.from({ length: 12 }, (_, index) => ({ path: `/w${index}` }));
     expect(mergeWorkspaceSuggestions(saved, ['/extra'])).toHaveLength(8);
