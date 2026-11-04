@@ -249,6 +249,7 @@
       }
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      markKeyboardScrollIntent(event);
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z' || isEditableTarget(event.target)) return;
       if (event.shiftKey) {
         if (undoSupported && agentsStore.activeSession.undo.stack.length > 0) {
@@ -475,10 +476,51 @@
     );
   }
 
+  /** True when a scrollable pane between `target` and the session viewport can still scroll in `direction`. */
+  function nestedPaneCanScroll(target: EventTarget | null, direction: 'up' | 'down'): boolean {
+    let element = target instanceof Element ? target : null;
+    while (element && element !== scrollViewport && element !== document.body && element !== document.documentElement) {
+      if (element instanceof HTMLElement && element.scrollHeight > element.clientHeight) {
+        const overflowY = getComputedStyle(element).overflowY;
+        if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') {
+          if (direction === 'up' ? element.scrollTop > 0 : element.scrollTop + element.clientHeight < element.scrollHeight - 1) {
+            return true;
+          }
+        }
+      }
+      element = element.parentElement;
+    }
+    return false;
+  }
+
+  const VIEWPORT_SCROLL_KEYS: Record<string, 'up' | 'down'> = {
+    ArrowUp: 'up',
+    PageUp: 'up',
+    Home: 'up',
+    ArrowDown: 'down',
+    PageDown: 'down',
+    End: 'down',
+    ' ': 'down'
+  };
+
+  /** Keys that scroll the session viewport count as user intent, like wheel and touch. */
+  function markKeyboardScrollIntent(event: KeyboardEvent) {
+    if (event.metaKey || event.ctrlKey || event.altKey || isEditableTarget(event.target)) return;
+    const keyDirection = VIEWPORT_SCROLL_KEYS[event.key];
+    if (!keyDirection) return;
+    // Space activates focused buttons and links rather than scrolling.
+    if (event.key === ' ' && event.target instanceof Element && event.target.closest('button, a, [role="button"]')) return;
+    const direction = event.key === ' ' && event.shiftKey ? 'up' : keyDirection;
+    if (nestedPaneCanScroll(event.target, direction)) return;
+    markUserScrollIntent(event);
+  }
+
   function handleViewportWheel(event: Event) {
     if (isSessionChromeEvent(event)) return;
-    markUserScrollIntent();
     const deltaY = 'deltaY' in event && typeof event.deltaY === 'number' ? event.deltaY : 0;
+    // Scrolling inside tool output (or any nested pane) must not detach follow mode.
+    if (deltaY !== 0 && nestedPaneCanScroll(event.target, deltaY < 0 ? 'up' : 'down')) return;
+    markUserScrollIntent();
     if (!scrollViewport) return;
 
     const distanceFromBottom = getDistanceFromBottom(scrollViewport);
