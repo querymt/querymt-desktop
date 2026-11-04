@@ -340,7 +340,9 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
  */
 export function prependOlderHistory(
   current: ActiveSessionViewModel,
-  page: { events: unknown[]; truncated?: TruncatedEntry[] }
+  page: { events: unknown[]; truncated?: TruncatedEntry[] },
+  /** Initial-window child links by toolCallId; a link derived from the page's own events wins. */
+  childLinks?: ReadonlyMap<string, string>
 ): ActiveSessionViewModel {
   const older = activeSessionFromLoadResponse(current.sessionId ?? '', {
     _meta: { 'querymt/sessionLoadSnapshot.v1': { audit: { events: page.events }, truncated: page.truncated } }
@@ -351,7 +353,15 @@ export function prependOlderHistory(
   return {
     ...current,
     transcript: [...older.transcript.filter((item) => !transcriptIds.has(item.id)), ...current.transcript],
-    toolCalls: [...older.toolCalls.filter((tool) => !toolIds.has(tool.id)), ...current.toolCalls],
+    toolCalls: [
+      ...older.toolCalls
+        .filter((tool) => !toolIds.has(tool.id))
+        .map((tool) => {
+          const childSessionId = childLinks?.get(tool.id);
+          return !tool.childSessionId && childSessionId ? { ...tool, childSessionId } : tool;
+        }),
+      ...current.toolCalls
+    ],
     events: [...older.events.filter((event) => !eventIds.has(event.id)), ...current.events]
   };
 }
@@ -369,6 +379,16 @@ export function getSnapshotHistory(response: unknown): HistoryInfo | null {
 export function getSnapshotChildSessionIds(response: unknown): string[] {
   const summary = readWindowSummary(readSnapshot(response));
   return summary ? (summary.childSessions ?? []).map((link) => link.childSessionId) : [];
+}
+
+/** Child links of a windowed load keyed by tool call; they cover tool calls outside the window. */
+export function getSnapshotChildToolLinks(response: unknown): Map<string, string> {
+  const links = new Map<string, string>();
+  const summary = readWindowSummary(readSnapshot(response));
+  for (const link of summary?.childSessions ?? []) {
+    if (link.toolCallId && link.childSessionId) links.set(link.toolCallId, link.childSessionId);
+  }
+  return links;
 }
 
 export function getSnapshotInputStates(response: unknown): SnapshotInputState[] {

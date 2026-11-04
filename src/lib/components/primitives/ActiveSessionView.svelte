@@ -188,22 +188,58 @@
   let lastScrollTop = 0;
   let loadingOlderAnchor = false;
 
+  function findTurnNode(id: string): HTMLElement | null {
+    for (const node of conversationRoot?.querySelectorAll<HTMLElement>('[data-turn-id]') ?? []) {
+      if (node.dataset.turnId === id) return node;
+    }
+    return null;
+  }
+
   /** Requests older turns, then restores the scroll offset so the visible content does not move. */
   async function loadOlder() {
     if (!onLoadOlder || !olderHistory?.available || olderHistory.loading || loadingOlderAnchor) return;
     loadingOlderAnchor = true;
     const { element } = resolveScrollViewport();
+    const startAgentId = agentId;
+    const startSessionId = session.sessionId;
+    const selectionChanged = () => agentId !== startAgentId || session.sessionId !== startSessionId;
+    // The first existing turn keeps its id when older turns are prepended, so its movement is
+    // exactly the prepended height; total scroll height would also count growth below it.
+    const anchorNode = conversationRoot?.querySelector<HTMLElement>('[data-turn-id]') ?? null;
+    const anchorId = anchorNode?.dataset.turnId ?? null;
+    const anchorTop = anchorNode?.getBoundingClientRect().top ?? 0;
     const previousHeight = element.scrollHeight;
+    const startScrollTop = element.scrollTop;
     // Browser scroll anchoring would also compensate for the prepended content; turn it off
     // for this load so the single manual adjustment below cannot be double-counted.
     const previousAnchor = element.style.overflowAnchor;
     element.style.overflowAnchor = 'none';
     try {
       await onLoadOlder();
+      const settledScrollTop = element.scrollTop;
       await tick();
-      const grown = element.scrollHeight - previousHeight;
-      // Use the offset now, not the one before the request, to keep any scroll made while it was pending.
-      if (grown > 0) element.scrollTop = element.scrollTop + grown;
+      // A different session owns the scroller now; its offset is not ours to adjust.
+      if (selectionChanged()) return;
+      // Keep any scroll the user made while the request was pending.
+      const wantedTop = anchorTop - (settledScrollTop - startScrollTop);
+      const restoreAnchor = () => {
+        const node = anchorId ? findTurnNode(anchorId) : null;
+        if (!node) return false;
+        element.scrollTop += node.getBoundingClientRect().top - wantedTop;
+        return true;
+      };
+      if (!restoreAnchor()) {
+        // Windowing still follows the old viewport, so the anchor may be unmounted: move
+        // roughly into place, remount around it, then correct against the anchor itself.
+        const grown = element.scrollHeight - previousHeight;
+        if (grown > 0) element.scrollTop += grown;
+        if (anchorId) {
+          syncViewport();
+          await tick();
+          if (selectionChanged()) return;
+          restoreAnchor();
+        }
+      }
       syncViewport();
     } finally {
       element.style.overflowAnchor = previousAnchor;

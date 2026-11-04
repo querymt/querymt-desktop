@@ -37,7 +37,7 @@ import {
   type PromptSendInput,
   type SessionCreateOptions
 } from '$lib/domain/session-launch';
-import { activeSessionFromLoadResponse, getSnapshotChildSessionIds, getSnapshotHistory, prependOlderHistory, getSnapshotInputStates, getSnapshotRuntimeStatus, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotChildSessionIds, getSnapshotChildToolLinks, getSnapshotHistory, prependOlderHistory, getSnapshotInputStates, getSnapshotRuntimeStatus, getSnapshotProviderChange, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import { canUndoToMessage, getCurrentUndoTarget, getUndoableSessionTurns } from '$lib/domain/session-undo';
 import {
   createEmptyActiveSession,
@@ -366,6 +366,9 @@ export class AgentsStore {
   private workspaceDiscoveryPromises = new Map<string, { scopeKey: string; promise: Promise<void> }>();
   private sessionListRefreshChain = new Map<string, Promise<void>>();
   private hydratedRemoteSessionKeys = new Set<string>();
+  // Child links of the loaded window's whole session, applied to tool calls in older pages.
+  private childToolLinksBySession = new Map<string, Map<string, string>>();
+  private historyRequestSeq = 0;
   // Sessions this client just created and already selected; their first load is redundant.
   private freshlyCreatedSessionKeys = new Set<string>();
   private launchRuns = new Map<string, Promise<string | null>>();
@@ -4758,6 +4761,7 @@ export class AgentsStore {
 
   private setHistoryPaging(agentId: string, sessionId: string, response: unknown) {
     const history = getSnapshotHistory(response);
+    this.childToolLinksBySession.set(buildSessionKey(agentId, sessionId), getSnapshotChildToolLinks(response));
     this.sessionHistoryPaging = {
       sessionKey: buildSessionKey(agentId, sessionId),
       before: history && !history.complete && history.before ? history.before : null,
@@ -4784,19 +4788,21 @@ export class AgentsStore {
     const isCurrent = () => generation === this.sessionSelectionGeneration &&
       this.isSelectedSession(agentId, sessionId) && this.clients.get(agentId) === record;
     const pagingKey = paging.sessionKey;
+    const requestId = ++this.historyRequestSeq;
     this.sessionHistoryPaging = { ...paging, loading: true, error: null };
     // A stale result must still release its own in-flight flag. Only one request can be
     // in flight (loading gate), so matching generation, selection and key means it is ours.
     const releasePending = () => {
       if (generation === this.sessionSelectionGeneration && this.isSelectedSession(agentId, sessionId) &&
-        this.sessionHistoryPaging.sessionKey === pagingKey && this.sessionHistoryPaging.loading) {
+        requestId === this.historyRequestSeq && this.sessionHistoryPaging.sessionKey === pagingKey &&
+        this.sessionHistoryPaging.loading) {
         this.sessionHistoryPaging = { ...this.sessionHistoryPaging, loading: false };
       }
     };
     try {
       const page = await record.client.sessionHistory(sessionId, paging.before);
       if (!isCurrent()) return releasePending();
-      this.activeSession = prependOlderHistory(this.activeSession, page);
+      this.activeSession = prependOlderHistory(this.activeSession, page, this.childToolLinksBySession.get(pagingKey));
       this.rememberSessionChildren(agentId, sessionId, this.activeSession.toolCalls.map((tool) => tool.childSessionId));
       this.sessionHistoryPaging = {
         ...paging,

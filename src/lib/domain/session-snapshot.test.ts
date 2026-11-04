@@ -3,7 +3,7 @@ import type { ActiveSessionViewModel } from './types';
 import { buildSessionConversation } from './session-conversation';
 import { applySessionNotification } from './session-updates';
 import { buildSessionToolDiffs } from './session-tool-diff';
-import { activeSessionFromLoadResponse, getSnapshotChildSessionIds, getSnapshotHistory, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession } from './session-snapshot';
+import { activeSessionFromLoadResponse, getSnapshotChildSessionIds, getSnapshotChildToolLinks, getSnapshotHistory, getSnapshotInputStates, getSnapshotProviderChange, normalizeHistoricalSession, prependOlderHistory } from './session-snapshot';
 
 const usageBreakdown = (n: number) => ({
   inputTokens: n, outputTokens: n, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0
@@ -54,6 +54,32 @@ describe('windowed load snapshots', () => {
     })]);
     expect(getSnapshotChildSessionIds(response)).toEqual(['child-1', 'child-2']);
     expect(getSnapshotHistory(response)).toEqual({ complete: false, before: 'tok' });
+  });
+
+  it('applies the initial summary child links to tool calls in older pages', () => {
+    const response = windowedResponse({ complete: false, before: 'tok' });
+    const current = activeSessionFromLoadResponse('s', response);
+    const links = getSnapshotChildToolLinks(response);
+    expect(links.get('tool-1')).toBe('child-1');
+    expect(links.size).toBe(1);
+
+    const page = {
+      events: [
+        { seq: 10, kind: { type: 'tool_call_start', data: { tool_call_id: 'tool-old', tool_name: 'delegate', arguments: '{}' } } },
+        { seq: 11, kind: { type: 'tool_call_end', data: { tool_call_id: 'tool-old', result: 'ok', is_error: false } } },
+        { seq: 12, kind: { type: 'tool_call_start', data: { tool_call_id: 'tool-own', tool_name: 'delegate', arguments: '{}' } } },
+        { seq: 13, kind: { type: 'session_forked', data: { child_session_id: 'child-own', tool_call_id: 'tool-own' } } }
+      ]
+    };
+    const merged = prependOlderHistory(current, page, new Map([['tool-old', 'child-old'], ['tool-own', 'child-from-summary']]));
+    const byId = new Map(merged.toolCalls.map((tool) => [tool.id, tool]));
+    expect(byId.get('tool-old')?.childSessionId).toBe('child-old');
+    // A link derived from the page's own events stays authoritative.
+    expect(byId.get('tool-own')?.childSessionId).toBe('child-own');
+    // Current tool calls are untouched.
+    expect(byId.get('tool-1')).toBe(current.toolCalls.find((tool) => tool.id === 'tool-1'));
+
+    expect(prependOlderHistory(current, page).toolCalls.find((tool) => tool.id === 'tool-old')?.childSessionId).toBeFalsy();
   });
 
   it('keeps deriving state from events when the window holds the complete history', () => {
