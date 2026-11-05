@@ -187,10 +187,14 @@
     if (!focusOpenSearch()) void focusSearchInput();
   }
 
+  /**
+   * Closes first so the dialog teardown never waits on the agent round trip;
+   * the trigger pill shows its pending state while the change is applied.
+   */
   async function handleSelect(modelId: string) {
-    await onSelect(modelId);
     selectionCompleted = true;
     closePicker();
+    await onSelect(modelId);
   }
 
   function handlePickerEscape(event: KeyboardEvent) {

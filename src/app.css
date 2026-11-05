@@ -5335,6 +5335,30 @@ summary:focus-visible {
   margin-top: 0.35rem;
 }
 
+/* Skip style/layout for groups scrolled out of view; the intrinsic size keeps the scrollbar stable. */
+.delegate-model-picker-group {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 12rem;
+}
+
+.delegate-model-show-more {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  padding: 0.45rem 0.72rem;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.delegate-model-show-more:hover,
+.delegate-model-show-more:focus-visible {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
 .delegate-model-picker-group-title {
   position: sticky;
   top: 0;

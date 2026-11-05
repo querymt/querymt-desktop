@@ -552,3 +552,71 @@ describe('ModelQuickPicker trigger', () => {
     expect(button).not.toHaveTextContent('Build server');
   });
 });
+
+function manyModels(count: number, provider = 'bulk'): ModelEntry[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `${provider}/model-${index}`,
+    provider,
+    model: `model-${index}`,
+    label: `Model ${index}`
+  }));
+}
+
+describe('ModelPickerPanel row limit', () => {
+  const rows = () => document.querySelectorAll('.delegate-model-choice');
+
+  it('caps each provider group, expands on Show more, and keeps keyboard indices contiguous', async () => {
+    render(ModelPickerPanel, { models: manyModels(100), onSelect: () => {}, searchLabel: 'Models' });
+    expect(rows()).toHaveLength(30);
+    const more = screen.getByRole('button', { name: 'Show 70 more' });
+    await fireEvent.click(more);
+    expect(rows()).toHaveLength(100);
+    expect(screen.queryByRole('button', { name: /Show .* more/ })).toBeNull();
+    expect(rows()[99]).toHaveAttribute('data-model-index', '99');
+  });
+
+  it('searches the whole catalog, including rows hidden behind Show more', async () => {
+    const onSelect = vi.fn();
+    render(ModelPickerPanel, { models: manyModels(100), onSelect, searchLabel: 'Models' });
+    const search = screen.getByLabelText('Models');
+    await fireEvent.input(search, { target: { value: 'model-97' } });
+    expect(rows()).toHaveLength(1);
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ model: 'model-97' }));
+    await fireEvent.input(search, { target: { value: 'model-' } });
+    expect(rows()).toHaveLength(100);
+    expect(screen.queryByRole('button', { name: /Show .* more/ })).toBeNull();
+  });
+
+  it('shows every row when the selected model sits beyond the limit', () => {
+    const models = manyModels(60);
+    render(ModelPickerPanel, { models, selectedModelId: getModelSelectionKey(models[55]), onSelect: () => {} });
+    expect(rows()).toHaveLength(60);
+  });
+
+  it('does not cap small groups or the Recent section', () => {
+    const models = manyModels(40);
+    render(ModelPickerPanel, { models: [...models, ...manyModels(5, 'small')], recentModels: models.slice(0, 35), onSelect: () => {} });
+    expect(within(document.body).getByText('Recent').closest('section')!.querySelectorAll('.delegate-model-choice')).toHaveLength(35);
+    expect(screen.queryByRole('button', { name: /Show .* more/ })).toBeNull();
+  });
+
+  it('adds no tooltip nodes per row', () => {
+    render(ModelPickerPanel, { models: manyModels(30), onSelect: () => {} });
+    expect(document.querySelectorAll('.app-tooltip-content')).toHaveLength(0);
+  });
+});
+
+describe('ModelQuickPicker close-first selection', () => {
+  it('closes the dialog before the selection round trip finishes', async () => {
+    let finish: () => void = () => {};
+    const onSelect = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    renderPicker({ selectedModelId: anthropic.id, onSelect });
+    await fireEvent.click(screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic' }));
+    const dialog = screen.getByRole('dialog', { name: 'Switch model' });
+    await fireEvent.click(within(dialog).getByRole('button', { name: /Gateway model/ }));
+    expect(onSelect).toHaveBeenCalledWith(custom.id);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Switch model' })).not.toBeInTheDocument());
+    finish();
+  });
+});
