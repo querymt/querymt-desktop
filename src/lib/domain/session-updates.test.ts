@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SessionNotification } from '@agentclientprotocol/sdk';
 import type { AccountingSnapshot } from '$lib/querymt/generated/types';
 import { activeSessionFromLoadResponse } from './session-snapshot';
-import { SessionRuntimePhase, DelegationUpdateState } from '$lib/querymt/generated/types';
+import { SessionRuntimePhase, DelegationUpdateState, DelegationActivity, DelegationStage, RuntimeAvailability } from '$lib/querymt/generated/types';
 import {
   applyDelegationChildSession,
   applySessionNotification,
@@ -44,10 +44,10 @@ describe('conversation event ordering', () => {
         { seq: 2, kind: { type: 'run_completed', data: { run_id: 'run-a', outcome: 'cancelled' } } }] }
     } } });
     loaded.delegations = [{ version: 1, sessionId: 'session-1', delegationId: 'd1', state: DelegationUpdateState.Forked,
-      targetAgentId: 'coder', objective: '', requestedAt: 1, updatedAt: 1, activity: 'live', stage: 'verifying' }];
+      targetAgentId: 'coder', objective: '', requestedAt: 1, updatedAt: 1, activity: DelegationActivity.Live, stage: DelegationStage.Verifying }];
     loaded.dependencyLabel = 'Verifying delegate result';
     const next = applySessionNotification(loaded, notification({ sessionUpdate: 'usage_update', used: 1, size: 100 }));
-    projectSessionRuntime(next, { phase: SessionRuntimePhase.Idle, steerable: false, pending_steering_count: 0, queued_input_count: 0 });
+    projectSessionRuntime(next, { observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Idle, steerable: false, pending_steering_count: 0, queued_input_count: 0 });
     expect(next).toMatchObject({ runId: 'run-a', lastRunOutcome: { runId: 'run-a', outcome: 'cancelled' },
       activityLabel: 'Turn cancelled.', dependencyLabel: 'Verifying delegate result', delegations: loaded.delegations });
     expect(loaded.lastRunOutcome?.outcome).toBe('cancelled');

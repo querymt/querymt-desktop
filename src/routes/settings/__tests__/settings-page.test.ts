@@ -187,6 +187,36 @@ afterEach(() => {
 });
 
 describe('Settings controls', () => {
+  it('lists MCP server logins in their own section, not among the providers', async () => {
+    const original = agentsStore.authProvidersByAgent['agent-1'];
+    agentsStore.authProvidersByAgent['agent-1'] = [
+      ...original,
+      {
+        provider: 'mcp:linear', display_name: 'MCP: linear', oauth_status: 'not_authenticated',
+        has_stored_api_key: false, has_env_api_key: false, supports_oauth: true
+      } as never
+    ];
+    try {
+      window.history.replaceState({}, '', '/settings?section=providers');
+      const { unmount } = render(SettingsPage);
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'Anthropic' })).toBeInTheDocument());
+      expect(screen.queryByRole('heading', { name: 'MCP: linear' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /MCP servers/ })).toBeInTheDocument();
+      unmount();
+
+      window.history.replaceState({}, '', '/settings?section=mcp');
+      render(SettingsPage);
+      await waitFor(() => expect(screen.getByRole('heading', { name: 'linear' })).toBeInTheDocument());
+      expect(screen.queryByRole('heading', { name: 'Anthropic' })).not.toBeInTheDocument();
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+      await waitFor(() => expect(agentsStore.startProviderSignIn).toHaveBeenCalledWith('agent-1', 'mcp:linear'));
+      expect(agentsStore.refreshModelsForAgent).not.toHaveBeenCalled();
+    } finally {
+      agentsStore.authProvidersByAgent['agent-1'] = original;
+    }
+  });
+
   it('opens an addressable settings destination from the URL', async () => {
     window.history.replaceState({}, '', '/settings?section=profiles');
     render(SettingsPage);

@@ -16,4 +16,14 @@ describe('SettingsSubnav', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Providers/ }));
     expect(onSelect).toHaveBeenCalledWith('providers');
   });
+
+  it('shows the MCP servers destination only when requested', async () => {
+    const onSelect = vi.fn();
+    const { rerender } = render(SettingsSubnav, { selected: 'general', onSelect });
+    expect(screen.queryByRole('button', { name: /MCP servers/ })).not.toBeInTheDocument();
+
+    await rerender({ selected: 'general', onSelect, showMcp: true });
+    await fireEvent.click(screen.getByRole('button', { name: /MCP servers/ }));
+    expect(onSelect).toHaveBeenCalledWith('mcp');
+  });
 });

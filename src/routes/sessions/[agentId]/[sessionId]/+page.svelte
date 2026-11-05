@@ -15,6 +15,9 @@
   import SessionTechnicalDetails from '$lib/components/session/SessionTechnicalDetails.svelte';
   import SessionUndoDialog from '$lib/components/session/SessionUndoDialog.svelte';
   import WorktreeSessionDialog from '$lib/components/session/WorktreeSessionDialog.svelte';
+  import ProviderOAuthDialog from '$lib/components/settings/ProviderOAuthDialog.svelte';
+  import { describeSkippedMcpServer } from '$lib/domain/mcp-auth';
+  import { OAuthSignInFlow } from '$lib/domain/oauth-sign-in.svelte';
   import { describeSessionAccess, type WorktreeCreateOptions, type WorktreeHandoffOptions } from '$lib/domain/session-workspace';
   import {
     createFollowScrollScheduler,
@@ -144,6 +147,29 @@
     ).length
   );
   // Read-only is agent-authoritative (load response or owner_transferred prompt failure).
+  // Inline sign-in for OAuth MCP servers that this session had to skip.
+  const mcpSignIn = new OAuthSignInFlow();
+  let mcpSignInTarget = $state<string | null>(null);
+  let newSessionPending = $state(false);
+
+  function startMcpSignIn(authId: string, serverName: string) {
+    mcpSignInTarget = serverName;
+    void mcpSignIn.start(agentId, authId, serverName);
+  }
+
+  /** The agent only gives a server to sessions started after login, so continue in a new one. */
+  async function startNewSessionForMcp() {
+    if (newSessionPending) return;
+    newSessionPending = true;
+    try {
+      const newId = await agentsStore.createSession(agentId, selectedSession?.cwd ? { cwd: selectedSession.cwd } : {});
+      if (newId) await goto(`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(newId)}`);
+    } finally {
+      newSessionPending = false;
+    }
+  }
+
+  const skippedMcpServers = $derived(agentId && sessionId ? agentsStore.getSkippedMcpServers(agentId, sessionId) : []);
   const readOnlyAccess = $derived(agentsStore.activeSessionId === sessionId ? agentsStore.activeSessionAccess : null);
   const readOnlyOwnerId = $derived(readOnlyAccess?.ownerSessionId ?? selectedSession?.workspace?.handedOffTo ?? null);
   const undoSupported = $derived(agentId && !readOnlyAccess ? agentsStore.canUseSessionUndo(agentId) : false);
@@ -808,6 +834,53 @@
         />
         <SessionActivityBar session={agentsStore.activeSession} forkPending={agentsStore.forkPending} />
       </div>
+
+      {#if skippedMcpServers.length > 0 && !readOnlyAccess}
+        <div class="session-mcp-auth-notice" role="status" data-testid="mcp-auth-notice">
+          {#each skippedMcpServers as server (server.server_name)}
+            {@const signedIn = agentsStore.isMcpServerSignedIn(agentId, server.provider_id)}
+            {@const signingIn = mcpSignIn.open && mcpSignInTarget === server.server_name}
+            <div class="session-mcp-auth-notice-row">
+              {#if signedIn}
+                <span>Signed in to "{server.server_name}". Start a new session to use its tools.</span>
+              {:else}
+                <span>{describeSkippedMcpServer(server)}</span>
+              {/if}
+              <span class="session-mcp-auth-notice-actions">
+                {#if signedIn}
+                  <button class="action-btn action-btn-accent" type="button" disabled={newSessionPending} onclick={startNewSessionForMcp}>New session</button>
+                {:else}
+                  <button class="action-btn" type="button" disabled={signingIn}
+                    onclick={() => startMcpSignIn(server.provider_id, server.server_name)}>{server.error ? 'Retry sign-in' : 'Sign in'}</button>
+                  {#if server.error}<a class="action-btn" href="/settings?section=mcp">Settings</a>{/if}
+                {/if}
+                <button class="action-btn" type="button" aria-label={`Dismiss ${server.server_name}`}
+                  onclick={() => agentsStore.dismissSkippedMcpServer(agentId, sessionId, server.server_name)}>×</button>
+              </span>
+            </div>
+          {/each}
+          {#if mcpSignIn.error}<div role="alert">{mcpSignIn.error}</div>{/if}
+        </div>
+      {/if}
+
+      <ProviderOAuthDialog
+        open={mcpSignIn.open}
+        label={mcpSignInTarget}
+        flowKind={mcpSignIn.flowKind}
+        authorizationUrl={mcpSignIn.authorizationUrl}
+        urlCopied={mcpSignIn.urlCopied}
+        needsCallbackInput={mcpSignIn.needsCallbackInput}
+        bind:value={mcpSignIn.value}
+        waiting={mcpSignIn.waiting}
+        pending={mcpSignIn.waiting || mcpSignIn.completing}
+        completing={mcpSignIn.completing}
+        submitDisabled={mcpSignIn.submitDisabled}
+        onDismiss={() => mcpSignIn.cancel()}
+        onOpenAuthorizationUrl={() => mcpSignIn.openAuthorizationUrl()}
+        onCopyAuthorizationUrl={() => mcpSignIn.copyAuthorizationUrl()}
+        onCancelSignIn={() => mcpSignIn.cancel()}
+        onSubmit={() => mcpSignIn.submit()}
+      />
 
       {#if readOnlyAccess}
         <div class="session-read-only-notice" role="status" data-testid="read-only-notice"

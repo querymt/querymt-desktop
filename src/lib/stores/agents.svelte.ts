@@ -30,6 +30,14 @@ import {
 } from '$lib/domain/session-workspace';
 import { normalizePromptError, type PromptFailure } from '$lib/domain/prompt-errors';
 import {
+  isMcpAuthId,
+  mergeSkippedMcpServers,
+  parseMcpAuthRequired,
+  readSkippedMcpServers,
+  skippedServerFromNotification,
+  type SkippedMcpServer
+} from '$lib/domain/mcp-auth';
+import {
   createPendingLaunchId,
   isPendingLaunchId,
   type LaunchSettings,
@@ -102,7 +110,7 @@ import type {
   SessionLifecyclePatch,
   SessionLifecycleFilter
 } from '$lib/domain/types';
-import { DelegateAssignmentSource, SessionInputDelivery, SessionInputState, ToolContentPart } from '$lib/querymt/generated/types';
+import { DelegateAssignmentSource, DelegationActivity, RuntimeAvailability, SessionInputDelivery, SessionInputState, ToolContentPart } from '$lib/querymt/generated/types';
 import type {
   AuthMethod,
   AuthProviderStatus,
@@ -164,6 +172,7 @@ import {
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK,
+  QMT_NOTIFICATION_MCP_AUTH_REQUIRED,
   QMT_NOTIFICATION_SESSION_INPUT_STATE,
   QMT_NOTIFICATION_SESSION_RUNTIME_CHANGED,
   type SessionRuntimeChangedNotification,
@@ -504,6 +513,8 @@ export class AgentsStore {
   composerWorkspaceMode = $state<ComposerWorkspaceMode>('local');
   /** Read-only grant of the active session (worktree handed off); agent-authoritative. */
   activeSessionAccess = $state<SessionAccessInfo | null>(null);
+  /** OAuth MCP servers left out of a session (login needed or unavailable), per `agentId:sessionId`. */
+  skippedMcpServersBySession = $state<Record<string, SkippedMcpServer[]>>({});
   /** Direct children (forks, worktree children) per `agentId:parentId`, loaded on expansion. */
   sessionChildrenByParent = $state<Record<string, DesktopSessionSummary[]>>({});
   worktreePending = $state(false);
@@ -3243,6 +3254,7 @@ export class AgentsStore {
     this.invalidateSharedSessionLists(agentId);
     delete this.openSessionPages[agentId];
     this.lastCreatedSession = response;
+    this.recordSkippedMcpServers(agentId, response.sessionId, readSkippedMcpServers(response._meta), true);
     this.applySessionConfigOptionsSnapshot(agentId, response.sessionId, response.configOptions ?? []);
     this.restoreSessionModel(agentId, response.sessionId, response.configOptions ?? [], response);
     this.rememberRecentWorkspace(normalizedCwd);
@@ -4228,7 +4240,7 @@ export class AgentsStore {
       this.reconcileSessionRuntime(agentId, sessionId, {
         phase: 'unknown' as SessionRuntimeStatus['phase'], steerable: false,
         pending_steering_count: 0, queued_input_count: 0,
-        observation: { ...initialRuntime?.observation, availability: 'unavailable' }
+        observation: { ...initialRuntime?.observation, availability: RuntimeAvailability.Unavailable }
       }, true);
       if (this.selectedRuntimeNeeded()) this.scheduleSessionRuntimeRefresh(agentId, sessionId, resolvedClient);
       throw error;
@@ -4539,6 +4551,8 @@ export class AgentsStore {
       }
       // Access is agent-authoritative: only the load response may grant or clear read-only.
       this.activeSessionAccess = readSessionAccess(loadedSession._meta);
+      // A load response is authoritative for what the session connected.
+      this.recordSkippedMcpServers(agentId, sessionId, readSkippedMcpServers(loadedSession._meta), false);
       const loadedWorkspace = readSessionWorkspace(loadedSession._meta);
       if (loadedWorkspace || this.activeSessionAccess) {
         const current = getSessionById(this.sessionsByAgent[agentId] ?? [], sessionId);
@@ -5444,7 +5458,7 @@ export class AgentsStore {
     for (const key of this.sessionDelegations.keys()) if (key.startsWith(`${agentId}:`)) this.sessionDelegations.delete(key);
     for (const key of this.pendingPromptRuns.keys()) if (key.startsWith(`${agentId}:`)) this.pendingPromptRuns.delete(key);
     if (this.activeAgentId === agentId && this.activeSessionId) {
-      this.activeSession.delegations = this.activeSession.delegations?.map((item) => ({ ...item, activity: 'historical' }));
+      this.activeSession.delegations = this.activeSession.delegations?.map((item) => ({ ...item, activity: DelegationActivity.Historical }));
       this.activeSession.dependencyLabel = null;
       this.activeSession.runState = 'unknown';
       this.activeSession.activityLabel = 'Execution status unavailable';
@@ -5474,6 +5488,40 @@ export class AgentsStore {
         this.handleSessionNotification(agentId, notification, record);
       });
     }
+  }
+
+  /**
+   * Remember MCP servers a session had to skip. `merge` keeps entries from the
+   * notification; a session response is authoritative and replaces them.
+   */
+  private recordSkippedMcpServers(agentId: string, sessionId: string, servers: SkippedMcpServer[], merge: boolean) {
+    const key = buildSessionKey(agentId, sessionId);
+    const next = merge ? mergeSkippedMcpServers(this.skippedMcpServersBySession[key] ?? [], servers) : servers;
+    if (next.length === 0) {
+      if (!(key in this.skippedMcpServersBySession)) return;
+      const { [key]: _removed, ...rest } = this.skippedMcpServersBySession;
+      this.skippedMcpServersBySession = rest;
+      return;
+    }
+    this.skippedMcpServersBySession = { ...this.skippedMcpServersBySession, [key]: next };
+  }
+
+  /** Remove one server from a session's banner (dismissed by the user). */
+  dismissSkippedMcpServer(agentId: string, sessionId: string, serverName: string) {
+    const remaining = this.getSkippedMcpServers(agentId, sessionId).filter((server) => server.server_name !== serverName);
+    this.recordSkippedMcpServers(agentId, sessionId, remaining, false);
+  }
+
+  /** The agent reports a stored login for this `mcp:<server>` auth id. */
+  isMcpServerSignedIn(agentId: string, authId: string): boolean {
+    return (this.authProvidersByAgent[agentId] ?? []).some(
+      (entry) => entry.provider === authId && entry.oauth_status === 'connected'
+    );
+  }
+
+  /** Skipped OAuth MCP servers of a session, for the sign-in banner. */
+  getSkippedMcpServers(agentId: string, sessionId: string): SkippedMcpServer[] {
+    return this.skippedMcpServersBySession[buildSessionKey(agentId, sessionId)] ?? [];
   }
 
   private ensureExtensionNotificationSubscription(agentId: string, record: AgentClientRecord) {
@@ -5548,6 +5596,13 @@ export class AgentsStore {
         }
         if (notification.method.startsWith('querymt/auth/')) {
           void this.refreshAuthProviders(agentId);
+        }
+        if (notification.method === QMT_NOTIFICATION_MCP_AUTH_REQUIRED) {
+          const parsed = parseMcpAuthRequired(notification.params);
+          if (parsed) {
+            this.recordSkippedMcpServers(agentId, parsed.session_id, [skippedServerFromNotification(parsed)], true);
+            void this.refreshAuthProviders(agentId).catch(() => undefined);
+          }
         }
         if (notification.method === 'querymt/pluginUpdateStatus') {
           this.pluginUpdateStatusByAgent = {
@@ -5641,7 +5696,11 @@ export class AgentsStore {
       throw new Error('Failed to connect to the agent.');
     }
     const result = await record.client.completeProviderOAuth(flow_id, response);
-    await Promise.allSettled([this.refreshAuthProviders(agentId), this.refreshModelsForAgent(agentId)]);
+    // `mcp:<server>` logins do not change the model list.
+    await Promise.allSettled([
+      this.refreshAuthProviders(agentId),
+      isMcpAuthId(result.provider) ? Promise.resolve() : this.refreshModelsForAgent(agentId)
+    ]);
     return result;
   }
 
@@ -5651,7 +5710,10 @@ export class AgentsStore {
       throw new Error('Failed to connect to the agent.');
     }
     const result = await record.client.disconnectProviderOAuth(provider);
-    await Promise.allSettled([this.refreshAuthProviders(agentId), this.refreshModelsForAgent(agentId)]);
+    await Promise.allSettled([
+      this.refreshAuthProviders(agentId),
+      isMcpAuthId(provider) ? Promise.resolve() : this.refreshModelsForAgent(agentId)
+    ]);
     return result;
   }
 
@@ -5690,7 +5752,7 @@ export class AgentsStore {
       const providers = await this.refreshAuthProviders(agentId);
       const match = providers.find((entry) => entry.provider === provider);
       if (match?.oauth_status === 'connected') {
-        await this.refreshModelsForAgent(agentId).catch(() => undefined);
+        if (!isMcpAuthId(provider)) await this.refreshModelsForAgent(agentId).catch(() => undefined);
         return true;
       }
       await delay(delayMs);
@@ -6094,8 +6156,8 @@ export class AgentsStore {
     this.reconcileManagedActivity(agentId, sessionId, snapshot.delegations ?? [], false, snapshotIsCurrent);
     const snapshotRuntime = getSnapshotRuntimeStatus(response);
     this.reconcileSessionRuntime(agentId, sessionId, snapshotRuntime?.observation ? snapshotRuntime : {
-      phase: 'unknown' as SessionRuntimeStatus['phase'], active_run_id: null, steerable: false,
-      pending_steering_count: 0, queued_input_count: 0, observation: { availability: 'unavailable' }
+      phase: 'unknown' as SessionRuntimeStatus['phase'], active_run_id: undefined, steerable: false,
+      pending_steering_count: 0, queued_input_count: 0, observation: { availability: RuntimeAvailability.Unavailable }
     }, snapshotIsCurrent, snapshotIsCurrent);
     this.projectSelectedExecution(agentId, sessionId);
     if (select && record) void this.refreshSessionRuntime(agentId, sessionId, record.client).catch(() => null);
@@ -7576,8 +7638,8 @@ function liveDelegations(items: DelegationUpdateNotification[]): DelegationUpdat
 
 function unavailableRuntime(current: SessionRuntimeStatus): SessionRuntimeStatus {
   return {
-    ...current, phase: 'unknown' as SessionRuntimeStatus['phase'], active_run_id: null, steerable: false,
-    observation: { ...current.observation, availability: 'unavailable' }
+    ...current, phase: 'unknown' as SessionRuntimeStatus['phase'], active_run_id: undefined, steerable: false,
+    observation: { ...current.observation, availability: RuntimeAvailability.Unavailable }
   };
 }
 
