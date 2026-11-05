@@ -188,6 +188,16 @@
   }
 
   function moveHighlight(direction: 1 | -1) {
+    // Arrowing past the last visible row of a capped group reveals its remaining rows
+    // instead of skipping them, so the keyboard reaches every model without Tab.
+    if (direction === 1) {
+      const capped = groups.find((group) => group.hiddenCount > 0 && group.items.at(-1)?.index === highlightedIndex);
+      if (capped) {
+        expandedGroups[capped.label] = true;
+        void tick().then(() => moveHighlight(1));
+        return;
+      }
+    }
     for (let index = highlightedIndex + direction; index >= 0 && index < filteredModels.length; index += direction) {
       if (filteredModels[index].availability !== 'unavailable') {
         highlightedIndex = index;
@@ -229,6 +239,7 @@
     <input
       bind:this={searchElement}
       class="app-picker-search-input"
+      autocomplete="off"
       {placeholder}
       aria-label={searchLabel}
       value={query}

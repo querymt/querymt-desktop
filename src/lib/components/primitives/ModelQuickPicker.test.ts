@@ -620,3 +620,41 @@ describe('ModelQuickPicker close-first selection', () => {
     finish();
   });
 });
+
+describe('ModelPickerPanel keyboard and search input', () => {
+  it('turns browser autofill off on the search input', () => {
+    render(ModelPickerPanel, { models: manyModels(3), onSelect: () => {}, searchLabel: 'Models' });
+    expect(screen.getByLabelText('Models')).toHaveAttribute('autocomplete', 'off');
+  });
+
+  it('arrowing past the last visible row expands the group and continues', async () => {
+    const onSelect = vi.fn();
+    render(ModelPickerPanel, { models: manyModels(40), onSelect, searchLabel: 'Models' });
+    const search = screen.getByLabelText('Models');
+    for (let i = 0; i < 29; i++) await fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(document.querySelectorAll('.delegate-model-choice')).toHaveLength(30);
+    await fireEvent.keyDown(search, { key: 'ArrowDown' });
+    await waitFor(() => expect(document.querySelectorAll('.delegate-model-choice')).toHaveLength(40));
+    await waitFor(() => expect(document.querySelector('.delegate-model-choice-highlighted')).toHaveAttribute('data-model-index', '30'));
+    await fireEvent.keyDown(search, { key: 'Enter' });
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ model: 'model-30' }));
+  });
+});
+
+describe('ModelQuickPicker failed selection', () => {
+  it('does not leak a rejection and reopens the picker so the user can retry', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onSelect = vi.fn(() => Promise.reject(new Error('boom')));
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    renderPicker({ selectedModelId: anthropic.id, onSelect });
+    await fireEvent.click(screen.getByRole('button', { name: 'Claude Sonnet 4 from anthropic' }));
+    await fireEvent.click(within(screen.getByRole('dialog', { name: 'Switch model' })).getByRole('button', { name: /Gateway model/ }));
+    await waitFor(() => expect(error).toHaveBeenCalledWith('Model selection failed', expect.any(Error)));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Switch model' })).toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(unhandled).not.toHaveBeenCalled();
+    process.off('unhandledRejection', unhandled);
+    error.mockRestore();
+  });
+});

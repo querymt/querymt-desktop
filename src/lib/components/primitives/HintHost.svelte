@@ -15,6 +15,10 @@
       position = null;
       return;
     }
+    if (!anchor.isConnected) {
+      hideHint();
+      return;
+    }
     const box = element.getBoundingClientRect();
     const { left, top } = placeHint(
       anchor.getBoundingClientRect(),
@@ -29,25 +33,28 @@
   // The anchor can scroll or resize away; dismiss like a native tooltip would.
   $effect(() => {
     if (!anchor) return;
+    // A removed anchor is dismissed by the next user-visible signal rather than by
+    // polling; Hint itself also cancels on destroy, so this covers non-Svelte removal.
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') hideHint();
+      if (event.key === 'Escape' || !anchor.isConnected) hideHint();
     };
     const onViewportChange = () => hideHint();
     const onScroll = (event: Event) => {
       if (event.target instanceof Node && element?.contains(event.target)) return;
       hideHint();
     };
+    const onPointerMove = () => {
+      if (!anchor.isConnected) hideHint();
+    };
     window.addEventListener('keydown', onKey, true);
+    window.addEventListener('pointermove', onPointerMove, { capture: true, passive: true });
     window.addEventListener('resize', onViewportChange);
     window.addEventListener('scroll', onScroll, { capture: true, passive: true });
-    const detached = setInterval(() => {
-      if (!anchor.isConnected) hideHint();
-    }, 250);
     return () => {
       window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('pointermove', onPointerMove, true);
       window.removeEventListener('resize', onViewportChange);
       window.removeEventListener('scroll', onScroll, true);
-      clearInterval(detached);
     };
   });
 </script>

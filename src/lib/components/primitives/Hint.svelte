@@ -30,6 +30,7 @@
 
   const owner = {};
   let pressed = false;
+  let stopPressTracking: (() => void) | null = null;
 
   const read = (): HintSpec | null => (disabled ? null : { text, detail, side, align });
   const isOpen = $derived(hintState.active?.owner === owner);
@@ -50,33 +51,50 @@
     scheduleHint(owner, anchorOf(event), read);
   });
   const onpointerleave = chain('onpointerleave', () => cancelHint(owner));
+  // The press can end anywhere (drag off the element, window loses the pointer),
+  // so release is tracked on the document rather than on the element.
   const onpointerdown = chain('onpointerdown', () => {
     pressed = true;
     cancelHint(owner);
-  });
-  const onpointerup = chain('onpointerup', () => {
-    pressed = false;
+    if (stopPressTracking || typeof document === 'undefined') return;
+    const release = () => {
+      pressed = false;
+      stopPressTracking?.();
+    };
+    document.addEventListener('pointerup', release, true);
+    document.addEventListener('pointercancel', release, true);
+    stopPressTracking = () => {
+      document.removeEventListener('pointerup', release, true);
+      document.removeEventListener('pointercancel', release, true);
+      stopPressTracking = null;
+    };
   });
   const onfocus = chain('onfocus', (event) => {
     if (disabled || pressed) return;
     scheduleHint(owner, anchorOf(event), read, true);
   });
   const onblur = chain('onblur', () => {
-    pressed = false;
     cancelHint(owner);
   });
 
-  $effect(() => () => cancelHint(owner));
+  // The caller's own aria-describedby is kept; the tooltip id is added while it is open.
+  const describedBy = $derived(
+    [rest['aria-describedby'] as string | undefined, isOpen ? HINT_ID : undefined].filter(Boolean).join(' ') || undefined
+  );
+
+  $effect(() => () => {
+    stopPressTracking?.();
+    cancelHint(owner);
+  });
 </script>
 
 <svelte:element
   this={as}
   {...rest}
-  aria-describedby={(rest['aria-describedby'] as string | undefined) ?? (isOpen ? HINT_ID : undefined)}
+  aria-describedby={describedBy}
   {onpointerenter}
   {onpointerleave}
   {onpointerdown}
-  {onpointerup}
   {onfocus}
   {onblur}
 >{@render children?.()}</svelte:element>

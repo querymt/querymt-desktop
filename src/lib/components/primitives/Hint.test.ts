@@ -90,6 +90,48 @@ describe('Hint (shared tooltip host)', () => {
   });
 });
 
+describe('Hint accessibility and robustness', () => {
+  it('keeps a caller aria-describedby and appends the tooltip id while open', async () => {
+    render(Hint, { text: 'Tip', tabindex: 0, 'aria-label': 'described', 'aria-describedby': 'external' });
+    const el = screen.getByLabelText('described');
+    expect(el).toHaveAttribute('aria-describedby', 'external');
+    el.focus();
+    await waitFor(() => expect(tooltips()).toHaveLength(1));
+    expect(el.getAttribute('aria-describedby')).toBe(`external ${tooltips()[0].id}`);
+    el.blur();
+    await waitFor(() => expect(el).toHaveAttribute('aria-describedby', 'external'));
+  });
+
+  it('shows the focus tooltip again after a press that was released elsewhere', async () => {
+    render(Hint, { text: 'Again', tabindex: 0, 'aria-label': 'again' });
+    const el = screen.getByLabelText('again');
+    await fireEvent.pointerDown(el);
+    // Released away from the element, so the element itself never sees pointerup.
+    await fireEvent.pointerUp(document.body);
+    el.focus();
+    await waitFor(() => expect(tooltips()).toHaveLength(1));
+  });
+
+  it('suppresses the focus tooltip while the press is still held', async () => {
+    render(Hint, { text: 'Held', tabindex: 0, 'aria-label': 'held' });
+    const el = screen.getByLabelText('held');
+    await fireEvent.pointerDown(el);
+    el.focus();
+    expect(tooltips()).toHaveLength(0);
+    await fireEvent.pointerUp(document.body);
+  });
+
+  it('dismisses when the anchor leaves the DOM without polling', async () => {
+    render(Hint, { text: 'Gone', tabindex: 0, 'aria-label': 'gone' });
+    const el = screen.getByLabelText('gone');
+    el.focus();
+    await waitFor(() => expect(tooltips()).toHaveLength(1));
+    el.remove();
+    await fireEvent.pointerMove(window);
+    await waitFor(() => expect(tooltips()).toHaveLength(0));
+  });
+});
+
 describe('placeHint', () => {
   const anchor = { left: 100, top: 100, right: 140, bottom: 120, width: 40, height: 20 };
   const viewport = { width: 800, height: 600 };
