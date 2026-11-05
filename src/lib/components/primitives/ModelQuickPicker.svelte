@@ -187,10 +187,22 @@
     if (!focusOpenSearch()) void focusSearchInput();
   }
 
+  /**
+   * Closes first so the dialog teardown never waits on the agent round trip;
+   * the trigger pill shows its pending state while the change is applied.
+   */
   async function handleSelect(modelId: string) {
-    await onSelect(modelId);
     selectionCompleted = true;
     closePicker();
+    try {
+      await onSelect(modelId);
+    } catch (error) {
+      // The picker is already gone: reopen it so the user can retry, as it used to
+      // stay open when a selection failed, and never leak an unhandled rejection.
+      console.error('Model selection failed', error);
+      selectionCompleted = false;
+      await openFromTrigger();
+    }
   }
 
   function handlePickerEscape(event: KeyboardEvent) {

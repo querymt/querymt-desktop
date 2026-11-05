@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { Tooltip } from 'bits-ui';
   import type { Snippet } from 'svelte';
+  import { HINT_ID, cancelHint, hintState, scheduleHint, type HintSpec } from './hint-host.svelte';
 
-  // Renders `as` itself (no wrapper element) as a bits-ui tooltip trigger, so
-  // existing markup, classes and test ids stay where they are. Replaces native
-  // `title` tooltips. Extra props go to the rendered element; event handlers are
-  // chained after the tooltip's own so neither side is overridden.
+  // Renders `as` itself (no wrapper element) and shows its text through the one
+  // shared tooltip (HintHost), so existing markup, classes and test ids stay where
+  // they are and long lists do not pay for a tooltip instance per row. Replaces
+  // native `title` tooltips. Extra props go to the rendered element; event
+  // handlers are chained after the tooltip's own so neither side is overridden.
   let {
     text,
     detail = null,
@@ -27,37 +28,73 @@
     [key: string]: unknown;
   } = $props();
 
-  const multiline = $derived(!!detail || text.includes('\n'));
+  const owner = {};
+  let pressed = false;
+  let stopPressTracking: (() => void) | null = null;
 
-  function merge(triggerProps: Record<string, unknown>): Record<string, unknown> {
-    const merged: Record<string, unknown> = { ...triggerProps };
-    for (const [key, value] of Object.entries(rest)) {
-      const existing = merged[key];
-      if (typeof value === 'function' && typeof existing === 'function') {
-        merged[key] = (...args: unknown[]) => {
-          (existing as (...a: unknown[]) => void)(...args);
-          (value as (...a: unknown[]) => void)(...args);
-        };
-      } else {
-        merged[key] = value;
-      }
-    }
-    return merged;
+  const read = (): HintSpec | null => (disabled ? null : { text, detail, side, align });
+  const isOpen = $derived(hintState.active?.owner === owner);
+
+  function chain(name: string, own: (event: Event) => void) {
+    return (event: Event) => {
+      own(event);
+      const user = rest[name];
+      if (typeof user === 'function') (user as (event: Event) => void)(event);
+    };
   }
+
+  const anchorOf = (event: Event) => event.currentTarget as HTMLElement;
+
+  // Hover opens after the delay; keyboard focus opens at once; pressing dismisses.
+  const onpointerenter = chain('onpointerenter', (event) => {
+    if (disabled || (event as PointerEvent).pointerType === 'touch') return;
+    scheduleHint(owner, anchorOf(event), read);
+  });
+  const onpointerleave = chain('onpointerleave', () => cancelHint(owner));
+  // The press can end anywhere (drag off the element, window loses the pointer),
+  // so release is tracked on the document rather than on the element.
+  const onpointerdown = chain('onpointerdown', () => {
+    pressed = true;
+    cancelHint(owner);
+    if (stopPressTracking || typeof document === 'undefined') return;
+    const release = () => {
+      pressed = false;
+      stopPressTracking?.();
+    };
+    document.addEventListener('pointerup', release, true);
+    document.addEventListener('pointercancel', release, true);
+    stopPressTracking = () => {
+      document.removeEventListener('pointerup', release, true);
+      document.removeEventListener('pointercancel', release, true);
+      stopPressTracking = null;
+    };
+  });
+  const onfocus = chain('onfocus', (event) => {
+    if (disabled || pressed) return;
+    scheduleHint(owner, anchorOf(event), read, true);
+  });
+  const onblur = chain('onblur', () => {
+    cancelHint(owner);
+  });
+
+  // The caller's own aria-describedby is kept; the tooltip id is added while it is open.
+  const describedBy = $derived(
+    [rest['aria-describedby'] as string | undefined, isOpen ? HINT_ID : undefined].filter(Boolean).join(' ') || undefined
+  );
+
+  $effect(() => () => {
+    stopPressTracking?.();
+    cancelHint(owner);
+  });
 </script>
 
-<Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
-  <Tooltip.Root disableHoverableContent {disabled}>
-    <Tooltip.Trigger>
-      {#snippet child({ props })}
-        <svelte:element this={as} {...merge(props)}>{@render children?.()}</svelte:element>
-      {/snippet}
-    </Tooltip.Trigger>
-    <Tooltip.Portal>
-      <Tooltip.Content class={`app-tooltip-content ${multiline ? 'app-tooltip-multiline' : ''}`} {side} {align} sideOffset={6}>
-        {text}
-        {#if detail}<span class="app-tooltip-detail">{detail}</span>{/if}
-      </Tooltip.Content>
-    </Tooltip.Portal>
-  </Tooltip.Root>
-</Tooltip.Provider>
+<svelte:element
+  this={as}
+  {...rest}
+  aria-describedby={describedBy}
+  {onpointerenter}
+  {onpointerleave}
+  {onpointerdown}
+  {onfocus}
+  {onblur}
+>{@render children?.()}</svelte:element>

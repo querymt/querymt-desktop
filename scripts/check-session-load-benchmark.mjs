@@ -8,7 +8,9 @@ const budgets = new Map([
   ['session windowed load 1x::windowed load + one older-history page', 250],
   ['session render 1x::ActiveSessionView mount and destroy', 2_000],
   // Was ~9.2 s before list reconciliation became linear; now ~85 ms locally.
-  ['session catalog 2000::catalog load + discovery + routine re-list', 500]
+  ['session catalog 2000::catalog load + discovery + routine re-list', 500],
+  // ~165 ms locally for 400 models (30 rows per group rendered); guards against per-row tooltip/portal cost returning.
+  ['model picker 400::ModelPickerPanel mount and destroy', 600]
 ]);
 const results = new Map();
 

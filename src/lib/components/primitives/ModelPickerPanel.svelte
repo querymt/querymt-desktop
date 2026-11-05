@@ -1,7 +1,6 @@
 <script lang="ts">
   import { Bot, Brain, Check, Gauge, History, LoaderCircle, Network, RefreshCw, Search, TriangleAlert } from '@lucide/svelte';
   import { tick } from 'svelte';
-  import { Tooltip } from 'bits-ui';
   import providerSprite from '$lib/assets/providers.svg?raw';
   import { ensureProviderSprite, providerIconHref, providerIconId } from '$lib/domain/provider-icons';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
@@ -70,6 +69,9 @@
   let highlightedIndex = $state(0);
   let trackedQuery = '';
   const unavailableHint = 'Provider temporarily unavailable. Refresh or check the provider.';
+  /** Rows rendered per provider group before "Show more"; searching always shows every match. */
+  const GROUP_ROW_LIMIT = 30;
+  let expandedGroups = $state<Record<string, boolean>>({});
 
   const rankedModels = $derived.by(() => {
     const needle = query.trim();
@@ -97,6 +99,7 @@
     if (recent.length > 0) {
       sections.push({ label: 'Recent', iconId: null, recent: true, models: recent.map((entry) => entry.model) });
     }
+    const searching = query.trim().length > 0;
 
     const grouped = new Map<string, ModelEntry[]>();
     for (const { model } of rankedModels) {
@@ -111,12 +114,39 @@
       sections.push({ label, iconId: providerIconId(items[0].provider), recent: false, models: items });
     }
 
-    // Keyboard indices follow the rendered sections, including Recent first.
+    // Keyboard indices follow the rendered rows, including Recent first. Row data
+    // is derived once here rather than per row in the template.
     let index = 0;
-    return sections.map(({ models: items, ...section }) => ({
-      ...section,
-      items: items.map((model) => ({ model, index: index++ }))
-    }));
+    return sections.map(({ models: items, ...section }) => {
+      const showAll =
+        section.recent ||
+        searching ||
+        expandedGroups[section.label] ||
+        items.length <= GROUP_ROW_LIMIT ||
+        items.slice(GROUP_ROW_LIMIT).some((model) => getModelSelectionKey(model) === selectedModelId);
+      const visible = showAll ? items : items.slice(0, GROUP_ROW_LIMIT);
+      return {
+        ...section,
+        allUnavailable: items.every((model) => model.availability === 'unavailable'),
+        hiddenCount: items.length - visible.length,
+        items: visible.map((model) => {
+          const key = getModelSelectionKey(model);
+          const known = knownInputModalities(model, modelInfo);
+          const context = modelInfo[key]?.limits?.context;
+          return {
+            model,
+            key,
+            index: index++,
+            nodeLabel: modelNodeLabel(model, modelLocation),
+            unavailable: model.availability === 'unavailable',
+            known,
+            displayed: displayedInputModalities(model, modelInfo),
+            contextLabel: context ? `${context.toLocaleString('en-US')} token context window` : 'Context size unknown',
+            contextShort: context ? formatContextSize(context) : 'UNK'
+          };
+        })
+      };
+    });
   });
 
   const filteredModels = $derived(groups.flatMap((group) => group.items.map((item) => item.model)));
@@ -158,6 +188,16 @@
   }
 
   function moveHighlight(direction: 1 | -1) {
+    // Arrowing past the last visible row of a capped group reveals its remaining rows
+    // instead of skipping them, so the keyboard reaches every model without Tab.
+    if (direction === 1) {
+      const capped = groups.find((group) => group.hiddenCount > 0 && group.items.at(-1)?.index === highlightedIndex);
+      if (capped) {
+        expandedGroups[capped.label] = true;
+        void tick().then(() => moveHighlight(1));
+        return;
+      }
+    }
     for (let index = highlightedIndex + direction; index >= 0 && index < filteredModels.length; index += direction) {
       if (filteredModels[index].availability !== 'unavailable') {
         highlightedIndex = index;
@@ -199,6 +239,7 @@
     <input
       bind:this={searchElement}
       class="app-picker-search-input"
+      autocomplete="off"
       {placeholder}
       aria-label={searchLabel}
       value={query}
@@ -249,32 +290,24 @@
               <Bot size={12} aria-hidden="true" />
             {/if}
             <span>{group.label}</span>
-            {#if !group.recent && group.items.every(({ model }) => model.availability === 'unavailable')}
-              <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
-                <Tooltip.Root disableHoverableContent>
-                  <Tooltip.Trigger>
-                    {#snippet child({ props })}
-                      {@const { type: _type, disabled: _disabled, ...triggerProps } = props}
-                      <span {...triggerProps} class="model-availability-indicator model-availability-warning" role="img" aria-label={unavailableHint}>
-                        <TriangleAlert size={12} aria-hidden="true" />
-                      </span>
-                    {/snippet}
-                  </Tooltip.Trigger>
-                  <Tooltip.Portal>
-                    <Tooltip.Content class="app-tooltip-content" sideOffset={6}>{unavailableHint}</Tooltip.Content>
-                  </Tooltip.Portal>
-                </Tooltip.Root>
-              </Tooltip.Provider>
+            {#if !group.recent && group.allUnavailable}
+              <Hint
+                text={unavailableHint}
+                tabindex={0}
+                class="model-availability-indicator model-availability-warning"
+                role="img"
+                aria-label={unavailableHint}
+              >
+                <TriangleAlert size={12} aria-hidden="true" />
+              </Hint>
             {/if}
           </div>
-          {#each group.items as item (getModelSelectionKey(item.model))}
+          {#each group.items as item (item.key)}
             {@const model = item.model}
-            {@const selectionKey = getModelSelectionKey(model)}
-            {@const info = modelInfo[selectionKey]}
-            {@const knownModalities = knownInputModalities(model, modelInfo)}
-            {@const selected = selectedModelId === selectionKey}
-            {@const nodeLabel = modelNodeLabel(model, modelLocation)}
-            {@const unavailable = model.availability === 'unavailable'}
+            {@const knownModalities = item.known}
+            {@const selected = selectedModelId === item.key}
+            {@const nodeLabel = item.nodeLabel}
+            {@const unavailable = item.unavailable}
             <button
               class="delegate-model-choice"
               class:delegate-model-choice-highlighted={!unavailable && highlightedIndex === item.index}
@@ -309,17 +342,17 @@
                   tabindex={-1}
                   class="app-picker-row-context"
                   side="left"
-                  text={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
-                  aria-label={info?.limits?.context ? `${info.limits.context.toLocaleString('en-US')} token context window` : 'Context size unknown'}
+                  text={item.contextLabel}
+                  aria-label={item.contextLabel}
                 >
                   <Gauge size={12} aria-hidden="true" />
-                  <span>{info?.limits?.context ? formatContextSize(info.limits.context) : 'UNK'}</span>
+                  <span>{item.contextShort}</span>
                 </Hint>
                 <span
                   class="app-picker-model-modalities"
                   aria-label={knownModalities.length > 0 ? `Input modalities: ${knownModalities.join(', ')}` : 'Input modalities unknown'}
                 >
-                  {#each displayedInputModalities(model, modelInfo) as modality}
+                  {#each item.displayed as modality}
                     {@const ModalityIcon = modalityIcon(modality)}
                     <Hint
                       tabindex={-1}
@@ -335,6 +368,15 @@
               </span>
             </button>
           {/each}
+          {#if group.hiddenCount > 0}
+            <button
+              class="delegate-model-show-more"
+              type="button"
+              onclick={() => { expandedGroups[group.label] = true; }}
+            >
+              Show {group.hiddenCount} more
+            </button>
+          {/if}
         </section>
       {/each}
     {/if}
