@@ -3361,6 +3361,49 @@ summary:focus-visible {
   background: var(--bg-card);
 }
 
+.provider-connection-group-title {
+  margin: 1rem 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-mcp-auth-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--status-muted-bg);
+  padding: 0.6rem 0.9rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.session-mcp-auth-notice-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.session-mcp-auth-notice-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+
+.session-mcp-auth-notice-row > span:first-child {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .provider-connection-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

@@ -22,6 +22,8 @@
     hasUsableProviderCredential,
     providerAuthCapabilitiesFromAgent
   } from '$lib/domain/provider-auth';
+  import { isMcpAuthId, mcpServerOfAuthId, splitAuthEntries } from '$lib/domain/mcp-auth';
+  import McpServerList from '$lib/components/settings/McpServerList.svelte';
   import { AuthMethod, OAuthStatus } from '$lib/querymt/generated/types';
   import type { AuthProviderStatus } from '$lib/querymt/generated/types';
   import { OAuthFlowKind } from '$lib/querymt/querymt-extensions';
@@ -55,6 +57,13 @@
   let providerPendingAction = $state<{ provider: string; action: string } | null>(null);
   let providerMessages = $state<Record<string, string | undefined>>({});
   let providerErrors = $state<Record<string, string | undefined>>({});
+  // Sign-in shares one cancel flag, poll resolver and dialog, so only one flow may run at a time
+  // (across providers and MCP servers) until its async work, including a cancelled one, has finished.
+  const oauthLocked = $derived(
+    Boolean(actionLoading?.startsWith('oauth')) ||
+      manualOAuthProvider !== null ||
+      Boolean(providerPendingAction?.action.startsWith('oauth'))
+  );
 
   const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
@@ -75,7 +84,13 @@
     }
   });
 
-  const providers = $derived.by(() => (selectedAgentId ? agentsStore.authProvidersByAgent[selectedAgentId] ?? [] : []));
+  // MCP server logins share the auth status list but are not LLM providers.
+  const authEntries = $derived.by(() => splitAuthEntries(selectedAgentId ? agentsStore.authProvidersByAgent[selectedAgentId] ?? [] : []));
+  const providers = $derived(authEntries.providers);
+  const mcpServers = $derived(authEntries.mcpServers);
+  const hasMcpServers = $derived(
+    authAgents.some((agent) => splitAuthEntries(agentsStore.authProvidersByAgent[agent.id] ?? []).mcpServers.length > 0)
+  );
   const providerAuthCapabilities = $derived.by(() =>
     providerAuthCapabilitiesFromAgent(selectedAgentId ? agentsStore.controlCapabilitiesByAgent[selectedAgentId] : null)
   );
@@ -101,7 +116,7 @@
     const section = new URL(window.location.href).searchParams.get('section');
     if (section === 'profiles' && !platformCapabilities.nativeProfileTemplates) {
       selectedSection = 'general';
-    } else if (section === 'appearance' || section === 'general' || section === 'keybindings' || section === 'profiles' || section === 'providers') {
+    } else if (section === 'appearance' || section === 'general' || section === 'keybindings' || section === 'profiles' || section === 'providers' || section === 'connectors') {
       selectedSection = section;
     }
   });
@@ -164,7 +179,8 @@
     pageError = null;
     pageMessage = null;
     setProviderMessage(provider, `Cancelled sign-in for ${provider.display_name}.`);
-    providerPendingAction = null;
+    // Stay pending until handleOAuth's async work settles, so a new sign-in cannot overlap it.
+    providerPendingAction = { provider: provider.provider, action: 'oauth-cancelling' };
     closeManualOAuthDialog();
     oauthCancelResolver?.();
   }
@@ -193,7 +209,7 @@
 
       const match = providers.find((entry) => entry.provider === providerName);
       if (match?.oauth_status === OAuthStatus.Connected) {
-        await agentsStore.refreshModelsForAgent(agentId).catch(() => undefined);
+        if (!isMcpAuthId(providerName)) await agentsStore.refreshModelsForAgent(agentId).catch(() => undefined);
         return 'connected';
       }
 
@@ -460,7 +476,7 @@
   }
 
   async function handleOAuth(provider: AuthProviderStatus) {
-    if (!selectedAgentId) return;
+    if (!selectedAgentId || oauthLocked) return;
     const agentId = selectedAgentId;
     setBusy(`oauth:${provider.provider}`);
     startProviderAction(provider, 'oauth');
@@ -508,6 +524,7 @@
       if (actionLoading === `oauth:${provider.provider}`) {
         setBusy(null);
         finishProviderAction(provider, 'oauth');
+        finishProviderAction(provider, 'oauth-cancelling');
       }
     }
   }
@@ -569,6 +586,7 @@
     <SettingsSubnav
       selected={selectedSection}
       showProfiles={platformCapabilities.nativeProfileTemplates}
+      showConnectors={hasMcpServers || selectedSection === 'connectors'}
       onSelect={selectSection}
     />
 
@@ -581,6 +599,56 @@
         <KeybindingsSettingsPanel />
       {:else if selectedSection === 'profiles' && platformCapabilities.nativeProfileTemplates}
         <ProfilesSettingsPanel />
+      {:else if selectedSection === 'connectors'}
+        <section class="settings-section">
+          <div class="settings-section-header settings-section-header-action provider-panel-header">
+            <div>
+              <h2>Connectors</h2>
+              <p>Sign in to OAuth-protected connectors. Tools become available in sessions started after signing in.</p>
+            </div>
+            <div class="provider-panel-actions">
+              {#if authAgents.length > 1}
+                <AppSelect bind:value={selectedAgentId} options={authAgents.map((agent) => ({ value: agent.id, label: agent.name }))} pill ariaLabel="Connectors agent" />
+              {/if}
+              <IconTooltipButton
+                label={refreshingProviders ? 'Refreshing sign-in status…' : 'Refresh connectors'}
+                icon={refreshingProviders ? LoaderCircle : RefreshCw}
+                iconClass={refreshingProviders ? 'animate-spin' : ''}
+                size={16}
+                busy={refreshingProviders}
+                disabled={!refreshingProviders && (!selectedAgentId || authLoading)}
+                onclick={() => refreshProviders()}
+              />
+            </div>
+          </div>
+
+          {#if authError || pageError}
+            <div class="alert-error settings-section-message">{pageError ?? authError}</div>
+          {/if}
+          {#if pageMessage}
+            <div class="alert-success settings-section-message">{pageMessage}</div>
+          {/if}
+
+          <div class="settings-subsection" aria-label="Connector authentication">
+            {#if mcpServers.length === 0 && !authLoading}
+              <div class="surface-muted p-4 text-sm text-[var(--muted)]">
+                No OAuth connectors are configured for this agent. Add <code>auth = {'{'} type = "oauth" {'}'}</code> to an HTTP <code>[[mcp]]</code> entry.
+              </div>
+            {:else}
+              <McpServerList
+                servers={mcpServers}
+                pendingAction={providerPendingAction}
+                signInLocked={oauthLocked}
+                messages={providerMessages}
+                errors={providerErrors}
+                onSignIn={handleOAuth}
+                onCancelSignIn={requestOAuthCancel}
+                onDisconnect={handleDisconnect}
+                onDialogTrigger={rememberProviderDialogTrigger}
+              />
+            {/if}
+          </div>
+        </section>
       {:else}
     {#if authAgents.length === 0}
       <section class="settings-section">
@@ -638,6 +706,7 @@
               {providers}
               authCapabilities={providerAuthCapabilities}
               pendingAction={providerPendingAction}
+              signInLocked={oauthLocked}
               messages={providerMessages}
               errors={providerErrors}
               onSignIn={handleOAuth}
@@ -682,6 +751,7 @@
   <ProviderOAuthDialog
     open={manualOAuthProvider !== null}
     provider={manualOAuthProvider}
+    label={manualOAuthProvider && isMcpAuthId(manualOAuthProvider.provider) ? mcpServerOfAuthId(manualOAuthProvider.provider) : null}
     focusTarget={providerDialogFocusTarget}
     portalTarget={overlayPortalTarget}
     flowKind={manualOAuthFlowKind}

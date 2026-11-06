@@ -11,6 +11,7 @@
     providers,
     authCapabilities = FULL_PROVIDER_AUTH_CAPABILITIES,
     pendingAction = null,
+    signInLocked = false,
     messages = {},
     errors = {},
     onSignIn,
@@ -24,6 +25,7 @@
     providers: AuthProviderStatus[];
     authCapabilities?: ProviderAuthCapabilities;
     pendingAction?: { provider: string; action: string } | null;
+    signInLocked?: boolean;
     messages?: Record<string, string | undefined>;
     errors?: Record<string, string | undefined>;
     onSignIn: (provider: AuthProviderStatus) => void;
@@ -44,6 +46,7 @@
       {provider}
       {authCapabilities}
       pendingAction={pendingAction?.provider === provider.provider ? pendingAction.action : null}
+      {signInLocked}
       message={messages[provider.provider]}
       error={errors[provider.provider]}
       {onSignIn}

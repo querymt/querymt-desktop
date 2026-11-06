@@ -26,6 +26,9 @@ import {
   SessionInputDelivery,
   SessionInputState,
   SessionRuntimePhase,
+  DelegationActivity,
+  DelegationStage,
+  RuntimeAvailability,
   type SessionInputStateNotification,
   type SessionRuntimeStatus,
   type SetDelegateModelResponse,
@@ -133,7 +136,7 @@ const mockClient = vi.hoisted(() => {
       pending_steering_count: 0,
       queued_input_count: 0,
       run_started_at_ms: undefined
-    })),
+    } as SessionRuntimeStatus)),
     cancelSession: vi.fn(async () => undefined),
     sessionHistory: vi.fn(async (_sessionId: string, _before: string): Promise<{ events: unknown[]; history: { complete: boolean; before?: string }; truncated: unknown[] }> => ({
       events: [], history: { complete: true }, truncated: []
@@ -484,7 +487,7 @@ beforeEach(() => {
     pending_steering_count: 0,
     queued_input_count: 0,
     run_started_at_ms: undefined
-  });
+  } as SessionRuntimeStatus);
   mockClient.listSessions.mockReset().mockResolvedValue({ sessions: [] });
   mockClient.loadSession.mockReset().mockResolvedValue({ response: { configOptions: [] }, replay: [] });
   mockClient.createSession.mockReset().mockResolvedValue({ sessionId: 'session-1', configOptions: [] });
@@ -511,11 +514,11 @@ describe('AgentsStore explicit remote attach runtime consistency', () => {
   const key = `agent-1:${id}`;
   const verifier = { version: 1, sessionId: id, delegationId: 'verify-1', targetAgentId: 'coder',
     state: DelegationUpdateState.Forked, objective: 'Check result', requestedAt: 1, updatedAt: 2,
-    activity: 'live', stage: 'verifying', sourceEpoch: 'workflow-1', sessionSeq: 17 } as const;
+    activity: DelegationActivity.Live, stage: DelegationStage.Verifying, sourceEpoch: 'workflow-1', sessionSeq: 17 } as const;
   const runtime = (phase = SessionRuntimePhase.Tools, revision = 4, extra: Partial<SessionRuntimeStatus> = {}): SessionRuntimeStatus => ({
-    phase, active_run_id: phase === SessionRuntimePhase.Idle || phase === SessionRuntimePhase.Unknown ? null : 'remote-run',
+    phase, active_run_id: phase === SessionRuntimePhase.Idle || phase === SessionRuntimePhase.Unknown ? undefined : 'remote-run',
     steerable: phase === SessionRuntimePhase.Tools, pending_steering_count: 0, queued_input_count: 0,
-    observation: { availability: 'live', epoch: 'remote-epoch', revision }, delegation_activity: [], ...extra
+    observation: { availability: RuntimeAvailability.Live, epoch: 'remote-epoch', revision }, delegation_activity: [], ...extra
   });
   const attached = (runtimeStatus?: SessionRuntimeStatus): RemoteSessionAttachInfo => ({
     session_id: id, node_id: 'node-1', attached: true, profile_id: 'owner-profile', profile_label: 'Owner', config_options: [],
@@ -581,7 +584,7 @@ describe('AgentsStore explicit remote attach runtime consistency', () => {
     expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
     expect(store.activeRunBusy).toBe(false);
     expect(mockClient.cancelSession).not.toHaveBeenCalled();
-    verify(runtime(SessionRuntimePhase.Unknown, 4, { observation: { availability: 'unavailable' } }));
+    verify(runtime(SessionRuntimePhase.Unknown, 4, { observation: { availability: RuntimeAvailability.Unavailable } }));
     await vi.advanceTimersByTimeAsync(0);
     expect(store.activeSession.runState).toBe('unknown');
     expect(store.sessionRuntimeBySession[key]?.delegation_activity).toEqual([verifier]);
@@ -600,7 +603,7 @@ describe('AgentsStore explicit remote attach runtime consistency', () => {
 
   it.each(['unavailable', 'missing-runtime', 'missing-observation'] as const)('does not invent Idle for %s attach evidence', async (kind) => {
     const store = await storeOnSessionRoute();
-    const observed = kind === 'unavailable' ? runtime(SessionRuntimePhase.Unknown, 1, { observation: { availability: 'unavailable' } })
+    const observed = kind === 'unavailable' ? runtime(SessionRuntimePhase.Unknown, 1, { observation: { availability: RuntimeAvailability.Unavailable } })
       : kind === 'missing-runtime' ? undefined : runtime(SessionRuntimePhase.Idle, 1, { observation: undefined });
     mockClient.attachRemoteSession.mockResolvedValueOnce(attached(observed));
     mockClient.supportsQuerymtMethod.mockReturnValue(false);
@@ -620,8 +623,8 @@ describe('AgentsStore explicit remote attach runtime consistency', () => {
     const attaching = store.attachRemoteSession('agent-1', 'node-1', id);
     await vi.advanceTimersByTimeAsync(0);
     const newer = runtime(SessionRuntimePhase.Tools, 1, { active_run_id: 'run-b',
-      observation: { availability: 'live', epoch: 'epoch-b', revision: 1 },
-      delegation_activity: [{ ...verifier, sourceEpoch: 'workflow-b', stage: 'finalizing', sessionSeq: 20 }] });
+      observation: { availability: RuntimeAvailability.Live, epoch: 'epoch-b', revision: 1 },
+      delegation_activity: [{ ...verifier, sourceEpoch: 'workflow-b', stage: DelegationStage.Finalizing, sessionSeq: 20 }] });
     mockClient.emitExtensionNotification({ method: 'querymt/session/runtimeChanged', params: { version: 1, session_id: id, runtime: newer } });
     mockClient.emitSessionUpdate({ sessionId: id, update: { sessionUpdate: 'tool_call_update', toolCallId: 'tool-b', title: 'Live B', status: 'in_progress' } });
     const old = attached(runtime(SessionRuntimePhase.Idle, 99, { delegation_activity: [verifier] }));
@@ -719,7 +722,7 @@ describe('AgentsStore explicit remote attach runtime consistency', () => {
 });
 
 describe('AgentsStore visibility-aware polling', () => {
-  const activeRuntime: SessionRuntimeStatus = { phase: SessionRuntimePhase.Model, active_run_id: 'run-1', steerable: true, pending_steering_count: 0, queued_input_count: 0 };
+  const activeRuntime: SessionRuntimeStatus = { observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Model, active_run_id: 'run-1', steerable: true, pending_steering_count: 0, queued_input_count: 0 };
   const listed: SessionInfo = { sessionId: 'session-1', title: 'Task', cwd: '/tmp/work', updatedAt: '2026-10-20T20:00:00Z' };
   function visibility(hidden: boolean) {
     Object.defineProperty(document, 'hidden', { configurable: true, value: hidden });
@@ -1032,6 +1035,38 @@ describe('AgentsStore recent sessions', () => {
     expect(store.recentSessionKeys).toEqual([]);
     await store.createSession('agent-1');
     expect(store.recentSessionKeys).toEqual(['agent-1:session-1']);
+  });
+
+  it('tracks skipped OAuth MCP servers from session/new meta and the mcpAuthRequired notification', async () => {
+    const store = createStore();
+    mockClient.createSession.mockResolvedValueOnce({
+      sessionId: 'session-1',
+      configOptions: [],
+      _meta: { querymt: { skippedMcpServers: [{ server_name: 'linear', provider_id: 'mcp:linear' }] } }
+    } as never);
+    await store.createSession('agent-1');
+    expect(store.getSkippedMcpServers('agent-1', 'session-1')).toEqual([
+      { server_name: 'linear', provider_id: 'mcp:linear' }
+    ]);
+
+    mockClient.emitExtensionNotification({
+      method: 'querymt/session/mcpAuthRequired',
+      params: { version: 1, session_id: 'session-1', server_name: 'down', provider_id: 'mcp:down', error: 'dns failure' }
+    });
+    expect(store.getSkippedMcpServers('agent-1', 'session-1').map((s) => [s.server_name, s.error])).toEqual([
+      ['linear', undefined],
+      ['down', 'dns failure']
+    ]);
+    expect(store.getSkippedMcpServers('agent-1', 'other')).toEqual([]);
+  });
+
+  it('ignores malformed mcpAuthRequired notifications', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    expect(mockClient.onExtensionNotification).toHaveBeenCalled();
+    mockClient.emitExtensionNotification({ method: 'querymt/session/mcpAuthRequired', params: { session_id: 's' } });
+    mockClient.emitExtensionNotification({ method: 'querymt/session/mcpAuthRequired', params: null });
+    expect(store.skippedMcpServersBySession).toEqual({});
   });
 
   it('remembers successful remote attachments', async () => {
@@ -1799,6 +1834,20 @@ describe('AgentsStore session lifecycle', () => {
     store.setComposerProfile('default');
     await store.createSession('agent-1');
     expect(mockClient.createRemoteSession).toHaveBeenCalledWith(expect.objectContaining({ profile_id: 'default' }));
+  });
+
+  it('creates on the explicit target instead of the unrelated composer target', async () => {
+    const store = await lifecycleStore();
+    store.setComposerTarget('node-1');
+    expect(await store.createSession('agent-1', { cwd: '/local/work', targetId: 'local' })).toBe('session-1');
+    expect(mockClient.createRemoteSession).not.toHaveBeenCalled();
+    expect(mockClient.createSession).toHaveBeenCalled();
+
+    store.setComposerTarget('local');
+    mockClient.createSession.mockClear();
+    await store.createSession('agent-1', { cwd: '/owner/work', targetId: 'node-2' });
+    expect(mockClient.createRemoteSession).toHaveBeenCalledWith(expect.objectContaining({ node_id: 'node-2', cwd: '/owner/work' }));
+    expect(mockClient.createSession).not.toHaveBeenCalled();
   });
 
   it('blocks an explicit remote profile when owner discovery fails rather than creating a default session', async () => {
@@ -6165,8 +6214,8 @@ describe('AgentsStore delegation lifecycle row reconciliation', () => {
     rawInput: { target_agent_id: 'coder' }, rawOutput: { status: 'queued' }
   } });
   const idle = (updates: ReturnType<typeof lifecycle>[] = [], revision = 1): SessionRuntimeStatus => ({
-    phase: SessionRuntimePhase.Idle, active_run_id: null, steerable: false, pending_steering_count: 0, queued_input_count: 0,
-    observation: { availability: 'live', epoch: 'actor-1', revision },
+    phase: SessionRuntimePhase.Idle, active_run_id: undefined, steerable: false, pending_steering_count: 0, queued_input_count: 0,
+    observation: { availability: RuntimeAvailability.Live, epoch: 'actor-1', revision },
     delegation_activity: updates as SessionRuntimeStatus['delegation_activity']
   });
   const announce = (updates: ReturnType<typeof lifecycle>[], revision = 1) => mockClient.emitExtensionNotification({
@@ -6215,13 +6264,13 @@ describe('AgentsStore delegation lifecycle row reconciliation', () => {
 
   it('accepts source-seeded fork and terminal facts at the retained stage watermark without changing stage liveness', async () => {
     const store = await selected(); dispatch();
-    emit(lifecycle(DelegationUpdateState.Requested, 50, { childSessionId: undefined, stage: 'verifying', activity: 'live' }));
-    emit(lifecycle(DelegationUpdateState.Forked, 50, { forkedAt: 2, updatedAt: 50, stage: undefined, activity: 'historical' }));
+    emit(lifecycle(DelegationUpdateState.Requested, 50, { childSessionId: undefined, stage: DelegationStage.Verifying, activity: DelegationActivity.Live }));
+    emit(lifecycle(DelegationUpdateState.Forked, 50, { forkedAt: 2, updatedAt: 50, stage: undefined, activity: DelegationActivity.Historical }));
     expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'forked', childSessionId: 'child-1' });
     expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
     emit(lifecycle(DelegationUpdateState.Completed, 50, { finishedAt: 3, updatedAt: 50, stage: undefined }));
     expect(store.activeSession.toolCalls[0].delegationState).toBe('completed');
-    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'completed', stage: 'verifying', activity: 'live', sessionSeq: 50 });
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'completed', stage: DelegationStage.Verifying, activity: DelegationActivity.Live, sessionSeq: 50 });
     expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
     // A lower-order terminal cannot replace the recovered outcome or its current stage.
     emit(lifecycle(DelegationUpdateState.Failed, 49, { finishedAt: 4, updatedAt: 60 }));
@@ -6229,20 +6278,20 @@ describe('AgentsStore delegation lifecycle row reconciliation', () => {
   });
 
   it('heals cached Forked50 from same-owner Completed50 idempotently before any future stage', async () => {
-    const store = await selected(); dispatch(); emit(lifecycle(DelegationUpdateState.Forked, 50, { stage: 'verifying' }));
-    const recovered = lifecycle(DelegationUpdateState.Completed, 50, { stage: 'verifying', activity: 'live' });
+    const store = await selected(); dispatch(); emit(lifecycle(DelegationUpdateState.Forked, 50, { stage: DelegationStage.Verifying }));
+    const recovered = lifecycle(DelegationUpdateState.Completed, 50, { stage: DelegationStage.Verifying, activity: DelegationActivity.Live });
     emit(JSON.parse(JSON.stringify(recovered)));
     expect(store.activeSession.toolCalls[0]).toMatchObject({ delegationState: 'completed', childSessionId: 'child-1' });
-    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'completed', sessionSeq: 50, stage: 'verifying', activity: 'live' });
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'completed', sessionSeq: 50, stage: DelegationStage.Verifying, activity: DelegationActivity.Live });
     const rows = store.activeSession.toolCalls; const observation = store.activeSession.delegations?.[0];
     emit(JSON.parse(JSON.stringify(recovered)));
     expect(store.activeSession.toolCalls).toEqual(rows); expect(store.activeSession.delegations?.[0]).toEqual(observation);
     expect(store.activeSession.toolCalls).toHaveLength(1);
-    emit(lifecycle(DelegationUpdateState.Requested, 50, { activity: 'historical', stage: undefined }));
+    emit(lifecycle(DelegationUpdateState.Requested, 50, { activity: DelegationActivity.Historical, stage: undefined }));
     emit(lifecycle(DelegationUpdateState.Failed, 50, { stage: undefined }));
     emit(lifecycle(DelegationUpdateState.Failed, 49, { updatedAt: 100 }));
     expect(store.activeSession.toolCalls).toEqual(rows);
-    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'completed', sourceEpoch: 'workflow-1', sessionSeq: 50, stage: 'verifying', activity: 'live' });
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'completed', sourceEpoch: 'workflow-1', sessionSeq: 50, stage: DelegationStage.Verifying, activity: DelegationActivity.Live });
     expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
   });
 
@@ -6257,11 +6306,11 @@ describe('AgentsStore delegation lifecycle row reconciliation', () => {
     const store = await selected(); dispatch(); store.activeSession.toolCalls[0].status = status; emit(lifecycle());
     mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(idle([], 2));
     await store.refreshSessionRuntime('agent-1', 'session-1');
-    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'forked', activity: 'historical' });
+    expect(store.activeSession.delegations?.[0]).toMatchObject({ state: 'forked', activity: DelegationActivity.Historical });
     expect(getSessionToolPresentation(store.activeSession.toolCalls[0])).toMatchObject({ status: 'pending', statusLabel: 'Status unavailable' });
     expect(store.activeSession.toolCalls[0].delegationState).not.toBe('completed');
     expect(store.activeSession.dependencyLabel).toBeNull(); expect(store.activeRunBusy).toBe(false);
-    emit(lifecycle(DelegationUpdateState.Completed, 2, { activity: 'live', stage: 'finalizing' }));
+    emit(lifecycle(DelegationUpdateState.Completed, 2, { activity: DelegationActivity.Live, stage: DelegationStage.Finalizing }));
     expect(store.activeSession.toolCalls[0].delegationState).toBe('completed');
     expect(store.activeSession.delegations?.[0].activity).toBe('historical');
     expect(store.activeSession.dependencyLabel).toBeNull();
@@ -6438,7 +6487,7 @@ describe('AgentsStore status consistency', () => {
       sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Stored answer' }
     } }] });
     mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Unknown, 0, {
-      observation: { availability: 'unavailable' }
+      observation: { availability: RuntimeAvailability.Unavailable }
     }));
     await store.loadSession('agent-1', 'session-1');
     const summary = store.sessionsByAgent['agent-1'].find((item) => item.sessionId === 'session-1');
@@ -6474,7 +6523,7 @@ describe('AgentsStore status consistency', () => {
     [SessionRuntimePhase.Unknown, 'unknown']
   ] as const)('accepts remote runtime-only %s without inventing history or dropping owner metadata', async (phase, status) => {
     const store = await selectedStore();
-    const runtimeStatus = runtime(phase, 1, { observation: { availability: phase === SessionRuntimePhase.Unknown ? 'unavailable' : 'live', epoch: 'remote-e1', revision: 1 } });
+    const runtimeStatus = runtime(phase, 1, { observation: { availability: phase === SessionRuntimePhase.Unknown ? RuntimeAvailability.Unavailable : RuntimeAvailability.Live, epoch: 'remote-e1', revision: 1 } });
     const lifecycle = { session_id: 'remote-s', resolved: false, archived: false, resolved_at: null, archived_at: null };
     mockClient.listSessions.mockResolvedValueOnce({ sessions: [{ sessionId: 'remote-s', cwd: '/remote/work', _meta: {
       location: 'remote', nodeId: 'remote-node', nodeLabel: 'Owner', profileId: 'coder', profileLabel: 'Coder',
@@ -6522,7 +6571,7 @@ describe('AgentsStore status consistency', () => {
     announce(runtime(phase, 6));
     rejectOld(new Error('Obsolete request failed'));
     await pending;
-    expect(store.activeSessionRuntime).toMatchObject({ phase, observation: { availability: 'live', revision: 6 } });
+    expect(store.activeSessionRuntime).toMatchObject({ phase, observation: { availability: RuntimeAvailability.Live, revision: 6 } });
     expect(store.activeRunBusy).toBe(phase === SessionRuntimePhase.Tools);
     if (phase === SessionRuntimePhase.Tools) expect(store.activeSession.runId).toBe('run-b');
   });
@@ -6531,7 +6580,7 @@ describe('AgentsStore status consistency', () => {
     const store = await selectedStore();
     announce(runtime(SessionRuntimePhase.Model, 5, { active_run_id: 'run-a' }));
     let rejectOld!: (error: Error) => void;
-    const replacement = runtime(SessionRuntimePhase.Tools, 1, { observation: { availability: 'live', epoch: 'actor-2', revision: 1 } });
+    const replacement = runtime(SessionRuntimePhase.Tools, 1, { observation: { availability: RuntimeAvailability.Live, epoch: 'actor-2', revision: 1 } });
     mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject; }))
       .mockResolvedValue(replacement);
     const pending = store.refreshSessionRuntime().catch(() => null);
@@ -6541,7 +6590,7 @@ describe('AgentsStore status consistency', () => {
     rejectOld(new Error('Old owner read failed'));
     await pending;
     await vi.waitFor(() => expect(store.activeSessionRuntime?.observation?.epoch).toBe('actor-2'));
-    expect(store.activeSessionRuntime).toMatchObject({ phase: SessionRuntimePhase.Tools, observation: { availability: 'live' } });
+    expect(store.activeSessionRuntime).toMatchObject({ phase: SessionRuntimePhase.Tools, observation: { availability: RuntimeAvailability.Live } });
     expect(store.activeRunBusy).toBe(true);
   });
 
@@ -6556,7 +6605,7 @@ describe('AgentsStore status consistency', () => {
       .mockImplementationOnce(() => new Promise((resolve) => { verify = resolve; }));
     const oldRead = store.refreshSessionRuntime('agent-1', 'session-1');
     await vi.waitFor(() => expect(finishOld).toBeDefined());
-    const changed = runtime(SessionRuntimePhase.Tools, 1, { observation: { availability: 'live', epoch: 'actor-2', revision: 1 } });
+    const changed = runtime(SessionRuntimePhase.Tools, 1, { observation: { availability: RuntimeAvailability.Live, epoch: 'actor-2', revision: 1 } });
     const listed = (sessionId: string, runtimeStatus: SessionRuntimeStatus) => ({ sessionId, cwd: '/tmp/work', _meta: {
       messageCount: 2, userMessageCount: 1, hasErrors: false, runtimeStatus
     } });
@@ -6580,7 +6629,7 @@ describe('AgentsStore status consistency', () => {
     verify(changed);
     await vi.waitFor(() => expect(summary()?.status).toBe('thinking'));
     expect(store.sessionRuntimeBySession['agent-1:session-1']).toMatchObject({ phase: SessionRuntimePhase.Tools,
-      observation: { availability: 'live', epoch: 'actor-2', revision: 1 } });
+      observation: { availability: RuntimeAvailability.Live, epoch: 'actor-2', revision: 1 } });
     expect(store.activeSessionId).toBe('other-session');
     await store.refreshSessionsForAgent('agent-1');
     expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2);
@@ -6596,7 +6645,7 @@ describe('AgentsStore status consistency', () => {
     mockClient.getSessionRuntimeStatus.mockImplementation(() => new Promise(() => {}));
     mockClient.listSessions.mockResolvedValue({ sessions: Array.from({ length: 5 }, (_, index) => ({
       sessionId: `cached-${index}`, cwd: '/tmp/work', _meta: { runtimeStatus: runtime(SessionRuntimePhase.Tools, 1,
-        { observation: { availability: 'live', epoch: 'actor-2', revision: 1 } }) }
+        { observation: { availability: RuntimeAvailability.Live, epoch: 'actor-2', revision: 1 } }) }
     })) });
     await store.refreshSessionsForAgent('agent-1');
     expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2);
@@ -6659,7 +6708,7 @@ describe('AgentsStore status consistency', () => {
     const attachments = [{ id: 'notes', name: 'notes.txt', mimeType: 'text/plain', size: 1, data: 'eA==' }];
     store.promptAttachments = attachments;
     mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Unknown, 1, {
-      active_run_id: null, steerable: false, observation: { availability: 'unavailable' }
+      active_run_id: undefined, steerable: false, observation: { availability: RuntimeAvailability.Unavailable }
     }));
     await store.sendPromptToActiveSession();
     expect(mockClient.sendPrompt).not.toHaveBeenCalled();
@@ -6688,7 +6737,7 @@ describe('AgentsStore status consistency', () => {
   function runtime(phase: SessionRuntimePhase, revision: number, extra: Partial<SessionRuntimeStatus> = {}): SessionRuntimeStatus {
     return { phase, active_run_id: phase === SessionRuntimePhase.Idle ? undefined : 'run-b',
       steerable: phase !== SessionRuntimePhase.Closing, pending_steering_count: 0, queued_input_count: 0,
-      observation: { availability: 'live', epoch: 'actor-1', revision }, delegation_activity: [], ...extra };
+      observation: { availability: RuntimeAvailability.Live, epoch: 'actor-1', revision }, delegation_activity: [], ...extra };
   }
 
   async function selectedStore() {
@@ -6707,7 +6756,7 @@ describe('AgentsStore status consistency', () => {
 
   const verifier = { version: 1, sessionId: 'session-1', delegationId: 'delegate-1',
     state: DelegationUpdateState.Forked, targetAgentId: 'coder', objective: '', requestedAt: 1, updatedAt: 2,
-    stage: 'verifying', activity: 'live', sourceEpoch: 'workflow-1', sessionSeq: 10 } as const;
+    stage: DelegationStage.Verifying, activity: DelegationActivity.Live, sourceEpoch: 'workflow-1', sessionSeq: 10 } as const;
 
   it('merges independently ordered stages and empty authoritative activity at equal self revision', async () => {
     const store = await selectedStore();
@@ -6715,7 +6764,7 @@ describe('AgentsStore status consistency', () => {
     expect(store.activeRunBusy).toBe(false);
     expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
     mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Idle, 5, {
-      delegation_activity: [{ ...verifier, stage: 'finalizing', sessionSeq: 11 }]
+      delegation_activity: [{ ...verifier, stage: DelegationStage.Finalizing, sessionSeq: 11 }]
     }));
     await store.refreshSessionRuntime();
     expect(store.activeSession.dependencyLabel).toBe('Finalizing delegate result');
@@ -6735,11 +6784,11 @@ describe('AgentsStore status consistency', () => {
     expect(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
 
     mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(runtime(SessionRuntimePhase.Unknown, 0, {
-      active_run_id: null, steerable: false, observation: { availability: 'unavailable', reason: 'owner_unavailable' }
+      active_run_id: undefined, steerable: false, observation: { availability: RuntimeAvailability.Unavailable, reason: 'owner_unavailable' }
     }));
     await store.refreshSessionRuntime();
     expect(store.activeSessionRuntime).toMatchObject({ phase: SessionRuntimePhase.Unknown,
-      observation: { availability: 'unavailable' } });
+      observation: { availability: RuntimeAvailability.Unavailable } });
     expect(store.activeSession.runState).toBe('unknown');
     expect.soft(store.activeSession.delegations).toContainEqual(liveVerifier);
     expect.soft(store.activeSession.dependencyLabel).toBe('Verifying delegate result');
@@ -6756,7 +6805,7 @@ describe('AgentsStore status consistency', () => {
     mockClient.getSessionRuntimeStatus.mockResolvedValueOnce(runtime(SessionRuntimePhase.Idle, 5));
     await store.refreshSessionRuntime();
     expect(store.activeSession.dependencyLabel).toBeNull();
-    expect(store.activeSession.delegations).toContainEqual({ ...liveVerifier, activity: 'historical' });
+    expect(store.activeSession.delegations).toContainEqual({ ...liveVerifier, activity: DelegationActivity.Historical });
     expect(store.activeSessionRuntime?.delegation_activity).toEqual([]);
   });
 
@@ -6865,7 +6914,7 @@ describe('AgentsStore status consistency', () => {
 
   it('distinguishes native waiting self execution from own-idle managed verification and historical rows', async () => {
     const store = await selectedStore();
-    announce(runtime(SessionRuntimePhase.Waiting, 1, { delegation_activity: [{ ...verifier, stage: 'executing' }] }));
+    announce(runtime(SessionRuntimePhase.Waiting, 1, { delegation_activity: [{ ...verifier, stage: DelegationStage.Executing }] }));
     expect(store.activeRunBusy).toBe(true);
     const view = render(SessionActivityBar, { session: store.activeSession });
     expect(screen.getByRole('status')).toHaveTextContent('Waiting for delegates');
@@ -6881,11 +6930,11 @@ describe('AgentsStore status consistency', () => {
     await store.cancelActiveSession();
     expect(mockClient.cancelSession).toHaveBeenCalledTimes(1);
     mockClient.emitExtensionNotification({ method: 'querymt/session/delegationUpdate', params: {
-      ...verifier, state: DelegationUpdateState.Completed, stage: undefined, activity: 'historical', sessionSeq: 12
+      ...verifier, state: DelegationUpdateState.Completed, stage: undefined, activity: DelegationActivity.Historical, sessionSeq: 12
     } });
     expect(store.activeSession.dependencyLabel).toBeNull();
     mockClient.emitExtensionNotification({ method: 'querymt/session/delegationUpdate', params: {
-      ...verifier, activity: 'historical', sourceEpoch: 'old-source', sessionSeq: 999
+      ...verifier, activity: DelegationActivity.Historical, sourceEpoch: 'old-source', sessionSeq: 999
     } });
     expect(store.activeSession.dependencyLabel).toBeNull();
     cleanup();
@@ -6933,10 +6982,10 @@ describe('AgentsStore status consistency', () => {
     announce(runtime(SessionRuntimePhase.Tools, 5));
     let finishOld!: (value: SessionRuntimeStatus) => void;
     mockClient.getSessionRuntimeStatus.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
-      .mockResolvedValueOnce(runtime(SessionRuntimePhase.Waiting, 1, { observation: { availability: 'live', epoch: 'actor-2', revision: 1 } }));
+      .mockResolvedValueOnce(runtime(SessionRuntimePhase.Waiting, 1, { observation: { availability: RuntimeAvailability.Live, epoch: 'actor-2', revision: 1 } }));
     const oldRead = store.refreshSessionRuntime();
     await vi.waitFor(() => expect(finishOld).toBeDefined());
-    announce(runtime(SessionRuntimePhase.Waiting, 1, { observation: { availability: 'live', epoch: 'actor-2', revision: 1 } }));
+    announce(runtime(SessionRuntimePhase.Waiting, 1, { observation: { availability: RuntimeAvailability.Live, epoch: 'actor-2', revision: 1 } }));
     finishOld(runtime(SessionRuntimePhase.Idle, 6));
     expect(await oldRead).toBeNull();
     await vi.waitFor(() => expect(store.activeSessionRuntime?.observation?.epoch).toBe('actor-2'));
@@ -6953,7 +7002,7 @@ describe('AgentsStore status consistency', () => {
     store.activeSession.runState = phase === 'idle' ? 'thinking' : 'completed';
     store.activeSession.activityLabel = phase === 'idle' ? 'Cancelling turn...' : 'Turn completed.';
     mockClient.getSessionRuntimeStatus.mockResolvedValue({
-      phase: phase === 'idle' ? SessionRuntimePhase.Idle : SessionRuntimePhase.Tools,
+      observation: { availability: RuntimeAvailability.Live }, phase: phase === 'idle' ? SessionRuntimePhase.Idle : SessionRuntimePhase.Tools,
       active_run_id: phase === 'tools' ? 'run-b' : undefined,
       steerable: phase === 'tools', pending_steering_count: 0, queued_input_count: 0
     });
@@ -6969,7 +7018,7 @@ describe('AgentsStore status consistency', () => {
   it('restores legacy replay-only tools and does not promote historical delegate rows to live work', async () => {
     const store = await selectedStore();
     mockClient.loadSession.mockResolvedValueOnce({ response: { configOptions: [], _meta: {
-      'querymt/sessionLoadSnapshot.v1': { delegationUpdates: [{ ...verifier, activity: 'historical' }] }
+      'querymt/sessionLoadSnapshot.v1': { delegationUpdates: [{ ...verifier, activity: DelegationActivity.Historical }] }
     } }, replay: [{ sessionId: 'session-1', update: {
       sessionUpdate: 'tool_call', toolCallId: 'legacy-shell', title: 'Legacy shell', status: 'in_progress'
     } }] });
@@ -6988,7 +7037,7 @@ describe('AgentsStore status consistency', () => {
     const view = render(SessionActivityBar, { session: store.activeSession });
     expect(screen.getByRole('status')).toHaveTextContent('Finishing turn');
     mockClient.getSessionRuntimeStatus.mockResolvedValue(runtime(SessionRuntimePhase.Unknown, 2, {
-      active_run_id: undefined, observation: { availability: 'unavailable', epoch: 'actor-1', revision: 2 }
+      active_run_id: undefined, observation: { availability: RuntimeAvailability.Unavailable, epoch: 'actor-1', revision: 2 }
     }));
     await store.refreshSessionRuntime();
     await view.rerender({ session: store.activeSession });
@@ -7007,7 +7056,7 @@ describe('AgentsStore status consistency', () => {
       ] } }
     } }, replay: [] });
     mockClient.getSessionRuntimeStatus.mockResolvedValue({
-      phase: SessionRuntimePhase.Tools, active_run_id: 'run-b', steerable: true,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Tools, active_run_id: 'run-b', steerable: true,
       pending_steering_count: 0, queued_input_count: 0, run_started_at_ms: 1
     });
     const loadingAt = Date.now();
@@ -7166,7 +7215,7 @@ describe('AgentsStore prompt session start', () => {
     store.activeSessionId = 'session-2';
     store.activeSession.sessionId = 'session-2';
     resolveRuntime({
-      phase: SessionRuntimePhase.Model,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Model,
       active_run_id: 'run-1',
       steerable: true,
       pending_steering_count: 0,
@@ -7186,7 +7235,7 @@ describe('AgentsStore prompt session start', () => {
     store.activeSessionId = 'session-1';
     store.sessionRuntimeBySession = {
       'agent-1:session-1': {
-        phase: SessionRuntimePhase.Idle,
+        observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Idle,
         active_run_id: undefined,
         steerable: false,
         pending_steering_count: 0,
@@ -7211,7 +7260,7 @@ describe('AgentsStore prompt session start', () => {
     store.activeSessionId = 'session-1';
     store.sessionRuntimeBySession = {
       'agent-1:session-1': {
-        phase: SessionRuntimePhase.Idle,
+        observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Idle,
         active_run_id: undefined,
         steerable: false,
         pending_steering_count: 0,
@@ -7262,7 +7311,7 @@ describe('AgentsStore prompt session start', () => {
     store.composerInputDeliveryBySession = { 'agent-1:session-1': 'steer' };
     store.sessionRuntimeBySession = {
       'agent-1:session-1': {
-        phase: SessionRuntimePhase.Model,
+        observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Model,
         active_run_id: undefined,
         steerable: true,
         pending_steering_count: 0,
@@ -7289,7 +7338,7 @@ describe('AgentsStore prompt session start', () => {
     const newer = store.refreshSessionRuntime('agent-1', 'session-1');
     await vi.waitFor(() => expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2));
     const authoritative: SessionRuntimeStatus = {
-      phase: SessionRuntimePhase.Idle,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Idle,
       active_run_id: undefined,
       steerable: false,
       pending_steering_count: 0,
@@ -7299,7 +7348,7 @@ describe('AgentsStore prompt session start', () => {
     resolveNewer(authoritative);
     await expect(newer).resolves.toEqual(authoritative);
     resolveOlder({
-      phase: SessionRuntimePhase.Model,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Model,
       active_run_id: 'stale-run',
       steerable: true,
       pending_steering_count: 1,
@@ -7457,7 +7506,7 @@ describe('AgentsStore prompt session start', () => {
   it('uses the canonical user chunk for applied steering instead of the lifecycle notification', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
     mockClient.getSessionRuntimeStatus.mockResolvedValue({
-      phase: SessionRuntimePhase.Model,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Model,
       active_run_id: 'run-1',
       steerable: true,
       pending_steering_count: 0,
@@ -7533,7 +7582,7 @@ describe('AgentsStore prompt session start', () => {
   ])('does not regress $delivery state when a lifecycle notification precedes the submit response', async ({ delivery, notificationState }) => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
     mockClient.getSessionRuntimeStatus.mockResolvedValue({
-      phase: SessionRuntimePhase.Tools,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: delivery === 'steer',
       pending_steering_count: 0,
@@ -7584,7 +7633,7 @@ describe('AgentsStore prompt session start', () => {
   it('does not resurrect a rekeyed queue item finalized before the submit response', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
     mockClient.getSessionRuntimeStatus.mockResolvedValue({
-      phase: SessionRuntimePhase.Tools,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: false,
       pending_steering_count: 0,
@@ -7627,7 +7676,7 @@ describe('AgentsStore prompt session start', () => {
   it('removes queued input through the backend and clears local pending state', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
     mockClient.getSessionRuntimeStatus.mockResolvedValue({
-      phase: SessionRuntimePhase.Tools,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: false,
       pending_steering_count: 0,
@@ -7653,7 +7702,7 @@ describe('AgentsStore prompt session start', () => {
   it('does not surface a failed discard after switching sessions', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
     mockClient.getSessionRuntimeStatus.mockResolvedValue({
-      phase: SessionRuntimePhase.Tools,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: false,
       pending_steering_count: 0,
@@ -7688,7 +7737,7 @@ describe('AgentsStore prompt session start', () => {
   it('reconciles an already-started queue item as no longer pending', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
     mockClient.getSessionRuntimeStatus.mockResolvedValue({
-      phase: SessionRuntimePhase.Tools,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: false,
       pending_steering_count: 0,
@@ -7716,7 +7765,7 @@ describe('AgentsStore prompt session start', () => {
   it('rekeys queued input when the server returns a different input id', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
     mockClient.getSessionRuntimeStatus.mockResolvedValue({
-      phase: SessionRuntimePhase.Tools,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: false,
       pending_steering_count: 0,
@@ -7776,7 +7825,7 @@ describe('AgentsStore prompt session start', () => {
   ])('removes queued input when its $name lifecycle notification arrives', async ({ state }) => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
     mockClient.getSessionRuntimeStatus.mockResolvedValue({
-      phase: SessionRuntimePhase.Tools,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: false,
       pending_steering_count: 0,
@@ -7810,7 +7859,7 @@ describe('AgentsStore prompt session start', () => {
   it('queues slash commands instead of steering an active run', async () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature: string) => feature === 'steering');
     mockClient.getSessionRuntimeStatus.mockResolvedValue({
-      phase: SessionRuntimePhase.Tools,
+      observation: { availability: RuntimeAvailability.Live }, phase: SessionRuntimePhase.Tools,
       active_run_id: 'run-1',
       steerable: true,
       pending_steering_count: 0,
@@ -10913,8 +10962,8 @@ describe('AgentsStore pending launches', () => {
     mockClient.supportsQuerymtFeature.mockImplementation((feature) => feature === 'steering');
     if (observation === 'unsupported') mockClient.supportsQuerymtMethod.mockImplementation((method?: string) => method !== 'querymt/session/runtimeState');
     mockClient.getSessionRuntimeStatus.mockImplementation(() => observation === 'pending' ? new Promise(() => {}) : Promise.resolve({
-      phase: SessionRuntimePhase.Unknown, active_run_id: null, steerable: false, pending_steering_count: 0, queued_input_count: 0,
-      observation: { availability: 'unavailable' }
+      phase: SessionRuntimePhase.Unknown, active_run_id: undefined, steerable: false, pending_steering_count: 0, queued_input_count: 0,
+      observation: { availability: RuntimeAvailability.Unavailable }
     }));
     mockClient.createRemoteSession.mockResolvedValueOnce({ session_id: 'remote-1', node_id: 'node-1', attached: true,
       config_options: modeOnly('build'), snapshot: { audit: { events: [] } } });
@@ -10925,7 +10974,7 @@ describe('AgentsStore pending launches', () => {
     const launchId = store.beginLaunch('agent-1')!;
     await vi.waitFor(() => expect(finishConfig).toBeTypeOf('function'));
     expect(store.pendingLaunches[launchId]).toMatchObject({ sessionId: 'remote-1', status: 'creating' });
-    expect(store.activeSessionRuntime).toMatchObject({ phase: 'unknown', observation: { availability: 'unavailable' } });
+    expect(store.activeSessionRuntime).toMatchObject({ phase: 'unknown', observation: { availability: RuntimeAvailability.Unavailable } });
     expect(mockClient.sendPrompt).not.toHaveBeenCalled();
     const initialReads = mockClient.getSessionRuntimeStatus.mock.calls.length;
     finishConfig();

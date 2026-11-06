@@ -1,16 +1,19 @@
 <script lang="ts">
-  import { Bot, Keyboard, Palette, SlidersHorizontal, WandSparkles } from '@lucide/svelte';
+  import { Bot, Keyboard, Palette, Plug, SlidersHorizontal, WandSparkles } from '@lucide/svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
 
-  export type SettingsSectionId = 'appearance' | 'general' | 'keybindings' | 'profiles' | 'providers';
+  export type SettingsSectionId = 'appearance' | 'general' | 'keybindings' | 'profiles' | 'providers' | 'connectors';
 
   let {
     selected,
     showProfiles = true,
+    showConnectors = false,
     onSelect
   }: {
     selected: SettingsSectionId;
     showProfiles?: boolean;
+    /** The agent has OAuth connectors (MCP servers) to sign in to. */
+    showConnectors?: boolean;
     onSelect: (section: SettingsSectionId) => void;
   } = $props();
 
@@ -19,9 +22,12 @@
     { id: 'appearance', label: 'Appearance', description: 'Theme and accent color', icon: Palette },
     { id: 'keybindings', label: 'Keybindings', description: 'Keyboard shortcuts', icon: Keyboard },
     { id: 'profiles', label: 'Profiles', description: 'Ready-made agent configurations', icon: WandSparkles },
-    { id: 'providers', label: 'Providers', description: 'Authentication and maintenance', icon: Bot }
+    { id: 'providers', label: 'Providers', description: 'Authentication and maintenance', icon: Bot },
+    { id: 'connectors', label: 'Connectors', description: 'Sign-in for connected tools', icon: Plug }
   ] satisfies Array<{ id: SettingsSectionId; label: string; description: string; icon: typeof SlidersHorizontal }>;
-  const sections = $derived(allSections.filter((section) => showProfiles || section.id !== 'profiles'));
+  const sections = $derived(allSections.filter(
+      (section) => (showProfiles || section.id !== 'profiles') && (showConnectors || section.id !== 'connectors')
+    ));
 </script>
 
 <nav class="settings-subnav" aria-label="Settings sections">

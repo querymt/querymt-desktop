@@ -155,6 +155,8 @@ export interface QuerymtWorktreeHandoffRequest {
 export const QMT_NOTIFICATION_SESSION_PINS_CHANGED = 'querymt/session/pinsChanged';
 export const QMT_NOTIFICATION_SESSION_INPUT_STATE = 'querymt/session/inputState';
 export const QMT_NOTIFICATION_SESSION_RUNTIME_CHANGED = 'querymt/session/runtimeChanged';
+/** An OAuth MCP server was left out of a session (login needed or unavailable). */
+export const QMT_NOTIFICATION_MCP_AUTH_REQUIRED = 'querymt/session/mcpAuthRequired';
 
 export interface SessionRuntimeChangedNotification {
   version: number;

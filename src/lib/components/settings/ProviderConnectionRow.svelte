@@ -19,6 +19,7 @@
     provider,
     authCapabilities = FULL_PROVIDER_AUTH_CAPABILITIES,
     pendingAction = null,
+    signInLocked = false,
     message = null,
     error = null,
     onSignIn,
@@ -32,6 +33,7 @@
     provider: AuthProviderStatus;
     authCapabilities?: ProviderAuthCapabilities;
     pendingAction?: string | null;
+    signInLocked?: boolean;
     message?: string | null;
     error?: string | null;
     onSignIn: (provider: AuthProviderStatus) => void;
@@ -83,7 +85,7 @@
         class="action-btn action-btn-compact provider-connection-action"
         type="button"
         aria-expanded={primaryAction === 'reconnect' ? undefined : detailsOpen}
-        disabled={pending}
+        disabled={pending || (primaryAction === 'reconnect' && signInLocked)}
         onclick={handlePrimaryAction}
       >
         {primaryAction === 'reconnect' ? 'Reconnect' : primaryAction === 'setup' ? 'Set up' : 'Manage'}
@@ -132,7 +134,7 @@
       {#if hasDetailActions}
       <div class="provider-connection-detail-actions">
         {#if provider.supports_oauth && provider.oauth_status !== OAuthStatus.Connected}
-          <button class="action-btn action-btn-compact" type="button" disabled={pending} onclick={(event) => openDialog(event, onSignIn)}><LogIn size={14} />{provider.oauth_status === OAuthStatus.Expired ? 'Reconnect OAuth' : 'Sign in with OAuth'}</button>
+          <button class="action-btn action-btn-compact" type="button" disabled={pending || signInLocked} onclick={(event) => openDialog(event, onSignIn)}><LogIn size={14} />{provider.oauth_status === OAuthStatus.Expired ? 'Reconnect OAuth' : 'Sign in with OAuth'}</button>
         {/if}
         {#if provider.supports_oauth && provider.oauth_status === OAuthStatus.Connected}
           <button class="action-btn action-btn-compact" type="button" disabled={pending} onclick={(event) => openDialog(event, onDisconnect)}><LogOut size={14} />Disconnect OAuth</button>

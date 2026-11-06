@@ -30,9 +30,24 @@ function findFocusCandidate(target: ProviderDialogFocusTarget): HTMLElement | nu
   return Array.from(row?.querySelectorAll<HTMLElement>('button:not(:disabled)') ?? []).find(isFocusable) ?? null;
 }
 
+const FOCUS_RETRY_FRAMES = 30;
+
 export function restoreProviderDialogFocus(event: Event, target: ProviderDialogFocusTarget | null): void {
-  if (!target || !findFocusCandidate(target)) return;
+  if (!target) return;
+  // A cancelled sign-in keeps its row locked until the async flow settles, so nothing may be
+  // focusable yet. Only give up when the trigger and its row are gone altogether.
+  const immediate = findFocusCandidate(target);
+  if (!immediate && !target.row?.isConnected) return;
 
   event.preventDefault();
-  requestAnimationFrame(() => findFocusCandidate(target)?.focus());
+  let framesLeft = FOCUS_RETRY_FRAMES;
+  const attempt = () => {
+    const candidate = findFocusCandidate(target);
+    if (candidate) {
+      candidate.focus();
+      return;
+    }
+    if (--framesLeft > 0 && target.row?.isConnected) requestAnimationFrame(attempt);
+  };
+  requestAnimationFrame(attempt);
 }

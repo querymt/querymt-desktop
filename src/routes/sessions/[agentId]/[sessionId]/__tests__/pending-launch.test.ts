@@ -44,7 +44,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', ResizeObserverMock);
   Element.prototype.scrollTo ??= () => {};
   route.params = { agentId: 'agent-1', sessionId: 'pending-launch-1' };
-  store.fns = {};
+  store.fns = { getSkippedMcpServers: vi.fn(() => []) };
   store.data = {
     activeSession: createEmptyActiveSession(),
     activeSessionId: 'pending-launch-1', activeAgentId: 'agent-1',

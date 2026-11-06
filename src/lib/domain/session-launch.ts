@@ -56,6 +56,10 @@ export interface SessionCreateOptions {
   /** Temporary id of the launch on screen; the session is only selected while it still is. */
   launchId?: string;
   cwd?: string;
+  /** Overrides the composer's target (`local` or a mesh node id) when no full `settings` are given. */
+  targetId?: string;
+  /** Overrides the composer's profile; only meaningful together with `targetId`. */
+  profileId?: string;
   settings?: LaunchSettings;
   /** Called once the new session is the selected one, before launch config writes. */
   onSelected?: (sessionId: string) => void;

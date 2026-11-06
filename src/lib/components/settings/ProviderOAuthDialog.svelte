@@ -9,6 +9,7 @@
   let {
     open,
     provider = null,
+    label = null,
     focusTarget = null,
     portalTarget = null,
     flowKind = null,
@@ -28,6 +29,8 @@
   }: {
     open: boolean;
     provider?: AuthProviderStatus | null;
+    /** Display name override, for sign-ins that are not provider rows (e.g. MCP servers). */
+    label?: string | null;
     focusTarget?: ProviderDialogFocusTarget | null;
     portalTarget?: HTMLElement | null;
     flowKind?: OAuthFlowKind | null;
@@ -48,7 +51,7 @@
 
   const isDevicePoll = $derived(flowKind === OAuthFlowKind.DevicePoll);
   const hasAuthorizationUrl = $derived(Boolean(authorizationUrl));
-  const providerName = $derived(provider?.display_name ?? 'this provider');
+  const providerName = $derived(label ?? provider?.display_name ?? 'this provider');
   const description = $derived(
     isDevicePoll
       ? `Approve access for ${providerName} in your browser, then check authentication.`

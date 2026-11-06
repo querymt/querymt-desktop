@@ -1,5 +1,5 @@
 import type { SessionNotification } from '@agentclientprotocol/sdk';
-import type { DelegationUpdateNotification, SessionRuntimeStatus } from '$lib/querymt/generated/types';
+import { DelegationActivity, type DelegationUpdateNotification, type SessionRuntimeStatus } from '$lib/querymt/generated/types';
 import { readAccountingMeta, readUsageBreakdown } from '$lib/domain/session-usage';
 import type {
   ActiveSessionViewModel,
@@ -618,7 +618,7 @@ export function mergeDelegationActivity(
   if (complete) {
     const liveIds = new Set(incoming.filter((item) => item.activity === 'live').map((item) => item.delegationId));
     for (const [id, item] of items) {
-      if (item.activity === 'live' && !liveIds.has(id)) items.set(id, { ...item, activity: 'historical' });
+      if (item.activity === 'live' && !liveIds.has(id)) items.set(id, { ...item, activity: DelegationActivity.Historical });
     }
   }
   const merged = [...items.values()];

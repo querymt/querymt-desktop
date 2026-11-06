@@ -83,6 +83,14 @@ export interface AccountingSnapshot {
  */
 export type AgentEventKind = 
 	| { type: "session_created", data?: undefined }
+	| { type: "runtime_changed", data: {
+	runtime: SessionRuntimeStatus;
+}}
+	| { type: "delegation_stage_changed", data: {
+	delegation_id: string;
+	stage?: DelegationStage;
+	source_epoch: string;
+}}
 	| { type: "session_workspace_bound", data: {
 	workspace: SessionWorkspaceView;
 	cwd?: string;
@@ -300,6 +308,34 @@ export type AgentEventKind =
 	tool_name: string;
 	is_error: boolean;
 	result: string;
+}}
+	/**
+	 * Progress of an in-flight MCP tool call. Transient: throttled, never
+	 * persisted or replayed, and never published after the call's
+	 * `ToolCallEnd`.
+	 */
+	| { type: "tool_call_progress", data: {
+	tool_call_id: string;
+	tool_name: string;
+	progress?: number;
+	total?: number;
+	message?: string;
+}}
+	/**
+	 * An OAuth MCP server was skipped (or failed a call) because it needs
+	 * authorization, or because its authorization could not be checked
+	 * (`error`). Transient: clients log in with `provider_id`
+	 * (`mcp:<server>`) through the `_querymt/auth/*` methods.
+	 */
+	| { type: "mcp_server_auth_required", data: {
+	server_name: string;
+	provider_id: string;
+	/**
+	 * Set when authorization could not be checked at all (for example
+	 * the authorization server is unreachable) rather than merely
+	 * missing. The server was skipped either way.
+	 */
+	error?: string;
 }}
 	| { type: "hook_notice", data: {
 	event_name: string;
@@ -1093,6 +1129,10 @@ export interface ControlFeatureInfo {
 	remote_sessions: boolean;
 	session_lifecycle?: boolean;
 	session_pins?: boolean;
+	/**
+	 * `session/list` honours `_meta.querymt.sessionSource` (`local` | `remote`), so clients
+	 * can page local and remote sessions independently and in parallel.
+	 */
 	session_source_listing?: boolean;
 	/** `loadWindow` on load/attach, the whole-session `summary`, and `querymt/session/history`. */
 	session_history_window?: boolean;
@@ -1122,6 +1162,13 @@ export interface CapabilitiesInfo {
 	methods: string[];
 	notifications: string[];
 	elicitation_recovery?: ElicitationRecoveryCapability;
+}
+
+/** A child session spawned by this session. */
+export interface ChildSessionLink {
+	childSessionId: string;
+	delegationId?: string;
+	toolCallId?: string;
 }
 
 /** Result of `complete_flow`. */
@@ -1210,16 +1257,25 @@ export enum DelegationUpdateState {
 	Cancelled = "cancelled",
 }
 
+export enum DelegationActivity {
+	Live = "live",
+	Historical = "historical",
+}
+
+export enum DelegationStage {
+	Queued = "queued",
+	Executing = "executing",
+	Verifying = "verifying",
+	Finalizing = "finalizing",
+	CancelRequested = "cancel_requested",
+}
+
 export interface DelegationUpdateNotification {
 	version: number;
 	sessionId: string;
 	delegationId: string;
 	toolCallId?: string;
 	state: DelegationUpdateState;
-	stage?: 'queued' | 'executing' | 'verifying' | 'finalizing' | 'cancel_requested';
-	activity?: 'live' | 'historical';
-	sessionSeq?: number;
-	sourceEpoch?: string;
 	targetAgentId: string;
 	objective: string;
 	childSessionId?: string;
@@ -1232,6 +1288,10 @@ export interface DelegationUpdateNotification {
 	updatedAt: number;
 	resultSummary?: string;
 	error?: string;
+	activity?: DelegationActivity;
+	stage?: DelegationStage;
+	sessionSeq?: number;
+	sourceEpoch?: string;
 }
 
 export interface DismissRemoteSessionRequest {
@@ -1363,6 +1423,19 @@ export interface GetScheduleControlRequest {
 	schedule_public_id: string;
 }
 
+/** Where the returned events sit in the session's history. */
+export interface HistoryInfo {
+	/** No older history exists before the returned events. */
+	complete: boolean;
+	/**
+	 * Opaque token for the `session/history` request that returns the turns
+	 * preceding the returned events. Absent when `complete`.
+	 */
+	before?: string;
+	/** The owner was unreachable; the history was served from the local copy. */
+	stale?: boolean;
+}
+
 export interface IrohLookupServiceDiagnostics {
 	service: string;
 	results: string;
@@ -1414,11 +1487,27 @@ export interface ListSchedulesControlRequest {
 	session_id?: string;
 }
 
+/** A client's request for a recent-history window. */
+export interface LoadWindow {
+	maxTurns: number;
+	maxBytes: number;
+	truncateBytes: number;
+}
+
 /** Result of `logout`. */
 export interface LogoutResult {
 	provider: string;
 	success: boolean;
 	message: string;
+}
+
+/** Params of the `querymt/session/mcpAuthRequired` notification. */
+export interface McpAuthRequiredNotification {
+	version: number;
+	session_id: string;
+	server_name: string;
+	provider_id: string;
+	error?: string;
 }
 
 /**
@@ -1550,11 +1639,47 @@ export interface ModelsChangedNotification {
 	reason: string;
 }
 
+/** A queued or steering input that has not started or been applied yet. */
+export interface PendingInputSummary {
+	inputId: string;
+	/** `"steer"` or `"queue"`. */
+	delivery: string;
+	/** `"accepted"` or `"queued"`. */
+	state: string;
+	runId?: string;
+	position?: number;
+	blocks?: any;
+	/** Acceptance time in milliseconds since the epoch. */
+	createdAt: number;
+}
+
 /** Result of updating a single OCI plugin. */
 export interface PluginUpdateResult {
 	plugin_name: string;
 	success: boolean;
 	message?: string;
+}
+
+/** Exclusive token categories, as in the live usage meta. */
+export interface UsageBreakdown {
+	inputTokens: number;
+	outputTokens: number;
+	reasoningTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+}
+
+/** Usage accumulated over the part of history preceding a window. */
+export interface PriorUsage {
+	/**
+	 * Journal position of the window's first event; the prior totals cover
+	 * exactly the events with a smaller position.
+	 */
+	windowStart?: number;
+	sessionTotals?: UsageBreakdown;
+	partial: boolean;
+	requestCount: number;
+	accounting: any;
 }
 
 /**
@@ -1643,6 +1768,19 @@ export interface RequestAccounting {
 
 export interface RevokeMeshInviteRequest {
 	invite_id: string;
+}
+
+export enum RuntimeAvailability {
+	Live = "live",
+	Inactive = "inactive",
+	Unavailable = "unavailable",
+}
+
+export interface RuntimeObservation {
+	availability: RuntimeAvailability;
+	epoch?: string;
+	revision?: number;
+	reason?: string;
 }
 
 export interface ScheduleActionControlRequest {
@@ -1752,6 +1890,82 @@ export interface SessionGroup {
 	next_cursor?: string;
 }
 
+/**
+ * Request for the turns preceding a position reported by a load or a
+ * previous older-history response.
+ */
+export interface SessionHistoryRequest {
+	sessionId: string;
+	/** The `history.before` token of the previous response. */
+	before: string;
+	loadWindow?: LoadWindow;
+}
+
+/** Which part of a tool call a truncation marker or content request refers to. */
+export enum ToolContentPart {
+	Result = "result",
+	Arguments = "arguments",
+}
+
+/** A tool result or argument string that was shortened in a response. */
+export interface TruncatedEntry {
+	tool_call_id: string;
+	part: ToolContentPart;
+	/**
+	 * JSON pointer to the shortened string inside the arguments; absent for
+	 * results and for arguments that are not JSON.
+	 */
+	path?: string;
+	full_bytes: number;
+}
+
+export interface SessionHistoryResponse {
+	/** Events whose `seq` is their history position, ascending. */
+	events: AgentEvent[];
+	history: HistoryInfo;
+	truncated: TruncatedEntry[];
+}
+
+/**
+ * Whole-session token usage (the live `_meta.querymt.usage` v1 fields) plus
+ * the state a client needs to keep live usage correct after a window.
+ */
+export interface SummaryUsage {
+	latestRequest?: UsageBreakdown;
+	sessionTotals?: UsageBreakdown;
+	partial: boolean;
+	/** Number of main-request completions in the session. */
+	requestCount: number;
+	/** Context occupancy reported by the last request, and its position. */
+	contextTokens?: number;
+	contextPosition?: number;
+	/** Session-lifetime accounting totals from the shared reducer. */
+	accounting: any;
+	/**
+	 * Usage of the events *before* the returned window. A consumer that
+	 * replays the window's own events seeds from this to reach whole-session
+	 * totals without counting any event twice.
+	 */
+	beforeWindow?: PriorUsage;
+}
+
+/** The session's current model, from its last `ProviderChanged`. */
+export interface SummaryProvider {
+	provider: string;
+	model: string;
+	node?: string;
+	contextLimit?: number;
+	position: number;
+}
+
+/** State computed over the entire session, independent of the window. */
+export interface SessionHistorySummary {
+	usage: SummaryUsage;
+	provider?: SummaryProvider;
+	pendingInputs: PendingInputSummary[];
+	childSessions: ChildSessionLink[];
+}
+
 export enum SessionInputDelivery {
 	Steer = "steer",
 	Queue = "queue",
@@ -1791,6 +2005,29 @@ export interface SessionLimits {
 	max_cost_usd?: number;
 }
 
+export enum SessionRuntimePhase {
+	Unknown = "unknown",
+	Idle = "idle",
+	Starting = "starting",
+	Model = "model",
+	Tools = "tools",
+	Waiting = "waiting",
+	Closing = "closing",
+	CancelRequested = "cancel_requested",
+}
+
+/** High-level runtime state for stop/resume and steering orchestration. */
+export interface SessionRuntimeStatus {
+	phase: SessionRuntimePhase;
+	active_run_id?: string;
+	steerable: boolean;
+	pending_steering_count: number;
+	queued_input_count: number;
+	run_started_at_ms?: number;
+	observation: RuntimeObservation;
+	delegation_activity?: DelegationUpdateNotification[];
+}
+
 export interface StreamCursor {
 	local_seq: number;
 	remote_seq_by_source: Record<string, number>;
@@ -1805,6 +2042,7 @@ export interface UserPromptRecord {
 }
 
 export interface SessionLoadSnapshot {
+	runtimeStatus: SessionRuntimeStatus;
 	audit: AuditView;
 	cursor: StreamCursor;
 	/**
@@ -1815,7 +2053,6 @@ export interface SessionLoadSnapshot {
 	accounting: AccountingSnapshot;
 	delegationUpdates: DelegationUpdateNotification[];
 	userPrompts?: UserPromptRecord[];
-	runtimeStatus?: SessionRuntimeStatus;
 	/** Present only for windowed loads: where the returned events sit. */
 	history?: HistoryInfo;
 	/** Present only for windowed loads: whole-session state. */
@@ -1824,39 +2061,24 @@ export interface SessionLoadSnapshot {
 	truncated?: TruncatedEntry[];
 }
 
-export enum SessionRuntimePhase {
-	Idle = "idle",
-	Starting = "starting",
-	Model = "model",
-	Tools = "tools",
-	Waiting = "waiting",
-	Closing = "closing",
-	CancelRequested = "cancel_requested",
-	Unknown = "unknown",
-}
-
-/** High-level runtime state for stop/resume and steering orchestration. */
-export interface SessionRuntimeStatus {
-	phase: SessionRuntimePhase;
-	active_run_id?: string | null;
-	steerable: boolean;
-	pending_steering_count: number;
-	queued_input_count: number;
-	run_started_at_ms?: number | null;
-	observation?: {
-		availability: 'live' | 'inactive' | 'unavailable';
-		epoch?: string;
-		revision?: number;
-		reason?: string;
-	};
-	delegation_activity?: DelegationUpdateNotification[];
-}
-
 export interface SessionMeta {
 	messageCount: number;
 	userMessageCount: number;
 	hasErrors: boolean;
 	runtimeStatus: SessionRuntimeStatus;
+}
+
+export interface SessionToolContentRequest {
+	sessionId: string;
+	toolCallId: string;
+	part: ToolContentPart;
+}
+
+export interface SessionToolContentResponse {
+	sessionId: string;
+	toolCallId: string;
+	part: ToolContentPart;
+	content: string;
 }
 
 export interface SetDelegateModelRequest {
@@ -1879,6 +2101,25 @@ export interface SetDelegateModelResponse {
 	reasoning_effort: DelegateReasoningEffort | null;
 	revision: number | null;
 	durable: boolean;
+}
+
+/**
+ * An MCP server that was left out of a session because its authorization is
+ * missing or could not be checked. The session itself still started.
+ * 
+ * Carried by the `McpServerAuthRequired` event, by session responses
+ * (`_meta.querymt.skippedMcpServers`) and, with the session id, by the
+ * `querymt/session/mcpAuthRequired` notification.
+ */
+export interface SkippedMcpServer {
+	server_name: string;
+	/** Provider id to log in with (`mcp:<server>`). */
+	provider_id: string;
+	/**
+	 * Why authorization could not be used, when it is not simply "no login
+	 * yet" (e.g. the authorization server is unreachable).
+	 */
+	error?: string;
 }
 
 /** Result of `start_flow`. */
@@ -2059,154 +2300,3 @@ export type SubmitInputResult =
 	input_id: string;
 }};
 
-/** A child session spawned by this session. */
-export interface ChildSessionLink {
-	childSessionId: string;
-	delegationId?: string;
-	toolCallId?: string;
-}
-
-/** Where the returned events sit in the session's history. */
-export interface HistoryInfo {
-	/** No older history exists before the returned events. */
-	complete: boolean;
-	/**
-	 * Opaque token for the `session/history` request that returns the turns
-	 * preceding the returned events. Absent when `complete`.
-	 */
-	before?: string;
-	/** The owner was unreachable; the history was served from the local copy. */
-	stale?: boolean;
-}
-
-/** A client's request for a recent-history window. */
-export interface LoadWindow {
-	maxTurns: number;
-	maxBytes: number;
-	truncateBytes: number;
-}
-
-/** A queued or steering input that has not started or been applied yet. */
-export interface PendingInputSummary {
-	inputId: string;
-	/** `"steer"` or `"queue"`. */
-	delivery: string;
-	/** `"accepted"` or `"queued"`. */
-	state: string;
-	runId?: string;
-	position?: number;
-	blocks?: any;
-	/** Acceptance time in milliseconds since the epoch. */
-	createdAt: number;
-}
-
-/** Exclusive token categories, as in the live usage meta. */
-export interface UsageBreakdown {
-	inputTokens: number;
-	outputTokens: number;
-	reasoningTokens: number;
-	cacheReadTokens: number;
-	cacheWriteTokens: number;
-}
-
-/** Usage accumulated over the part of history preceding a window. */
-export interface PriorUsage {
-	/**
-	 * Journal position of the window's first event; the prior totals cover
-	 * exactly the events with a smaller position.
-	 */
-	windowStart?: number;
-	sessionTotals?: UsageBreakdown;
-	partial: boolean;
-	requestCount: number;
-	accounting: any;
-}
-
-/**
- * Whole-session token usage (the live `_meta.querymt.usage` v1 fields) plus
- * the state a client needs to keep live usage correct after a window.
- */
-export interface SummaryUsage {
-	latestRequest?: UsageBreakdown;
-	sessionTotals?: UsageBreakdown;
-	partial: boolean;
-	/** Number of main-request completions in the session. */
-	requestCount: number;
-	/** Context occupancy reported by the last request, and its position. */
-	contextTokens?: number;
-	contextPosition?: number;
-	/** Session-lifetime accounting totals from the shared reducer. */
-	accounting: any;
-	/**
-	 * Usage of the events *before* the returned window. A consumer that
-	 * replays the window's own events seeds from this to reach whole-session
-	 * totals without counting any event twice.
-	 */
-	beforeWindow?: PriorUsage;
-}
-
-/** The session's current model, from its last `ProviderChanged`. */
-export interface SummaryProvider {
-	provider: string;
-	model: string;
-	node?: string;
-	contextLimit?: number;
-	position: number;
-}
-
-/**
- * Request for the turns preceding a position reported by a load or a
- * previous older-history response.
- */
-export interface SessionHistoryRequest {
-	sessionId: string;
-	/** The `history.before` token of the previous response. */
-	before: string;
-	loadWindow?: LoadWindow;
-}
-
-export interface SessionHistoryResponse {
-	/** Events whose `seq` is their history position, ascending. */
-	events: AgentEvent[];
-	history: HistoryInfo;
-	truncated: TruncatedEntry[];
-}
-
-/** Which part of a tool call a truncation marker or content request refers to. */
-export enum ToolContentPart {
-	Result = "result",
-	Arguments = "arguments",
-}
-
-/** A tool result or argument string that was shortened in a response. */
-export interface TruncatedEntry {
-	tool_call_id: string;
-	part: ToolContentPart;
-	/**
-	 * JSON pointer to the shortened string inside the arguments; absent for
-	 * results and for arguments that are not JSON.
-	 */
-	path?: string;
-	full_bytes: number;
-}
-
-/** State computed over the entire session, independent of the window. */
-export interface SessionHistorySummary {
-	usage: SummaryUsage;
-	provider?: SummaryProvider;
-	pendingInputs: PendingInputSummary[];
-	childSessions: ChildSessionLink[];
-}
-
-export interface SessionToolContentRequest {
-	sessionId: string;
-	toolCallId: string;
-	part: ToolContentPart;
-}
-
-export interface SessionToolContentResponse {
-	sessionId: string;
-	toolCallId: string;
-	part: ToolContentPart;
-	content: string;
-}
