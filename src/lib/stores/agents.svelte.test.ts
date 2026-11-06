@@ -1062,6 +1062,8 @@ describe('AgentsStore recent sessions', () => {
 
   it('ignores malformed mcpAuthRequired notifications', async () => {
     const store = createStore();
+    await store.connectAgent('agent-1');
+    expect(mockClient.onExtensionNotification).toHaveBeenCalled();
     mockClient.emitExtensionNotification({ method: 'querymt/session/mcpAuthRequired', params: { session_id: 's' } });
     mockClient.emitExtensionNotification({ method: 'querymt/session/mcpAuthRequired', params: null });
     expect(store.skippedMcpServersBySession).toEqual({});
@@ -1832,6 +1834,20 @@ describe('AgentsStore session lifecycle', () => {
     store.setComposerProfile('default');
     await store.createSession('agent-1');
     expect(mockClient.createRemoteSession).toHaveBeenCalledWith(expect.objectContaining({ profile_id: 'default' }));
+  });
+
+  it('creates on the explicit target instead of the unrelated composer target', async () => {
+    const store = await lifecycleStore();
+    store.setComposerTarget('node-1');
+    expect(await store.createSession('agent-1', { cwd: '/local/work', targetId: 'local' })).toBe('session-1');
+    expect(mockClient.createRemoteSession).not.toHaveBeenCalled();
+    expect(mockClient.createSession).toHaveBeenCalled();
+
+    store.setComposerTarget('local');
+    mockClient.createSession.mockClear();
+    await store.createSession('agent-1', { cwd: '/owner/work', targetId: 'node-2' });
+    expect(mockClient.createRemoteSession).toHaveBeenCalledWith(expect.objectContaining({ node_id: 'node-2', cwd: '/owner/work' }));
+    expect(mockClient.createSession).not.toHaveBeenCalled();
   });
 
   it('blocks an explicit remote profile when owner discovery fails rather than creating a default session', async () => {

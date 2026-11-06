@@ -3384,14 +3384,24 @@ summary:focus-visible {
 
 .session-mcp-auth-notice-actions {
   display: inline-flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
   gap: 0.4rem;
+  margin-left: auto;
 }
 
 .session-mcp-auth-notice-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.5rem 0.75rem;
+}
+
+.session-mcp-auth-notice-row > span:first-child {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .provider-connection-row {

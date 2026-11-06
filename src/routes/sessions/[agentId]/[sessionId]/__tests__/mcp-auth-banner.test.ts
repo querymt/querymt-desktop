@@ -104,7 +104,7 @@ describe('Session page MCP sign-in banner', () => {
     expect(screen.getByTestId('mcp-auth-notice')).toHaveTextContent('Start a new session');
 
     await fireEvent.click(screen.getByRole('button', { name: 'New session' }));
-    await waitFor(() => expect(store.spy('createSession')).toHaveBeenCalledWith('agent-1', { cwd: '/tmp/work' }));
+    await waitFor(() => expect(store.spy('createSession')).toHaveBeenCalledWith('agent-1', { cwd: '/tmp/work', targetId: 'local' }));
     await waitFor(() => expect(goto).toHaveBeenCalledWith('/sessions/agent-1/new-1'));
   });
 
@@ -115,7 +115,7 @@ describe('Session page MCP sign-in banner', () => {
 
     expect(screen.getByTestId('mcp-auth-notice')).toHaveTextContent('unavailable: dns failure');
     expect(screen.getByRole('button', { name: 'Retry sign-in' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings?section=mcp');
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings?section=connectors');
 
     await fireEvent.click(screen.getByRole('button', { name: 'Dismiss linear' }));
     expect(store.spy('dismissSkippedMcpServer')).toHaveBeenCalledWith('agent-1', 'real-1', 'linear');

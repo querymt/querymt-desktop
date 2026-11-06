@@ -162,7 +162,13 @@
     if (newSessionPending) return;
     newSessionPending = true;
     try {
-      const newId = await agentsStore.createSession(agentId, selectedSession?.cwd ? { cwd: selectedSession.cwd } : {});
+      const remoteNodeId = selectedSession?.location === 'remote' ? selectedSession.remoteNodeId : undefined;
+      const newId = await agentsStore.createSession(agentId, {
+        ...(selectedSession?.cwd ? { cwd: selectedSession.cwd } : {}),
+        // Keep the original target; otherwise the composer's unrelated selection would decide it.
+        ...(selectedSession && (selectedSession.location !== 'remote' || remoteNodeId) ? { targetId: remoteNodeId ?? 'local' } : {}),
+        ...(remoteNodeId && selectedSession?.remoteProfileId ? { profileId: selectedSession.remoteProfileId } : {})
+      });
       if (newId) await goto(`/sessions/${encodeURIComponent(agentId)}/${encodeURIComponent(newId)}`);
     } finally {
       newSessionPending = false;
@@ -852,7 +858,7 @@
                 {:else}
                   <button class="action-btn" type="button" disabled={signingIn}
                     onclick={() => startMcpSignIn(server.provider_id, server.server_name)}>{server.error ? 'Retry sign-in' : 'Sign in'}</button>
-                  {#if server.error}<a class="action-btn" href="/settings?section=mcp">Settings</a>{/if}
+                  {#if server.error}<a class="action-btn" href="/settings?section=connectors">Settings</a>{/if}
                 {/if}
                 <button class="action-btn" type="button" aria-label={`Dismiss ${server.server_name}`}
                   onclick={() => agentsStore.dismissSkippedMcpServer(agentId, sessionId, server.server_name)}>×</button>

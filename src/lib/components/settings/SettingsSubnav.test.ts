@@ -17,13 +17,13 @@ describe('SettingsSubnav', () => {
     expect(onSelect).toHaveBeenCalledWith('providers');
   });
 
-  it('shows the MCP servers destination only when requested', async () => {
+  it('shows the Connectors destination only when requested', async () => {
     const onSelect = vi.fn();
     const { rerender } = render(SettingsSubnav, { selected: 'general', onSelect });
-    expect(screen.queryByRole('button', { name: /MCP servers/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Connectors/ })).not.toBeInTheDocument();
 
-    await rerender({ selected: 'general', onSelect, showMcp: true });
-    await fireEvent.click(screen.getByRole('button', { name: /MCP servers/ }));
-    expect(onSelect).toHaveBeenCalledWith('mcp');
+    await rerender({ selected: 'general', onSelect, showConnectors: true });
+    await fireEvent.click(screen.getByRole('button', { name: /Connectors/ }));
+    expect(onSelect).toHaveBeenCalledWith('connectors');
   });
 });

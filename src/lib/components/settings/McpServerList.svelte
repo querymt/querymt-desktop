@@ -7,6 +7,7 @@
   let {
     servers,
     pendingAction = null,
+    signInLocked = false,
     messages = {},
     errors = {},
     onSignIn,
@@ -17,6 +18,8 @@
     /** `mcp:<server>` entries of `_querymt/auth/status`. */
     servers: AuthProviderStatus[];
     pendingAction?: { provider: string; action: string } | null;
+    /** A sign-in is running for any provider or server; disables every Sign in button. */
+    signInLocked?: boolean;
     messages?: Record<string, string | undefined>;
     errors?: Record<string, string | undefined>;
     onSignIn: (server: AuthProviderStatus) => void;
@@ -37,7 +40,7 @@
   }
 </script>
 
-<div class="provider-connection-list" aria-label="MCP servers">
+<div class="provider-connection-list" aria-label="Connectors">
   {#each sorted as server (server.provider)}
     {@const connected = server.oauth_status === OAuthStatus.Connected}
     {@const pending = pendingFor(server)}
@@ -64,7 +67,7 @@
           <button
             class="action-btn action-btn-compact provider-connection-action"
             type="button"
-            disabled={Boolean(pending)}
+            disabled={Boolean(pending) || signInLocked}
             onclick={(event) => { onDialogTrigger(event); onSignIn(server); }}
           ><LogIn size={14} />Sign in</button>
         {/if}

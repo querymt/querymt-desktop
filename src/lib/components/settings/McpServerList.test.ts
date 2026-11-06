@@ -60,4 +60,16 @@ describe('McpServerList', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel sign-in' }));
     expect(h.onCancelSignIn).toHaveBeenCalledOnce();
   });
+
+  it('disables every Sign in button while any sign-in is locked', async () => {
+    const h = handlers();
+    render(McpServerList, {
+      servers: [server('linear', false), server('other', false)],
+      signInLocked: true,
+      ...h
+    });
+    const buttons = screen.getAllByRole('button', { name: 'Sign in' });
+    expect(buttons).toHaveLength(2);
+    for (const button of buttons) expect(button).toBeDisabled();
+  });
 });

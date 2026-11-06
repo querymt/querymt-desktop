@@ -201,10 +201,10 @@ describe('Settings controls', () => {
       const { unmount } = render(SettingsPage);
       await waitFor(() => expect(screen.getByRole('heading', { name: 'Anthropic' })).toBeInTheDocument());
       expect(screen.queryByRole('heading', { name: 'MCP: linear' })).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /MCP servers/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Connectors/ })).toBeInTheDocument();
       unmount();
 
-      window.history.replaceState({}, '', '/settings?section=mcp');
+      window.history.replaceState({}, '', '/settings?section=connectors');
       render(SettingsPage);
       await waitFor(() => expect(screen.getByRole('heading', { name: 'linear' })).toBeInTheDocument());
       expect(screen.queryByRole('heading', { name: 'Anthropic' })).not.toBeInTheDocument();

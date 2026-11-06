@@ -3304,7 +3304,16 @@ export class AgentsStore {
       return null;
     }
 
-    const launch = options.settings ?? this.captureLaunchSettings(agentId);
+    let launch = options.settings ?? this.captureLaunchSettings(agentId);
+    if (!options.settings && options.targetId !== undefined) {
+      const isLocal = options.targetId === 'local';
+      launch = {
+        ...launch,
+        targetId: options.targetId,
+        workspaceMode: isLocal ? launch.workspaceMode : ('local' as ComposerWorkspaceMode),
+        profileId: options.profileId ?? (isLocal ? 'default' : 'querymt:owner-default')
+      };
+    }
     const canSelect = () => !launchId || this.isSelectedSession(agentId, launchId);
     let announced = false;
     const announceSelected = (sessionId: string) => {
