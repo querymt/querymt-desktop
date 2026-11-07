@@ -104,6 +104,10 @@ function createAgentsStore() {
       if (agentId) agentsStore.launchModelIds[agentId] = value;
     }),
     refreshModelsForAgent: vi.fn(async () => undefined),
+    chooseLaunchModel: vi.fn((agentId: string | null | undefined, value: string) => {
+      if (agentId) agentsStore.launchModelIds[agentId] = value;
+    }),
+    initializeSettled: true,
     refreshRemoteProfiles: vi.fn(async () => undefined),
     getLaunchProfileError: vi.fn((): string | null => null),
     clearLaunchProfileError: vi.fn(),
@@ -147,7 +151,31 @@ function createAgentsStore() {
 }
 
 const goto = vi.hoisted(() => vi.fn(async () => undefined));
-const agentsStore = vi.hoisted(() => createAgentsStore());
+const agentsStore = vi.hoisted(() => {
+  const store = createAgentsStore();
+  Object.defineProperty(store, 'primaryAgentId', {
+    configurable: true,
+    get() {
+      return store.configs.find((config) => config.enabled && config.id === store.composerAgentId)?.id ??
+        store.connectedAgents[0]?.id ?? store.configs.find((config) => config.enabled)?.id ?? null;
+    }
+  });
+  // Like the real store, readiness follows the launcher's agent unless a test overrides it.
+  let readinessOverride: unknown = null;
+  Object.defineProperty(store, 'readiness', {
+    configurable: true,
+    get() {
+      return readinessOverride ?? { agentId: (store as unknown as { primaryAgentId: string | null }).primaryAgentId, setupComplete: true, checks: [] };
+    },
+    set(value: unknown) {
+      readinessOverride = value;
+    }
+  });
+  return store as typeof store & {
+    readonly primaryAgentId: string | null;
+    readiness: { agentId: string | null; setupComplete: boolean; checks: Array<{ id: string; status: string; title: string; reason: string | null; action: null }> } | null;
+  };
+});
 
 vi.mock('$lib/components/primitives/SessionComposer.svelte', { spy: true });
 vi.mock('$app/navigation', () => ({ goto }));
@@ -176,6 +204,7 @@ afterEach(() => {
 
 beforeEach(() => {
   Object.assign(agentsStore, createAgentsStore());
+  agentsStore.readiness = null;
 });
 
 describe('Landing page session start', () => {
@@ -236,6 +265,7 @@ describe('Landing page session start', () => {
       expect(await screen.findByRole('button', { name: /^Claude Sonnet 4 from anthropic on flkr/ })).toBeInTheDocument();
       expect(agentsStore.getLaunchModelId('agent-1')).toBe(getModelSelectionKey(flkr));
       expect(agentsStore.setLaunchModel).not.toHaveBeenCalled();
+      expect(agentsStore.chooseLaunchModel).not.toHaveBeenCalled();
       expect(agentsStore.createSession).not.toHaveBeenCalled();
       expect(agentsStore.startSessionWithPrompt).not.toHaveBeenCalled();
     } finally {
@@ -255,7 +285,7 @@ describe('Landing page session start', () => {
       .find((button) => button.classList.contains('delegate-model-choice'))!;
     await fireEvent.click(modelRow);
 
-    expect(agentsStore.setLaunchModel).toHaveBeenCalledWith('agent-1', 'anthropic/claude-sonnet-4');
+    expect(agentsStore.chooseLaunchModel).toHaveBeenCalledWith('agent-1', 'anthropic/claude-sonnet-4');
     expect(agentsStore.activeSessionId).toBe('previous-session');
   });
 
@@ -567,5 +597,25 @@ describe('Landing page overview links', () => {
     await waitFor(() => {
       expect(document.querySelector('.app-tooltip-content')).toHaveTextContent('Agents connected and ready to start sessions');
     });
+  });
+});
+
+describe('Landing page with unfinished setup', () => {
+  it('shows the checklist, the blocked reason, and does not launch', async () => {
+    agentsStore.readiness = {
+      agentId: 'agent-1',
+      setupComplete: false,
+      checks: [{ id: 'providers', status: 'blocked', title: 'Providers', reason: 'No provider is connected.', action: null }]
+    };
+    agentsStore.composerPrompt = 'Draft prompt';
+    render(LandingPage);
+
+    expect(screen.getByTestId('setup-checklist')).toHaveTextContent('No provider is connected.');
+    expect(screen.getByTestId('composer-send-blocked')).toHaveTextContent('No provider is connected.');
+
+    const props = vi.mocked(SessionComposer).mock.calls.at(-1)![1];
+    expect(props.sendBlockedReason).toBe('No provider is connected.');
+    await props.onSendPrompt();
+    expect(agentsStore.beginLaunch).not.toHaveBeenCalled();
   });
 });

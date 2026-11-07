@@ -217,6 +217,8 @@ import {
 } from '$lib/stores/session-mode-preferences';
 import { createEmbeddedAgentConfig, EMBEDDED_AGENT_ID } from '$lib/platform/embedded-agent';
 import { isEmbedded, platformCapabilities } from '$lib/platform/runtime';
+import { evaluateReadiness, type ReadinessReport } from '$lib/domain/readiness';
+import { hasUsableProviderCredential } from '$lib/domain/provider-auth';
 import { normalizeAcpWebSocketEndpoint, usesSecureWebSocket } from '$lib/querymt/websocket-url';
 
 const AGENTS_STORAGE_KEY = 'querymt-desktop.agents';
@@ -542,6 +544,10 @@ export class AgentsStore {
   private remoteProfileVersions = new Map<string, number>();
   promptFocusToken = $state(0);
   loading = $state(false);
+  /** True while `initialize()` runs. */
+  initializing = $state(false);
+  /** `initialize()` has finished at least once. */
+  initializeSettled = $state(false);
   error = $state<string | null>(null);
   promptFailure = $state<PromptFailure | null>(null);
   promptRetryPending = $state(false);
@@ -1145,6 +1151,7 @@ export class AgentsStore {
       this.configs = [createEmbeddedAgentConfig(window.location)];
     }
     this.loading = true;
+    this.initializing = true;
     this.error = null;
 
     try {
@@ -1168,7 +1175,50 @@ export class AgentsStore {
       this.error = error instanceof Error ? error.message : 'Failed to initialize configured agents.';
     } finally {
       this.loading = false;
+      this.initializing = false;
+      this.initializeSettled = true;
     }
+  }
+
+  /** Agent the start screen launches with. */
+  get primaryAgentId(): string | null {
+    const online = this.connectedAgents;
+    return this.configs.find((config) => config.enabled && config.id === this.composerAgentId)?.id ??
+      online[0]?.id ?? this.configs.find((config) => config.enabled)?.id ?? null;
+  }
+
+  /** First-run readiness shared by the setup wizard and the start screen. */
+  get readiness(): ReadinessReport {
+    return evaluateReadiness({
+      configs: this.configs,
+      primaryAgentId: this.primaryAgentId,
+      statuses: this.statuses,
+      connectionStates: this.connectionStates,
+      agentErrors: this.agentErrors,
+      capabilities: this.controlCapabilitiesByAgent,
+      authProviders: this.authProvidersByAgent,
+      authLoading: this.authLoadingByAgent,
+      authErrors: this.authErrorsByAgent,
+      models: this.modelsByAgent,
+      modelLoading: this.modelLoadingByAgent,
+      launchModelIds: this.launchModelIds,
+      initializing: this.initializing || !this.initializeSettled
+    });
+  }
+
+  /** The agent supports provider auth and reports no connected provider. */
+  private needsProviderForModels(agentId: string): boolean {
+    if (!this.controlCapabilitiesByAgent[agentId]?.features?.auth) return false;
+    const providers = this.authProvidersByAgent[agentId];
+    return Array.isArray(providers) && !providers.some(hasUsableProviderCredential);
+  }
+
+  /** User-chosen launch model: selected now and remembered as the agent's most recent model. */
+  chooseLaunchModel(agentId: string | null | undefined, selectionKey: string) {
+    if (!agentId) return;
+    this.setLaunchModel(agentId, selectionKey);
+    const model = findModelBySelectionKey(this.modelsByAgent[agentId] ?? [], selectionKey);
+    if (model) this.rememberRecentModel(agentId, model);
   }
 
   private async ensureAgentLogSubscription() {
@@ -6248,7 +6298,9 @@ export class AgentsStore {
       const models = await load();
       if (models.length === 0 && options.keepExistingOnEmpty) {
         if (!options.suppressEmptyError) {
-          this.error = errorMessage;
+          this.error = this.needsProviderForModels(agentId)
+            ? 'No models available. Connect a provider in Settings → Providers.'
+            : errorMessage;
         }
         return 0;
       }

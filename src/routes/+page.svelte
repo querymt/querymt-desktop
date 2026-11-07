@@ -12,6 +12,8 @@
   import { mergeWorkspaceSuggestions } from '$lib/domain/workspace-suggestions';
   import { formatSessionTimestampShort, getSessionWorkspaceName, isActiveSessionStatus, isRootSession, sessionMatchesLifecycle } from '$lib/domain/sessions';
   import type { DesktopSessionSummary, InboxItem } from '$lib/domain/types';
+  import { firstOpenCheck } from '$lib/domain/readiness';
+  import SetupChecklist from '$lib/components/setup/SetupChecklist.svelte';
 
   const NEEDS_YOU_LIMIT = 3;
 
@@ -94,10 +96,18 @@
   const onlineAgents = $derived(agentsStore.connectedAgents);
   const configuredAgentCount = $derived(agentsStore.configs.filter((config) => config.enabled).length);
 
-  const primaryAgentId = $derived(
-    agentsStore.configs.find((config) => config.enabled && config.id === agentsStore.composerAgentId)?.id ??
-    onlineAgents[0]?.id ?? agentsStore.configs.find((config) => config.enabled)?.id ?? null
+  const primaryAgentId = $derived(agentsStore.primaryAgentId);
+  const readiness = $derived(agentsStore.readiness);
+  const blockingCheck = $derived(firstOpenCheck(readiness));
+  // Readiness may fall back to another running agent; launching needs the launcher's own agent.
+  const launcherAgentMismatch = $derived(readiness.setupComplete && readiness.agentId !== primaryAgentId);
+  const canLaunch = $derived(readiness.setupComplete && !launcherAgentMismatch);
+  const sendBlockedReason = $derived(
+    canLaunch ? null
+      : launcherAgentMismatch ? 'The selected agent is not running. Start it or choose another agent.'
+      : blockingCheck?.status === 'pending' ? 'Setting up…' : blockingCheck?.reason ?? null
   );
+  const showSetupChecklist = $derived(agentsStore.initializeSettled && !readiness.setupComplete);
   const modelLocation = $derived.by(() => {
     if (!primaryAgentId) return undefined;
     const status = agentsStore.meshStatusByAgent[primaryAgentId];
@@ -138,7 +148,7 @@
   // Both launch buttons open the session view immediately under a temporary id;
   // the store keeps creating the session (and sends the prompt) in the background.
   async function startSessionFromLauncher() {
-    if (!primaryAgentId) {
+    if (!primaryAgentId || !canLaunch) {
       return;
     }
 
@@ -195,8 +205,13 @@
       </section>
     {/each}
 
+    {#if showSetupChecklist}
+      <SetupChecklist report={readiness} />
+    {/if}
+
     <SessionComposer
       compact={true}
+      {sendBlockedReason}
       minimal={true}
       launch={true}
       sendShortcut={chatPreferencesStore.sendShortcut}
@@ -231,7 +246,7 @@
       onCwdInput={(value) => agentsStore.setComposerCwd(value)}
       onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
       onModelChange={(value) => {
-        if (primaryAgentId) agentsStore.setLaunchModel(primaryAgentId, value);
+        if (primaryAgentId) agentsStore.chooseLaunchModel(primaryAgentId, value);
       }}
       onRefreshModels={() => primaryAgentId && agentsStore.refreshModelsForAgent(primaryAgentId)}
       onAddAttachments={(attachments) => agentsStore.addPromptAttachments(attachments)}

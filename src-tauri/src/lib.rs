@@ -1,3 +1,4 @@
+pub mod app_reset;
 pub mod commands;
 pub mod deep_links;
 pub mod keychain;
@@ -32,6 +33,15 @@ pub fn run() {
     });
 
     let context = tauri::generate_context!();
+    // Apply a scheduled desktop data reset before any webview opens its storage.
+    let identifier = context.config().identifier.clone();
+    if let Some(dirs) = app_reset::AppDirs::resolve(&identifier) {
+        match app_reset::apply_pending(&dirs, &identifier) {
+            Ok(true) => eprintln!("Desktop app data was reset."),
+            Ok(false) => {}
+            Err(error) => eprintln!("Desktop app data reset failed: {error}"),
+        }
+    }
     #[cfg(all(feature = "cef", target_os = "linux"))]
     let context = {
         let mut context = context;
@@ -77,7 +87,8 @@ pub fn run() {
             commands::querymt_session_load_heartbeat,
             commands::querymt_session_load_finish,
             commands::querymt_workspace_suggest_paths,
-            commands::querymt_workspace_validate_directory
+            commands::querymt_workspace_validate_directory,
+            commands::querymt_app_reset_data
         ])
         .setup(|_app| {
             #[cfg(all(feature = "cef", target_os = "linux"))]

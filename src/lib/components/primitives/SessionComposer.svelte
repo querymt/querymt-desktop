@@ -96,8 +96,11 @@
     onInputDeliveryChange = null,
     onStopPrompt = null,
     onPromptExpandedChange = null,
+    sendBlockedReason = null,
     onSendPrompt
   }: {
+    /** When set, sending is disabled and this reason is shown. */
+    sendBlockedReason?: string | null;
     cwd?: string;
     prompt?: string;
     loading?: boolean;
@@ -456,6 +459,7 @@
       onStopPrompt();
       return;
     }
+    if (sendBlockedReason) return;
     onSendPrompt();
   }
 
@@ -658,6 +662,10 @@
         </button>
       {/if}
     </div>
+  {/if}
+
+  {#if sendBlockedReason}
+    <p class={`${unifiedShell ? 'mx-1' : 'mx-2'} composer-send-blocked text-sm text-[var(--muted)]`} role="status" data-testid="composer-send-blocked">{sendBlockedReason}</p>
   {/if}
 
   {#if !sessionOnly}
@@ -913,7 +921,7 @@
         {/if}
         <button
           class={`composer-send ${hasDraft ? 'composer-send-ready' : 'composer-send-idle'} ${launch ? 'action-btn action-btn-primary justify-center' : minimal || (activeSessionId && agentRunning && turnControlSupported) ? 'action-btn action-btn-primary px-4' : 'icon-btn icon-btn-primary'}`}
-          disabled={loading}
+          disabled={loading || Boolean(sendBlockedReason)}
           type="button"
           aria-label={activeSessionId ? primaryActionLabel : creatingBlankSession ? 'Start blank session' : 'Start session'}
           onclick={handlePrimaryAction}
@@ -1000,7 +1008,7 @@
           controlSize="compact"
           size={16}
           class={`composer-send ${hasDraft ? 'composer-send-ready' : 'composer-send-idle'}`}
-          disabled={loading}
+          disabled={loading || Boolean(sendBlockedReason)}
           onclick={handlePrimaryAction}
         />
       {/if}

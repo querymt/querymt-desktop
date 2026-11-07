@@ -11521,3 +11521,31 @@ describe('AgentsStore windowed path parity', () => {
     expect(mockClient.sessionHistory).not.toHaveBeenCalled();
   });
 });
+
+describe('first-run setup support', () => {
+  const local: ModelEntry = { id: 'openai/gpt', provider: 'openai', model: 'gpt' };
+  const remote: ModelEntry = { id: 'anthropic/claude', provider: 'anthropic', model: 'claude', node_id: 'peer-1' };
+
+  it('chooseLaunchModel selects and persists the model as the most recent one, including mesh nodes', () => {
+    localStorage.removeItem('querymt-desktop.recent-models');
+    const store = createStore();
+    store.modelsByAgent = { 'agent-1': [local, remote] };
+    store.chooseLaunchModel('agent-1', getModelSelectionKey(remote));
+    expect(store.getLaunchModelId('agent-1')).toBe(getModelSelectionKey(remote));
+    const saved = JSON.parse(localStorage.getItem('querymt-desktop.recent-models') ?? '{}');
+    expect(saved['agent-1'][0]).toBe(getModelSelectionKey(remote));
+    expect(store.getRecentModels('agent-1')[0]).toEqual(remote);
+  });
+
+  it('exposes readiness for the primary agent', () => {
+    const store = createStore();
+    store.initializeSettled = true;
+    store.connectionStates = { 'agent-1': 'initialized' };
+    store.controlCapabilitiesByAgent = { 'agent-1': { features: { auth: true } } as never };
+    store.authProvidersByAgent = { 'agent-1': [{ provider: 'openai', display_name: 'OpenAI', has_stored_api_key: false, has_env_api_key: false, supports_oauth: true }] };
+    store.modelsByAgent = { 'agent-1': [] };
+    expect(store.primaryAgentId).toBe('agent-1');
+    expect(store.readiness.setupComplete).toBe(false);
+    expect(store.readiness.checks.find((check) => check.id === 'providers')?.status).toBe('blocked');
+  });
+});
