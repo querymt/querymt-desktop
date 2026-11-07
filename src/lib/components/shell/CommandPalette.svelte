@@ -180,6 +180,17 @@
         }
       },
       {
+        id: 'run-setup',
+        title: 'Run setup',
+        subtitle: 'Check the agent, connect providers and choose a model.',
+        section: 'Navigate',
+        keywords: ['setup', 'onboarding', 'providers', 'wizard', 'first run'],
+        run: async () => {
+          commandPaletteStore.close();
+          await goto('/setup');
+        }
+      },
+      {
         id: 'open-mesh',
         title: 'Open mesh',
         subtitle: 'View mesh status, nodes, and remote sessions.',

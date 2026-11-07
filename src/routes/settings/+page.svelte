@@ -12,7 +12,7 @@
   import ProviderMaintenance from '$lib/components/settings/ProviderMaintenance.svelte';
   import ProviderOAuthDialog from '$lib/components/settings/ProviderOAuthDialog.svelte';
   import ProviderOverview from '$lib/components/settings/ProviderOverview.svelte';
-  import { captureProviderDialogFocusTarget, type ProviderDialogFocusTarget } from '$lib/components/settings/provider-dialog-focus';
+  import { ProviderActionsController } from '$lib/components/settings/provider-actions.svelte';
   import SettingsSubnav, { type SettingsSectionId } from '$lib/components/settings/SettingsSubnav.svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
@@ -24,46 +24,17 @@
   } from '$lib/domain/provider-auth';
   import { isMcpAuthId, mcpServerOfAuthId, splitAuthEntries } from '$lib/domain/mcp-auth';
   import McpServerList from '$lib/components/settings/McpServerList.svelte';
-  import { AuthMethod, OAuthStatus } from '$lib/querymt/generated/types';
-  import type { AuthProviderStatus } from '$lib/querymt/generated/types';
-  import { OAuthFlowKind } from '$lib/querymt/querymt-extensions';
-  import { openExternalUrl } from '$native';
+  import { OAuthStatus } from '$lib/querymt/generated/types';
   import { platformCapabilities } from '$lib/platform/runtime';
 
   let selectedAgentId = $state('');
-  let actionLoading = $state<string | null>(null);
-  let pageError = $state<string | null>(null);
-  let pageMessage = $state<string | null>(null);
-  let tokenDialogProvider = $state<AuthProviderStatus | null>(null);
-  let tokenDialogValue = $state('');
-  let manualOAuthProvider = $state<AuthProviderStatus | null>(null);
-  let manualOAuthFlowId = $state('');
-  let manualOAuthFlowKind = $state<OAuthFlowKind | null>(null);
-  let manualOAuthAuthorizationUrl = $state('');
-  let manualOAuthUrlCopied = $state(false);
-  let manualOAuthNeedsCallbackInput = $state(false);
-  let manualOAuthValue = $state('');
-  let oauthCancelRequested = $state(false);
-  let oauthCancelResolver: (() => void) | null = null;
-  let disconnectProviderPending = $state<AuthProviderStatus | null>(null);
-  let clearKeyProviderPending = $state<AuthProviderStatus | null>(null);
-  let providerDialogFocusTarget = $state<ProviderDialogFocusTarget | null>(null);
   let selectedSection = $state<SettingsSectionId>('general');
   let refreshingProviders = $state(false);
   let refreshingModels = $state(false);
   let updatingPlugins = $state(false);
   let maintenanceError = $state<string | null>(null);
   let maintenanceMessage = $state<string | null>(null);
-  let providerPendingAction = $state<{ provider: string; action: string } | null>(null);
-  let providerMessages = $state<Record<string, string | undefined>>({});
-  let providerErrors = $state<Record<string, string | undefined>>({});
-  // Sign-in shares one cancel flag, poll resolver and dialog, so only one flow may run at a time
-  // (across providers and MCP servers) until its async work, including a cancelled one, has finished.
-  const oauthLocked = $derived(
-    Boolean(actionLoading?.startsWith('oauth')) ||
-      manualOAuthProvider !== null ||
-      Boolean(providerPendingAction?.action.startsWith('oauth'))
-  );
+  const pa = new ProviderActionsController(() => selectedAgentId);
 
   const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
@@ -74,6 +45,7 @@
       return Boolean(caps?.features.auth);
     })
   );
+  const runningAgentCount = $derived(agentsStore.connectedAgents.length);
 
   $effect(() => {
     if (!selectedAgentId && authAgents.length > 0) {
@@ -108,9 +80,6 @@
     selectedAgentId ? agentsStore.pluginUpdateStatusByAgent[selectedAgentId] ?? null : null
   );
   const lastPluginUpdate = $derived.by(() => (selectedAgentId ? agentsStore.lastPluginUpdateByAgent[selectedAgentId] ?? null : null));
-  const manualOAuthIsDevicePoll = $derived(manualOAuthFlowKind === OAuthFlowKind.DevicePoll);
-
-  type OAuthPollResult = 'connected' | 'timeout' | 'cancelled';
 
   onMount(() => {
     const section = new URL(window.location.href).searchParams.get('section');
@@ -129,170 +98,14 @@
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
   }
 
-  function setBusy(value: string | null) {
-    actionLoading = value;
-  }
-
-  function startProviderAction(provider: AuthProviderStatus, action: string) {
-    providerPendingAction = { provider: provider.provider, action };
-    providerMessages = { ...providerMessages, [provider.provider]: undefined };
-    providerErrors = { ...providerErrors, [provider.provider]: undefined };
-  }
-
-  function finishProviderAction(provider: AuthProviderStatus, action: string) {
-    if (providerPendingAction?.provider === provider.provider && providerPendingAction.action === action) {
-      providerPendingAction = null;
-    }
-  }
-
-  function setProviderMessage(provider: AuthProviderStatus, message: string) {
-    providerMessages = { ...providerMessages, [provider.provider]: message };
-    providerErrors = { ...providerErrors, [provider.provider]: undefined };
-  }
-
-  function setProviderError(provider: AuthProviderStatus, message: string) {
-    providerErrors = { ...providerErrors, [provider.provider]: message };
-    providerMessages = { ...providerMessages, [provider.provider]: undefined };
-  }
-
-  function isOAuthLoading(provider: AuthProviderStatus) {
-    return actionLoading === `oauth:${provider.provider}`;
-  }
-
-  function isOAuthCompleting(provider: AuthProviderStatus) {
-    return actionLoading === `oauth-complete:${provider.provider}`;
-  }
-
-  function isManualOAuthSubmitDisabled() {
-    if (!manualOAuthProvider) return true;
-    if (isOAuthCompleting(manualOAuthProvider)) return true;
-    if (actionLoading && !isOAuthLoading(manualOAuthProvider)) return true;
-    return !manualOAuthIsDevicePoll && !manualOAuthValue.trim();
-  }
-
-  function requestOAuthCancel(provider: AuthProviderStatus) {
-    if (!isOAuthLoading(provider)) return;
-
-    // UI-side cancellation only: QueryMT ACP auth has no cancel endpoint yet.
-    // If stale backend flows become a problem, add backend cancel support instead of using logout, which deletes credentials.
-    oauthCancelRequested = true;
-    pageError = null;
-    pageMessage = null;
-    setProviderMessage(provider, `Cancelled sign-in for ${provider.display_name}.`);
-    // Stay pending until handleOAuth's async work settles, so a new sign-in cannot overlap it.
-    providerPendingAction = { provider: provider.provider, action: 'oauth-cancelling' };
-    closeManualOAuthDialog();
-    oauthCancelResolver?.();
-  }
-
-  function waitForOAuthPoll(delayMs: number) {
-    return new Promise<void>((resolve) => {
-      const timeoutId = window.setTimeout(() => {
-        oauthCancelResolver = null;
-        resolve();
-      }, delayMs);
-
-      oauthCancelResolver = () => {
-        window.clearTimeout(timeoutId);
-        oauthCancelResolver = null;
-        resolve();
-      };
-    });
-  }
-
-  async function pollProviderSignInUntilCancelled(agentId: string, providerName: string, attempts = 60, delayMs = 2000): Promise<OAuthPollResult> {
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      if (oauthCancelRequested) return 'cancelled';
-
-      const providers = await agentsStore.refreshAuthProviders(agentId);
-      if (oauthCancelRequested) return 'cancelled';
-
-      const match = providers.find((entry) => entry.provider === providerName);
-      if (match?.oauth_status === OAuthStatus.Connected) {
-        if (!isMcpAuthId(providerName)) await agentsStore.refreshModelsForAgent(agentId).catch(() => undefined);
-        return 'connected';
-      }
-
-      await waitForOAuthPoll(delayMs);
-    }
-
-    return oauthCancelRequested ? 'cancelled' : 'timeout';
-  }
-
-  function closeTokenDialog() {
-    tokenDialogProvider = null;
-    tokenDialogValue = '';
-  }
-
-  function closeManualOAuthDialog() {
-    manualOAuthProvider = null;
-    manualOAuthFlowId = '';
-    manualOAuthFlowKind = null;
-    manualOAuthAuthorizationUrl = '';
-    manualOAuthUrlCopied = false;
-    manualOAuthNeedsCallbackInput = false;
-    manualOAuthValue = '';
-  }
-
-  function showOAuthDialog(
-    provider: AuthProviderStatus,
-    flowId: string,
-    flowKind: OAuthFlowKind | null | undefined,
-    authorizationUrl: string | null | undefined,
-    needsCallbackInput = false
-  ) {
-    manualOAuthProvider = provider;
-    manualOAuthFlowId = flowId;
-    manualOAuthFlowKind = flowKind ?? null;
-    manualOAuthAuthorizationUrl = authorizationUrl ?? '';
-    manualOAuthUrlCopied = false;
-    manualOAuthNeedsCallbackInput = needsCallbackInput;
-    manualOAuthValue = '';
-  }
-
-  async function openManualOAuthAuthorizationUrl() {
-    if (!manualOAuthAuthorizationUrl || !manualOAuthProvider) return;
-    await openExternalUrl(manualOAuthAuthorizationUrl);
-    pageError = null;
-    pageMessage = `Opened sign-in for ${manualOAuthProvider.display_name}.`;
-  }
-
-  async function copyManualOAuthAuthorizationUrl() {
-    if (!manualOAuthAuthorizationUrl) return;
-    try {
-      await navigator.clipboard.writeText(manualOAuthAuthorizationUrl);
-      manualOAuthUrlCopied = true;
-      pageError = null;
-    } catch (error) {
-      pageError = error instanceof Error ? error.message : 'Failed to copy authorization URL.';
-    }
-  }
-
-  function closeOrCancelManualOAuthDialog() {
-    if (actionLoading?.startsWith('oauth:') && manualOAuthProvider) {
-      requestOAuthCancel(manualOAuthProvider);
-      return;
-    }
-    closeManualOAuthDialog();
-  }
-
-  function closeDisconnectDialog() {
-    disconnectProviderPending = null;
-  }
-
-  function closeClearKeyDialog() {
-    clearKeyProviderPending = null;
-  }
-
   async function refreshProviders() {
     if (!selectedAgentId) return;
     refreshingProviders = true;
-    pageError = null;
-    pageMessage = null;
+    pa.clearPageStatus();
     try {
       await agentsStore.refreshAuthProviders(selectedAgentId);
     } catch (error) {
-      pageError = error instanceof Error ? error.message : 'Failed to refresh providers.';
+      pa.pageError = error instanceof Error ? error.message : 'Failed to refresh providers.';
     } finally {
       refreshingProviders = false;
     }
@@ -328,248 +141,6 @@
       maintenanceError = error instanceof Error ? error.message : 'Failed to update plugins.';
     } finally {
       updatingPlugins = false;
-    }
-  }
-
-  async function submitManualOAuth() {
-    if (!selectedAgentId || !manualOAuthProvider || !manualOAuthFlowId) {
-      return;
-    }
-    if (!manualOAuthIsDevicePoll && !manualOAuthValue.trim()) {
-      return;
-    }
-
-    const agentId = selectedAgentId;
-    const provider = manualOAuthProvider;
-    const flowId = manualOAuthFlowId;
-    const response = manualOAuthIsDevicePoll ? '' : manualOAuthValue.trim();
-
-    if (isOAuthLoading(provider)) {
-      oauthCancelRequested = true;
-      oauthCancelResolver?.();
-    }
-
-    setBusy(`oauth-complete:${provider.provider}`);
-    startProviderAction(provider, 'oauth-complete');
-    pageError = null;
-    pageMessage = null;
-
-    try {
-      const result = await agentsStore.completeProviderSignIn(agentId, flowId, response);
-      if (result.success) {
-        const message = result.message || `Successfully authenticated with ${provider.display_name}.`;
-        pageMessage = message;
-        setProviderMessage(provider, message);
-        closeManualOAuthDialog();
-      } else {
-        const message = result.message || `Failed to complete sign-in for ${provider.display_name}.`;
-        pageError = message;
-        setProviderError(provider, message);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : `Failed to complete sign-in for ${provider.display_name}.`;
-      pageError = message;
-      setProviderError(provider, message);
-    } finally {
-      setBusy(null);
-      finishProviderAction(provider, 'oauth-complete');
-    }
-  }
-
-  async function submitApiToken() {
-    if (!selectedAgentId || !tokenDialogProvider || !tokenDialogValue.trim()) {
-      return;
-    }
-
-    const provider = tokenDialogProvider;
-    setBusy(`token:${provider.provider}`);
-    startProviderAction(provider, 'token');
-    pageError = null;
-    pageMessage = null;
-
-    try {
-      const result = await agentsStore.setProviderApiToken(
-        selectedAgentId,
-        provider.provider,
-        tokenDialogValue.trim()
-      );
-      if (result.success) {
-        const message = result.message || `Stored API key for ${provider.display_name}.`;
-        pageMessage = message;
-        setProviderMessage(provider, message);
-        closeTokenDialog();
-      } else {
-        const message = result.message || `Failed to store API key for ${provider.display_name}.`;
-        pageError = message;
-        setProviderError(provider, message);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : `Failed to store API key for ${provider.display_name}.`;
-      pageError = message;
-      setProviderError(provider, message);
-    } finally {
-      setBusy(null);
-      finishProviderAction(provider, 'token');
-    }
-  }
-
-  async function confirmDisconnectProvider() {
-    if (!selectedAgentId || !disconnectProviderPending) return;
-
-    const provider = disconnectProviderPending;
-    setBusy(`disconnect:${provider.provider}`);
-    startProviderAction(provider, 'disconnect');
-    pageError = null;
-    pageMessage = null;
-
-    try {
-      const result = await agentsStore.disconnectProvider(selectedAgentId, provider.provider);
-      if (result.success) {
-        const message = result.message || `Disconnected ${provider.display_name}.`;
-        pageMessage = message;
-        setProviderMessage(provider, message);
-        closeDisconnectDialog();
-      } else {
-        const message = result.message || `Failed to disconnect ${provider.display_name}.`;
-        pageError = message;
-        setProviderError(provider, message);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : `Failed to disconnect ${provider.display_name}.`;
-      pageError = message;
-      setProviderError(provider, message);
-    } finally {
-      setBusy(null);
-      finishProviderAction(provider, 'disconnect');
-    }
-  }
-
-  async function confirmClearApiToken() {
-    if (!selectedAgentId || !clearKeyProviderPending) return;
-
-    const provider = clearKeyProviderPending;
-    setBusy(`clear-token:${provider.provider}`);
-    startProviderAction(provider, 'clear-token');
-    pageError = null;
-    pageMessage = null;
-
-    try {
-      const result = await agentsStore.clearProviderApiToken(selectedAgentId, provider.provider);
-      if (result.success) {
-        const message = result.message || `Cleared API key for ${provider.display_name}.`;
-        pageMessage = message;
-        setProviderMessage(provider, message);
-        closeClearKeyDialog();
-      } else {
-        const message = result.message || `Failed to clear API key for ${provider.display_name}.`;
-        pageError = message;
-        setProviderError(provider, message);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : `Failed to clear API key for ${provider.display_name}.`;
-      pageError = message;
-      setProviderError(provider, message);
-    } finally {
-      setBusy(null);
-      finishProviderAction(provider, 'clear-token');
-    }
-  }
-
-  async function handleOAuth(provider: AuthProviderStatus) {
-    if (!selectedAgentId || oauthLocked) return;
-    const agentId = selectedAgentId;
-    setBusy(`oauth:${provider.provider}`);
-    startProviderAction(provider, 'oauth');
-    oauthCancelRequested = false;
-    pageError = null;
-    pageMessage = null;
-
-    try {
-      const start = await agentsStore.startProviderSignIn(agentId, provider.provider);
-      const providerName = start.provider || provider.provider;
-
-      const flowKind = start.flow_kind ?? null;
-      const waitsForRedirectCallback = Boolean(start.authorization_url && flowKind === OAuthFlowKind.RedirectCode);
-      const showsCallbackInput = flowKind !== OAuthFlowKind.DevicePoll;
-
-      showOAuthDialog(provider, start.flow_id, flowKind, start.authorization_url, showsCallbackInput);
-
-      if (!waitsForRedirectCallback) {
-        return;
-      }
-
-      const pollResult = await pollProviderSignInUntilCancelled(agentId, providerName);
-      if (pollResult === 'connected') {
-        const message = `Successfully authenticated with ${providerName}.`;
-        closeManualOAuthDialog();
-        pageMessage = message;
-        setProviderMessage(provider, message);
-        return;
-      }
-      if (pollResult === 'cancelled') {
-        return;
-      }
-
-      pageMessage = `Waiting for ${providerName} sign-in to complete. Paste the callback URL or code below if automatic completion does not finish.`;
-      manualOAuthNeedsCallbackInput = true;
-    } catch (error) {
-      if (!oauthCancelRequested) {
-        const message = error instanceof Error ? error.message : `Failed to start sign-in for ${provider.provider}.`;
-        pageError = message;
-        setProviderError(provider, message);
-      }
-    } finally {
-      oauthCancelRequested = false;
-      oauthCancelResolver = null;
-      if (actionLoading === `oauth:${provider.provider}`) {
-        setBusy(null);
-        finishProviderAction(provider, 'oauth');
-        finishProviderAction(provider, 'oauth-cancelling');
-      }
-    }
-  }
-
-  function rememberProviderDialogTrigger(event: MouseEvent) {
-    providerDialogFocusTarget = captureProviderDialogFocusTarget(event);
-  }
-
-  function handleDisconnect(provider: AuthProviderStatus) {
-    disconnectProviderPending = provider;
-  }
-
-  function handleSetApiToken(provider: AuthProviderStatus) {
-    tokenDialogProvider = provider;
-    tokenDialogValue = '';
-  }
-
-  function handleClearApiToken(provider: AuthProviderStatus) {
-    clearKeyProviderPending = provider;
-  }
-
-  async function handleAuthMethodChange(provider: AuthProviderStatus, value: string) {
-    if (!selectedAgentId || value === 'auto') return;
-    setBusy(`method:${provider.provider}`);
-    startProviderAction(provider, 'method');
-    pageError = null;
-    pageMessage = null;
-    try {
-      const result = await agentsStore.setProviderAuthMethod(selectedAgentId, provider.provider, value as AuthMethod);
-      if (result.success) {
-        const message = result.message || `Updated auth method for ${provider.display_name}.`;
-        pageMessage = message;
-        setProviderMessage(provider, message);
-      } else {
-        const message = result.message || `Failed to update auth method for ${provider.display_name}.`;
-        pageError = message;
-        setProviderError(provider, message);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : `Failed to update auth method for ${provider.display_name}.`;
-      pageError = message;
-      setProviderError(provider, message);
-    } finally {
-      setBusy(null);
-      finishProviderAction(provider, 'method');
     }
   }
 </script>
@@ -622,11 +193,11 @@
             </div>
           </div>
 
-          {#if authError || pageError}
-            <div class="alert-error settings-section-message">{pageError ?? authError}</div>
+          {#if authError || pa.pageError}
+            <div class="alert-error settings-section-message">{pa.pageError ?? authError}</div>
           {/if}
-          {#if pageMessage}
-            <div class="alert-success settings-section-message">{pageMessage}</div>
+          {#if pa.pageMessage}
+            <div class="alert-success settings-section-message">{pa.pageMessage}</div>
           {/if}
 
           <div class="settings-subsection" aria-label="Connector authentication">
@@ -637,14 +208,14 @@
             {:else}
               <McpServerList
                 servers={mcpServers}
-                pendingAction={providerPendingAction}
-                signInLocked={oauthLocked}
-                messages={providerMessages}
-                errors={providerErrors}
-                onSignIn={handleOAuth}
-                onCancelSignIn={requestOAuthCancel}
-                onDisconnect={handleDisconnect}
-                onDialogTrigger={rememberProviderDialogTrigger}
+                pendingAction={pa.providerPendingAction}
+                signInLocked={pa.oauthLocked}
+                messages={pa.providerMessages}
+                errors={pa.providerErrors}
+                onSignIn={pa.handleOAuth}
+                onCancelSignIn={pa.requestOAuthCancel}
+                onDisconnect={pa.handleDisconnect}
+                onDialogTrigger={pa.rememberProviderDialogTrigger}
               />
             {/if}
           </div>
@@ -655,7 +226,11 @@
       <div class="settings-section-header">
         <div>
           <h2>Providers</h2>
-          <p>No connected agents currently advertise provider auth controls.</p>
+          {#if runningAgentCount === 0}
+            <p>The agent is not running, so providers cannot be shown. <a class="link" href="/agents">Open Agents</a> to start it or see why it failed.</p>
+          {:else}
+            <p>No connected agents currently advertise provider auth controls.</p>
+          {/if}
         </div>
         </div>
       </section>
@@ -684,15 +259,15 @@
 
         <ProviderOverview connected={connectedProviderCount} needsSetup={setupProviderCount} attention={attentionProviderCount} models={modelCount} />
 
-      {#if authError || pageError}
+      {#if authError || pa.pageError}
         <div class="alert-error settings-section-message">
-          {pageError ?? authError}
+          {pa.pageError ?? authError}
         </div>
       {/if}
 
-      {#if pageMessage}
+      {#if pa.pageMessage}
         <div class="alert-success settings-section-message">
-          {pageMessage}
+          {pa.pageMessage}
         </div>
       {/if}
 
@@ -705,17 +280,17 @@
             <ProviderConnectionList
               {providers}
               authCapabilities={providerAuthCapabilities}
-              pendingAction={providerPendingAction}
-              signInLocked={oauthLocked}
-              messages={providerMessages}
-              errors={providerErrors}
-              onSignIn={handleOAuth}
-              onCancelSignIn={requestOAuthCancel}
-              onDisconnect={handleDisconnect}
-              onSetApiKey={handleSetApiToken}
-              onClearApiKey={handleClearApiToken}
-              onAuthMethodChange={handleAuthMethodChange}
-              onDialogTrigger={rememberProviderDialogTrigger}
+              pendingAction={pa.providerPendingAction}
+              signInLocked={pa.oauthLocked}
+              messages={pa.providerMessages}
+              errors={pa.providerErrors}
+              onSignIn={pa.handleOAuth}
+              onCancelSignIn={pa.requestOAuthCancel}
+              onDisconnect={pa.handleDisconnect}
+              onSetApiKey={pa.handleSetApiToken}
+              onClearApiKey={pa.handleClearApiToken}
+              onAuthMethodChange={pa.handleAuthMethodChange}
+              onDialogTrigger={pa.rememberProviderDialogTrigger}
             />
           {/if}
         </div>
@@ -738,55 +313,55 @@
   </div>
 
   <ProviderApiKeyDialog
-    open={tokenDialogProvider !== null}
-    provider={tokenDialogProvider}
-    focusTarget={providerDialogFocusTarget}
+    open={pa.tokenDialogProvider !== null}
+    provider={pa.tokenDialogProvider}
+    focusTarget={pa.providerDialogFocusTarget}
     portalTarget={overlayPortalTarget}
-    bind:value={tokenDialogValue}
-    pending={!!actionLoading}
-    onClose={closeTokenDialog}
-    onSubmit={submitApiToken}
+    bind:value={pa.tokenDialogValue}
+    pending={!!pa.actionLoading}
+    onClose={pa.closeTokenDialog}
+    onSubmit={pa.submitApiToken}
   />
 
   <ProviderOAuthDialog
-    open={manualOAuthProvider !== null}
-    provider={manualOAuthProvider}
-    label={manualOAuthProvider && isMcpAuthId(manualOAuthProvider.provider) ? mcpServerOfAuthId(manualOAuthProvider.provider) : null}
-    focusTarget={providerDialogFocusTarget}
+    open={pa.manualOAuthProvider !== null}
+    provider={pa.manualOAuthProvider}
+    label={pa.manualOAuthProvider && isMcpAuthId(pa.manualOAuthProvider.provider) ? mcpServerOfAuthId(pa.manualOAuthProvider.provider) : null}
+    focusTarget={pa.providerDialogFocusTarget}
     portalTarget={overlayPortalTarget}
-    flowKind={manualOAuthFlowKind}
-    authorizationUrl={manualOAuthAuthorizationUrl}
-    urlCopied={manualOAuthUrlCopied}
-    needsCallbackInput={manualOAuthNeedsCallbackInput}
-    bind:value={manualOAuthValue}
-    waiting={actionLoading?.startsWith('oauth:') ?? false}
-    pending={!!actionLoading}
-    completing={manualOAuthProvider ? isOAuthCompleting(manualOAuthProvider) : false}
-    submitDisabled={isManualOAuthSubmitDisabled()}
-    onDismiss={closeOrCancelManualOAuthDialog}
-    onOpenAuthorizationUrl={openManualOAuthAuthorizationUrl}
-    onCopyAuthorizationUrl={copyManualOAuthAuthorizationUrl}
-    onCancelSignIn={() => manualOAuthProvider && requestOAuthCancel(manualOAuthProvider)}
-    onSubmit={submitManualOAuth}
+    flowKind={pa.manualOAuthFlowKind}
+    authorizationUrl={pa.manualOAuthAuthorizationUrl}
+    urlCopied={pa.manualOAuthUrlCopied}
+    needsCallbackInput={pa.manualOAuthNeedsCallbackInput}
+    bind:value={pa.manualOAuthValue}
+    waiting={pa.actionLoading?.startsWith('oauth:') ?? false}
+    pending={!!pa.actionLoading}
+    completing={pa.manualOAuthProvider ? pa.isOAuthCompleting(pa.manualOAuthProvider) : false}
+    submitDisabled={pa.isManualOAuthSubmitDisabled()}
+    onDismiss={pa.closeOrCancelManualOAuthDialog}
+    onOpenAuthorizationUrl={pa.openManualOAuthAuthorizationUrl}
+    onCopyAuthorizationUrl={pa.copyManualOAuthAuthorizationUrl}
+    onCancelSignIn={() => pa.manualOAuthProvider && pa.requestOAuthCancel(pa.manualOAuthProvider)}
+    onSubmit={pa.submitManualOAuth}
   />
 
   <ProviderDisconnectDialog
-    open={disconnectProviderPending !== null}
-    provider={disconnectProviderPending}
-    focusTarget={providerDialogFocusTarget}
+    open={pa.disconnectProviderPending !== null}
+    provider={pa.disconnectProviderPending}
+    focusTarget={pa.providerDialogFocusTarget}
     portalTarget={overlayPortalTarget}
-    pending={!!actionLoading}
-    onClose={closeDisconnectDialog}
-    onConfirm={confirmDisconnectProvider}
+    pending={!!pa.actionLoading}
+    onClose={pa.closeDisconnectDialog}
+    onConfirm={pa.confirmDisconnectProvider}
   />
 
   <ProviderClearKeyDialog
-    open={clearKeyProviderPending !== null}
-    provider={clearKeyProviderPending}
-    focusTarget={providerDialogFocusTarget}
+    open={pa.clearKeyProviderPending !== null}
+    provider={pa.clearKeyProviderPending}
+    focusTarget={pa.providerDialogFocusTarget}
     portalTarget={overlayPortalTarget}
-    pending={!!actionLoading}
-    onClose={closeClearKeyDialog}
-    onConfirm={confirmClearApiToken}
+    pending={!!pa.actionLoading}
+    onClose={pa.closeClearKeyDialog}
+    onConfirm={pa.confirmClearApiToken}
   />
 </div>

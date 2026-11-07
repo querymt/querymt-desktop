@@ -20,6 +20,9 @@
   import type { SessionRunState } from '$lib/domain/types';
   import { getAppRuntime, getNativeWindow, type WindowResizeDirection } from '$native';
   import { isEmbedded, isTauriRuntime } from '$lib/platform/runtime';
+  import { detectFirstRun, markOnboardingCompleted } from '$lib/domain/onboarding';
+
+  const FIRST_RUN_SETTLE_CAP_MS = 10_000;
   import type { Snippet } from 'svelte';
 
   const ESC_CANCEL_WINDOW_MS = 700;
@@ -49,6 +52,7 @@
 
   const pathname = $derived(page.url.pathname);
   const isActiveSessionRoute = $derived(pathname.startsWith('/sessions/'));
+  const isSetupRoute = $derived(pathname === '/setup' || pathname.startsWith('/setup/'));
   const currentRailAgentId = $derived(isActiveSessionRoute ? decodeURIComponent(page.params.agentId ?? '') : null);
   const currentRailSessionId = $derived(isActiveSessionRoute ? decodeURIComponent(page.params.sessionId ?? '') : null);
   const isSessionCancellable = $derived(
@@ -117,7 +121,21 @@
     appearanceStore.initialize();
     chatPreferencesStore.initialize();
     sidebarStore.initialize();
-    void agentsStore.initialize();
+    // Decide before initialization writes anything that would make a fresh install look used.
+    const firstRun = detectFirstRun();
+    const initialized = agentsStore.initialize();
+    if (firstRun) {
+      void Promise.race([
+        initialized,
+        new Promise((resolve) => setTimeout(resolve, FIRST_RUN_SETTLE_CAP_MS))
+      ]).then(() => {
+        if (agentsStore.readiness.setupComplete) {
+          markOnboardingCompleted();
+        } else if (page.url.pathname === '/') {
+          void goto('/setup');
+        }
+      });
+    }
 
     isMacPlatform = detectMacPlatform();
 
@@ -204,6 +222,10 @@
       }
 
       if (!(event.metaKey || event.ctrlKey)) {
+        return;
+      }
+      // The setup wizard is left only by finishing or skipping it.
+      if (isSetupRoute) {
         return;
       }
 
@@ -352,6 +374,12 @@
 
 <Tooltip.Provider>
   <div class={`app-shell min-h-screen p-4 ${isActiveSessionRoute ? 'app-shell-active-session' : ''} ${windowDecorationsStore.usesCustomTitlebar ? `app-shell-custom-titlebar ${windowMaximized ? 'app-shell-maximized' : ''}` : ''}`}>
+    {#if isSetupRoute}
+      <main class="app-setup-main">
+        {@render children?.()}
+      </main>
+      <div bind:this={overlayPortalTarget} class="app-overlay-root"></div>
+    {:else}
     <RecentSessionRail
       current={section}
       sessions={agentsStore.sessions}
@@ -395,5 +423,6 @@
 
     </div>
     <div bind:this={overlayPortalTarget} class="app-overlay-root"></div>
+    {/if}
   </div>
 </Tooltip.Provider>

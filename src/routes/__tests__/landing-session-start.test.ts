@@ -104,6 +104,15 @@ function createAgentsStore() {
       if (agentId) agentsStore.launchModelIds[agentId] = value;
     }),
     refreshModelsForAgent: vi.fn(async () => undefined),
+    chooseLaunchModel: vi.fn((agentId: string | null | undefined, value: string) => {
+      if (agentId) agentsStore.launchModelIds[agentId] = value;
+    }),
+    initializeSettled: true,
+    readiness: {
+      agentId: 'agent-1',
+      setupComplete: true,
+      checks: [] as Array<{ id: string; status: string; title: string; reason: string | null; action: null }>
+    },
     refreshRemoteProfiles: vi.fn(async () => undefined),
     getLaunchProfileError: vi.fn((): string | null => null),
     clearLaunchProfileError: vi.fn(),
@@ -147,7 +156,17 @@ function createAgentsStore() {
 }
 
 const goto = vi.hoisted(() => vi.fn(async () => undefined));
-const agentsStore = vi.hoisted(() => createAgentsStore());
+const agentsStore = vi.hoisted(() => {
+  const store = createAgentsStore();
+  Object.defineProperty(store, 'primaryAgentId', {
+    configurable: true,
+    get() {
+      return store.configs.find((config) => config.enabled && config.id === store.composerAgentId)?.id ??
+        store.connectedAgents[0]?.id ?? store.configs.find((config) => config.enabled)?.id ?? null;
+    }
+  });
+  return store as typeof store & { readonly primaryAgentId: string | null };
+});
 
 vi.mock('$lib/components/primitives/SessionComposer.svelte', { spy: true });
 vi.mock('$app/navigation', () => ({ goto }));
@@ -236,6 +255,7 @@ describe('Landing page session start', () => {
       expect(await screen.findByRole('button', { name: /^Claude Sonnet 4 from anthropic on flkr/ })).toBeInTheDocument();
       expect(agentsStore.getLaunchModelId('agent-1')).toBe(getModelSelectionKey(flkr));
       expect(agentsStore.setLaunchModel).not.toHaveBeenCalled();
+      expect(agentsStore.chooseLaunchModel).not.toHaveBeenCalled();
       expect(agentsStore.createSession).not.toHaveBeenCalled();
       expect(agentsStore.startSessionWithPrompt).not.toHaveBeenCalled();
     } finally {
@@ -255,7 +275,7 @@ describe('Landing page session start', () => {
       .find((button) => button.classList.contains('delegate-model-choice'))!;
     await fireEvent.click(modelRow);
 
-    expect(agentsStore.setLaunchModel).toHaveBeenCalledWith('agent-1', 'anthropic/claude-sonnet-4');
+    expect(agentsStore.chooseLaunchModel).toHaveBeenCalledWith('agent-1', 'anthropic/claude-sonnet-4');
     expect(agentsStore.activeSessionId).toBe('previous-session');
   });
 

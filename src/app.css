@@ -10701,22 +10701,22 @@ a.session-delegate-session:hover {
   border-radius: var(--radius-control);
 }
 
-.app-brand-icon img {
+.app-brand-icon-svg {
   width: 100%;
   height: 100%;
-  object-fit: contain;
 }
 
-.app-brand-icon .app-brand-icon-dark {
-  display: none;
+/* Tile follows the accent; stencil keeps the original dark/bright icon colours. */
+.app-brand-icon-tile {
+  fill: var(--accent);
 }
 
-:root[data-theme='dark'] .app-brand-icon-light {
-  display: none;
+.app-brand-icon-stencil {
+  fill: #191919;
 }
 
-:root[data-theme='dark'] .app-brand-icon-dark {
-  display: block;
+:root[data-theme='dark'] .app-brand-icon-stencil {
+  fill: #fff7ed;
 }
 
 .app-nav-icon-surface {
@@ -14211,3 +14211,361 @@ a.session-delegate-session:hover {
   }
 }
 
+
+/* First-run setup. Reuses the dialog surface, dialog typography and the
+   Start screen "Needs you" rows; only layout lives here. */
+.setup-checklist-row {
+  grid-template-columns: 0.5rem minmax(0, 1fr) auto;
+}
+
+.setup-checklist-row:hover {
+  background: transparent;
+}
+
+.setup-checklist-row .start-needs-you-copy small {
+  white-space: normal;
+}
+
+.setup-checklist-pending .start-needs-you-dot {
+  background: var(--text-dim);
+}
+
+.setup-checklist-blocked .start-needs-you-dot {
+  background: var(--status-danger);
+}
+
+button.start-needs-you-action {
+  border: 0;
+  cursor: pointer;
+}
+
+button.start-needs-you-action:hover:enabled {
+  background: color-mix(in srgb, var(--composer-pill-surface-hover), var(--text) 6%);
+}
+
+.app-setup-main {
+  display: flex;
+  min-height: calc(100vh - 2rem);
+  justify-content: center;
+}
+
+.setup-page {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+  padding: 2.5rem 1rem;
+}
+
+.setup-column {
+  display: grid;
+  width: min(38rem, 100%);
+  align-content: start;
+  gap: 1rem;
+}
+
+/* Quiet text progress, like the Settings subnav: no filled accent badges. */
+.setup-steps {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 0.3rem 0.55rem;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.setup-step:hover:enabled {
+  background: var(--row-surface-hover);
+  color: var(--text);
+}
+
+.setup-step:disabled {
+  cursor: default;
+}
+
+.setup-step-done {
+  color: var(--muted);
+}
+
+.setup-check {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.setup-step-current {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.setup-step-dot {
+  display: inline-flex;
+  width: 1rem;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Same surface as .app-dialog, so the shared model picker and dialogs match. */
+.setup-card {
+  display: grid;
+  gap: 1rem;
+  border: 1px solid var(--subtle-border-strong);
+  border-radius: var(--radius);
+  background: var(--dialog-bg);
+  box-shadow: var(--shadow-sm);
+  padding: 1.25rem 1.5rem 1.4rem;
+}
+
+.setup-hero {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.setup-hero .app-dialog-description {
+  margin-top: 0;
+}
+
+.setup-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.setup-message {
+  margin: 0;
+}
+
+.setup-boot-log {
+  display: grid;
+  justify-items: center;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.74rem;
+}
+
+.setup-boot-log li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.setup-boot-log-mark {
+  display: inline-flex;
+  width: 0.85rem;
+  justify-content: center;
+}
+
+.setup-boot-log-done {
+  color: var(--text-dim);
+}
+
+.setup-boot-log-current {
+  color: var(--text);
+}
+
+.setup-boot-log-failed span {
+  color: var(--status-danger);
+}
+
+.setup-facts,
+.setup-summary {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-facts div,
+.setup-summary li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 0;
+  font-size: 0.82rem;
+}
+
+.setup-facts div + div,
+.setup-summary li + li {
+  border-top: 1px solid var(--subtle-border);
+}
+
+.setup-facts dt,
+.setup-summary strong {
+  color: var(--text);
+  font-weight: 560;
+}
+
+.setup-facts dd {
+  margin: 0;
+  color: var(--muted);
+}
+
+.setup-summary span {
+  color: var(--muted);
+}
+
+.setup-summary-ready span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text);
+}
+
+.setup-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.setup-scroll {
+  max-height: 46vh;
+  overflow: auto;
+}
+
+.setup-model-picker .delegate-model-picker-list {
+  max-height: min(24rem, 46vh);
+}
+
+/* Footer and buttons match .app-dialog-footer and Settings secondary buttons. */
+.setup-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.setup-footer-spacer {
+  flex: 1;
+}
+
+.setup-page .action-btn:not(.action-btn-primary, .action-btn-accent, .action-btn-danger) {
+  border-color: transparent;
+  background: var(--composer-pill-surface-hover);
+}
+
+.setup-page .action-btn:not(.action-btn-primary, .action-btn-accent, .action-btn-danger):hover:enabled {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--composer-pill-surface-hover), var(--text) 6%);
+}
+
+.setup-link-btn {
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 0 0.4rem;
+}
+
+.setup-link-btn:hover {
+  color: var(--text);
+}
+
+/* Boot mark: brand hexagons in accent, peers and links in theme surfaces (mobile startupPalette). */
+.boot-mark {
+  display: inline-block;
+}
+
+.boot-mark-logo {
+  fill: var(--accent);
+}
+
+/* Opaque base under each hexagon so links stay underneath while hexagons fade during the animation. */
+.boot-mark-base {
+  fill: var(--dialog-bg);
+}
+
+.boot-mark-peer {
+  fill: var(--bg-card-hover);
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+.boot-mark-link {
+  stroke: var(--border-strong);
+  stroke-width: 1.4;
+  opacity: 0.6;
+}
+
+.boot-mark-connecting .boot-mark-logo,
+.boot-mark-connecting .boot-mark-peer {
+  animation: boot-mark-node var(--boot-cycle) linear infinite;
+  animation-delay: var(--delay);
+}
+
+.boot-mark-connecting .boot-mark-link {
+  animation: boot-mark-link var(--boot-cycle) linear infinite;
+  animation-delay: var(--delay);
+}
+
+.boot-mark-failed .boot-mark-logo {
+  opacity: 0.6;
+}
+
+@keyframes boot-mark-node {
+  0% { opacity: 0.35; }
+  18% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { opacity: 0.35; }
+}
+
+@keyframes boot-mark-link {
+  0% { opacity: 0; stroke-dashoffset: var(--length); }
+  20% { opacity: 0.6; stroke-dashoffset: 0; }
+  80% { opacity: 0.6; stroke-dashoffset: 0; }
+  100% { opacity: 0; stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-mark-connecting .boot-mark-logo,
+  .boot-mark-connecting .boot-mark-peer,
+  .boot-mark-connecting .boot-mark-link {
+    animation: none;
+  }
+}
+
+/* Provider rows default to the card surface; inside the dialog-surface setup card use the dialog surface. */
+.setup-card .provider-connection-list,
+.setup-card .provider-connection-row {
+  background: var(--dialog-bg);
+}
+
+.setup-card .provider-connection-row:hover,
+.setup-card .provider-connection-row:focus-within {
+  background: var(--row-surface-hover);
+}
+
+.setup-appearance {
+  display: grid;
+  gap: 1.1rem;
+}
+
+/* Swatch ring gap must match the dialog surface it sits on. */
+.setup-card .accent-swatch-selected {
+  box-shadow:
+    0 0 0 2px var(--dialog-bg),
+    0 0 0 4px var(--swatch);
+}

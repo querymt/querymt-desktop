@@ -2,8 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import { Tooltip } from 'bits-ui';
   import Hint from '$lib/components/primitives/Hint.svelte';
-  import brandLight from '$lib/assets/querymt-icon-light.svg';
-  import brandDark from '$lib/assets/querymt-icon-dark.svg';
+  import BrandIcon from '$lib/components/brand/BrandIcon.svelte';
   import { ChevronLeft, ChevronRight, CircleQuestionMark, LoaderCircle, Menu, Pin } from '@lucide/svelte';
   import SidebarAttentionDot from '$lib/components/shell/SidebarAttentionDot.svelte';
   import SessionIdChip from '$lib/components/primitives/SessionIdChip.svelte';
@@ -415,7 +414,7 @@
           <Tooltip.Trigger>
             {#snippet child({ props })}
               <a {...props} class={`app-icon-link app-icon-home ${current === 'Start' ? 'app-icon-link-current' : ''}`} href="/" aria-current={current === 'Start' ? 'page' : undefined} aria-label="Start">
-                <span class="app-brand-icon" aria-hidden="true"><img class="app-brand-icon-light" src={brandLight} alt="" /><img class="app-brand-icon-dark" src={brandDark} alt="" /></span>
+                <span class="app-brand-icon" aria-hidden="true"><BrandIcon /></span>
               </a>
             {/snippet}
           </Tooltip.Trigger>
@@ -509,7 +508,7 @@
           <Tooltip.Trigger>
             {#snippet child({ props })}
               <a {...props} class={`app-sidebar-brand ${current === 'Start' ? 'app-sidebar-brand-current' : ''}`} href="/" aria-current={current === 'Start' ? 'page' : undefined} aria-label="QueryMT, start a new session">
-                <span class="app-brand-icon" aria-hidden="true"><img class="app-brand-icon-light" src={brandLight} alt="" /><img class="app-brand-icon-dark" src={brandDark} alt="" /></span>
+                <span class="app-brand-icon" aria-hidden="true"><BrandIcon /></span>
                 <span class="app-sidebar-brand-copy"><strong>QueryMT</strong><small>Agents command and control</small></span>
               </a>
             {/snippet}

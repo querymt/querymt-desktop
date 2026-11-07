@@ -59,6 +59,14 @@
     />
   </div>
 
+  <div class="settings-simple-row">
+    <div class="settings-simple-main">
+      <h3>Setup</h3>
+      <p>Check the agent, connect providers and choose a model.</p>
+    </div>
+    <a class="action-btn" href="/setup">Run setup again</a>
+  </div>
+
   <div class="settings-advanced">
     <button class="settings-advanced-trigger" type="button" aria-expanded={advancedOpen} onclick={() => (advancedOpen = !advancedOpen)}>
       <span>
