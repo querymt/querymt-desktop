@@ -20,6 +20,7 @@ function input(patch: Partial<ReadinessInput> = {}): ReadinessInput {
     capabilities: { a: caps(true) },
     authProviders: { a: [provider({ has_stored_api_key: true })] },
     authLoading: {},
+    authErrors: {},
     models: { a: [model] },
     modelLoading: {},
     launchModelIds: { a: 'openai/gpt' },
@@ -112,5 +113,22 @@ describe('evaluateReadiness', () => {
   it('requires a launch model that resolves', () => {
     const report = evaluateReadiness(input({ launchModelIds: { a: 'gone/model' } }));
     expect(report.checks[3]).toMatchObject({ status: 'blocked', action: { kind: 'choose-model', agentId: 'a' } });
+  });
+});
+
+describe('evaluateReadiness provider edge cases', () => {
+  it('ignores connected MCP connector logins', () => {
+    const report = evaluateReadiness(input({
+      authProviders: { a: [provider(), provider({ provider: 'mcp:github', display_name: 'GitHub', oauth_status: OAuthStatus.Connected })] },
+      models: { a: [] }
+    }));
+    expect(status(report).providers).toBe('blocked');
+    expect(report.checks[2].action).toEqual({ kind: 'open-providers', agentId: 'a' });
+  });
+
+  it('blocks with a retry when the provider list failed to load', () => {
+    const report = evaluateReadiness(input({ authProviders: {}, authErrors: { a: 'timeout' } }));
+    expect(report.checks[1]).toMatchObject({ status: 'blocked', action: { kind: 'refresh-providers', agentId: 'a' } });
+    expect(report.checks[1].reason).toContain('timeout');
   });
 });

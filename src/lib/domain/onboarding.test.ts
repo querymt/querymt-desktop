@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   ONBOARDING_STORAGE_KEY,
   ONBOARDING_VERSION,
@@ -6,7 +6,8 @@ import {
   isOnboardingDone,
   loadOnboardingState,
   markOnboardingCompleted,
-  markOnboardingSkipped
+  markOnboardingSkipped,
+  runFirstRunRedirect
 } from './onboarding';
 
 function memory(initial: Record<string, string> = {}) {
@@ -50,5 +51,52 @@ describe('onboarding', () => {
   it('re-offers onboarding for an older version', () => {
     const store = memory({ [ONBOARDING_STORAGE_KEY]: JSON.stringify({ version: 0, completedAt: '2020-01-01', skippedAt: null }) });
     expect(isOnboardingDone(loadOnboardingState(store))).toBe(false);
+  });
+});
+
+describe('runFirstRunRedirect', () => {
+  const base = () => ({
+    initialized: Promise.resolve(),
+    isSetupComplete: () => false,
+    currentPath: () => '/',
+    openSetup: vi.fn(),
+    markCompleted: vi.fn()
+  });
+
+  it('does nothing for existing users', async () => {
+    const input = base();
+    expect(await runFirstRunRedirect({ ...input, firstRun: false })).toBe('none');
+    expect(input.openSetup).not.toHaveBeenCalled();
+  });
+
+  it('opens setup on a fresh install from the start screen', async () => {
+    const input = base();
+    expect(await runFirstRunRedirect({ ...input, firstRun: true })).toBe('setup');
+    expect(input.openSetup).toHaveBeenCalledOnce();
+  });
+
+  it('records completion when setup is already usable', async () => {
+    const input = { ...base(), isSetupComplete: () => true };
+    expect(await runFirstRunRedirect({ ...input, firstRun: true })).toBe('completed');
+    expect(input.markCompleted).toHaveBeenCalledOnce();
+    expect(input.openSetup).not.toHaveBeenCalled();
+  });
+
+  it('never redirects from deep links', async () => {
+    const input = { ...base(), currentPath: () => '/sessions/a/b' };
+    expect(await runFirstRunRedirect({ ...input, firstRun: true })).toBe('none');
+    expect(input.openSetup).not.toHaveBeenCalled();
+  });
+
+  it('stops waiting after the cap when initialization hangs', async () => {
+    vi.useFakeTimers();
+    try {
+      const input = { ...base(), initialized: new Promise(() => undefined) };
+      const result = runFirstRunRedirect({ ...input, firstRun: true, capMs: 10_000 });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await result).toBe('setup');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

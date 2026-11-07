@@ -44,10 +44,10 @@ No agent changes are needed. Every group uses existing ACP and QueryMT extension
 
 ## 8. Entry points
 
-- [x] 8.1 Add the first-run redirect in `+layout.svelte` (design, decision 4): only from `/`, after initialization settles or after 10 s, once per app start. Test the fresh-install, already-usable, existing-user and deep-link cases. (implemented; covered by manual check 9.2, no automated layout test yet)
+- [x] 8.1 Add the first-run redirect in `+layout.svelte` (design, decision 4): only from `/`, after initialization settles or after 10 s, once per app start. Test the fresh-install, already-usable, existing-user and deep-link cases. Covered by `runFirstRunRedirect` tests in `onboarding.test.ts` (fresh install, already usable, existing user, deep link, 10 s cap).
 - [x] 8.2 Add *Run setup again* to Settings → General and a *Run setup* command to the command palette.
 
 ## 9. Checks
 
 - [x] 9.1 Run `npm run check`, `npm run test:ui` (only pre-existing failures allowed) and `openspec validate first-run-setup --strict`.
-- [ ] 9.2 Manual check with a clean app data directory: fresh install without providers, with an environment key only, and with a broken agent command. Then repeat as an upgraded user with existing data, and with light/dark themes and reduced motion for the boot mark.
+- [ ] 9.2 Manual check with a clean app data directory: fresh install without providers, with an environment key only, and with a broken agent command. Then repeat as an upgraded user with existing data, open a deep link on a fresh install (no redirect), and with light/dark themes and reduced motion for the boot mark.

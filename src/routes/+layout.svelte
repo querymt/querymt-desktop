@@ -20,9 +20,7 @@
   import type { SessionRunState } from '$lib/domain/types';
   import { getAppRuntime, getNativeWindow, type WindowResizeDirection } from '$native';
   import { isEmbedded, isTauriRuntime } from '$lib/platform/runtime';
-  import { detectFirstRun, markOnboardingCompleted } from '$lib/domain/onboarding';
-
-  const FIRST_RUN_SETTLE_CAP_MS = 10_000;
+  import { detectFirstRun, runFirstRunRedirect } from '$lib/domain/onboarding';
   import type { Snippet } from 'svelte';
 
   const ESC_CANCEL_WINDOW_MS = 700;
@@ -124,18 +122,13 @@
     // Decide before initialization writes anything that would make a fresh install look used.
     const firstRun = detectFirstRun();
     const initialized = agentsStore.initialize();
-    if (firstRun) {
-      void Promise.race([
-        initialized,
-        new Promise((resolve) => setTimeout(resolve, FIRST_RUN_SETTLE_CAP_MS))
-      ]).then(() => {
-        if (agentsStore.readiness.setupComplete) {
-          markOnboardingCompleted();
-        } else if (page.url.pathname === '/') {
-          void goto('/setup');
-        }
-      });
-    }
+    void runFirstRunRedirect({
+      firstRun,
+      initialized,
+      isSetupComplete: () => agentsStore.readiness.setupComplete,
+      currentPath: () => page.url.pathname,
+      openSetup: () => void goto('/setup')
+    });
 
     isMacPlatform = detectMacPlatform();
 

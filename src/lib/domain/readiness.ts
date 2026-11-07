@@ -1,6 +1,7 @@
 import { OAuthStatus, type AuthProviderStatus, type CapabilitiesInfo } from '$lib/querymt/generated/types';
 import { findModelBySelectionKey } from '$lib/querymt/config-options';
 import { hasUsableProviderCredential } from '$lib/domain/provider-auth';
+import { splitAuthEntries } from '$lib/domain/mcp-auth';
 import type { AgentConfig, AgentConnectionState, AgentRuntimeStatus, ModelEntry } from '$lib/domain/types';
 
 export type ReadinessCheckId = 'agent' | 'providers' | 'models' | 'model';
@@ -10,6 +11,7 @@ export type ReadinessAction =
   | { kind: 'retry-agent'; agentId: string }
   | { kind: 'open-agents' }
   | { kind: 'open-providers'; agentId: string }
+  | { kind: 'refresh-providers'; agentId: string }
   | { kind: 'refresh-models'; agentId: string }
   | { kind: 'choose-model'; agentId: string };
 
@@ -38,6 +40,7 @@ export interface ReadinessInput {
   capabilities: Record<string, CapabilitiesInfo | null | undefined>;
   authProviders: Record<string, AuthProviderStatus[] | undefined>;
   authLoading: Record<string, boolean | undefined>;
+  authErrors: Record<string, string | null | undefined>;
   models: Record<string, ModelEntry[] | undefined>;
   modelLoading: Record<string, boolean | undefined>;
   launchModelIds: Record<string, string | undefined>;
@@ -92,12 +95,18 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessReport {
 
   let providers: ReadinessCheck;
   const supportsAuth = Boolean(input.capabilities[agentId]?.features?.auth);
-  const entries = input.authProviders[agentId] ?? [];
+  // MCP connector logins share the auth list but are not model providers.
+  const entries = splitAuthEntries(input.authProviders[agentId] ?? []).providers;
+  const authError = input.authErrors[agentId] ?? null;
   if (!supportsAuth) {
     providers = check('providers', 'Providers', 'not_applicable');
   } else if (entries.some(hasUsableProviderCredential)) {
     providers = check('providers', 'Providers', 'ok');
-  } else if (input.authLoading[agentId] || input.authProviders[agentId] === undefined) {
+  } else if (input.authLoading[agentId]) {
+    providers = check('providers', 'Providers', 'pending', 'Checking providers…');
+  } else if (authError) {
+    providers = check('providers', 'Providers', 'blocked', `Could not load providers: ${authError}`, { kind: 'refresh-providers', agentId });
+  } else if (input.authProviders[agentId] === undefined) {
     providers = check('providers', 'Providers', 'pending', 'Checking providers…');
   } else {
     const expired = entries.filter((entry) => entry.oauth_status === OAuthStatus.Expired);

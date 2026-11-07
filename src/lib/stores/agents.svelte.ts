@@ -1198,6 +1198,7 @@ export class AgentsStore {
       capabilities: this.controlCapabilitiesByAgent,
       authProviders: this.authProvidersByAgent,
       authLoading: this.authLoadingByAgent,
+      authErrors: this.authErrorsByAgent,
       models: this.modelsByAgent,
       modelLoading: this.modelLoadingByAgent,
       launchModelIds: this.launchModelIds,

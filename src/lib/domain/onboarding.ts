@@ -82,3 +82,40 @@ export function detectFirstRun(store: StorageLike | null = storage(), now = new 
   }
   return true;
 }
+
+export const FIRST_RUN_SETTLE_CAP_MS = 10_000;
+
+export interface FirstRunRedirectInput {
+  firstRun: boolean;
+  /** Resolves when agent initialization settles. */
+  initialized: Promise<unknown>;
+  isSetupComplete: () => boolean;
+  currentPath: () => string;
+  openSetup: () => void;
+  markCompleted?: () => void;
+  capMs?: number;
+}
+
+/**
+ * Once per app start: after initialization settles (or the cap passes), a first run
+ * either records onboarding as completed (already usable) or opens setup from `/` only.
+ */
+export async function runFirstRunRedirect(input: FirstRunRedirectInput): Promise<'none' | 'completed' | 'setup'> {
+  if (!input.firstRun) return 'none';
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cap = new Promise((resolve) => { timer = setTimeout(resolve, input.capMs ?? FIRST_RUN_SETTLE_CAP_MS); });
+  try {
+    await Promise.race([input.initialized.catch(() => undefined), cap]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (input.isSetupComplete()) {
+    (input.markCompleted ?? markOnboardingCompleted)();
+    return 'completed';
+  }
+  if (input.currentPath() === '/') {
+    input.openSetup();
+    return 'setup';
+  }
+  return 'none';
+}

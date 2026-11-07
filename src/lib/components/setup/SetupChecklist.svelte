@@ -13,6 +13,7 @@
       case 'retry-agent': return 'Retry';
       case 'open-agents': return 'Open Agents';
       case 'open-providers': return 'Connect provider';
+      case 'refresh-providers': return 'Retry';
       case 'refresh-models': return 'Refresh models';
       case 'choose-model': return 'Choose model';
     }
@@ -32,6 +33,9 @@
           break;
         case 'open-providers':
           await goto('/settings?section=providers');
+          break;
+        case 'refresh-providers':
+          await agentsStore.refreshAuthProviders(action.agentId).catch(() => undefined);
           break;
         case 'refresh-models':
           await agentsStore.refreshModelsForAgent(action.agentId);

@@ -108,11 +108,6 @@ function createAgentsStore() {
       if (agentId) agentsStore.launchModelIds[agentId] = value;
     }),
     initializeSettled: true,
-    readiness: {
-      agentId: 'agent-1',
-      setupComplete: true,
-      checks: [] as Array<{ id: string; status: string; title: string; reason: string | null; action: null }>
-    },
     refreshRemoteProfiles: vi.fn(async () => undefined),
     getLaunchProfileError: vi.fn((): string | null => null),
     clearLaunchProfileError: vi.fn(),
@@ -165,7 +160,21 @@ const agentsStore = vi.hoisted(() => {
         store.connectedAgents[0]?.id ?? store.configs.find((config) => config.enabled)?.id ?? null;
     }
   });
-  return store as typeof store & { readonly primaryAgentId: string | null };
+  // Like the real store, readiness follows the launcher's agent unless a test overrides it.
+  let readinessOverride: unknown = null;
+  Object.defineProperty(store, 'readiness', {
+    configurable: true,
+    get() {
+      return readinessOverride ?? { agentId: (store as unknown as { primaryAgentId: string | null }).primaryAgentId, setupComplete: true, checks: [] };
+    },
+    set(value: unknown) {
+      readinessOverride = value;
+    }
+  });
+  return store as typeof store & {
+    readonly primaryAgentId: string | null;
+    readiness: { agentId: string | null; setupComplete: boolean; checks: Array<{ id: string; status: string; title: string; reason: string | null; action: null }> } | null;
+  };
 });
 
 vi.mock('$lib/components/primitives/SessionComposer.svelte', { spy: true });
@@ -195,6 +204,7 @@ afterEach(() => {
 
 beforeEach(() => {
   Object.assign(agentsStore, createAgentsStore());
+  agentsStore.readiness = null;
 });
 
 describe('Landing page session start', () => {
@@ -587,5 +597,25 @@ describe('Landing page overview links', () => {
     await waitFor(() => {
       expect(document.querySelector('.app-tooltip-content')).toHaveTextContent('Agents connected and ready to start sessions');
     });
+  });
+});
+
+describe('Landing page with unfinished setup', () => {
+  it('shows the checklist, the blocked reason, and does not launch', async () => {
+    agentsStore.readiness = {
+      agentId: 'agent-1',
+      setupComplete: false,
+      checks: [{ id: 'providers', status: 'blocked', title: 'Providers', reason: 'No provider is connected.', action: null }]
+    };
+    agentsStore.composerPrompt = 'Draft prompt';
+    render(LandingPage);
+
+    expect(screen.getByTestId('setup-checklist')).toHaveTextContent('No provider is connected.');
+    expect(screen.getByTestId('composer-send-blocked')).toHaveTextContent('No provider is connected.');
+
+    const props = vi.mocked(SessionComposer).mock.calls.at(-1)![1];
+    expect(props.sendBlockedReason).toBe('No provider is connected.');
+    await props.onSendPrompt();
+    expect(agentsStore.beginLaunch).not.toHaveBeenCalled();
   });
 });

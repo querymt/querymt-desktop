@@ -124,11 +124,14 @@
     }
   }
 
+  const isDone = (check: ReadinessCheck) => check.status === 'ok' || check.status === 'not_applicable';
+
   function summaryState(id: ReadinessCheckId): 'ready' | 'skipped' | 'missing' {
-    const check = byId[id];
-    if (check.status === 'ok' || check.status === 'not_applicable') return 'ready';
-    const stepId: StepId = id === 'models' ? 'providers' : id === 'agent' ? 'agent' : id === 'providers' ? 'providers' : 'model';
-    return skipped.includes(stepId) ? 'skipped' : 'missing';
+    // The Model row also covers the model list: with no models there is nothing to pick.
+    const done = id === 'model' ? isDone(byId.models) && isDone(byId.model) : isDone(byId[id]);
+    if (done) return 'ready';
+    const steps: StepId[] = id === 'agent' ? ['agent'] : id === 'providers' ? ['providers'] : ['model', 'providers'];
+    return steps.some((stepId) => skipped.includes(stepId)) ? 'skipped' : 'missing';
   }
 
   const SOURCE_LABELS: Record<string, string> = { bundled: 'Bundled with the app', path: 'Found on PATH', explicit: 'Custom path' };

@@ -99,6 +99,14 @@
   const primaryAgentId = $derived(agentsStore.primaryAgentId);
   const readiness = $derived(agentsStore.readiness);
   const blockingCheck = $derived(firstOpenCheck(readiness));
+  // Readiness may fall back to another running agent; launching needs the launcher's own agent.
+  const launcherAgentMismatch = $derived(readiness.setupComplete && readiness.agentId !== primaryAgentId);
+  const canLaunch = $derived(readiness.setupComplete && !launcherAgentMismatch);
+  const sendBlockedReason = $derived(
+    canLaunch ? null
+      : launcherAgentMismatch ? 'The selected agent is not running. Start it or choose another agent.'
+      : blockingCheck?.status === 'pending' ? 'Setting up…' : blockingCheck?.reason ?? null
+  );
   const showSetupChecklist = $derived(agentsStore.initializeSettled && !readiness.setupComplete);
   const modelLocation = $derived.by(() => {
     if (!primaryAgentId) return undefined;
@@ -140,7 +148,7 @@
   // Both launch buttons open the session view immediately under a temporary id;
   // the store keeps creating the session (and sends the prompt) in the background.
   async function startSessionFromLauncher() {
-    if (!primaryAgentId || !readiness.setupComplete) {
+    if (!primaryAgentId || !canLaunch) {
       return;
     }
 
@@ -203,7 +211,7 @@
 
     <SessionComposer
       compact={true}
-      sendBlockedReason={readiness.setupComplete ? null : (blockingCheck?.status === 'pending' ? 'Setting up…' : blockingCheck?.reason ?? null)}
+      {sendBlockedReason}
       minimal={true}
       launch={true}
       sendShortcut={chatPreferencesStore.sendShortcut}
