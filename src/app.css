@@ -14569,3 +14569,19 @@ button.start-needs-you-action:hover:enabled {
     0 0 0 2px var(--dialog-bg),
     0 0 0 4px var(--swatch);
 }
+
+.settings-reset-detail {
+  display: grid;
+  gap: 0.6rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.settings-reset-detail p {
+  margin: 0;
+}
+
+.settings-reset-detail strong {
+  color: var(--text);
+}

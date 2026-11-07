@@ -704,3 +704,17 @@ fn is_ordered_subsequence(value: &str, query: &str) -> bool {
     }
     q == chars.len()
 }
+
+/// Schedules a reset of desktop-only app data and restarts the app to apply it.
+/// Agent data, provider credentials and project files are not touched.
+#[tauri::command]
+pub fn querymt_app_reset_data(
+    app: AppHandle,
+    options: crate::app_reset::ResetOptions,
+) -> Result<(), String> {
+    let identifier = app.config().identifier.clone();
+    let dirs = crate::app_reset::AppDirs::resolve(&identifier)
+        .ok_or_else(|| "Failed to resolve app data directories.".to_string())?;
+    crate::app_reset::schedule(&dirs, options)?;
+    app.restart()
+}

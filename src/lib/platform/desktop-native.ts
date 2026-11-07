@@ -163,3 +163,9 @@ export async function setWindowDecorationMode(useOsDecorations: boolean): Promis
   }
   await currentWindow.setShadow(true);
 }
+
+/** Schedules a reset of desktop-only app data; the app restarts to apply it. */
+export async function resetAppData(options: { includeProfiles: boolean }): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('querymt_app_reset_data', { options });
+}

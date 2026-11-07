@@ -154,3 +154,8 @@ export async function getAppRuntime(): Promise<string> {
 export async function setWindowDecorationMode(_useOsDecorations: boolean): Promise<void> {
   return unavailable();
 }
+
+/** Embedded mode has no app folders; only browser storage is cleared, then the page reloads. */
+export async function resetAppData(_options: { includeProfiles: boolean }): Promise<void> {
+  window.location.reload();
+}

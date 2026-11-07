@@ -3665,6 +3665,7 @@ name = "querymt-desktop"
 version = "0.1.7"
 dependencies = [
  "cef",
+ "dirs 7.0.0",
  "futures-util",
  "opentelemetry",
  "opentelemetry-otlp",
