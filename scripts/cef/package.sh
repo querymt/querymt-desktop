@@ -58,15 +58,23 @@ bash scripts/cef/stage-runtime.sh release "$PROFILE_DIR"
 WORK="$TARGET_ROOT/cef-package-$ARCH"
 OUT="$TARGET_ROOT/release/bundle"
 RUNTIME="$WORK/runtime"
+XKB_FALLBACK="$WORK/xkb-fallback"
 rm -rf "$WORK"
-mkdir -p "$RUNTIME"
+mkdir -p "$RUNTIME" "$XKB_FALLBACK"
 rm -rf "$OUT/appimage" "$OUT/deb" "$OUT/tar"
 mkdir -p "$OUT/appimage" "$OUT/deb" "$OUT/tar"
 
 cp -a "$PROFILE_DIR"/*.so* "$RUNTIME/" 2>/dev/null || true
 cp -a "$PROFILE_DIR"/*.pak "$PROFILE_DIR"/*.dat "$PROFILE_DIR"/*.bin "$PROFILE_DIR"/*.json "$RUNTIME/" 2>/dev/null || true
-stage_library_family libxkbcommon-x11.so.0 "$RUNTIME"
-stage_library_family libxcb-xkb.so.1 "$RUNTIME"
+# winit dlopens libxkbcommon-x11 for the CEF runtime's X11 event loop.
+# libxkbcommon-x11 builds keymaps using libxkbcommon's private struct layouts,
+# so it must come from the same release as libxkbcommon. Never put it next to
+# the binary (RUNPATH=$ORIGIN would pair it with a different host libxkbcommon
+# and segfault in xkb_state_update_mask). Keep a matched set in a separate
+# directory that the AppImage only uses when the host lacks libxkbcommon-x11.
+stage_library_family libxkbcommon.so.0 "$XKB_FALLBACK"
+stage_library_family libxkbcommon-x11.so.0 "$XKB_FALLBACK"
+stage_library_family libxcb-xkb.so.1 "$XKB_FALLBACK"
 cp -a "$PROFILE_DIR"/chrome_crashpad_handler "$RUNTIME/" 2>/dev/null || true
 cp -a "$PROFILE_DIR"/CEF-LICENSE.txt "$RUNTIME/"
 mkdir -p "$RUNTIME/locales"
@@ -88,6 +96,8 @@ fi
 APPDIR="$WORK/QueryMT.AppDir"
 mkdir -p "$APPDIR/usr/bin"
 cp -a "$RUNTIME/." "$APPDIR/usr/bin/"
+mkdir -p "$APPDIR/usr/lib/xkb-fallback"
+cp -a "$XKB_FALLBACK/." "$APPDIR/usr/lib/xkb-fallback/"
 cp "$BINARY" "$APPDIR/usr/bin/querymt-desktop"
 cp packaging/querymt-desktop.desktop "$APPDIR/querymt-desktop.desktop"
 cp src-tauri/icons/icon.png "$APPDIR/querymt-desktop.png"
@@ -95,6 +105,26 @@ cat > "$APPDIR/AppRun" <<'APPRUN'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
 export LD_LIBRARY_PATH="$HERE/usr/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+host_has_library() {
+  for ldconfig in ldconfig /sbin/ldconfig /usr/sbin/ldconfig; do
+    if command -v "$ldconfig" >/dev/null 2>&1; then
+      "$ldconfig" -p 2>/dev/null | grep -q "[[:space:]]$1 (" && return 0
+      break
+    fi
+  done
+  for dir in /usr/lib /usr/lib64 /lib /lib64 /usr/lib/*-linux-gnu /lib/*-linux-gnu; do
+    [ -e "$dir/$1" ] && return 0
+  done
+  return 1
+}
+
+# libxkbcommon-x11 must match the libxkbcommon it is paired with. Prefer the
+# host's pair; only fall back to the bundled, matched pair when the host has no
+# libxkbcommon-x11 at all.
+if ! host_has_library libxkbcommon-x11.so.0; then
+  export LD_LIBRARY_PATH="$HERE/usr/lib/xkb-fallback:$LD_LIBRARY_PATH"
+fi
 
 # AppImages cannot install a path-based AppArmor userns profile. Fall back only
 # when the host blocks the user namespaces required by Chromium's sandbox.

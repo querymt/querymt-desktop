@@ -54,6 +54,7 @@ overrides:
       - libxext6
       - libxfixes3
       - libxkbcommon0
+      - libxkbcommon-x11-0
       - libxrandr2
       - xdg-utils
       - xwayland
