@@ -18,6 +18,9 @@
     disabled?: boolean;
     addressError?: string | null;
   } = $props();
+
+  const uid = $props.id();
+  const addressErrorId = `${uid}-address-error`;
 </script>
 
 <label class="app-dialog-field">
@@ -52,9 +55,9 @@
       spellcheck={false}
       inputmode="text"
       aria-invalid={addressError ? 'true' : undefined}
-      aria-describedby={addressError ? 'agent-address-error' : undefined}
+      aria-describedby={addressError ? addressErrorId : undefined}
     />
     <span class="app-dialog-field-help">Host and port of a running ACP WebSocket server (qmtcode --acp-ws).</span>
-    {#if addressError}<span id="agent-address-error" class="app-dialog-field-error" role="alert">{addressError}</span>{/if}
+    {#if addressError}<span id={addressErrorId} class="app-dialog-field-error" role="alert">{addressError}</span>{/if}
   </label>
 {/if}

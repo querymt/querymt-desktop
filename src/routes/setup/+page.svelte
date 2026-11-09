@@ -137,6 +137,7 @@
 
   async function retryAgent() {
     const action = byId.agent.action;
+    agentFormError = null;
     retrying = true;
     try {
       if (action?.kind === 'retry-agent') await agentsStore.restartConfiguredAgent(action.agentId);
@@ -293,6 +294,8 @@
             </div>
           </form>
         {:else if byId.agent.status === 'blocked'}
+          <!-- A save can fail after the form closed (e.g. storage full); keep its reason visible. -->
+          {#if agentFormError}{@render errorBlock(agentFormError)}{/if}
           <!-- Same error block as the Agents page: message with its actions inline. -->
           <div class="state-inline-error" role="alert">
             <AlertTriangle size={15} aria-hidden="true" />
