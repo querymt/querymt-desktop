@@ -218,6 +218,10 @@ impl AcpAgentManager {
         } = match launch_agent(app, &command_line) {
             Ok(launched) => launched,
             Err(error) => {
+                // The UI error stays short; the agent log keeps where we looked.
+                if error == missing_agent_message() {
+                    push_log(&mut process.logs, "system", &missing_agent_detail(app));
+                }
                 let entry = record_start_failure(process, &error);
                 let _ = app.emit(
                     LOG_EVENT,
@@ -660,6 +664,25 @@ fn launch_agent(app: &AppHandle, command_line: &str) -> Result<LaunchedAgent, St
     }
 }
 
+/// Short, user-facing error for a missing bundled agent.
+fn missing_agent_message() -> String {
+    format!(
+        "The {BUNDLED_AGENT_NAME} agent is not installed. Install {BUNDLED_AGENT_NAME}, or edit the agent and set the full path to it."
+    )
+}
+
+/// Diagnostic log line listing every location searched for the bundled agent.
+fn missing_agent_detail(app: &AppHandle) -> String {
+    let names = bundled_agent_file_names();
+    let searched = bundle_search_dirs(app)
+        .iter()
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Looked for {BUNDLED_AGENT_NAME} in: {searched}, and on PATH.")
+}
+
 /// Directories that may contain the bundled agent, relative to the running app.
 fn bundle_search_dirs(app: &AppHandle) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
@@ -730,7 +753,6 @@ fn resolve_program(
     }
 
     let names = bundled_agent_file_names();
-    let mut searched = Vec::new();
     for dir in bundle_dirs {
         for name in &names {
             let candidate = dir.join(name);
@@ -740,7 +762,6 @@ fn resolve_program(
                     source: ProgramSource::Bundled,
                 });
             }
-            searched.push(candidate);
         }
     }
 
@@ -751,15 +772,8 @@ fn resolve_program(
         });
     }
 
-    let searched = searched
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    Err(format!(
-        "Could not find the '{BUNDLED_AGENT_NAME}' agent. It is not bundled with this app and is not on PATH. \
-         Looked in: [{searched}]. Reinstall QueryMT Desktop, or set the agent command to the full path of a qmtcode binary."
-    ))
+    // Searched paths overwhelm users; the start path writes them to the agent log instead.
+    Err(missing_agent_message())
 }
 
 fn find_on_path(file_name: &str, path_var: &OsStr) -> Option<PathBuf> {
@@ -1455,16 +1469,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_qmtcode_errors_listing_searched_locations() {
+    fn missing_qmtcode_errors_with_a_short_message() {
         let root = temp_dir("missing");
         let dir = root.join("Contents").join("MacOS");
 
         let error = resolve_program("qmtcode", std::slice::from_ref(&dir), None).unwrap_err();
-        assert!(
-            error.contains("Could not find the 'qmtcode' agent"),
-            "{error}"
-        );
-        assert!(error.contains(&dir.display().to_string()), "{error}");
+        assert!(error.contains("qmtcode agent is not installed"), "{error}");
+        assert!(!error.contains(&dir.display().to_string()), "{error}");
         let _ = fs::remove_dir_all(root);
     }
 

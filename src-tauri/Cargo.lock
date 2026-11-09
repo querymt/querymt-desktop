@@ -3662,7 +3662,7 @@ dependencies = [
 
 [[package]]
 name = "querymt-desktop"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "cef",
  "dirs 7.0.0",

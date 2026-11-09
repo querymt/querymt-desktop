@@ -2004,10 +2004,47 @@ summary:focus-visible {
   font-size: 0.78rem;
 }
 
-/* New-session page sits a bit above center so the "Needs you" strip fits below
-   the composer without the page feeling stacked. */
+/* New-session page: as on the mobile home screen, the composer sits in the
+   vertical middle. Two equal flexible regions surround it: logo, heading and
+   notices above (pinned to the composer), recent sessions and overview below.
+   When either region outgrows half the page, the page just grows and scrolls. */
 .start-launch-page {
-  padding-top: clamp(2rem, 16vh, 9rem);
+  min-height: calc(100dvh - 7rem);
+}
+
+.start-launch-column {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding-block: 1.5rem;
+}
+
+.start-launch-above,
+.start-launch-below {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.start-launch-above {
+  justify-content: flex-end;
+}
+
+.start-launch-below {
+  justify-content: flex-start;
+}
+
+.start-launch-logo {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 0.25rem;
+}
+
+/* The page background, not the dialog surface, sits behind the mark here. */
+.start-launch-logo .boot-mark-base {
+  fill: var(--body-bg-base);
 }
 
 .start-needs-you {
@@ -2217,10 +2254,16 @@ summary:focus-visible {
   font-size: 0.73rem;
 }
 
+/* Borderless tinted block: sits flush with the borderless rows around it. */
 .state-inline-error {
-  border: 1px solid var(--status-danger-border);
+  border: 0;
+  border-radius: var(--radius-control);
   background: var(--status-danger-bg);
   color: var(--status-danger);
+}
+
+.state-inline-error > svg {
+  flex: none;
 }
 
 .state-inline-progress {
@@ -3772,6 +3815,42 @@ summary:focus-visible {
 .composer-delivery-switch button.active {
   background: var(--composer-pill-surface-hover);
   color: var(--text);
+}
+
+/* Full-width two-way choice (agent connection type), styled like the delivery switch. */
+.connection-type-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.15rem;
+  border-radius: var(--radius-control);
+  background: var(--composer-pill-surface);
+  padding: 0.15rem;
+}
+
+.connection-type-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 0;
+  border-radius: calc(var(--radius-control) - 2px);
+  background: transparent;
+  padding: 0.4rem 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.connection-type-switch button:hover:enabled,
+.connection-type-switch button.active {
+  background: var(--composer-pill-surface-hover);
+  color: var(--text);
+}
+
+.connection-type-switch button:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .composer-options-host {
@@ -14245,13 +14324,23 @@ button.start-needs-you-action:hover:enabled {
 
 .app-setup-main {
   display: flex;
+  flex: 1 0 auto;
   min-height: calc(100vh - 2rem);
   justify-content: center;
 }
 
+/* The custom-titlebar shell has a fixed height and its own titlebar padding;
+   fill what is left instead of overflowing it, so centering is exact. */
+.app-shell-custom-titlebar .app-setup-main {
+  min-height: 100%;
+}
+
+/* Every step (progress, card and actions together) sits in the middle of the
+   window. Tall steps grow the page and scroll instead of being clipped. */
 .setup-page {
   display: flex;
   width: 100%;
+  align-items: center;
   justify-content: center;
   padding: 2.5rem 1rem;
 }
@@ -14320,15 +14409,27 @@ button.start-needs-you-action:hover:enabled {
   font-variant-numeric: tabular-nums;
 }
 
-/* Same surface as .app-dialog, so the shared model picker and dialogs match. */
+/* Same surface as in-page cards (.surface-muted, Settings lists), not a dialog:
+   it sits on the page, so no floating shadow or translucent dialog edge. */
 .setup-card {
   display: grid;
   gap: 1rem;
-  border: 1px solid var(--subtle-border-strong);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--dialog-bg);
-  box-shadow: var(--shadow-sm);
+  background: var(--bg-card);
   padding: 1.25rem 1.5rem 1.4rem;
+}
+
+/* Shared pieces default to the dialog surface; inside the setup card use the card surface. */
+.setup-card .boot-mark-base,
+.setup-card .delegate-model-picker-list,
+.setup-card .delegate-model-picker-group-title {
+  fill: var(--bg-card);
+  background: var(--bg-card);
+}
+
+.setup-card .delegate-model-picker-group-title {
+  box-shadow: 0 -1px 0 var(--bg-card);
 }
 
 .setup-hero {
@@ -14547,27 +14648,9 @@ button.start-needs-you-action:hover:enabled {
   }
 }
 
-/* Provider rows default to the card surface; inside the dialog-surface setup card use the dialog surface. */
-.setup-card .provider-connection-list,
-.setup-card .provider-connection-row {
-  background: var(--dialog-bg);
-}
-
-.setup-card .provider-connection-row:hover,
-.setup-card .provider-connection-row:focus-within {
-  background: var(--row-surface-hover);
-}
-
 .setup-appearance {
   display: grid;
   gap: 1.1rem;
-}
-
-/* Swatch ring gap must match the dialog surface it sits on. */
-.setup-card .accent-swatch-selected {
-  box-shadow:
-    0 0 0 2px var(--dialog-bg),
-    0 0 0 4px var(--swatch);
 }
 
 .settings-reset-detail {
