@@ -1,6 +1,6 @@
 [package]
 name = "querymt-desktop"
-version = "0.1.9"
+version = "0.1.10"
 description = "QueryMT Desktop"
 authors = ["QueryMT"]
 edition = "2021"
