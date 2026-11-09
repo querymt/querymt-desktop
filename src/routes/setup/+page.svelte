@@ -1,10 +1,12 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { getContext, onMount } from 'svelte';
-  import { Check, LoaderCircle, RefreshCw, X } from '@lucide/svelte';
+  import { AlertTriangle, Check, LoaderCircle, RefreshCw, X } from '@lucide/svelte';
   import BootMark from '$lib/components/brand/BootMark.svelte';
   import AppearanceControls from '$lib/components/settings/AppearanceControls.svelte';
   import ModelPickerPanel from '$lib/components/primitives/ModelPickerPanel.svelte';
+  import AgentConnectionFields from '$lib/components/primitives/AgentConnectionFields.svelte';
+  import type { AgentConfig } from '$lib/domain/types';
   import ProviderApiKeyDialog from '$lib/components/settings/ProviderApiKeyDialog.svelte';
   import ProviderClearKeyDialog from '$lib/components/settings/ProviderClearKeyDialog.svelte';
   import ProviderConnectionList from '$lib/components/settings/ProviderConnectionList.svelte';
@@ -36,6 +38,17 @@
   let modelQuery = $state('');
   let retrying = $state(false);
 
+  // Agent setup happens inside the wizard, so the user never has to leave it.
+  const DEFAULT_AGENT_NAME = 'QMTCODE';
+  const DEFAULT_AGENT_COMMAND = 'qmtcode --acp';
+  let editingAgent = $state(false);
+  let savingAgent = $state(false);
+  let agentFormError = $state<string | null>(null);
+  let draftName = $state(DEFAULT_AGENT_NAME);
+  let draftTransport = $state<AgentConfig['transport']>('stdio');
+  let draftCommandLine = $state(DEFAULT_AGENT_COMMAND);
+  let draftWebSocketUrl = $state('');
+
   const step = $derived(steps[stepIndex]);
   const readiness = $derived(agentsStore.readiness);
   const agentId = $derived(readiness.agentId ?? agentsStore.primaryAgentId ?? '');
@@ -50,6 +63,15 @@
   const providers = $derived(splitAuthEntries(agentId ? agentsStore.authProvidersByAgent[agentId] ?? [] : []).providers);
   const providerAuthCapabilities = $derived(providerAuthCapabilitiesFromAgent(agentId ? agentsStore.controlCapabilitiesByAgent[agentId] : null));
   const models = $derived(agentId ? agentsStore.modelsByAgent[agentId] ?? [] : []);
+
+  const noAgentConfigured = $derived(byId.agent.status === 'blocked' && byId.agent.action?.kind === 'open-agents');
+  const failingAgent = $derived.by(() => {
+    const action = byId.agent.action;
+    return action?.kind === 'retry-agent' ? agentsStore.configs.find((config) => config.id === action.agentId) ?? null : null;
+  });
+  const showAgentForm = $derived(byId.agent.status === 'blocked' && (noAgentConfigured || (editingAgent && failingAgent !== null)));
+  const agentDraftEndpoint = $derived((draftTransport === 'websocket' ? draftWebSocketUrl : draftCommandLine).trim());
+  const agentDraftValid = $derived(draftName.trim().length > 0 && agentDraftEndpoint.length > 0);
 
   const bootState = $derived(byId.agent.status === 'pending' ? 'connecting' : byId.agent.status === 'blocked' ? 'failed' : 'idle');
 
@@ -124,6 +146,50 @@
     }
   }
 
+  function editFailingAgent() {
+    if (!failingAgent) return;
+    draftName = failingAgent.name;
+    draftTransport = failingAgent.transport;
+    draftCommandLine = failingAgent.commandLine;
+    draftWebSocketUrl = failingAgent.websocketUrl ?? '';
+    agentFormError = null;
+    editingAgent = true;
+  }
+
+  function cancelAgentEdit() {
+    editingAgent = false;
+    agentFormError = null;
+  }
+
+  async function saveAgent() {
+    const name = draftName.trim();
+    const endpoint = agentDraftEndpoint;
+    if (!name || !endpoint || savingAgent) return;
+    savingAgent = true;
+    agentFormError = null;
+    try {
+      if (editingAgent && failingAgent) {
+        const updates = draftTransport === 'websocket'
+          ? { name, transport: draftTransport, commandLine: '', websocketUrl: endpoint }
+          : { name, transport: draftTransport, commandLine: endpoint, websocketUrl: undefined, websocketSecure: undefined };
+        agentsStore.updateConfig(failingAgent.id, updates);
+        editingAgent = false;
+        await agentsStore.refreshAgent({ ...failingAgent, ...updates });
+        await agentsStore.restartConfiguredAgent(failingAgent.id);
+      } else {
+        const config = agentsStore.createConfig(name, draftTransport, endpoint);
+        agentsStore.saveConfig(config);
+        editingAgent = false;
+        await agentsStore.refreshAgent(config);
+        await agentsStore.startConfiguredAgent(config.id);
+      }
+    } catch (error) {
+      agentFormError = error instanceof Error ? error.message : 'Unable to save this agent.';
+    } finally {
+      savingAgent = false;
+    }
+  }
+
   const isDone = (check: ReadinessCheck) => check.status === 'ok' || check.status === 'not_applicable';
 
   function summaryState(id: ReadinessCheckId): 'ready' | 'skipped' | 'missing' {
@@ -136,6 +202,13 @@
 
   const SOURCE_LABELS: Record<string, string> = { bundled: 'Bundled with the app', path: 'Found on PATH', explicit: 'Custom path' };
 </script>
+
+{#snippet errorBlock(message: string)}
+  <div class="state-inline-error" role="alert">
+    <AlertTriangle size={15} aria-hidden="true" />
+    <span class="min-w-0 flex-1">{message}</span>
+  </div>
+{/snippet}
 
 <svelte:head>
   <title>Set up QueryMT</title>
@@ -196,15 +269,42 @@
             {#if agentStatus?.version}<div><dt>Version</dt><dd>{agentStatus.version}</dd></div>{/if}
             {#if agentStatus?.programSource}<div><dt>Source</dt><dd>{SOURCE_LABELS[agentStatus.programSource] ?? agentStatus.programSource}</dd></div>{/if}
           </dl>
+        {:else if showAgentForm}
+          {#if noAgentConfigured}
+            <p class="setup-note">No agent is configured yet. Add one to continue: a local command Desktop starts for you, or the address of an ACP WebSocket server that is already running.</p>
+          {/if}
+          <form class="app-dialog-form setup-agent-form" aria-label={noAgentConfigured ? 'Add agent' : 'Edit agent'} onsubmit={(event) => { event.preventDefault(); void saveAgent(); }}>
+            <AgentConnectionFields
+              bind:name={draftName}
+              bind:transport={draftTransport}
+              bind:commandLine={draftCommandLine}
+              bind:websocketUrl={draftWebSocketUrl}
+              disabled={savingAgent}
+            />
+            {#if agentFormError}{@render errorBlock(agentFormError)}{/if}
+            <div class="setup-inline-actions">
+              {#if !noAgentConfigured}
+                <button class="action-btn" type="button" disabled={savingAgent} onclick={cancelAgentEdit}>Cancel</button>
+              {/if}
+              <button class="action-btn action-btn-accent" type="submit" disabled={!agentDraftValid || savingAgent}>
+                {#if savingAgent}<LoaderCircle size={14} class="animate-spin" />{/if}
+                {noAgentConfigured ? 'Add and start agent' : 'Save and restart'}
+              </button>
+            </div>
+          </form>
         {:else if byId.agent.status === 'blocked'}
-          <div class="alert-error setup-message" role="alert">{byId.agent.reason}</div>
-          <div class="setup-inline-actions">
+          <!-- Same error block as the Agents page: message with its actions inline. -->
+          <div class="state-inline-error" role="alert">
+            <AlertTriangle size={15} aria-hidden="true" />
+            <span class="min-w-0 flex-1">{byId.agent.reason}</span>
             {#if byId.agent.action?.kind === 'retry-agent'}
-              <button class="action-btn" type="button" disabled={retrying} onclick={retryAgent}>
+              <button class="action-btn action-btn-compact" type="button" disabled={retrying} onclick={retryAgent}>
                 {#if retrying}<LoaderCircle size={14} class="animate-spin" />{/if} Retry
               </button>
             {/if}
-            <a class="action-btn" href="/agents">Open Agents</a>
+            {#if failingAgent}
+              <button class="action-btn action-btn-compact" type="button" disabled={retrying} onclick={editFailingAgent}>Edit agent</button>
+            {/if}
           </div>
         {/if}
       {:else if step === 'providers'}
@@ -215,7 +315,7 @@
         {#if byId.providers.status === 'not_applicable'}
           <p class="setup-note">{byId.agent.status === 'ok' ? 'This agent does not manage provider sign-in. Its models are configured on the agent.' : 'Start the agent first to see its providers.'}</p>
         {:else}
-          {#if pa.pageError}<div class="alert-error setup-message" role="alert">{pa.pageError}</div>{/if}
+          {#if pa.pageError}{@render errorBlock(pa.pageError)}{/if}
           {#if byId.providers.status === 'ok'}<div class="alert-success setup-message">A provider is connected. You can add more or continue.</div>{/if}
           {#if providers.length === 0}
             <p class="setup-note">{byId.providers.status === 'pending' ? 'Checking providers…' : 'The agent reported no providers.'}</p>

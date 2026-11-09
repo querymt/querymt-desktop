@@ -664,10 +664,6 @@
     </div>
   {/if}
 
-  {#if sendBlockedReason}
-    <p class={`${unifiedShell ? 'mx-1' : 'mx-2'} composer-send-blocked text-sm text-[var(--muted)]`} role="status" data-testid="composer-send-blocked">{sendBlockedReason}</p>
-  {/if}
-
   {#if !sessionOnly}
     <div class={unifiedShell ? 'px-1 pt-2.5' : 'px-2'}>
       <WorkspacePathInput

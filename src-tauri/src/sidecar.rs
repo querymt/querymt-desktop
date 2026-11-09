@@ -756,9 +756,10 @@ fn resolve_program(
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>()
         .join(", ");
+    // The searched paths help debugging but overwhelm users; keep them in the log only.
+    tracing::warn!(searched = %searched, "{BUNDLED_AGENT_NAME} agent binary not found");
     Err(format!(
-        "Could not find the '{BUNDLED_AGENT_NAME}' agent. It is not bundled with this app and is not on PATH. \
-         Looked in: [{searched}]. Reinstall QueryMT Desktop, or set the agent command to the full path of a qmtcode binary."
+        "The {BUNDLED_AGENT_NAME} agent is not installed. Install {BUNDLED_AGENT_NAME}, or edit the agent and set the full path to it."
     ))
 }
 
@@ -1455,16 +1456,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_qmtcode_errors_listing_searched_locations() {
+    fn missing_qmtcode_errors_with_a_short_message() {
         let root = temp_dir("missing");
         let dir = root.join("Contents").join("MacOS");
 
         let error = resolve_program("qmtcode", std::slice::from_ref(&dir), None).unwrap_err();
-        assert!(
-            error.contains("Could not find the 'qmtcode' agent"),
-            "{error}"
-        );
-        assert!(error.contains(&dir.display().to_string()), "{error}");
+        assert!(error.contains("qmtcode agent is not installed"), "{error}");
+        assert!(!error.contains(&dir.display().to_string()), "{error}");
         let _ = fs::remove_dir_all(root);
     }
 

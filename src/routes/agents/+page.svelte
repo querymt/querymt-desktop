@@ -19,7 +19,7 @@
   import { Portal } from 'bits-ui';
   import AppConfirmDialog from '$lib/components/primitives/AppConfirmDialog.svelte';
   import AppDialog from '$lib/components/primitives/AppDialog.svelte';
-  import AppSelect from '$lib/components/primitives/AppSelect.svelte';
+  import AgentConnectionFields from '$lib/components/primitives/AgentConnectionFields.svelte';
   import Hint from '$lib/components/primitives/Hint.svelte';
   import IconTooltipButton from '$lib/components/primitives/IconTooltipButton.svelte';
   import SectionHeader from '$lib/components/primitives/SectionHeader.svelte';
@@ -55,11 +55,6 @@
   let draftWebSocketUrl = $state('');
   let agentDialogError = $state<string | null>(null);
 
-  const transportOptions = [
-    { value: 'stdio', label: 'Local process' },
-    { value: 'websocket', label: 'WebSocket endpoint' }
-  ];
-
   const getOverlayPortalTarget = getContext<() => HTMLElement | null>('app-overlay-target');
   const overlayPortalTarget = $derived(getOverlayPortalTarget?.() ?? undefined);
 
@@ -82,6 +77,10 @@
   );
 
   const attentionCards = $derived.by(() => agentCards.filter(isAttentionCard));
+  // The Needs attention list already shows per-agent failures; don't repeat them in the banner.
+  const refreshError = $derived(
+    agentsStore.error && !attentionCards.some((card) => getAttentionMessage(card) === agentsStore.error) ? agentsStore.error : null
+  );
 
   const selectedCard = $derived.by(() =>
     selectedAgentId ? agentCards.find((card) => card.config.id === selectedAgentId) ?? null : null
@@ -423,10 +422,10 @@
           {#if !isEmbedded}<button class="action-btn action-btn-primary" type="button" onclick={openAddDialog}>Add agent</button>{/if}
         </div>
       {:else}
-        {#if agentsStore.error}
+        {#if refreshError}
           <div class="state-inline-error" role="alert">
             <AlertTriangle size={15} />
-            <span class="min-w-0 flex-1"><strong>Some agents could not be refreshed.</strong> {agentsStore.error}</span>
+            <span class="min-w-0 flex-1"><strong>Some agents could not be refreshed.</strong> {refreshError}</span>
             <button class="action-btn action-btn-compact" type="button" onclick={() => refreshAgents()}>Retry</button>
           </div>
         {:else if refreshing}
@@ -527,43 +526,13 @@
       onDismiss={closeAgentDialog}
     >
       <form id="agent-dialog-form" class="app-dialog-form" onsubmit={(event) => { event.preventDefault(); void saveAgentDialog(); }}>
-        <label class="app-dialog-field">
-          <span class="app-dialog-field-label">Agent name</span>
-          <input class="input-shell w-full" placeholder="Agent name" bind:value={draftName} />
-          <span class="app-dialog-field-help">Shown in sidebars, settings, and session controls.</span>
-        </label>
-
-        <label class="app-dialog-field">
-          <span class="app-dialog-field-label">Connection type</span>
-          <AppSelect bind:value={draftTransport} options={transportOptions} ariaLabel="Agent connection type" />
-          <span class="app-dialog-field-help">Local processes are managed by Desktop. WebSocket agents run independently.</span>
-        </label>
-
-        {#if draftTransport === 'stdio'}
-          <label class="app-dialog-field">
-            <span class="app-dialog-field-label">Command line</span>
-            <input class="input-shell w-full" placeholder="/path/to/executable --acp" bind:value={draftCommandLine} autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false} inputmode="text" />
-            <span class="app-dialog-field-help">Executable and arguments used to start the ACP agent.</span>
-          </label>
-        {:else}
-          <label class="app-dialog-field">
-            <span class="app-dialog-field-label">Agent address</span>
-            <input
-              class="input-shell w-full"
-              placeholder="127.0.0.1:3030"
-              bind:value={draftWebSocketUrl}
-              autocomplete="off"
-              autocorrect="off"
-              autocapitalize="off"
-              spellcheck={false}
-              inputmode="text"
-              aria-invalid={agentDialogError ? 'true' : undefined}
-              aria-describedby={agentDialogError ? 'agent-address-error' : undefined}
-            />
-            <span class="app-dialog-field-help">Host and port for an independently running ACP WebSocket server.</span>
-            {#if agentDialogError}<span id="agent-address-error" class="app-dialog-field-error" role="alert">{agentDialogError}</span>{/if}
-          </label>
-        {/if}
+        <AgentConnectionFields
+          bind:name={draftName}
+          bind:transport={draftTransport}
+          bind:commandLine={draftCommandLine}
+          bind:websocketUrl={draftWebSocketUrl}
+          addressError={agentDialogError}
+        />
       </form>
 
       {#snippet footer()}

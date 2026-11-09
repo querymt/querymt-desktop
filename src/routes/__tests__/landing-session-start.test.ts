@@ -611,7 +611,8 @@ describe('Landing page with unfinished setup', () => {
     render(LandingPage);
 
     expect(screen.getByTestId('setup-checklist')).toHaveTextContent('No provider is connected.');
-    expect(screen.getByTestId('composer-send-blocked')).toHaveTextContent('No provider is connected.');
+    // Setup problems are explained once, by the checklist, never inside the composer.
+    expect(screen.queryByTestId('composer-send-blocked')).not.toBeInTheDocument();
 
     const props = vi.mocked(SessionComposer).mock.calls.at(-1)![1];
     expect(props.sendBlockedReason).toBe('No provider is connected.');

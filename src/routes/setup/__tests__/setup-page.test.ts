@@ -33,6 +33,10 @@ const agentsStore = vi.hoisted(() => ({
   refreshModelsForAgent: vi.fn(),
   restartConfiguredAgent: vi.fn(async () => undefined),
   startConfiguredAgent: vi.fn(async () => undefined),
+  refreshAgent: vi.fn(async () => undefined),
+  createConfig: vi.fn((name: string, transport: string, endpoint: string) => ({ id: 'new-agent', name, transport, commandLine: endpoint, enabled: true, autoStart: true })),
+  saveConfig: vi.fn(),
+  updateConfig: vi.fn(),
   requestPromptFocus: vi.fn()
 }));
 
@@ -91,6 +95,39 @@ describe('setup wizard', () => {
     expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
     await fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
     expect(agentsStore.restartConfiguredAgent).toHaveBeenCalledWith('agent-1');
+  });
+
+  it('adds and starts an agent inside the wizard when none is configured', async () => {
+    const base = report({ agent: 'blocked', providers: 'not_applicable', models: 'not_applicable', model: 'not_applicable' });
+    agentsStore.readiness = {
+      ...base,
+      agentId: null,
+      checks: base.checks.map((c) => (c.id === 'agent' ? { ...c, reason: 'No agent is configured.', action: { kind: 'open-agents' as const } } : c))
+    };
+    render(SetupPage);
+    await fireEvent.click(screen.getByRole('button', { name: 'Get started' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(screen.queryByRole('link', { name: 'Open Agents' })).not.toBeInTheDocument();
+    expect(screen.getByRole('form', { name: 'Add agent' })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('qmtcode --acp')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Add and start agent' }));
+    await vi.waitFor(() => expect(agentsStore.startConfiguredAgent).toHaveBeenCalledWith('new-agent'));
+    expect(agentsStore.createConfig).toHaveBeenCalledWith('QMTCODE', 'stdio', 'qmtcode --acp');
+    expect(agentsStore.saveConfig).toHaveBeenCalled();
+    expect(screen.getByRole('heading', { name: 'Agent' })).toBeInTheDocument();
+  });
+
+  it('edits and restarts a failing agent inside the wizard', async () => {
+    agentsStore.readiness = report({ agent: 'blocked', providers: 'not_applicable', models: 'not_applicable', model: 'not_applicable' });
+    render(SetupPage);
+    await fireEvent.click(screen.getByRole('button', { name: 'Get started' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Edit agent' }));
+    const command = screen.getByDisplayValue('qmtcode --acp');
+    await fireEvent.input(command, { target: { value: '/opt/qmtcode --acp' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save and restart' }));
+    await vi.waitFor(() => expect(agentsStore.restartConfiguredAgent).toHaveBeenCalledWith('agent-1'));
+    expect(agentsStore.updateConfig).toHaveBeenCalledWith('agent-1', expect.objectContaining({ commandLine: '/opt/qmtcode --acp' }));
   });
 
   it('animates the boot mark while the agent is starting', async () => {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
-  import { FolderOpen } from '@lucide/svelte';
+  import { AlertTriangle, FolderOpen } from '@lucide/svelte';
   import { Tooltip } from 'bits-ui';
   import SessionComposer from '$lib/components/primitives/SessionComposer.svelte';
   import { agentsStore, LAUNCH_MODE_OPTIONS, LAUNCH_REASONING_OPTIONS } from '$lib/stores/agents.svelte';
@@ -14,6 +14,7 @@
   import type { DesktopSessionSummary, InboxItem } from '$lib/domain/types';
   import { firstOpenCheck } from '$lib/domain/readiness';
   import SetupChecklist from '$lib/components/setup/SetupChecklist.svelte';
+  import BootMark from '$lib/components/brand/BootMark.svelte';
 
   const NEEDS_YOU_LIMIT = 3;
 
@@ -108,6 +109,17 @@
       : blockingCheck?.status === 'pending' ? 'Setting up…' : blockingCheck?.reason ?? null
   );
   const showSetupChecklist = $derived(agentsStore.initializeSettled && !readiness.setupComplete);
+  // Errors never go inside the composer. Setup problems are already explained by
+  // the checklist; anything else is shown as a notice above the composer.
+  const launcherError = $derived.by(() => {
+    const error = agentsStore.error ?? agentsStore.getLaunchProfileError(primaryAgentId);
+    if (!error) return null;
+    return readiness.checks.some((check) => check.reason === error) ? null : error;
+  });
+  function dismissLauncherError() {
+    agentsStore.clearError();
+    agentsStore.clearLaunchProfileError(primaryAgentId);
+  }
   const modelLocation = $derived.by(() => {
     if (!primaryAgentId) return undefined;
     const status = agentsStore.meshStatusByAgent[primaryAgentId];
@@ -178,9 +190,13 @@
 {#snippet agentsLabel()}<strong>{onlineAgents.length}/{configuredAgentCount}</strong> {configuredAgentCount === 1 ? 'agent' : 'agents'} connected{/snippet}
 {#snippet inboxLabel()}<strong>{onlineRequestCount}</strong> {onlineRequestCount === 1 ? 'request needs' : 'requests need'} input{/snippet}
 
-<div class="start-launch-page flex min-h-[calc(100vh-7rem)] w-full items-start justify-center px-4">
-  <section class="mx-auto w-full max-w-4xl space-y-6">
+<!-- Like the mobile home screen, the composer sits in the vertical middle: equal
+     flexible regions above (logo, heading, notices) and below (recent sessions, overview). -->
+<div class="start-launch-page flex w-full justify-center px-4">
+  <section class="start-launch-column mx-auto w-full max-w-4xl">
+   <div class="start-launch-above">
     <div class="space-y-3 text-center">
+      <div class="start-launch-logo"><BootMark state="idle" size={88} /></div>
       <div class="section-eyebrow">New session</div>
       <h1 class="text-3xl font-semibold tracking-[-0.02em] text-[var(--text)] md:text-4xl">What should QueryMT do?</h1>
       <p class="mx-auto flex max-w-2xl items-center justify-center gap-2 text-sm text-[var(--muted)] md:text-base">
@@ -209,6 +225,15 @@
       <SetupChecklist report={readiness} />
     {/if}
 
+    {#if launcherError}
+      <div class="state-inline-error" role="alert" data-testid="launcher-error">
+        <AlertTriangle size={15} aria-hidden="true" />
+        <span class="min-w-0 flex-1">{launcherError}</span>
+        <button class="action-btn action-btn-compact" type="button" aria-label="Dismiss error" onclick={dismissLauncherError}>Dismiss</button>
+      </div>
+    {/if}
+   </div>
+
     <SessionComposer
       compact={true}
       {sendBlockedReason}
@@ -219,7 +244,7 @@
       prompt={agentsStore.composerPrompt}
       loading={agentsStore.loading || agentsStore.launching}
       starting={agentsStore.launching}
-      error={agentsStore.error ?? agentsStore.getLaunchProfileError(primaryAgentId)}
+      error={null}
       activeSessionId={null}
       promptFocusToken={agentsStore.promptFocusToken}
       modelOptions={primaryAgentId ? (agentsStore.modelsByAgent[primaryAgentId] ?? []) : []}
@@ -256,12 +281,10 @@
       onLaunchReasoningChange={(reasoningId) => agentsStore.setComposerReasoning(reasoningId)}
       onTargetChange={(targetId) => agentsStore.setComposerTarget(targetId)}
       onCreateSession={() => startSessionFromLauncher()}
-      onDismissError={() => {
-        agentsStore.clearError();
-        agentsStore.clearLaunchProfileError(primaryAgentId);
-      }}
       onSendPrompt={() => startSessionFromLauncher()}
     />
+
+   <div class="start-launch-below">
 
     {#if stripEntries.length}
       <section class="start-needs-you" class:start-needs-you-recent={!showNeedsYou} aria-labelledby="start-needs-you-heading">
@@ -295,5 +318,6 @@
         {@render overviewLink('/inbox', 'Requests waiting for your answer', inboxLabel)}
       </nav>
     </Tooltip.Provider>
+   </div>
   </section>
 </div>
