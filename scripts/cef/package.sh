@@ -106,15 +106,31 @@ cat > "$APPDIR/AppRun" <<'APPRUN'
 HERE="$(dirname "$(readlink -f "$0")")"
 export LD_LIBRARY_PATH="$HERE/usr/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+# Only libraries loadable by this AppImage's architecture count; a 32-bit-only
+# host copy must not suppress the bundled fallback.
+case "$(uname -m)" in
+  x86_64) LDCONFIG_ARCH=x86-64; MULTIARCH=x86_64-linux-gnu; ELF_MACHINE=3e ;;
+  aarch64 | arm64) LDCONFIG_ARCH=AArch64; MULTIARCH=aarch64-linux-gnu; ELF_MACHINE=b7 ;;
+  *) LDCONFIG_ARCH=; MULTIARCH=; ELF_MACHINE= ;;
+esac
+
+elf_matches_arch() {
+  command -v od >/dev/null 2>&1 || return 0
+  [ "$(od -An -tx1 -j4 -N1 "$1" 2>/dev/null | tr -d ' \n')" = 02 ] || return 1
+  [ -z "$ELF_MACHINE" ] || [ "$(od -An -tx1 -j18 -N1 "$1" 2>/dev/null | tr -d ' \n')" = "$ELF_MACHINE" ]
+}
+
 host_has_library() {
   for ldconfig in ldconfig /sbin/ldconfig /usr/sbin/ldconfig; do
     if command -v "$ldconfig" >/dev/null 2>&1; then
-      "$ldconfig" -p 2>/dev/null | grep -q "[[:space:]]$1 (" && return 0
+      if [ -n "$LDCONFIG_ARCH" ]; then
+        "$ldconfig" -p 2>/dev/null | grep -q "[[:space:]]$1 (libc6,$LDCONFIG_ARCH" && return 0
+      fi
       break
     fi
   done
-  for dir in /usr/lib /usr/lib64 /lib /lib64 /usr/lib/*-linux-gnu /lib/*-linux-gnu; do
-    [ -e "$dir/$1" ] && return 0
+  for dir in ${MULTIARCH:+/usr/lib/$MULTIARCH /lib/$MULTIARCH} /usr/lib64 /lib64 /usr/lib /lib; do
+    [ -e "$dir/$1" ] && elf_matches_arch "$dir/$1" && return 0
   done
   return 1
 }
