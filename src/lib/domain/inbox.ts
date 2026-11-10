@@ -45,9 +45,11 @@ export function mapElicitationRequestToInboxItem(
 ): InboxItem {
   const allowCustom = allowsCustomResponses(request);
   const form = ElicitationRequestGuard.isForm(request) ? request : null;
-  const formFields = form
-    ? mapElicitationFormFields(form.requestedSchema, allowCustom, optionDescriptionsFromMeta(request._meta))
-    : [];
+  const unsupportedForm = form ? hasUnsupportedProperty(form.requestedSchema) : false;
+  const formFields =
+    form && !unsupportedForm
+      ? mapElicitationFormFields(form.requestedSchema, allowCustom, optionDescriptionsFromMeta(request._meta))
+      : [];
   const scoped = request as { sessionId?: unknown; requestId?: unknown };
   const sessionId = typeof scoped.sessionId === 'string' ? scoped.sessionId : null;
   const owner = sessionId ?? `request ${String(scoped.requestId)}`;
@@ -56,7 +58,9 @@ export function mapElicitationRequestToInboxItem(
   return {
     id,
     title,
-    detail: request.message,
+    detail: unsupportedForm
+      ? `${request.message}\n\nThis form uses field types the desktop app cannot display, so it cannot be submitted here.`
+      : request.message,
     owner,
     severity: 'medium',
     type: 'elicitation',
@@ -66,8 +70,12 @@ export function mapElicitationRequestToInboxItem(
     status: 'pending',
     resolution: null,
     error: null,
-    actions:
-      form
+    actions: unsupportedForm
+      ? [
+          { id: 'decline', label: 'Decline', kind: 'decline' },
+          { id: 'cancel', label: 'Cancel', kind: 'cancel' }
+        ]
+      : form
         ? [
             { id: 'accept', label: 'Submit', kind: 'accept' },
             { id: 'decline', label: 'Decline', kind: 'decline' },
@@ -156,6 +164,11 @@ export function buildElicitationResponse(actionId: string, fields: InboxFormFiel
     return null;
   }
 
+  // Never submit a form containing fields we cannot represent faithfully.
+  if (fields.some((field) => !SUPPORTED_FIELD_KINDS.has(field.kind))) {
+    return null;
+  }
+
   const content: Record<string, ElicitationContentValue> = {};
   for (const field of fields) {
     if (field.customActive) {
@@ -187,6 +200,16 @@ export function buildElicitationResponse(actionId: string, fields: InboxFormFiel
     action: 'accept',
     content
   };
+}
+
+const SUPPORTED_FIELD_KINDS: ReadonlySet<string> = new Set(['string', 'number', 'integer', 'boolean', 'array']);
+
+function hasUnsupportedProperty(schema: ElicitationSchema): boolean {
+  const properties = (schema.properties ?? {}) as Record<string, unknown>;
+  return Object.values(properties).some((property) => {
+    const type = (property as { type?: unknown } | null)?.type;
+    return typeof type !== 'string' || !SUPPORTED_FIELD_KINDS.has(type);
+  });
 }
 
 function mapPermissionOption(option: PermissionOption): InboxAction {

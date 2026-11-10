@@ -398,7 +398,10 @@ export class DesktopAcpClient {
     const connection = createAcpClient({ name: 'querymt-desktop' })
       .onNotification('session/update', ({ params }) => browserClient.sessionUpdate(params))
       // Anything that is not a standard notification is a QueryMT extension.
-      .onNotification('*', ({ method, params }) => browserClient.extNotification(method, params))
+      // Normalize `_querymt/...` wire names to logical names so internal listeners match.
+      .onNotification('*', ({ method, params }) =>
+        browserClient.extNotification(toLogicalQuerymtMethod(method) ?? method, params)
+      )
       .onRequest('session/request_permission', ({ params }) => browserClient.requestPermission(params))
       .onRequest('elicitation/create', ({ params }) => browserClient.unstable_createElicitation(params))
       .connect(stream);

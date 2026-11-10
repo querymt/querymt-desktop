@@ -15,6 +15,11 @@ vi.mock('./browser-client', () => ({
     beginSessionReplay = beginSessionReplay;
     completeSessionReplay = completeSessionReplay;
     abortSessionReplay = abortSessionReplay;
+    async extNotification(method: string, params: unknown) {
+      for (const handler of [...extensionNotificationHandlers]) {
+        handler({ method, params } as QuerymtExtensionNotification);
+      }
+    }
     onExtensionNotification(handler: (notification: QuerymtExtensionNotification) => void) {
       extensionNotificationHandlers.push(handler);
     }
@@ -31,6 +36,9 @@ function emitExtensionNotification(notification: QuerymtExtensionNotification): 
   }
 }
 
+const wildcardNotificationHandlers = vi.hoisted(
+  () => [] as Array<(message: { method: string; params: unknown }) => unknown>
+);
 const createWebSocketAcpStream = vi.hoisted(() => vi.fn());
 const createTauriAcpStream = vi.hoisted(() => vi.fn());
 const ClientSideConnectionMock = vi.hoisted(() =>
@@ -60,7 +68,10 @@ vi.mock('@agentclientprotocol/sdk/unstable', async (importOriginal) => {
   // mock instance so existing tests can still script `initialize`/`extMethod`.
   const client = () => {
     const builder = {
-      onNotification: () => builder,
+      onNotification: (name: string, handler: (message: { method: string; params: unknown }) => unknown) => {
+        if (name === '*') wildcardNotificationHandlers.push(handler);
+        return builder;
+      },
       onRequest: () => builder,
       connect: () => {
         const instance = new (ClientSideConnectionMock as unknown as new () => {
@@ -913,6 +924,28 @@ describe('DesktopAcpClient elicitation recovery', () => {
     const client = websocketClient();
     await expect(client.connect()).resolves.toMatchObject({ protocolVersion: 1 });
     expect(client.supportsElicitationRecovery()).toBe(false);
+  });
+
+  it('normalizes prefixed wire notifications from the wildcard handler before forwarding', async () => {
+    const stream = mockAcpStream();
+    createWebSocketAcpStream.mockResolvedValueOnce(stream);
+    wildcardNotificationHandlers.length = 0;
+    const client = websocketClient();
+    await client.connect();
+
+    const wildcard = wildcardNotificationHandlers.at(-1);
+    expect(wildcard).toBeDefined();
+    await wildcard!({
+      method: '_querymt/elicitation/recoveryAuthority',
+      params: { version: 1, session_id: 'session-1', resume_authority: 'process-secret-1' }
+    });
+
+    expect(client.hasElicitationAuthority('session-1')).toBe(true);
+
+    const seen: string[] = [];
+    extensionNotificationHandlers.push((notification) => seen.push(notification.method));
+    await wildcard!({ method: 'vendor/custom', params: {} });
+    expect(seen).toEqual(['vendor/custom']);
   });
 
   it('stores resume authority in memory across WebSocket client replacement without logging it', async () => {
