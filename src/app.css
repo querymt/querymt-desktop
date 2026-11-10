@@ -8328,6 +8328,98 @@ a.session-delegate-session:hover {
   gap: 0.65rem;
 }
 
+/* Context-compaction boundary: a full-width divider, deliberately unlike a turn bubble. */
+.session-compaction {
+  display: grid;
+  gap: 0.4rem;
+  padding-block: 0.35rem;
+  color: var(--muted);
+}
+
+.session-compaction-rule {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-strong), transparent);
+}
+
+.session-compaction-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 0.76rem;
+}
+
+.session-compaction-mark {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.session-compaction-title {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.session-compaction-title-live {
+  background: linear-gradient(90deg, var(--muted) 20%, var(--accent) 50%, var(--muted) 80%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: state-skeleton-shimmer 1.6s ease-in-out infinite;
+}
+
+.session-compaction-detail {
+  font-variant-numeric: tabular-nums;
+}
+
+.session-compaction-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.4rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.session-compaction-toggle:hover,
+.session-compaction-toggle:focus-visible {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+.session-compaction-chevron-open {
+  transform: rotate(180deg);
+}
+
+.session-compaction-failed .session-compaction-mark,
+.session-compaction-failed .session-compaction-detail {
+  color: var(--danger);
+}
+
+.session-compaction-cancelled .session-compaction-mark {
+  color: var(--muted);
+}
+
+.session-compaction-summary {
+  margin-inline: auto;
+  max-width: 46rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.session-compaction-summary-live {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
 .session-prompt-error {
   display: grid;
   grid-template-columns: 1.7rem minmax(0, 1fr);

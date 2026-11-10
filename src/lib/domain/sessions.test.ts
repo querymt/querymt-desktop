@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SessionInfo } from '@agentclientprotocol/sdk';
+import type { SessionInfo } from '@agentclientprotocol/sdk/unstable';
 import { buildListSessionChildrenRequest, getSessionGroupCwd, compareSessionsByPin, readSessionPin, sessionMatchesLifecycle, buildListSessionsRequest, formatSessionTimestamp, formatSessionTimestampShort, getRecentSessionRailItems, getSessionStatusTone, groupSessionsByWorkspace, inferSessionStatus, isRootSession, mapAcpSessionsToDesktopSessions, newestTimestamp } from './sessions';
 import type { DesktopSessionSummary, SessionStatus } from './types';
 

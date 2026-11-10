@@ -1,5 +1,7 @@
 import { applyDelegationChildSession, createEmptyActiveSession, normalizeContentBlocks, stringifyOptional, summarizeContentBlocks } from '$lib/domain/session-updates';
 import type { ActiveSessionViewModel, PromptAttachment, SessionContentBlock, SessionToolCallItem, SessionTranscriptItem } from '$lib/domain/types';
+import { interruptOpenCompactions } from '$lib/domain/session-compaction';
+import type { SessionCompactionItem } from '$lib/domain/types';
 import { appendHistoricalUsage, readAccountingSnapshot, readTokenUsage } from '$lib/domain/session-usage';
 import type { DelegationUpdateNotification, HistoryInfo, SessionHistorySummary, SessionRuntimeStatus, TruncatedEntry } from '$lib/querymt/generated/types';
 
@@ -92,6 +94,8 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
   const windowSummary = readWindowSummary(snapshot);
 
   const toolCallsById = new Map<string, SessionToolCallItem>();
+  const compactionsById = new Map<string, SessionCompactionItem>();
+  let openLegacyCompactionId: string | null = null;
   const supersededRunIds = new Set<string>();
   const pendingDelegationToolCalls = new Map<string, string>();
   const pendingChildSessionsByDelegation = new Map<string, string>();
@@ -128,6 +132,51 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
       session.usage.contextUsed = readNonNegativeNumber(data.context_tokens) ?? session.usage.contextUsed;
       session.usage.activeWorkMs += elapsedWorkMs(activeWorkStartedAt, readTimestampMs(event.timestamp));
       activeWorkStartedAt = null;
+      continue;
+    }
+
+    if (kind === 'compaction_start' || kind === 'compaction_summary_chunk' || kind === 'compaction_end' || kind === 'compaction_failed') {
+      const seq = event.seq ?? session.events.length + 1;
+      let id = readString(data.compaction_id);
+      if (!id) {
+        // Legacy records carry no identity: pair terminals with the latest open start.
+        if (kind === 'compaction_start' || !openLegacyCompactionId) openLegacyCompactionId = `querymt-compaction-legacy-${seq}`;
+        id = openLegacyCompactionId;
+      }
+      const timestampMs = readTimestampMs(event.timestamp) ?? undefined;
+      let item = compactionsById.get(id);
+      if (!item) {
+        item = {
+          id,
+          status: 'in_progress',
+          summary: '',
+          eventIndex: event.seq,
+          startedAtMs: timestampMs,
+          // The reduced count is only known from the end event; the "before" is the count at start.
+          tokensBefore: session.usage.contextUsed
+        };
+        compactionsById.set(id, item);
+      }
+      if (kind === 'compaction_summary_chunk') {
+        item.summary += readString(data.content) ?? '';
+      } else if (kind === 'compaction_end') {
+        item.status = 'completed';
+        item.summary = readString(data.summary) ?? item.summary;
+        item.endedAtMs = timestampMs;
+        const after = readNonNegativeNumber(data.context_tokens);
+        if (after !== null) {
+          item.tokensAfter = after;
+          session.usage.contextUsed = after;
+        }
+        if (!readString(data.compaction_id)) openLegacyCompactionId = null;
+      } else if (kind === 'compaction_failed') {
+        const cancelled = readBoolean(data.cancelled);
+        item.status = cancelled ? 'cancelled' : 'failed';
+        item.error = cancelled ? null : readString(data.reason) ?? null;
+        item.endedAtMs = timestampMs;
+        if (!readString(data.compaction_id)) openLegacyCompactionId = null;
+      }
+      session.events.push({ id: `snapshot-${seq}`, kind, text: '', messageId: null });
       continue;
     }
 
@@ -311,6 +360,7 @@ export function activeSessionFromLoadResponse(sessionId: string, response: unkno
     }
   }
 
+  if (compactionsById.size > 0) session.compactions = [...compactionsById.values()];
   restoreUnmatchedPrompts(session, snapshot, structuredPrompts, restoredStructuredPrompts, toolCallsById);
   applyTruncation(toolCallsById, snapshot.truncated);
   if (windowSummary) {
@@ -362,7 +412,12 @@ export function prependOlderHistory(
         }),
       ...current.toolCalls
     ],
-    events: [...older.events.filter((event) => !eventIds.has(event.id)), ...current.events]
+    events: [...older.events.filter((event) => !eventIds.has(event.id)), ...current.events],
+    compactions: (() => {
+      const known = new Set((current.compactions ?? []).map((item) => item.id));
+      const merged = [...(older.compactions ?? []).filter((item) => !known.has(item.id)), ...(current.compactions ?? [])];
+      return merged.length > 0 ? merged : undefined;
+    })()
   };
 }
 
@@ -498,6 +553,7 @@ export function normalizeHistoricalSession(
 ): ActiveSessionViewModel {
   // Loading history is not evidence that execution or a pending tool ended.
   if (session.runStateFromLifecycle && (session.runState === 'completed' || session.runState === 'failed')) {
+    interruptOpenCompactions(session);
     session.activeToolCallId = null;
     session.toolCalls = session.toolCalls.map((tool) =>
       (tool.status === 'pending' || tool.status === 'in_progress') && (!tool.runId || tool.runId === session.runId)

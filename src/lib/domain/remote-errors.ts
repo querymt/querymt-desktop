@@ -1,4 +1,4 @@
-import { RequestError } from '@agentclientprotocol/sdk';
+import { RequestError } from '@agentclientprotocol/sdk/unstable';
 
 /** Error category the agent reports when a remote mesh node runs an incompatible agent. */
 export const REMOTE_UPGRADE_REQUIRED_CATEGORY = 'remote_upgrade_required';

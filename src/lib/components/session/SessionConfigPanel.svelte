@@ -10,7 +10,7 @@
     getSelectConfigOptions
   } from '$lib/querymt/config-options';
   import type { ActiveSessionViewModel } from '$lib/domain/types';
-  import type { SessionConfigOption, SessionConfigSelectOption } from '@agentclientprotocol/sdk';
+  import type { SessionConfigOption, SessionConfigSelectOption } from '@agentclientprotocol/sdk/unstable';
   import type { Component } from 'svelte';
 
   type SelectConfigOption = SessionConfigOption & { type: 'select' };

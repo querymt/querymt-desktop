@@ -1,5 +1,5 @@
-import type { Stream } from '@agentclientprotocol/sdk';
-import type { AnyMessage } from '@agentclientprotocol/sdk/dist/jsonrpc.js';
+import type { Stream } from '@agentclientprotocol/sdk/unstable';
+import type { AnyMessage } from '@agentclientprotocol/sdk/unstable';
 
 export async function createTauriAcpStream(agentId: string): Promise<Stream> {
   const { createTauriAcpStream: createStream } = await import('$native');

@@ -1,6 +1,15 @@
-import type { SessionNotification } from '@agentclientprotocol/sdk';
+import type { SessionNotification } from '@agentclientprotocol/sdk/unstable';
 import { DelegationActivity, type DelegationUpdateNotification, type SessionRuntimeStatus } from '$lib/querymt/generated/types';
 import { readAccountingMeta, readUsageBreakdown } from '$lib/domain/session-usage';
+import {
+  applyCompactionSummaryChunk,
+  applyCompactionUpdate,
+  cloneCompactions,
+  COMPACTING_LABEL,
+  hasActiveCompaction,
+  isCompactingLabel,
+  settleCompactionUsage
+} from '$lib/domain/session-compaction';
 import type {
   ActiveSessionViewModel,
   SessionEventItem,
@@ -89,6 +98,9 @@ function currentConversationEventIndex(session: ActiveSessionViewModel): number 
   }
   for (const tool of session.toolCalls) {
     if (typeof tool.eventIndex === 'number') maxIndex = Math.max(maxIndex, tool.eventIndex);
+  }
+  for (const item of session.compactions ?? []) {
+    if (typeof item.eventIndex === 'number') maxIndex = Math.max(maxIndex, item.eventIndex);
   }
   return maxIndex + 1;
 }
@@ -252,6 +264,13 @@ function applySessionNotificationInPlace(
       session.usage.breakdown = readUsageBreakdown(update._meta) ?? session.usage.breakdown;
       session.usage.standardCostUsd = readCostUsd(update.cost) ?? session.usage.standardCostUsd;
       applyAccountingMeta(session, update._meta);
+      settleCompactionUsage(session, readFiniteNumber(update.used));
+      break;
+    case 'compaction_update':
+      applyCompactionUpdate(session, update, conversationEventIndex);
+      break;
+    case 'compaction_summary_chunk':
+      applyCompactionSummaryChunk(session, update, conversationEventIndex);
       break;
     case 'session_info_update':
       // Metadata-only accounting fallback when no reliable context pair exists.
@@ -280,6 +299,9 @@ export function getNextConversationEventIndex(session: ActiveSessionViewModel): 
   for (const tool of session.toolCalls) {
     if (typeof tool.eventIndex === 'number') maxIndex = Math.max(maxIndex, tool.eventIndex);
   }
+  for (const item of session.compactions ?? []) {
+    if (typeof item.eventIndex === 'number') maxIndex = Math.max(maxIndex, item.eventIndex);
+  }
   return maxIndex + 1;
 }
 
@@ -290,6 +312,7 @@ function cloneSession(current: ActiveSessionViewModel): ActiveSessionViewModel {
     ...current,
     transcript: current.transcript.map((item) => ({ ...item, blocks: item.blocks?.map((block) => ({ ...block })) })),
     toolCalls: current.toolCalls.map((item) => ({ ...item })),
+    compactions: cloneCompactions(current.compactions),
     plans: current.plans.map((item) => ({ ...item })),
     events: current.events.map((item) => ({ ...item })),
     configOptions: current.configOptions.map((item) => ({ ...item })),
@@ -507,6 +530,13 @@ export function applySessionNotification(
       next.usage.breakdown = readUsageBreakdown(update._meta) ?? next.usage.breakdown;
       next.usage.standardCostUsd = readCostUsd(update.cost) ?? next.usage.standardCostUsd;
       applyAccountingMeta(next, update._meta);
+      settleCompactionUsage(next, readFiniteNumber(update.used));
+      break;
+    case 'compaction_update':
+      applyCompactionUpdate(next, update, conversationEventIndex);
+      break;
+    case 'compaction_summary_chunk':
+      applyCompactionSummaryChunk(next, update, conversationEventIndex);
       break;
     case 'session_info_update':
       applyAccountingMeta(next, update._meta);
@@ -561,6 +591,12 @@ export function projectSessionRuntime(session: ActiveSessionViewModel, runtime: 
   }
   beginSessionWork(session);
   session.lastError = null;
+  if (hasActiveCompaction(session) || (isCompactingLabel(session.activityLabel) && runtime.phase !== 'cancel_requested' && runtime.phase !== 'closing')) {
+    // The runtime only knows the turn is busy; the compaction knows why.
+    session.runState = 'thinking';
+    session.activityLabel = COMPACTING_LABEL;
+    return;
+  }
   const responding = runtime.phase === 'model' && session.runState === 'streaming' && previousRunId === session.runId;
   session.runState = runtime.phase === 'tools' ? 'tool-running' : responding ? 'streaming' : 'thinking';
   const active = getActiveSessionTools(session);
@@ -1090,6 +1126,10 @@ function summarizeUpdate(notification: SessionNotification): string {
       const cost = readCostUsd(update.cost);
       return `Context ${update.used}/${update.size} tokens${percent}${cost !== null ? ` · $${cost.toFixed(4)}` : ''}`;
     }
+    case 'compaction_update':
+      return `Compaction ${update.status}`;
+    case 'compaction_summary_chunk':
+      return 'Compaction summary';
     case 'available_commands_update':
       return 'Available commands update';
     case 'current_mode_update':

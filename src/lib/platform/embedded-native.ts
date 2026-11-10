@@ -1,4 +1,4 @@
-import type { Stream } from '@agentclientprotocol/sdk';
+import type { Stream } from '@agentclientprotocol/sdk/unstable';
 import type { AgentConfig, AgentRuntimeStatus, WorkspaceSuggestion } from '$lib/domain/types';
 import type { SessionLoadTelemetryCounters } from '$lib/perf/session-load-metrics';
 export type { SessionLoadTelemetryCounters } from '$lib/perf/session-load-metrics';

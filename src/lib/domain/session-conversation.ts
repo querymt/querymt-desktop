@@ -5,6 +5,7 @@ import { getSessionToolChangeStats, isDelegateTool, type SessionToolChangeStats 
 import { getTranscriptBlocks, mapTranscriptRole } from '$lib/domain/session-updates';
 import type {
   ActiveSessionViewModel,
+  SessionCompactionItem,
   SessionContentBlock,
   SessionToolCallItem,
   SessionTranscriptGroup,
@@ -73,15 +74,19 @@ export type SessionConversationTurn = {
   content: SessionConversationContent[];
   presentation?: SessionConversationPresentationItem[];
   settled?: boolean;
+  /** Set when this entry is a context-compaction boundary rather than a prompt/response turn. */
+  compaction?: SessionCompactionItem;
 };
 
 type RawConversationItem =
   | { type: 'transcript'; transcript: SessionTranscriptItem; eventIndex?: number; sourceOrder: number }
-  | { type: 'tool'; tool: SessionToolCallItem; eventIndex?: number; sourceOrder: number };
+  | { type: 'tool'; tool: SessionToolCallItem; eventIndex?: number; sourceOrder: number }
+  | { type: 'compaction'; compaction: SessionCompactionItem; eventIndex?: number; sourceOrder: number };
 
 type OrderedConversationItem =
   | { type: 'group'; group: SessionTranscriptGroup }
-  | { type: 'tool'; tool: SessionToolCallItem };
+  | { type: 'tool'; tool: SessionToolCallItem }
+  | { type: 'compaction'; compaction: SessionCompactionItem };
 
 type DraftContent =
   | SessionToolContent
@@ -100,6 +105,7 @@ type DraftTurn = {
   };
   content: DraftContent[];
   durationMs?: number;
+  compaction?: SessionCompactionItem;
 };
 
 type ConversationCache = {
@@ -134,7 +140,8 @@ function conversationRevision(session: ActiveSessionViewModel): string {
     lastTool?.arguments ?? '',
     lastTool?.messageId ?? '',
     String(lastTool?.isError ?? ''),
-    String(lastTool?.eventIndex ?? '')
+    String(lastTool?.eventIndex ?? ''),
+    JSON.stringify(session.compactions ?? [])
   ].join('\0');
 }
 
@@ -172,8 +179,11 @@ function materializeConversation(
   const liveReasoning = session.runState === 'thinking';
 
   return drafts.map((draft, index) => {
-    const settled = index !== activeTurnIndex;
+    const settled = draft.compaction ? draft.compaction.status !== 'in_progress' : index !== activeTurnIndex;
     const previous = previousTurns?.[index];
+    if (draft.compaction) {
+      return { id: draft.id, forkMessageId: null, content: [], settled, compaction: draft.compaction, presentation: [] };
+    }
     if (previous && canReuseSettledTurn(previous, draft, settled)) {
       return previous;
     }
@@ -226,6 +236,7 @@ function sameBlocks(left?: SessionContentBlock[], right?: SessionContentBlock[])
 
 function canReuseSettledTurn(previous: SessionConversationTurn, draft: DraftTurn, settled: boolean): boolean {
   if (!settled || !previous.settled) return false;
+  if (previous.compaction || draft.compaction) return false;
   if (previous.id !== draft.id) return false;
   if (previous.forkMessageId !== draft.forkMessageId) return false;
   if ((previous.durationMs ?? undefined) !== (draft.durationMs ?? undefined)) return false;
@@ -293,12 +304,20 @@ function materializeContent(
 }
 
 function buildConversationDrafts(session: ActiveSessionViewModel): DraftTurn[] {
-  const orderedItems = buildOrderedItems(session.transcript, canonicalizeTools(session.toolCalls));
+  const orderedItems = buildOrderedItems(session.transcript, canonicalizeTools(session.toolCalls), session.compactions ?? []);
   const turns: DraftTurn[] = [];
   const turnTimings: Array<{ started?: number; ended?: number }> = [];
   let current: DraftTurn | null = null;
 
   for (const item of orderedItems) {
+    if (item.type === 'compaction') {
+      // A boundary of its own; whatever follows starts a fresh turn.
+      turns.push({ id: `compaction-${item.compaction.id}`, forkMessageId: null, content: [], compaction: item.compaction });
+      turnTimings.push({});
+      current = null;
+      continue;
+    }
+
     if (item.type === 'group' && item.group.role === 'user') {
       current = {
         id: `turn-${item.group.id}`,
@@ -362,7 +381,7 @@ function buildConversationDrafts(session: ActiveSessionViewModel): DraftTurn[] {
     }
   });
 
-  return turns.filter((turn) => turn.user || turn.content.length > 0);
+  return turns.filter((turn) => turn.compaction || turn.user || turn.content.length > 0);
 }
 
 export function getTurnDelegates(turn: SessionConversationTurn | undefined): SessionToolCallItem[] {
@@ -492,7 +511,11 @@ function sameThoughtPart(group: SessionTranscriptGroup, item: SessionTranscriptI
   return incoming === current;
 }
 
-function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionToolCallItem[]): OrderedConversationItem[] {
+function buildOrderedItems(
+  transcript: SessionTranscriptItem[],
+  tools: SessionToolCallItem[],
+  compactions: SessionCompactionItem[]
+): OrderedConversationItem[] {
   const rawItems: RawConversationItem[] = [
     ...transcript.map((item, sourceOrder) => ({
       type: 'transcript' as const,
@@ -505,6 +528,12 @@ function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionTo
       tool,
       eventIndex: tool.eventIndex,
       sourceOrder: transcript.length + index
+    })),
+    ...compactions.map((compaction, index) => ({
+      type: 'compaction' as const,
+      compaction,
+      eventIndex: compaction.eventIndex,
+      sourceOrder: transcript.length + tools.length + index
     }))
   ].sort(compareRawItems);
 
@@ -512,6 +541,12 @@ function buildOrderedItems(transcript: SessionTranscriptItem[], tools: SessionTo
   let openAssistantGroup: SessionTranscriptGroup | null = null;
   let openThoughtGroup: SessionTranscriptGroup | null = null;
   for (const item of rawItems) {
+    if (item.type === 'compaction') {
+      openAssistantGroup = null;
+      openThoughtGroup = null;
+      orderedItems.push({ type: 'compaction', compaction: item.compaction });
+      continue;
+    }
     if (item.type === 'tool') {
       // A tool call ends both the current assistant text segment and the
       // current reasoning trace: what streams after it starts fresh.

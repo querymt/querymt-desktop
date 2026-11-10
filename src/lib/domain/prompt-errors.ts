@@ -1,4 +1,4 @@
-import { RequestError } from '@agentclientprotocol/sdk';
+import { RequestError } from '@agentclientprotocol/sdk/unstable';
 import type { PromptAttachment } from '$lib/domain/types';
 import { toRemoteNodeUpgradeRequired } from '$lib/domain/remote-errors';
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SessionNotification } from '@agentclientprotocol/sdk';
+import type { SessionNotification } from '@agentclientprotocol/sdk/unstable';
 import { applySessionNotification, createEmptyActiveSession, reduceSessionReplay } from './session-updates';
 import { createSyntheticSessionLoadFixture } from '$lib/perf/session-load-fixture';
 

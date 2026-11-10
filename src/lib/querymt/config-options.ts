@@ -3,7 +3,7 @@ import type {
   SessionConfigSelectGroup,
   SessionConfigSelectOption,
   SetSessionConfigOptionRequest
-} from '@agentclientprotocol/sdk';
+} from '@agentclientprotocol/sdk/unstable';
 import type { ComposerOption, ModelEntry } from '$lib/domain/types';
 
 export const CONFIG_MODEL = 'model' as const;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SessionNotification } from '@agentclientprotocol/sdk';
+import type { SessionNotification } from '@agentclientprotocol/sdk/unstable';
 import type { AccountingSnapshot } from '$lib/querymt/generated/types';
 import { activeSessionFromLoadResponse } from './session-snapshot';
 import { SessionRuntimePhase, DelegationUpdateState, DelegationActivity, DelegationStage, RuntimeAvailability } from '$lib/querymt/generated/types';

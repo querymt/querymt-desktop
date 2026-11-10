@@ -1,4 +1,4 @@
-import { RequestError } from '@agentclientprotocol/sdk';
+import { RequestError } from '@agentclientprotocol/sdk/unstable';
 
 /**
  * Managed Git worktree support (agent change `add-git-worktree-isolation`).

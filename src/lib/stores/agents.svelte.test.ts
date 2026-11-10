@@ -7,7 +7,7 @@ import SessionToolBlock from '$lib/components/session/SessionToolBlock.svelte';
 import SessionDelegatesBubble from '$lib/components/session/SessionDelegatesBubble.svelte';
 import { getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
 import SessionHeader from '$lib/components/session/SessionHeader.svelte';
-import { RequestError, type InitializeResponse, type ListSessionsRequest, type PromptResponse, type SessionConfigOption, type SessionInfo, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk';
+import { RequestError, type InitializeResponse, type ListSessionsRequest, type PromptResponse, type SessionConfigOption, type SessionInfo, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk/unstable';
 import type { AgentConfig, DesktopSessionSummary, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
 import { findModeConfigOption, findReasoningConfigOption, getModelSelectionKey } from '$lib/querymt/config-options';
 import { QMT_METHOD_MESH_NODES, QMT_METHOD_MESH_STATUS } from '$lib/querymt/querymt-extensions';
@@ -7882,6 +7882,25 @@ describe('AgentsStore prompt session start', () => {
       'image'
     );
     expect(mockClient.steerSession).not.toHaveBeenCalled();
+  });
+
+  it('labels a /compact prompt as compacting instead of a generic wait', async () => {
+    let resolvePrompt!: () => void;
+    mockClient.sendPrompt.mockImplementationOnce(
+      () => new Promise<PromptResponse>((resolve) => { resolvePrompt = () => resolve({ stopReason: 'end_turn' }); })
+    );
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.composerPrompt = '/compact keep the API notes';
+
+    const sending = store.sendPromptToActiveSession();
+    await vi.waitFor(() => expect(mockClient.sendPrompt).toHaveBeenCalled());
+
+    expect(store.activeSession.runState).toBe('thinking');
+    expect(store.activeSession.activityLabel).toBe('Compacting context\u2026');
+    resolvePrompt();
+    await sending;
   });
 
   it('sends attachment-only prompts and keeps structured optimistic blocks', async () => {

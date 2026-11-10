@@ -100,7 +100,7 @@
       ['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState) ||
       (!session.sessionId && ['thinking', 'cancelling'].includes(summaryStatus))
     ) {
-      return { label: session.activityLabel?.startsWith('Cancelling') ? 'Cancelling' : session.activityLabel?.startsWith('Finishing') ? 'Finishing' : session.activityLabel?.startsWith('Waiting for delegates') ? 'Waiting for delegates' : 'Working', tone: 'running', busy: true };
+      return { label: session.activityLabel?.startsWith('Compacting') ? 'Compacting' : session.activityLabel?.startsWith('Cancelling') ? 'Cancelling' : session.activityLabel?.startsWith('Finishing') ? 'Finishing' : session.activityLabel?.startsWith('Waiting for delegates') ? 'Waiting for delegates' : 'Working', tone: 'running', busy: true };
     }
     if (session.runState === 'completed' || (!session.sessionId && summaryStatus === 'completed')) {
       // Same tone the session list gives a completed turn.

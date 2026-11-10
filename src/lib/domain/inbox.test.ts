@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CreateElicitationRequest, ElicitationSchema } from '@agentclientprotocol/sdk';
+import type { CreateElicitationRequest, ElicitationSchema } from '@agentclientprotocol/sdk/unstable';
 import { buildElicitationResponse, describeElicitationAnswers, mapElicitationRequestToInboxItem } from './inbox';
 
 // Fixtures carry option `description` and `_meta`, which the SDK's EnumOption type does not
@@ -15,6 +15,30 @@ function request(requestedSchema: Record<string, unknown>, querymtMeta?: Record<
 }
 
 describe('elicitation inbox mapping', () => {
+  it('treats forms with unsupported property types as non-submittable', () => {
+    const item = mapElicitationRequestToInboxItem(
+      request({
+        type: 'object',
+        properties: { blob: { type: 'object', title: 'Blob' }, name: { type: 'string' } },
+        required: ['blob']
+      }),
+      'item-1'
+    );
+
+    expect(item.formFields).toEqual([]);
+    expect(item.actions?.map((action) => action.kind)).toEqual(['decline', 'cancel']);
+    expect(item.detail).toContain('cannot be submitted');
+  });
+
+  it('refuses to build an accept response for unsupported field kinds', () => {
+    const fields = [
+      { key: 'blob', label: 'Blob', kind: 'object', required: true, value: '' }
+    ] as unknown as Parameters<typeof buildElicitationResponse>[1];
+
+    expect(buildElicitationResponse('accept', fields)).toBeNull();
+    expect(buildElicitationResponse('decline', fields)).toEqual({ action: 'decline' });
+  });
+
   it('maps ACP oneOf and anyOf options', () => {
     const item = mapElicitationRequestToInboxItem(
       request({

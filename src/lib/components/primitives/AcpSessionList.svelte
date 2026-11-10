@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { SessionInfo } from '@agentclientprotocol/sdk';
+  import type { SessionInfo } from '@agentclientprotocol/sdk/unstable';
 
   export let sessions: SessionInfo[];
 </script>

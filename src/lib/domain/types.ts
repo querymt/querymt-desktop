@@ -1,4 +1,4 @@
-import type { SessionConfigOption } from '@agentclientprotocol/sdk';
+import type { SessionConfigOption } from '@agentclientprotocol/sdk/unstable';
 import type { AccountingSnapshot, DelegationUpdateNotification, DelegationUpdateState } from '$lib/querymt/generated/types';
 
 export type RuntimeStatus = 'running' | 'starting' | 'degraded' | 'stopped';
@@ -318,6 +318,25 @@ export interface SessionTranscriptGroup {
   endedAtMs?: number;
 }
 
+/** One context compaction. Rendered as a boundary in the conversation, never as a turn. */
+export interface SessionCompactionItem {
+  /** Agent-owned ID; legacy records without one use `querymt-compaction-legacy-<seq>`. */
+  id: string;
+  status: 'in_progress' | 'completed' | 'failed' | 'cancelled';
+  /** Retained summary text; chunks append and a terminal summary replaces it. */
+  summary: string;
+  error?: string | null;
+  eventIndex?: number;
+  startedAtMs?: number;
+  endedAtMs?: number;
+  /** Context tokens in use when the compaction started, when known. */
+  tokensBefore?: number | null;
+  /** Context tokens after the compaction, when the agent reported it. */
+  tokensAfter?: number | null;
+  /** Live only: the next usage update is this compaction's post-compaction count. */
+  awaitingUsage?: boolean;
+}
+
 export interface SessionToolCallItem {
   id: string;
   runId?: string | null;
@@ -391,6 +410,7 @@ export interface ActiveSessionViewModel {
   sessionId: string | null;
   transcript: SessionTranscriptItem[];
   toolCalls: SessionToolCallItem[];
+  compactions?: SessionCompactionItem[];
   plans: SessionPlanEntry[];
   events: SessionEventItem[];
   configOptions: SessionConfigOption[];

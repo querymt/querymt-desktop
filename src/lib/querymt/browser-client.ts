@@ -1,11 +1,10 @@
 import type {
-  Client,
   CreateElicitationRequest,
   CreateElicitationResponse,
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionNotification
-} from '@agentclientprotocol/sdk';
+} from '@agentclientprotocol/sdk/unstable';
 import type { QuerymtExtensionNotification } from '$lib/querymt/querymt-extensions';
 
 export interface SessionReplayCapture {
@@ -13,7 +12,7 @@ export interface SessionReplayCapture {
   notifications: SessionNotification[];
 }
 
-export class BrowserClient implements Client {
+export class BrowserClient {
   private sessionUpdateHandlers: Array<(notification: SessionNotification) => void> = [];
   private replayCaptures = new Map<string, SessionReplayCapture>();
   private permissionRequestHandlers: Array<

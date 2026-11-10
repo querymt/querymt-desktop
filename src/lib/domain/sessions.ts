@@ -1,4 +1,4 @@
-import type { ListSessionsRequest, SessionInfo } from '@agentclientprotocol/sdk';
+import type { ListSessionsRequest, SessionInfo } from '@agentclientprotocol/sdk/unstable';
 import type { DesktopSessionSummary, SessionBrowserState, SessionPin, SessionLifecycle, SessionLifecycleFilter, SessionLifecycleView, SessionStatus } from '$lib/domain/types';
 import { readSessionAccess, readSessionWorkspace } from '$lib/domain/session-workspace';
 import {

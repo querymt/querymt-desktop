@@ -1,4 +1,4 @@
-import { RequestError } from '@agentclientprotocol/sdk';
+import { RequestError } from '@agentclientprotocol/sdk/unstable';
 
 export interface ErrorReport {
   /** One line for the UI: the error message plus the agent's reason when it gave one. */
