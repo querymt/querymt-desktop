@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ClientSideConnection } from '@agentclientprotocol/sdk';
+import type { ClientConnection } from '@agentclientprotocol/sdk/unstable';
 import {
   QMT_ELICITATION_RECOVERY_VERSION,
   QMT_METHOD_ELICITATION_ATTACH_SESSION,
@@ -51,10 +51,10 @@ function capabilitiesFixture(
 }
 
 function extensionClient() {
-  const extMethod = vi.fn(async (): Promise<unknown> => ({}));
+  const extMethod = vi.fn(async (..._args: unknown[]): Promise<unknown> => ({}));
   const extensions = new QuerymtExtensions({
-    extMethod
-  } as unknown as ClientSideConnection);
+    agent: { request: extMethod }
+  } as unknown as ClientConnection);
   return { extensions, extMethod };
 }
 

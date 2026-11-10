@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ListSessionsRequest, ListSessionsResponse } from '@agentclientprotocol/sdk';
+import type { ListSessionsRequest, ListSessionsResponse } from '@agentclientprotocol/sdk/unstable';
 import type { AgentsStore } from './agents.svelte';
 import { SESSION_CATALOG_STORAGE_KEY } from './session-catalog-cache';
 import { EMBEDDED_AGENT_ID } from '$lib/platform/embedded-agent';

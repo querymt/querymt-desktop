@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { RequestError } from '@agentclientprotocol/sdk';
+import { RequestError } from '@agentclientprotocol/sdk/unstable';
 import { DesktopAcpClient, clearElicitationResumeAuthorities, clearElicitationResumeAuthoritiesForAgent } from './acp-client';
 import { RemoteNodeUpgradeRequiredError } from '$lib/domain/remote-errors';
 import type { QuerymtExtensionNotification } from './querymt-extensions';
-import type { AnyMessage } from '@agentclientprotocol/sdk/dist/jsonrpc.js';
+import type { AnyMessage } from '@agentclientprotocol/sdk/unstable';
 
 const beginSessionReplay = vi.fn(() => ({ sessionId: 'session-1', notifications: [] }));
 const completeSessionReplay = vi.fn(() => []);
@@ -54,13 +54,55 @@ vi.mock('./transport', () => ({
   createTauriAcpStream
 }));
 
-vi.mock('@agentclientprotocol/sdk', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@agentclientprotocol/sdk')>();
-  return {
-    ...actual,
-    ClientSideConnection: ClientSideConnectionMock
+vi.mock('@agentclientprotocol/sdk/unstable', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agentclientprotocol/sdk/unstable')>();
+  // The SDK's app API replaced the connection class. Each `connect()` builds one
+  // mock instance so existing tests can still script `initialize`/`extMethod`.
+  const client = () => {
+    const builder = {
+      onNotification: () => builder,
+      onRequest: () => builder,
+      connect: () => {
+        const instance = new (ClientSideConnectionMock as unknown as new () => {
+          initialize: (params: unknown) => Promise<unknown>;
+          extMethod: (method: string, params: unknown) => Promise<unknown>;
+        })();
+        return {
+          agent: {
+            request: (method: string, params: unknown) =>
+              method === 'initialize' ? instance.initialize(params) : instance.extMethod(method, params),
+            notify: async () => undefined
+          }
+        };
+      }
+    };
+    return builder;
   };
+  return { ...actual, client };
 });
+
+const REQUEST_METHODS: Record<string, string> = {
+  loadSession: 'session/load',
+  prompt: 'session/prompt',
+  newSession: 'session/new',
+  listSessions: 'session/list',
+  unstable_forkSession: 'session/fork'
+};
+
+/** Adapts per-method mocks to the SDK's `connection.agent.request(method, params)` shape. */
+function fakeConnection(handlers: Record<string, (params: unknown) => unknown>) {
+  const byMethod = new Map(Object.entries(handlers).map(([name, fn]) => [REQUEST_METHODS[name], fn]));
+  return {
+    agent: {
+      request: async (method: string, params: unknown) => {
+        const handler = byMethod.get(method);
+        if (!handler) throw new Error(`unexpected request ${method}`);
+        return handler(params);
+      },
+      notify: async () => undefined
+    }
+  };
+}
 
 describe('DesktopAcpClient session metadata', () => {
   it('maps an upgrade-required failure on session load and keeps other errors raw', async () => {
@@ -71,7 +113,7 @@ describe('DesktopAcpClient session metadata', () => {
     });
     const missing = new RequestError(-32602, 'Invalid params', { message: 'session not found' });
     const loadSession = vi.fn().mockRejectedValueOnce(upgrade).mockRejectedValueOnce(missing);
-    (client as unknown as { connection: { loadSession: typeof loadSession } }).connection = { loadSession };
+    (client as unknown as { connection: unknown }).connection = fakeConnection({ loadSession });
 
     await expect(client.loadSession('session-1', '/tmp/work')).rejects.toMatchObject({
       name: 'RemoteNodeUpgradeRequiredError',
@@ -85,7 +127,7 @@ describe('DesktopAcpClient session metadata', () => {
   it('includes the desktop session-load operation id in ACP metadata', async () => {
     const client = new DesktopAcpClient({ id: 'agent-1', name: 'Agent', transport: 'stdio', commandLine: 'agent', enabled: true, autoStart: true });
     const loadSession = vi.fn(async () => ({ configOptions: [] }));
-    (client as unknown as { connection: { loadSession: typeof loadSession } }).connection = { loadSession };
+    (client as unknown as { connection: unknown }).connection = fakeConnection({ loadSession });
 
     const loaded = await client.loadSession('session-1', '/tmp/work', 'operation-1');
     expect(loaded.response).toEqual({ configOptions: [] });
@@ -113,7 +155,7 @@ describe('DesktopAcpClient windowed history', () => {
     const sessionHistory = vi.fn(async () => ({ events: [], history: { complete: true }, truncated: [] }));
     const sessionToolContent = vi.fn(async () => ({ content: 'full' }));
     const internal = client as unknown as Record<string, unknown>;
-    internal.connection = { loadSession };
+    internal.connection = fakeConnection({ loadSession });
     internal.controlCapabilities = { methods, features };
     internal.querymtExtensions = { attachRemoteSession, sessionHistory, sessionToolContent };
     return { client, loadSession, attachRemoteSession, sessionHistory, sessionToolContent };
@@ -175,7 +217,7 @@ describe('DesktopAcpClient windowed history', () => {
 function promptClient(capabilities: { image?: boolean; embeddedContext?: boolean }) {
   const client = new DesktopAcpClient({ id: 'agent-1', name: 'Agent', transport: 'stdio', commandLine: 'agent', enabled: true, autoStart: true });
   const prompt = vi.fn(async (_request: unknown) => ({ stopReason: 'end_turn' as const }));
-  (client as unknown as { connection: { prompt: typeof prompt }; initializeResponse: unknown }).connection = { prompt };
+  (client as unknown as { connection: unknown; initializeResponse: unknown }).connection = fakeConnection({ prompt });
   (client as unknown as { initializeResponse: unknown }).initializeResponse = {
     protocolVersion: 1,
     agentCapabilities: { promptCapabilities: capabilities },
@@ -214,7 +256,7 @@ describe('DesktopAcpClient worktrees', () => {
   it('sends session workspace metadata only when requested', async () => {
     const { client } = promptClient({});
     const newSession = vi.fn(async () => ({ sessionId: 'n' }));
-    (client as unknown as { connection: unknown }).connection = { newSession };
+    (client as unknown as { connection: unknown }).connection = fakeConnection({ newSession });
     await client.createSession('/p');
     expect(newSession).toHaveBeenLastCalledWith({ cwd: '/p', mcpServers: [], _meta: undefined });
     await client.createSession('/p', 'prof', { execution: 'worktree' });
@@ -254,7 +296,7 @@ describe('DesktopAcpClient worktrees', () => {
   it('lists children with the children scope', async () => {
     const { client } = promptClient({});
     const listSessions = vi.fn(async () => ({ sessions: [] }));
-    (client as unknown as { connection: unknown }).connection = { listSessions };
+    (client as unknown as { connection: unknown }).connection = fakeConnection({ listSessions });
     await client.listSessionChildren('p1');
     expect(listSessions).toHaveBeenCalledWith({ _meta: { session_scope: 'children', querymt: { parentSessionId: 'p1' } } });
   });
@@ -409,7 +451,7 @@ describe('DesktopAcpClient forkSession', () => {
   it('uses native ACP fork with QueryMT historical message metadata', async () => {
     const client = new DesktopAcpClient({ id: 'agent-1', name: 'Agent', transport: 'stdio', commandLine: 'agent', enabled: true, autoStart: true });
     const unstable_forkSession = vi.fn(async () => ({ sessionId: 'fork-1' }));
-    (client as unknown as { connection: { unstable_forkSession: typeof unstable_forkSession } }).connection = { unstable_forkSession };
+    (client as unknown as { connection: unknown }).connection = fakeConnection({ unstable_forkSession });
 
     await expect(client.forkSession('source-1', '/tmp/work', 'assistant-2')).resolves.toEqual({ sessionId: 'fork-1' });
     expect(unstable_forkSession).toHaveBeenCalledWith({
@@ -464,6 +506,17 @@ describe('DesktopAcpClient connect cancellation', () => {
       this.extMethod = vi.fn(async () => {
         throw new Error('method not found');
       });
+    });
+  });
+
+  it('advertises compaction support so the agent sends compaction updates', async () => {
+    createWebSocketAcpStream.mockResolvedValueOnce(mockAcpStream());
+
+    await websocketClient().connect();
+
+    const initialize = ClientSideConnectionMock.mock.instances[0]?.initialize as ReturnType<typeof vi.fn>;
+    expect(initialize.mock.calls[0]?.[0]).toMatchObject({
+      clientCapabilities: { session: { compaction: {} } }
     });
   });
 

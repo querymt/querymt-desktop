@@ -20,7 +20,7 @@
   import { getModeToneIndex } from '$lib/domain/session-mode-tone';
   import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment, SessionContentBlock, SessionInputDeliveryMode } from '$lib/domain/types';
   import type { SendShortcut } from '$lib/stores/chat-preferences.svelte';
-  import type { SessionConfigOption } from '@agentclientprotocol/sdk';
+  import type { SessionConfigOption } from '@agentclientprotocol/sdk/unstable';
 
   let modelPickerRef: { openPicker: () => Promise<void> } | null = null;
   let fileInputElement = $state<HTMLInputElement | null>(null);

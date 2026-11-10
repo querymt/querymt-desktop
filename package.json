@@ -22,7 +22,7 @@
     "package:cef": "bash scripts/cef/package.sh"
   },
   "devDependencies": {
-    "@agentclientprotocol/sdk": "latest",
+    "@agentclientprotocol/sdk": "~2.5.0",
     "@lucide/svelte": "^1.0.0",
     "@sveltejs/adapter-static": "^3.0.10",
     "@sveltejs/kit": "^2.64.0",

@@ -1,4 +1,4 @@
-import type { LoadSessionResponse, SessionNotification } from '@agentclientprotocol/sdk';
+import type { LoadSessionResponse, SessionNotification } from '@agentclientprotocol/sdk/unstable';
 
 export const TRACE_SESSION_LOAD_1X = {
   events: 4_189,

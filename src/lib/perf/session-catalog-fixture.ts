@@ -1,4 +1,4 @@
-import type { ListSessionsRequest, ListSessionsResponse, SessionInfo } from '@agentclientprotocol/sdk';
+import type { ListSessionsRequest, ListSessionsResponse, SessionInfo } from '@agentclientprotocol/sdk/unstable';
 import { AgentsStore } from '$lib/stores/agents.svelte';
 import type { SessionLifecycleFilter } from '$lib/domain/types';
 

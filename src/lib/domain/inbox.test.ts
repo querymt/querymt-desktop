@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CreateElicitationRequest, ElicitationSchema } from '@agentclientprotocol/sdk';
+import type { CreateElicitationRequest, ElicitationSchema } from '@agentclientprotocol/sdk/unstable';
 import { buildElicitationResponse, describeElicitationAnswers, mapElicitationRequestToInboxItem } from './inbox';
 
 // Fixtures carry option `description` and `_meta`, which the SDK's EnumOption type does not

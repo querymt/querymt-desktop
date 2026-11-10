@@ -1,4 +1,4 @@
-import { ndJsonStream, type Stream } from '@agentclientprotocol/sdk';
+import { ndJsonStream, type Stream } from '@agentclientprotocol/sdk/unstable';
 
 export async function createTauriAcpStream(agentId: string): Promise<Stream> {
   const { Channel, invoke } = await import('@tauri-apps/api/core');

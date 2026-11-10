@@ -194,7 +194,7 @@ describe('ScheduleDialog', () => {
   it('shows the agent reason and copies the full error details', async () => {
     const writeText = vi.fn(async (_text: string) => undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
-    const { RequestError } = await import('@agentclientprotocol/sdk');
+    const { RequestError } = await import('@agentclientprotocol/sdk/unstable');
     agentsStore.createSchedule.mockRejectedValueOnce(new RequestError(-32602, 'Invalid params', { error: 'missing field `type`' }));
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await openDialog({ agentId: 'agent-1', cwd: '/home/me/projects/querymt', prompt: 'Summarise open PRs' });

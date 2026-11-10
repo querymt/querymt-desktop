@@ -35,7 +35,7 @@
     if (session.runState === 'waiting-input') return plain('Input needed');
     if (session.runState === 'unknown') return plain(session.activityLabel ?? 'Execution status unavailable');
     if (session.dependencyLabel && !agentBusy) return plain(`Own turn idle - ${session.dependencyLabel}`);
-    if (session.activityLabel?.startsWith('Cancelling') || session.activityLabel?.startsWith('Finishing')) return plain(session.activityLabel);
+    if (session.activityLabel?.startsWith('Cancelling') || session.activityLabel?.startsWith('Finishing') || session.activityLabel?.startsWith('Compacting')) return plain(session.activityLabel);
     if (session.runState === 'tool-running' && activeToolPresentation) {
       const count = session.toolCalls.filter((tool) => (tool.status === 'pending' || tool.status === 'in_progress') && (!session.runId || !tool.runId || tool.runId === session.runId)).length;
       return {

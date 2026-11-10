@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AnyMessage } from '@agentclientprotocol/sdk/dist/jsonrpc.js';
+import type { AnyMessage } from '@agentclientprotocol/sdk/unstable';
 import {
   hoistElicitationOptionDescriptions,
   optionDescriptionsFromMeta,

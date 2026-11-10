@@ -1,4 +1,4 @@
-import type { LoadSessionResponse, SessionNotification } from '@agentclientprotocol/sdk';
+import type { LoadSessionResponse, SessionNotification } from '@agentclientprotocol/sdk/unstable';
 import type { ActiveSessionViewModel } from '$lib/domain/types';
 import { activeSessionFromLoadResponse, normalizeHistoricalSession } from '$lib/domain/session-snapshot';
 import { applySessionNotification, createEmptyActiveSession } from '$lib/domain/session-updates';

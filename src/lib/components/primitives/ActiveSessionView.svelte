@@ -3,6 +3,7 @@
   import { provideToolContentFetcher, type ToolContentFetcher } from '$lib/components/session/tool-content-context';
   import Conversation from '$lib/components/ai-elements/conversation.svelte';
   import SessionTurn from '$lib/components/session/SessionTurn.svelte';
+  import SessionCompactionDivider from '$lib/components/session/SessionCompactionDivider.svelte';
   import SessionTurnDiffPanel from '$lib/components/session/SessionTurnDiffPanel.svelte';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { getForkTarget } from '$lib/domain/session-fork';
@@ -395,6 +396,8 @@
         {#each windowedTurns as item (item.type === 'turn' ? item.turn.id : item.key)}
           {#if item.type === 'spacer'}
             <div class="session-turn-spacer" style={`height:${item.height}px`} aria-hidden="true"></div>
+          {:else if item.turn.compaction}
+            <SessionCompactionDivider compaction={item.turn.compaction} />
           {:else}
             {@const turn = item.turn}
             {@const forkTarget = getForkTarget(turn)}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { PromptResponse } from '@agentclientprotocol/sdk';
+  import type { PromptResponse } from '@agentclientprotocol/sdk/unstable';
 
   export let sessionId: string | null;
   export let response: PromptResponse | null;

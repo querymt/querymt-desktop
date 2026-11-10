@@ -1,4 +1,4 @@
-import type { SessionConfigOption } from '@agentclientprotocol/sdk';
+import type { SessionConfigOption } from '@agentclientprotocol/sdk/unstable';
 import { findModeConfigOption, getConfigOptionChoices } from '$lib/querymt/config-options';
 
 /** Size of the mode tone palette defined in app.css (`--mode-tone-*`). */

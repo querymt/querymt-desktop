@@ -1,6 +1,7 @@
 import {
-  ClientSideConnection,
+  client as createAcpClient,
   type ClientCapabilities,
+  type ClientConnection,
   type ContentBlock,
   type CreateElicitationRequest,
   type CreateElicitationResponse,
@@ -18,7 +19,7 @@ import {
   type SessionConfigOption,
   type SessionNotification,
   type SetSessionConfigOptionRequest
-} from '@agentclientprotocol/sdk';
+} from '@agentclientprotocol/sdk/unstable';
 import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment, PromptSendOptions, SessionPin, SessionLifecycle, SessionLifecyclePatch } from '$lib/domain/types';
 import type {
   AttachRemoteSessionRequest,
@@ -124,7 +125,7 @@ import {
 } from '$lib/domain/session-workspace';
 import { preserveElicitationOptionDescriptionsOnStream } from '$lib/querymt/elicitation-option-meta';
 import { createTauriAcpStream, createWebSocketAcpStream } from '$lib/querymt/transport';
-import type { Stream } from '@agentclientprotocol/sdk';
+import type { Stream } from '@agentclientprotocol/sdk/unstable';
 import { isEmbedded } from '$lib/platform/runtime';
 import { acpWebSocketUrl } from '$lib/querymt/websocket-url';
 import { mapRemoteUpgradeRequired } from '$lib/domain/remote-errors';
@@ -337,7 +338,7 @@ export interface LoadedAcpSession {
 export class DesktopAcpClient {
   private config: AgentConfig;
   private browserClient = new BrowserClient();
-  private connection: ClientSideConnection | null = null;
+  private connection: ClientConnection | null = null;
   private stream: Stream | null = null;
   private initializeResponse: InitializeResponse | null = null;
   private querymtExtensions: QuerymtExtensions | null = null;
@@ -394,7 +395,13 @@ export class DesktopAcpClient {
     }
 
     const browserClient = this.browserClient;
-    const connection = new ClientSideConnection(() => browserClient, stream);
+    const connection = createAcpClient({ name: 'querymt-desktop' })
+      .onNotification('session/update', ({ params }) => browserClient.sessionUpdate(params))
+      // Anything that is not a standard notification is a QueryMT extension.
+      .onNotification('*', ({ method, params }) => browserClient.extNotification(method, params))
+      .onRequest('session/request_permission', ({ params }) => browserClient.requestPermission(params))
+      .onRequest('elicitation/create', ({ params }) => browserClient.unstable_createElicitation(params))
+      .connect(stream);
     this.stream = stream;
     this.connection = connection;
 
@@ -409,7 +416,7 @@ export class DesktopAcpClient {
 
     let initializeResponse: InitializeResponse;
     try {
-      initializeResponse = await connection.initialize(request);
+      initializeResponse = await connection.agent.request('initialize', request);
     } catch (error) {
       if (!this.connectIsCurrent(epoch, connection)) {
         throw connectCancelledError();
@@ -573,7 +580,7 @@ export class DesktopAcpClient {
       await this.connect();
     }
 
-    return this.connection!.listSessions(request);
+    return this.connection!.agent.request('session/list', request);
   }
 
   /** Direct children (forks and worktree children) of one session; the caller filters by parent. */
@@ -586,7 +593,7 @@ export class DesktopAcpClient {
       await this.connect();
     }
 
-    await this.connection!.deleteSession({ sessionId });
+    await this.connection!.agent.request('session/delete', { sessionId });
   }
 
   async createSession(
@@ -601,7 +608,7 @@ export class DesktopAcpClient {
     const querymt: Record<string, unknown> = {};
     if (profileId) querymt.profile_id = profileId;
     if (sessionWorkspace) querymt.sessionWorkspace = sessionWorkspace;
-    return this.connection!.newSession({
+    return this.connection!.agent.request('session/new', {
       cwd,
       mcpServers: [],
       _meta: Object.keys(querymt).length ? { querymt } : undefined
@@ -647,7 +654,7 @@ export class DesktopAcpClient {
 
     const capture = this.browserClient.beginSessionReplay(sessionId);
     try {
-      const response = await this.connection!.loadSession({
+      const response = await this.connection!.agent.request('session/load', {
         sessionId,
         cwd,
         mcpServers: [],
@@ -675,7 +682,7 @@ export class DesktopAcpClient {
       await this.connect();
     }
 
-    return this.connection!.unstable_forkSession({
+    return this.connection!.agent.request('session/fork', {
       sessionId,
       cwd,
       mcpServers: [],
@@ -1072,7 +1079,7 @@ export class DesktopAcpClient {
       await this.connect();
     }
 
-    const response = await this.connection!.setSessionConfigOption(request);
+    const response = await this.connection!.agent.request('session/set_config_option', request);
     return response.configOptions ?? [];
   }
 
@@ -1095,7 +1102,7 @@ export class DesktopAcpClient {
     }
     const content = this.buildPromptContent(prompt, attachments, options.imageMode ?? 'image');
     try {
-      return await this.connection!.prompt({
+      return await this.connection!.agent.request('session/prompt', {
         sessionId,
         prompt: content,
         _meta: options.clientPromptId
@@ -1229,7 +1236,7 @@ export class DesktopAcpClient {
       await this.connect();
     }
 
-    await this.connection!.cancel({ sessionId });
+    await this.connection!.agent.notify('session/cancel', { sessionId });
   }
 
   async disconnect() {
@@ -1287,7 +1294,7 @@ export class DesktopAcpClient {
     return () => this.browserClient.offExtensionNotification(wrapped);
   }
 
-  private connectIsCurrent(epoch: number, connection?: ClientSideConnection): boolean {
+  private connectIsCurrent(epoch: number, connection?: ClientConnection): boolean {
     return (
       this.connectEpoch === epoch &&
       !this.intentionallyDisconnected &&
@@ -1391,6 +1398,9 @@ function buildClientCapabilities(): ClientCapabilities {
     elicitation,
     fs: {},
     terminal: false,
+    // Compaction updates are ID-addressed (`compaction_update` and
+    // `compaction_summary_chunk`); without this the agent never sends them.
+    session: { compaction: {} },
     // `ClientCapabilities` is non-exhaustive in the ACP SDK, so the QueryMT
     // namespace is advertised through `_meta` (ACP's extensibility escape
     // hatch). Declaring epoch 1 tells the agent this client hydrates history

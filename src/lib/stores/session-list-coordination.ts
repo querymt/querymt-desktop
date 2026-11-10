@@ -1,4 +1,4 @@
-import type { ListSessionsResponse } from '@agentclientprotocol/sdk';
+import type { ListSessionsResponse } from '@agentclientprotocol/sdk/unstable';
 
 export interface SessionListChannel {
   onmessage: ((event: { data: unknown }) => void) | null;

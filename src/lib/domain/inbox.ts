@@ -6,7 +6,8 @@ import type {
   ElicitationSchema,
   PermissionOption,
   RequestPermissionRequest
-} from '@agentclientprotocol/sdk';
+} from '@agentclientprotocol/sdk/unstable';
+import { CreateElicitationRequest as ElicitationRequestGuard } from '@agentclientprotocol/sdk/unstable';
 import type { InboxAction, InboxFormField, InboxFormOption, InboxItem } from '$lib/domain/types';
 import { optionDescriptionsFromMeta } from '$lib/querymt/elicitation-option-meta';
 
@@ -43,12 +44,14 @@ export function mapElicitationRequestToInboxItem(
   agentName?: string
 ): InboxItem {
   const allowCustom = allowsCustomResponses(request);
-  const formFields =
-    request.mode === 'form'
-      ? mapElicitationFormFields(request.requestedSchema, allowCustom, optionDescriptionsFromMeta(request._meta))
-      : [];
-  const owner = 'sessionId' in request ? request.sessionId : `request ${String(request.requestId)}`;
-  const title = request.mode === 'form' ? request.requestedSchema.title || 'Elicitation request' : 'Elicitation request';
+  const form = ElicitationRequestGuard.isForm(request) ? request : null;
+  const formFields = form
+    ? mapElicitationFormFields(form.requestedSchema, allowCustom, optionDescriptionsFromMeta(request._meta))
+    : [];
+  const scoped = request as { sessionId?: unknown; requestId?: unknown };
+  const sessionId = typeof scoped.sessionId === 'string' ? scoped.sessionId : null;
+  const owner = sessionId ?? `request ${String(scoped.requestId)}`;
+  const title = form ? form.requestedSchema.title || 'Elicitation request' : 'Elicitation request';
 
   return {
     id,
@@ -59,12 +62,12 @@ export function mapElicitationRequestToInboxItem(
     type: 'elicitation',
     agentId: agentId ?? null,
     agentName: agentName ?? null,
-    sessionId: 'sessionId' in request ? request.sessionId : null,
+    sessionId,
     status: 'pending',
     resolution: null,
     error: null,
     actions:
-      request.mode === 'form'
+      form
         ? [
             { id: 'accept', label: 'Submit', kind: 'accept' },
             { id: 'decline', label: 'Decline', kind: 'decline' },
@@ -204,12 +207,13 @@ function mapElicitationFormFields(
 
   return Object.entries(properties).map(([key, property]) => {
     const options = mapPropertyOptions(property, optionDescriptions[key]);
+    const loose = property as LooseProperty;
     return {
       key,
-      label: property.title || key,
-      kind: property.type,
+      label: loose.title || key,
+      kind: loose.type as InboxFormField['kind'],
       required: required.has(key),
-      description: property.description ?? null,
+      description: loose.description ?? null,
       options,
       value: getDefaultFieldValue(property),
       allowCustom: allowCustom && Boolean(options?.length),
@@ -226,10 +230,21 @@ function allowsCustomResponses(request: CreateElicitationRequest): boolean {
   return metadata.source === 'builtin:question' || metadata.allow_custom === true || metadata.allowCustom === true;
 }
 
+type LooseProperty = {
+  type: string;
+  title?: string | null;
+  description?: string | null;
+  default?: unknown;
+  oneOf?: TitledElicitationOption[];
+  enum?: string[];
+  items?: unknown;
+};
+
 function mapPropertyOptions(
-  property: ElicitationPropertySchema,
+  rawProperty: ElicitationPropertySchema,
   optionDescriptions?: Record<string, string>
 ): InboxFormOption[] | undefined {
+  const property = rawProperty as LooseProperty;
   if (property.type === 'string') {
     if (property.oneOf?.length) {
       return property.oneOf.map((option) => mapTitledOption(option, optionDescriptions?.[option.const]));
@@ -289,18 +304,11 @@ function mapTitledOption(option: TitledElicitationOption, fallback?: string): In
   };
 }
 
-function getDefaultFieldValue(property: ElicitationPropertySchema): InboxFormField['value'] {
-  if (property.type === 'boolean') {
-    return property.default ?? false;
-  }
-
-  if (property.type === 'number' || property.type === 'integer') {
-    return property.default ?? '';
-  }
-
-  if (property.type === 'array') {
-    return property.default ?? [];
-  }
-
-  return property.default ?? '';
+function getDefaultFieldValue(rawProperty: ElicitationPropertySchema): InboxFormField['value'] {
+  const property = rawProperty as LooseProperty;
+  const fallback = property.default as InboxFormField['value'] | undefined;
+  if (property.type === 'boolean') return fallback ?? false;
+  if (property.type === 'number' || property.type === 'integer') return fallback ?? '';
+  if (property.type === 'array') return fallback ?? [];
+  return fallback ?? '';
 }

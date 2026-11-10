@@ -1,4 +1,4 @@
-import { RequestError } from '@agentclientprotocol/sdk';
+import { RequestError } from '@agentclientprotocol/sdk/unstable';
 import type {
   InitializeResponse,
   ListSessionsResponse,
@@ -9,7 +9,7 @@ import type {
   SessionConfigOption,
   SessionInfo,
   SessionNotification
-} from '@agentclientprotocol/sdk';
+} from '@agentclientprotocol/sdk/unstable';
 import { tick } from 'svelte';
 import {
   buildSessionWorkspaceRequest,
@@ -64,6 +64,7 @@ import {
   normalizeContentBlock,
   readClientPromptId
 } from '$lib/domain/session-updates';
+import { COMPACTING_LABEL, isCompactCommand } from '$lib/domain/session-compaction';
 import {
   buildListSessionsRequest,
   createSessionBrowserState,
@@ -3836,7 +3837,7 @@ export class AgentsStore {
       this.activeSession.undo.lastRevertedFiles = [];
       this.activeSession.undo.lastMessage = null;
       this.activeSession.runState = 'thinking';
-      this.activeSession.activityLabel = 'Waiting for the agent to respond…';
+      this.activeSession.activityLabel = isCompactCommand(prompt) ? COMPACTING_LABEL : 'Waiting for the agent to respond…';
       beginSessionWork(this.activeSession);
       this.activeSession.lastError = null;
       if (!retryFailure && !explicit) {

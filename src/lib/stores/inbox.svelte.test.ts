@@ -4,7 +4,7 @@ import type {
   CreateElicitationResponse,
   RequestPermissionRequest,
   RequestPermissionResponse
-} from '@agentclientprotocol/sdk';
+} from '@agentclientprotocol/sdk/unstable';
 import { InboxStore } from './inbox.svelte';
 
 const sendDesktopNotification = vi.hoisted(() => vi.fn(async () => undefined));

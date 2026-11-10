@@ -3,7 +3,7 @@ import type {
   CreateElicitationResponse,
   RequestPermissionRequest,
   RequestPermissionResponse
-} from '@agentclientprotocol/sdk';
+} from '@agentclientprotocol/sdk/unstable';
 import {
   buildElicitationResponse,
   describeElicitationResolution,

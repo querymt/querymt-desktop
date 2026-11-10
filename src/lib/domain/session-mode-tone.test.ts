@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SessionConfigOption, SessionConfigSelectGroup, SessionConfigSelectOption } from '@agentclientprotocol/sdk';
+import type { SessionConfigOption, SessionConfigSelectGroup, SessionConfigSelectOption } from '@agentclientprotocol/sdk/unstable';
 import { getModeToneIndex, getSessionContextTone, SESSION_CONTEXT_TONE_COUNT } from './session-mode-tone';
 
 function modeOption(values: string[], currentValue?: string): SessionConfigOption {

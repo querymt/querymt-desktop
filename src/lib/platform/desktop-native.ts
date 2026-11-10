@@ -1,5 +1,5 @@
-import type { Stream } from '@agentclientprotocol/sdk';
-import type { AnyMessage } from '@agentclientprotocol/sdk/dist/jsonrpc.js';
+import type { Stream } from '@agentclientprotocol/sdk/unstable';
+import type { AnyMessage } from '@agentclientprotocol/sdk/unstable';
 
 export { createTauriAcpStream } from '$lib/querymt/transport-tauri';
 

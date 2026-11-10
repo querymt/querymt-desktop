@@ -48,7 +48,7 @@ import type {
   SessionToolContentResponse,
   UndoStackFrameResponse
 } from '$lib/querymt/generated/types';
-import type { ClientSideConnection } from '@agentclientprotocol/sdk';
+import type { ClientConnection } from '@agentclientprotocol/sdk/unstable';
 
 /** OAuth flow kinds reported by `querymt/auth/start` (`flow_kind` on the wire). */
 export enum OAuthFlowKind {
@@ -360,7 +360,7 @@ export interface QuerymtRedoResponse extends QuerymtUndoStackResponse {
 
 export interface QuerymtSubmitInputRequest {
   session_id: string;
-  prompt: import('@agentclientprotocol/sdk').ContentBlock[];
+  prompt: import('@agentclientprotocol/sdk/unstable').ContentBlock[];
   client_input_id: string;
   expected_run_id?: string;
 }
@@ -460,10 +460,10 @@ export function toLogicalQuerymtMethod(method: string): QuerymtLogicalMethod | n
 }
 
 export class QuerymtExtensions {
-  constructor(private connection: ClientSideConnection) {}
+  constructor(private connection: ClientConnection) {}
 
   private async call<T>(method: QuerymtLogicalMethod, params: unknown = {}): Promise<T> {
-    const response = await this.connection.extMethod(
+    const response = await this.connection.agent.request<unknown, Record<string, unknown>>(
       toAcpExtensionMethod(method),
       params as Record<string, unknown>
     );
