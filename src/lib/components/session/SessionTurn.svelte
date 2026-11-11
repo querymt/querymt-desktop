@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ArrowUpRight, Braces, Check, Copy, Diff, GitFork, LoaderCircle, Redo2, Undo2 } from '@lucide/svelte';
+  import { ArrowUpRight, Braces, Check, Copy, Diff, FileText, Folder, GitFork, LoaderCircle, Redo2, Undo2 } from '@lucide/svelte';
+  import { Tooltip } from 'bits-ui';
+  import { filePathFromUri } from '$lib/domain/session-updates';
   import SessionPromptError from '$lib/components/session/SessionPromptError.svelte';
   import SessionAttachmentPreview from '$lib/components/session/SessionAttachmentPreview.svelte';
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
@@ -11,7 +13,7 @@
   import { preloadSessionToolPatchDiff } from './session-tool-patch-diff';
   import { buildTurnPresentation, formatTurnDuration, getTurnChangedFileCount, getTurnChangeStats, getTurnDelegates, type SessionConversationTurn } from '$lib/domain/session-conversation';
   import { normalizeMarkdownCodeFences, renderMarkdownToHtml, splitStreamingMarkdown } from '$lib/domain/markdown';
-  import type { DesktopSessionSummary, SessionContentBlock, SessionImageGalleryItem } from '$lib/domain/types';
+  import type { DesktopSessionSummary, SessionContentBlock, SessionImageGalleryItem, SessionResourceLinkBlock } from '$lib/domain/types';
   import type { PromptFailure } from '$lib/domain/prompt-errors';
 
   let {
@@ -86,6 +88,7 @@
       }
     }
     return {
+      fileLinks: (turn.user?.blocks ?? []).filter((block): block is SessionResourceLinkBlock => block.type === 'resource_link' && /^file:/i.test(block.uri)),
       attachmentSegments: segments.filter((segment) => segment.type === 'attachments'),
       textSegments: segments.filter((segment) => segment.type === 'text'),
       frontMatter
@@ -127,9 +130,10 @@
     const source = blocks?.length ? blocks : text ? [{ type: 'text' as const, text }] : [];
     const segments: Array<
       | { type: 'text'; block: Extract<SessionContentBlock, { type: 'text' }> }
-      | { type: 'attachments'; blocks: Exclude<SessionContentBlock, { type: 'text' }>[] }
+      | { type: 'attachments'; blocks: Exclude<SessionContentBlock, { type: 'text' | 'resource_link' }>[] }
     > = [];
     for (const block of source) {
+      if (block.type === 'resource_link') continue;
       if (block.type === 'text') {
         const previous = segments.at(-1);
         // Streamed responses arrive as one text block per chunk; coalesce
@@ -188,6 +192,23 @@
           <SessionAttachmentPreview blocks={segment.blocks} gallery={imageGallery} {failedImageKeys} {onImageFailure} />
         </div>
       {/each}
+      {#if userPresentation.fileLinks.length > 0}
+        <div class="session-user-message-file-links" aria-label="Mentioned files">
+          <Tooltip.Provider delayDuration={250} skipDelayDuration={80}>
+            {#each userPresentation.fileLinks as link (link.uri)}
+              <Tooltip.Root disableHoverableContent>
+                <Tooltip.Trigger class="session-file-chip" type="button" data-testid="file-chip">
+                  {#if link.uri.endsWith('/')}<Folder size={13} aria-hidden="true" />{:else}<FileText size={13} aria-hidden="true" />{/if}
+                  <span>{link.name}</span>
+                </Tooltip.Trigger>
+                <Tooltip.Portal>
+                  <Tooltip.Content class="app-tooltip-content" sideOffset={6}>{filePathFromUri(link.uri)}</Tooltip.Content>
+                </Tooltip.Portal>
+              </Tooltip.Root>
+            {/each}
+          </Tooltip.Provider>
+        </div>
+      {/if}
       {#if userPresentation.frontMatter && userPresentation.textSegments.length === 0}
         <div class="session-message session-message-user">
           <p class="muted">No message body</p>

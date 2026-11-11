@@ -840,6 +840,18 @@ export function normalizeContentBlock(value: unknown): SessionContentBlock | nul
     };
   }
 
+  if (block.type === 'resource_link') {
+    // Only file:// links are mentions; attachment:/// and other echoes keep their existing handling.
+    const linkUri = readString(block.uri);
+    if (!linkUri || !/^file:/i.test(linkUri)) return null;
+    return {
+      type: 'resource_link',
+      uri: linkUri,
+      name: readString(block.name) ?? fileNameFromUri(linkUri),
+      title: readString(block.title)
+    };
+  }
+
   if (block.type !== 'resource' || !block.resource || typeof block.resource !== 'object') return null;
   const resource = block.resource as Record<string, unknown>;
   const resourceMeta = { ...readAttachmentMeta(resource._meta), ...meta };
@@ -873,7 +885,32 @@ export function summarizeContentBlocks(blocks: SessionContentBlock[]): string {
   if (text) return text;
   if (blocks.length === 1 && blocks[0].type === 'image') return blocks[0].name ?? 'Image attachment';
   if (blocks.length === 1 && blocks[0].type === 'resource') return blocks[0].name ?? 'File attachment';
+  if (blocks.length === 1 && blocks[0].type === 'resource_link') return blocks[0].name;
   return `${blocks.length} attachments`;
+}
+
+/** Last path segment of a file URI, percent-decoded; used when a link carries no name. */
+export function fileNameFromUri(uri: string): string {
+  const path = uri.replace(/^file:\/\/[^/]*/i, '').replace(/[?#].*$/, '').replace(/\/+$/, '');
+  const last = path.slice(path.lastIndexOf('/') + 1);
+  try {
+    return decodeURIComponent(last) || uri;
+  } catch {
+    return last || uri;
+  }
+}
+
+/** Full path decoded from a file URI, for display. */
+export function filePathFromUri(uri: string): string {
+  const path = uri.replace(/^file:\/\/[^/]*/i, '').replace(/[?#].*$/, '');
+  let decoded = path;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    // keep raw path
+  }
+  // file:///C:/x -> C:/x
+  return /^\/[A-Za-z]:\//.test(decoded) ? decoded.slice(1) : decoded;
 }
 
 function readAttachmentMeta(value: unknown): { id?: string; name?: string; size?: number } {

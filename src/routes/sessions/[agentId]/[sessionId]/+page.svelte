@@ -926,6 +926,10 @@
         modelLoading={agentsStore.sessionHistoryLoading || !!agentsStore.modelLoadingByAgent[agentId]}
         agentLabel={showAgentBadges ? selectedSession.agentName : null}
         attachments={agentsStore.promptAttachments}
+        mentionSource={agentsStore.mentionSource(agentId)}
+        mentionTarget={{ session_id: sessionId }}
+        mentions={agentsStore.composerMentions}
+        onMentionsChange={(mentions) => agentsStore.setComposerMentions(mentions)}
         onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
         onModelChange={(value) => agentsStore.setSessionModel(agentId, sessionId, value)}
         onRefreshModels={() => agentsStore.refreshModelsForAgent(agentId)}

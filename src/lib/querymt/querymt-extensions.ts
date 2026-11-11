@@ -76,6 +76,10 @@ export type QuerymtExtensionNotification =
       method: 'querymt/elicitation/completed';
       params: QuerymtElicitationCompletedNotification;
     }
+  | {
+      method: 'querymt/workspace/indexReady';
+      params: QuerymtWorkspaceIndexReadyNotification;
+    }
   | { method: 'querymt/mesh/joined'; params: MeshJoinedNotification }
   | { method: 'querymt/mesh/nodesChanged'; params: MeshNodesChangedNotification }
   | { method: 'querymt/mesh/peerExpired'; params: MeshPeerExpiredNotification }
@@ -138,6 +142,40 @@ export const QMT_METHOD_SESSION_HISTORY = 'querymt/session/history';
 export const QMT_METHOD_SESSION_TOOL_CONTENT = 'querymt/session/toolContent';
 export const QMT_METHOD_WORKTREE_CREATE = 'querymt/worktree/create';
 export const QMT_METHOD_WORKTREE_HANDOFF = 'querymt/worktree/handoff';
+export const QMT_METHOD_WORKSPACE_FILES = 'querymt/workspace/files';
+export const QMT_NOTIFICATION_WORKSPACE_INDEX_READY = 'querymt/workspace/indexReady';
+
+/** Query for `querymt/workspace/files`: exactly one of `session_id` or `cwd`. */
+export interface QuerymtWorkspaceFilesRequest {
+  session_id?: string;
+  cwd?: string;
+  query?: string;
+  limit?: number;
+}
+
+export interface QuerymtWorkspaceFileEntry {
+  /** `/`-separated path relative to the query cwd. */
+  path: string;
+  /** Absolute path in the agent's native form. */
+  abs_path: string;
+  /** Agent-built `file://` URI; sent verbatim as a `resource_link`. */
+  uri: string;
+  name: string;
+  is_dir: boolean;
+}
+
+export interface QuerymtWorkspaceFilesResponse {
+  status: 'ready' | 'not_ready';
+  workspace_root?: string;
+  cwd?: string;
+  entries: QuerymtWorkspaceFileEntry[];
+  truncated: boolean;
+}
+
+export interface QuerymtWorkspaceIndexReadyNotification {
+  session_id: string;
+  workspace_root: string;
+}
 
 export interface QuerymtWorktreeCreateRequest {
   cwd: string;
@@ -476,6 +514,45 @@ export class QuerymtExtensions {
 
   async worktreeHandoff(request: QuerymtWorktreeHandoffRequest): Promise<unknown> {
     return this.call<unknown>(QMT_METHOD_WORKTREE_HANDOFF, request);
+  }
+
+  async workspaceFiles(request: QuerymtWorkspaceFilesRequest): Promise<QuerymtWorkspaceFilesResponse> {
+    const response = await this.call<Partial<QuerymtWorkspaceFilesResponse> | null>(
+      QMT_METHOD_WORKSPACE_FILES,
+      request
+    );
+    if (
+      !response ||
+      (response.status !== 'ready' && response.status !== 'not_ready') ||
+      !Array.isArray(response.entries)
+    ) {
+      throw new QuerymtExtensionResponseError(QMT_METHOD_WORKSPACE_FILES);
+    }
+    const entries: QuerymtWorkspaceFileEntry[] = [];
+    for (const entry of response.entries) {
+      if (
+        !entry ||
+        typeof entry.path !== 'string' ||
+        typeof entry.uri !== 'string' ||
+        typeof entry.name !== 'string'
+      ) {
+        throw new QuerymtExtensionResponseError(QMT_METHOD_WORKSPACE_FILES);
+      }
+      entries.push({
+        path: entry.path,
+        abs_path: typeof entry.abs_path === 'string' ? entry.abs_path : '',
+        uri: entry.uri,
+        name: entry.name,
+        is_dir: entry.is_dir === true
+      });
+    }
+    return {
+      status: response.status,
+      workspace_root: response.workspace_root,
+      cwd: response.cwd,
+      entries,
+      truncated: response.truncated === true
+    };
   }
 
   async getSessionLifecycle(session_id: string): Promise<SessionLifecycle> {

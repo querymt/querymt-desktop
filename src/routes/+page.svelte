@@ -269,6 +269,10 @@
       selectedWorkspaceMode={agentsStore.composerWorkspaceMode}
       onWorkspaceModeChange={(mode) => agentsStore.setComposerWorkspaceMode(mode as ComposerWorkspaceMode, primaryAgentId)}
       onCwdInput={(value) => agentsStore.setComposerCwd(value)}
+      mentionSource={agentsStore.composerTargetId === 'local' ? agentsStore.mentionSource(primaryAgentId) : null}
+      mentionTarget={/^(\/|[A-Za-z]:[\\/])/.test(agentsStore.composerCwd.trim()) ? { cwd: agentsStore.composerCwd.trim() } : null}
+      mentions={agentsStore.composerMentions}
+      onMentionsChange={(mentions) => agentsStore.setComposerMentions(mentions)}
       onPromptInput={(value) => agentsStore.setComposerPrompt(value)}
       onModelChange={(value) => {
         if (primaryAgentId) agentsStore.chooseLaunchModel(primaryAgentId, value);

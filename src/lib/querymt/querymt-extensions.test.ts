@@ -470,3 +470,33 @@ describe('QuerymtExtensions control methods', () => {
     expect(extMethod).toHaveBeenCalledWith('_querymt/updatePlugins', {});
   });
 });
+
+describe('QuerymtExtensions workspace files', () => {
+  it('calls the wire method and parses uri/name entries', async () => {
+    const { extensions, extMethod } = extensionClient();
+    extMethod.mockResolvedValueOnce({
+      status: 'ready',
+      workspace_root: '/repo',
+      cwd: '/repo',
+      entries: [{ path: 'src/a.ts', abs_path: '/repo/src/a.ts', uri: 'file:///repo/src/a.ts', name: 'a.ts', is_dir: false }],
+      truncated: true
+    });
+    const response = await extensions.workspaceFiles({ session_id: 's1', query: 'a', limit: 10 });
+    expect(extMethod).toHaveBeenCalledWith('_querymt/workspace/files', { session_id: 's1', query: 'a', limit: 10 });
+    expect(response.status).toBe('ready');
+    expect(response.truncated).toBe(true);
+    expect(response.entries[0]).toEqual({
+      path: 'src/a.ts', abs_path: '/repo/src/a.ts', uri: 'file:///repo/src/a.ts', name: 'a.ts', is_dir: false
+    });
+  });
+
+  it('accepts not_ready and rejects malformed responses', async () => {
+    const { extensions, extMethod } = extensionClient();
+    extMethod.mockResolvedValueOnce({ status: 'not_ready', entries: [], truncated: false });
+    expect((await extensions.workspaceFiles({ cwd: '/repo' })).status).toBe('not_ready');
+    extMethod.mockResolvedValueOnce({ status: 'weird', entries: [] });
+    await expect(extensions.workspaceFiles({ cwd: '/repo' })).rejects.toBeInstanceOf(QuerymtExtensionResponseError);
+    extMethod.mockResolvedValueOnce({ status: 'ready', entries: [{ path: 'a' }] });
+    await expect(extensions.workspaceFiles({ cwd: '/repo' })).rejects.toBeInstanceOf(QuerymtExtensionResponseError);
+  });
+});
