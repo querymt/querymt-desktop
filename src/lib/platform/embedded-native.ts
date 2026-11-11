@@ -30,6 +30,34 @@ function unavailable(): never {
   throw new Error('This native operation is unavailable in the embedded QueryMT UI.');
 }
 
+export type {
+  InstallEvent,
+  UpdatePreferencesPatch,
+  UpdateState,
+  UpdatesStatus
+} from '$lib/querymt/updates';
+import type { InstallEvent, UpdatePreferencesPatch, UpdateState, UpdatesStatus } from '$lib/querymt/updates';
+
+/** Embedded builds have no desktop updater. */
+export async function getUpdatesStatus(): Promise<UpdatesStatus> {
+  return unavailable();
+}
+export async function setUpdatePreferences(_patch: UpdatePreferencesPatch): Promise<UpdatesStatus> {
+  return unavailable();
+}
+export async function checkForUpdates(_manual: boolean): Promise<UpdatesStatus> {
+  return unavailable();
+}
+export async function installUpdate(_onEvent: (event: InstallEvent) => void): Promise<void> {
+  return unavailable();
+}
+export async function restartForUpdate(): Promise<void> {
+  return unavailable();
+}
+export async function listenUpdateState(_handler: (state: UpdateState) => void): Promise<() => void> {
+  return () => {};
+}
+
 export async function createTauriAcpStream(_agentId: string): Promise<Stream> {
   return unavailable();
 }

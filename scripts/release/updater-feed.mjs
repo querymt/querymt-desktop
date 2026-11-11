@@ -1,0 +1,155 @@
+#!/usr/bin/env node
+// Build the updater feed (latest.json) for one release channel (design D4).
+//
+//   node scripts/release/updater-feed.mjs \
+//     --dist dist --version-name <vX.Y.Z|nightly> --version <semver> \
+//     --base-url <download url prefix> --qmtcode-version <semver> \
+//     --pubkey-from src-tauri/tauri.conf.json --out dist/latest.json \
+//     [--notes-file notes.md] [--pub-date <RFC 3339>]
+//
+// The feed lists, per platform key, the artifact URL and the signature (the
+// content of the artifact's .sig file). The script fails, and writes nothing,
+// when any expected platform key has no artifact, no signature, or a signature
+// that does not verify against the updater public key. A feed is therefore
+// never published incomplete or with signatures the installed apps would
+// reject.
+//
+// Platform keys and artifact names (names come from collect-bundles.sh):
+//   darwin-aarch64     QueryMT-Desktop-<vn>-macos-aarch64.app.tar.gz
+//   darwin-x86_64      QueryMT-Desktop-<vn>-macos-x86_64.app.tar.gz
+//   windows-x86_64     QueryMT-Desktop-<vn>-windows-x64-setup.exe
+//   linux-<arch>-wry   QueryMT-Desktop-wry-<vn>-linux-<arch>.AppImage
+//   linux-<arch>-cef   QueryMT-Desktop-cef-<vn>-linux-<arch>.AppImage
+
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { parseSemver } from './lib/semver.mjs';
+import { verifyTauriSignature } from './lib/minisign.mjs';
+
+/** Expected platform key -> artifact file name for a release. */
+export function expectedPlatforms(versionName) {
+  const vn = versionName;
+  const platforms = {
+    'darwin-aarch64': `QueryMT-Desktop-${vn}-macos-aarch64.app.tar.gz`,
+    'darwin-x86_64': `QueryMT-Desktop-${vn}-macos-x86_64.app.tar.gz`,
+    'windows-x86_64': `QueryMT-Desktop-${vn}-windows-x64-setup.exe`
+  };
+  for (const arch of ['x86_64', 'aarch64']) {
+    platforms[`linux-${arch}-wry`] = `QueryMT-Desktop-wry-${vn}-linux-${arch}.AppImage`;
+    platforms[`linux-${arch}-cef`] = `QueryMT-Desktop-cef-${vn}-linux-${arch}.AppImage`;
+  }
+  return platforms;
+}
+
+/**
+ * Pure feed construction.
+ *
+ * @param {object} options
+ * @param {Map<string, Buffer>|Record<string, Buffer>} options.files  file name -> content for everything in dist/
+ * @param {string} options.versionName  `vX.Y.Z` or `nightly`
+ * @param {string} options.version      desktop semver (without `v`)
+ * @param {string} options.qmtcodeVersion
+ * @param {string} options.baseUrl
+ * @param {string} options.publicKeyBase64
+ * @param {string} [options.notes]
+ * @param {string} [options.pubDate]
+ */
+export function buildFeed({ files, versionName, version, qmtcodeVersion, baseUrl, publicKeyBase64, notes = '', pubDate }) {
+  const errors = [];
+  const fileMap = files instanceof Map ? files : new Map(Object.entries(files));
+
+  for (const [label, value] of [['version', version], ['qmtcode version', qmtcodeVersion]]) {
+    try {
+      parseSemver(value);
+    } catch {
+      errors.push(`${label} '${value}' is not a valid semver version`);
+    }
+  }
+  if (versionName !== 'nightly' && versionName !== `v${version}`) {
+    errors.push(`version name '${versionName}' must be 'nightly' or 'v${version}'`);
+  }
+  if (!/^https:\/\//.test(baseUrl ?? '')) errors.push(`base URL '${baseUrl}' must be an https URL`);
+
+  const platforms = {};
+  for (const [key, name] of Object.entries(expectedPlatforms(versionName))) {
+    const artifact = fileMap.get(name);
+    const signature = fileMap.get(`${name}.sig`);
+    if (!artifact) {
+      errors.push(`${key}: artifact ${name} is missing`);
+      continue;
+    }
+    if (!signature || signature.length === 0) {
+      errors.push(`${key}: signature ${name}.sig is missing`);
+      continue;
+    }
+    const signatureBase64 = signature.toString('utf8').trim();
+    try {
+      verifyTauriSignature({ data: artifact, signatureBase64, publicKeyBase64 });
+    } catch (error) {
+      errors.push(`${key}: ${name}: ${error.message}`);
+      continue;
+    }
+    platforms[key] = { signature: signatureBase64, url: `${baseUrl.replace(/\/$/, '')}/${encodeURIComponent(name)}` };
+  }
+
+  if (errors.length > 0) {
+    const failure = new Error(`updater feed is incomplete:\n  - ${errors.join('\n  - ')}`);
+    failure.errors = errors;
+    throw failure;
+  }
+
+  return {
+    version,
+    notes,
+    pub_date: pubDate ?? new Date().toISOString(),
+    qmtcode_version: qmtcodeVersion,
+    platforms
+  };
+}
+
+function parseArgs(argv) {
+  const args = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg.startsWith('--')) throw new Error(`unexpected argument ${arg}`);
+    const value = argv[++i];
+    if (value === undefined) throw new Error(`${arg} needs a value`);
+    args[arg.slice(2)] = value;
+  }
+  for (const required of ['dist', 'version-name', 'version', 'base-url', 'qmtcode-version', 'pubkey-from', 'out']) {
+    if (!args[required]) throw new Error(`missing --${required}`);
+  }
+  return args;
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const files = new Map();
+  for (const name of readdirSync(args.dist)) files.set(name, readFileSync(join(args.dist, name)));
+
+  const publicKeyBase64 = JSON.parse(readFileSync(args['pubkey-from'], 'utf8'))?.plugins?.updater?.pubkey;
+  if (!publicKeyBase64) throw new Error(`${args['pubkey-from']} has no plugins.updater.pubkey`);
+
+  const feed = buildFeed({
+    files,
+    versionName: args['version-name'],
+    version: args.version,
+    qmtcodeVersion: args['qmtcode-version'],
+    baseUrl: args['base-url'],
+    publicKeyBase64,
+    notes: args['notes-file'] ? readFileSync(args['notes-file'], 'utf8').trim() : '',
+    pubDate: args['pub-date']
+  });
+  writeFileSync(args.out, `${JSON.stringify(feed, null, 2)}\n`);
+  console.log(`Wrote ${args.out}: version ${feed.version}, qmtcode ${feed.qmtcode_version}, ${Object.keys(feed.platforms).length} platforms`);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`updater-feed: ${error.message}`);
+    process.exit(1);
+  }
+}

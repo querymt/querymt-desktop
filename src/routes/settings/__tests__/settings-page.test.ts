@@ -130,6 +130,41 @@ const windowDecorationsStore = vi.hoisted(() => ({
 
 vi.mock('$lib/stores/window-decorations.svelte', () => ({ windowDecorationsStore }));
 
+const updatesStore = vi.hoisted(() => {
+  const baseStatus = () => ({
+    channel: 'stable',
+    buildChannel: 'stable',
+    currentVersion: '0.1.10',
+    qmtcodeVersion: '0.5.2',
+    installKind: 'macApp',
+    autoCheck: true,
+    skippedVersion: null,
+    lastCheck: null,
+    state: { kind: 'idle' }
+  });
+  return {
+    baseStatus,
+    status: baseStatus() as Record<string, unknown> | null,
+    state: { kind: 'idle' } as Record<string, unknown>,
+    prompt: null as unknown,
+    checking: false,
+    actionError: null as string | null,
+    initialize: vi.fn(async () => {}),
+    setChannel: vi.fn(async () => {}),
+    setAutoCheck: vi.fn(async () => {}),
+    checkNow: vi.fn(async () => {}),
+    reopen: vi.fn(),
+    restart: vi.fn(async () => {})
+  };
+});
+
+vi.mock('$lib/stores/updates.svelte', () => ({ updatesStore }));
+
+function setUpdateState(state: Record<string, unknown>, status: Record<string, unknown> = {}) {
+  updatesStore.status = { ...updatesStore.baseStatus(), ...status, state };
+  updatesStore.state = state;
+}
+
 beforeEach(() => {
   sidebarStore.showPinnedSessions = false;
   window.history.replaceState({}, '', '/settings');
@@ -184,6 +219,11 @@ afterEach(() => {
     flow_kind: 'device_poll'
   }));
   chatPreferencesStore.sendShortcut = 'enter';
+  updatesStore.status = updatesStore.baseStatus();
+  updatesStore.state = { kind: 'idle' };
+  updatesStore.prompt = null;
+  updatesStore.checking = false;
+  updatesStore.actionError = null;
 });
 
 describe('Settings controls', () => {
@@ -801,5 +841,96 @@ describe('Settings controls', () => {
     expect(screen.getByText('Downloading layers')).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Set up' }));
     expect(screen.getByRole('button', { name: 'Set API key' })).toBeEnabled();
+  });
+});
+
+describe('Updates settings', () => {
+  function openUpdates() {
+    window.history.replaceState({}, '', '/settings?section=updates');
+    render(SettingsPage);
+  }
+
+  it('shows the app and qmtcode versions and the current channel', async () => {
+    openUpdates();
+
+    expect(await screen.findByRole('heading', { name: 'Updates' })).toBeInTheDocument();
+    expect(screen.getByText('0.1.10')).toBeInTheDocument();
+    expect(screen.getByText('0.5.2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Release channel' })).toHaveTextContent('Stable');
+    expect(updatesStore.initialize).toHaveBeenCalled();
+  });
+
+  it('toggles automatic checks and runs Check now', async () => {
+    openUpdates();
+
+    await fireEvent.click(await screen.findByRole('switch', { name: 'Check for updates automatically' }));
+    expect(updatesStore.setAutoCheck).toHaveBeenCalledWith(false);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
+    expect(updatesStore.checkNow).toHaveBeenCalled();
+  });
+
+  it('saves a channel change', async () => {
+    openUpdates();
+
+    const trigger = await screen.findByRole('button', { name: 'Release channel' });
+    await fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const option = await screen.findByRole('option', { name: /Nightly/ });
+    await fireEvent.pointerMove(option);
+    await fireEvent.pointerUp(option, { button: 0, pointerType: 'mouse' });
+    await fireEvent.click(option);
+    expect(updatesStore.setChannel).toHaveBeenCalledWith('nightly');
+  });
+
+  it('says it is waiting for a stable release newer than the running build', async () => {
+    setUpdateState(
+      { kind: 'waiting', running: '0.1.11-nightly.20261111054629', offered: '0.1.10' },
+      { currentVersion: '0.1.11-nightly.20261111054629' }
+    );
+    openUpdates();
+
+    expect(
+      await screen.findByText('Waiting for a stable release newer than 0.1.11-nightly.20261111054629.')
+    ).toBeInTheDocument();
+  });
+
+  it('explains a qmtcode downgrade refusal', async () => {
+    setUpdateState({
+      kind: 'refused',
+      version: '0.1.12',
+      reason: 'qmtcodeDowngrade',
+      message: 'It would downgrade the bundled qmtcode from 0.5.3 to 0.5.2.'
+    });
+    openUpdates();
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Version 0.1.12 is not offered: It would downgrade the bundled qmtcode from 0.5.3 to 0.5.2.'
+    );
+  });
+
+  it('offers a restart once an update is installed', async () => {
+    setUpdateState({ kind: 'installed', version: '0.1.11' });
+    openUpdates();
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Restart now' }));
+    expect(updatesStore.restart).toHaveBeenCalled();
+  });
+
+  it('lets the user bring back a postponed update', async () => {
+    setUpdateState({
+      kind: 'available',
+      version: '0.1.11',
+      notes: null,
+      date: null,
+      qmtcodeVersion: null,
+      canInstall: true,
+      releaseUrl: 'https://example.test/r',
+      skipped: false
+    });
+    updatesStore.prompt = null;
+    openUpdates();
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Review update' }));
+    expect(updatesStore.reopen).toHaveBeenCalled();
   });
 });

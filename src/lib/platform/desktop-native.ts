@@ -105,6 +105,18 @@ export {
   type ProfileTemplateInfo
 } from '$lib/querymt/profile-templates';
 export {
+  checkForUpdates,
+  getUpdatesStatus,
+  installUpdate,
+  listenUpdateState,
+  restartForUpdate,
+  setUpdatePreferences,
+  type InstallEvent,
+  type UpdatePreferencesPatch,
+  type UpdateState,
+  type UpdatesStatus
+} from '$lib/querymt/updates';
+export {
   checkpointSessionLoadTelemetry,
   finishSessionLoadTelemetry,
   heartbeatSessionLoadTelemetry,

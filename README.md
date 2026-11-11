@@ -38,8 +38,21 @@ Linux release filenames identify the runtime:
 - `QueryMT-Desktop-wry-<version>-linux-<arch>.*`: stable default, using the system WebKitGTK webview.
 - `QueryMT-Desktop-cef-<version>-linux-<arch>.*`: experimental CEF runtime, bundling Chromium instead of using WebKitGTK.
 
+`<version>` is `vX.Y.Z` for stable releases and `nightly` for the rolling nightly.
+
 Choose `x86_64` for Intel/AMD Linux or `aarch64` for ARM64 Linux. Both runtimes provide
 AppImage and Debian (`.deb`) packages; CEF also provides a portable `.tar.gz`.
+
+## Updates and release channels
+
+The app checks for updates in the background (Settings → Updates) and never downloads without confirmation. Stable and nightly are separate channels, each with its own `latest.json` feed.
+
+- **Versions:** stable is `X.Y.Z`. A nightly is `<base>-nightly.<UTC YYYYMMDDHHMMSS>`, where `<base>` is the project version, or the next patch if tag `v<base>` already exists. The commit SHA is never part of the version.
+- **No downgrades:** an update is offered only if it is strictly newer. Switching a nightly to stable shows "Waiting for a stable release newer than X" until a newer stable is published. Reinstalling a stable build by hand is possible, but it may not open data written by a newer nightly.
+- **qmtcode gate:** an update that would downgrade the bundled qmtcode is refused, so a session database is never opened by an older qmtcode. A stable desktop release fails CI if its bundled qmtcode is older than the one in the current nightly.
+- **Install kinds:** macOS app, Windows NSIS and Linux AppImage update in place. `.deb` and the CEF `.tar.gz` only show a link to the release page.
+- **Signing:** every update is verified against the public key in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`). The private key and its password live only in the `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repository secrets, plus one backup in the maintainers' password manager. Losing the key means existing installs can no longer update and must be reinstalled.
+- **Key rotation:** release one build that embeds the new public key, signed with the old key. Once users have updated, switch the secrets to the new key.
 
 ## Development
 

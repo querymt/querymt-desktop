@@ -5,6 +5,7 @@
   import GeneralSettingsPanel from '$lib/components/settings/GeneralSettingsPanel.svelte';
   import KeybindingsSettingsPanel from '$lib/components/settings/KeybindingsSettingsPanel.svelte';
   import ProfilesSettingsPanel from '$lib/components/settings/ProfilesSettingsPanel.svelte';
+  import UpdatesSettingsPanel from '$lib/components/settings/UpdatesSettingsPanel.svelte';
   import ProviderApiKeyDialog from '$lib/components/settings/ProviderApiKeyDialog.svelte';
   import ProviderClearKeyDialog from '$lib/components/settings/ProviderClearKeyDialog.svelte';
   import ProviderConnectionList from '$lib/components/settings/ProviderConnectionList.svelte';
@@ -85,7 +86,9 @@
     const section = new URL(window.location.href).searchParams.get('section');
     if (section === 'profiles' && !platformCapabilities.nativeProfileTemplates) {
       selectedSection = 'general';
-    } else if (section === 'appearance' || section === 'general' || section === 'keybindings' || section === 'profiles' || section === 'providers' || section === 'connectors') {
+    } else if (section === 'updates' && !platformCapabilities.selfUpdate) {
+      selectedSection = 'general';
+    } else if (section === 'updates' || section === 'appearance' || section === 'general' || section === 'keybindings' || section === 'profiles' || section === 'providers' || section === 'connectors') {
       selectedSection = section;
     }
   });
@@ -158,6 +161,7 @@
       selected={selectedSection}
       showProfiles={platformCapabilities.nativeProfileTemplates}
       showConnectors={hasMcpServers || selectedSection === 'connectors'}
+      showUpdates={platformCapabilities.selfUpdate}
       onSelect={selectSection}
     />
 
@@ -170,6 +174,8 @@
         <KeybindingsSettingsPanel />
       {:else if selectedSection === 'profiles' && platformCapabilities.nativeProfileTemplates}
         <ProfilesSettingsPanel />
+      {:else if selectedSection === 'updates' && platformCapabilities.selfUpdate}
+        <UpdatesSettingsPanel />
       {:else if selectedSection === 'connectors'}
         <section class="settings-section">
           <div class="settings-section-header settings-section-header-action provider-panel-header">

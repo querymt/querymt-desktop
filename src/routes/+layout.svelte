@@ -8,6 +8,8 @@
   import RecentSessionRail from '$lib/components/shell/RecentSessionRail.svelte';
   import ScheduleDialog from '$lib/components/automations/ScheduleDialog.svelte';
   import CommandPalette from '$lib/components/shell/CommandPalette.svelte';
+  import UpdatePrompt from '$lib/components/shell/UpdatePrompt.svelte';
+  import { updatesStore } from '$lib/stores/updates.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { appearanceStore } from '$lib/stores/appearance.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
@@ -119,6 +121,7 @@
     appearanceStore.initialize();
     chatPreferencesStore.initialize();
     sidebarStore.initialize();
+    void updatesStore.initialize();
     // Decide before initialization writes anything that would make a fresh install look used.
     const firstRun = detectFirstRun();
     const initialized = agentsStore.initialize();
@@ -270,6 +273,7 @@
       }
       cleanupDesktopWindow();
       agentsStore.dispose();
+      updatesStore.dispose();
     };
   });
 
@@ -416,6 +420,7 @@
 
     </div>
     <div bind:this={overlayPortalTarget} class="app-overlay-root"></div>
+    <UpdatePrompt />
     {/if}
   </div>
 </Tooltip.Provider>

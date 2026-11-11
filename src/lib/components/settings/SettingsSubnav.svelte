@@ -1,19 +1,22 @@
 <script lang="ts">
-  import { Bot, Keyboard, Palette, Plug, SlidersHorizontal, WandSparkles } from '@lucide/svelte';
+  import { Bot, Download, Keyboard, Palette, Plug, SlidersHorizontal, WandSparkles } from '@lucide/svelte';
   import AppSelect from '$lib/components/primitives/AppSelect.svelte';
 
-  export type SettingsSectionId = 'appearance' | 'general' | 'keybindings' | 'profiles' | 'providers' | 'connectors';
+  export type SettingsSectionId = 'appearance' | 'general' | 'keybindings' | 'profiles' | 'providers' | 'connectors' | 'updates';
 
   let {
     selected,
     showProfiles = true,
     showConnectors = false,
+    showUpdates = false,
     onSelect
   }: {
     selected: SettingsSectionId;
     showProfiles?: boolean;
     /** The agent has OAuth connectors (MCP servers) to sign in to. */
     showConnectors?: boolean;
+    /** The desktop build can update itself. */
+    showUpdates?: boolean;
     onSelect: (section: SettingsSectionId) => void;
   } = $props();
 
@@ -23,10 +26,14 @@
     { id: 'keybindings', label: 'Keybindings', description: 'Keyboard shortcuts', icon: Keyboard },
     { id: 'profiles', label: 'Profiles', description: 'Ready-made agent configurations', icon: WandSparkles },
     { id: 'providers', label: 'Providers', description: 'Authentication and maintenance', icon: Bot },
-    { id: 'connectors', label: 'Connectors', description: 'Sign-in for connected tools', icon: Plug }
+    { id: 'connectors', label: 'Connectors', description: 'Sign-in for connected tools', icon: Plug },
+    { id: 'updates', label: 'Updates', description: 'Version and release channel', icon: Download }
   ] satisfies Array<{ id: SettingsSectionId; label: string; description: string; icon: typeof SlidersHorizontal }>;
   const sections = $derived(allSections.filter(
-      (section) => (showProfiles || section.id !== 'profiles') && (showConnectors || section.id !== 'connectors')
+      (section) =>
+        (showProfiles || section.id !== 'profiles') &&
+        (showConnectors || section.id !== 'connectors') &&
+        (showUpdates || section.id !== 'updates')
     ));
 </script>
 

@@ -5,6 +5,7 @@ pub mod keychain;
 mod session_load_telemetry;
 pub mod sidecar;
 mod telemetry;
+pub mod updates;
 mod websocket;
 
 use session_load_telemetry::SessionLoadTelemetry;
@@ -64,6 +65,16 @@ pub fn run() {
         .manage(AcpAgentManager::default())
         .manage(AcpWebSocketManager::default())
         .manage(session_load_telemetry)
+        // The plugin is registered for its updater machinery only. No `updater:*`
+        // permission is granted in capabilities/, so the webview cannot call it
+        // directly; it goes through the `updates_*` commands, which apply the
+        // channel and gating rules.
+        .plugin(
+            tauri_plugin_updater::Builder::new()
+                // Never let the plugin's own comparator allow a downgrade.
+                .default_version_comparator(|current, release| release.version > current)
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             commands::app_ping,
             commands::app_runtime,
@@ -88,9 +99,16 @@ pub fn run() {
             commands::querymt_session_load_finish,
             commands::querymt_workspace_suggest_paths,
             commands::querymt_workspace_validate_directory,
-            commands::querymt_app_reset_data
+            commands::querymt_app_reset_data,
+            updates::updates_status,
+            updates::updates_set_preferences,
+            updates::updates_check,
+            updates::updates_install,
+            updates::updates_restart
         ])
         .setup(|_app| {
+            _app.manage(updates::manager_for(_app.handle()));
+            updates::spawn_scheduler(_app.handle().clone());
             #[cfg(all(feature = "cef", target_os = "linux"))]
             {
                 let handle = _app.handle().clone();

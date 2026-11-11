@@ -12,7 +12,8 @@ export const platformCapabilities = Object.freeze({
   nativeProfileTemplates: isDesktop,
   nativeWorkspacePicker: isDesktop,
   workspacePathSuggestions: isDesktop,
-  windowControls: isDesktop
+  windowControls: isDesktop,
+  selfUpdate: isDesktop
 });
 
 export function isTauriRuntime(): boolean {
