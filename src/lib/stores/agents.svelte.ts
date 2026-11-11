@@ -177,8 +177,11 @@ import {
   QMT_NOTIFICATION_SESSION_INPUT_STATE,
   QMT_NOTIFICATION_SESSION_RUNTIME_CHANGED,
   type SessionRuntimeChangedNotification,
-  QMT_NOTIFICATION_SESSION_PINS_CHANGED
+  QMT_NOTIFICATION_SESSION_PINS_CHANGED,
+  QMT_NOTIFICATION_WORKSPACE_INDEX_READY,
+  type QuerymtWorkspaceIndexReadyNotification
 } from '$lib/querymt/querymt-extensions';
+import { extractActiveMentions, type AcceptedMention, type MentionQuerySource } from '$lib/domain/mention-controller';
 import { sendDesktopNotification } from '$lib/querymt/notifications';
 import {
   SessionLoadMeasurement,
@@ -506,6 +509,9 @@ export class AgentsStore {
   lastPromptResponse = $state<PromptResponse | null>(null);
   composerCwd = $state('');
   composerPrompt = $state('');
+  /** `@` mentions accepted into the draft; only those still present in the text are sent. */
+  composerMentions = $state<AcceptedMention[]>([]);
+  private mentionSources = new WeakMap<DesktopAcpClient, MentionQuerySource>();
   // Agent-scoped launch model selections, revalidated against each refreshed
   // model catalog so one agent's selection never leaks into another's.
   private launchModelIds = $state<Record<string, string>>({});
@@ -1239,7 +1245,36 @@ export class AgentsStore {
     }
   }
 
+  setComposerMentions(mentions: AcceptedMention[]) {
+    this.composerMentions = mentions;
+  }
+
+  /** Whether the agent advertises the workspace file query that powers `@` completion. */
+  supportsWorkspaceFiles(agentId: string | null): boolean {
+    return !!agentId && (this.clients.get(agentId)?.client.supportsWorkspaceFiles() ?? false);
+  }
+
+  /** Completion source for an agent, or null when it lacks the capability. Stable per client. */
+  mentionSource(agentId: string | null): MentionQuerySource | null {
+    const client = agentId ? this.clients.get(agentId)?.client : undefined;
+    if (!client || !client.supportsWorkspaceFiles()) return null;
+    let source = this.mentionSources.get(client);
+    if (!source) {
+      source = {
+        query: (request) => client.workspaceFiles(request),
+        onIndexReady: (handler) => client.onExtensionNotification((notification) => {
+          if (notification.method === QMT_NOTIFICATION_WORKSPACE_INDEX_READY) {
+            handler(notification.params as QuerymtWorkspaceIndexReadyNotification);
+          }
+        })
+      };
+      this.mentionSources.set(client, source);
+    }
+    return source;
+  }
+
   setComposerCwd(value: string) {
+    if (value !== this.composerCwd) this.composerMentions = [];
     this.composerCwd = value;
     this.error = null;
   }
@@ -1291,6 +1326,7 @@ export class AgentsStore {
 
   setComposerTarget(targetId: string) {
     if (this.composerTargetId !== targetId) {
+      this.composerMentions = [];
       // A profile ID is scoped to its owner, even when two owners use the same name.
       this.composerProfileId = targetId === 'local' ? 'default' : 'querymt:owner-default';
     }
@@ -1306,6 +1342,7 @@ export class AgentsStore {
   }
 
   setComposerAgent(agentId: string | null) {
+    if (this.composerAgentId !== agentId) this.composerMentions = [];
     this.composerAgentId = agentId;
     if (this.composerWorkspaceMode !== 'local' && (!agentId || !this.canCreateWorktree(agentId))) {
       this.composerWorkspaceMode = 'local';
@@ -3477,6 +3514,7 @@ export class AgentsStore {
       status: 'creating',
       error: null,
       prompt: this.composerPrompt.trim(),
+      mentions: extractActiveMentions(this.composerPrompt.trim(), this.composerMentions),
       attachments: this.promptAttachments.map((attachment) => ({ ...attachment })),
       clientPromptId: createClientPromptId(),
       settings,
@@ -3488,6 +3526,7 @@ export class AgentsStore {
     const kept = Object.fromEntries(Object.entries(this.pendingLaunches).filter(([, entry]) => entry.status !== 'ready'));
     this.pendingLaunches = { ...kept, [launch.id]: launch };
     this.composerPrompt = '';
+    this.composerMentions = [];
     this.clearPromptAttachments();
     this.showLaunchProgress(launch, true);
     void this.runLaunch(launch.id);
@@ -3509,7 +3548,7 @@ export class AgentsStore {
     if (reset) {
       this.resetActiveSession(launch.agentId, launch.id);
       if (launch.prompt || launch.attachments.length > 0) {
-        this.addOptimisticUserPrompt(launch.id, launch.prompt, launch.attachments, launch.clientPromptId);
+        this.addOptimisticUserPrompt(launch.id, launch.prompt, launch.attachments, launch.clientPromptId, launch.mentions);
       }
     }
     this.activeSession.runState = 'thinking';
@@ -3537,6 +3576,7 @@ export class AgentsStore {
       agentId: launch.agentId,
       sessionId,
       prompt: launch.prompt,
+      mentions: launch.mentions ?? [],
       attachments: launch.attachments.map((attachment) => ({ ...attachment })),
       clientPromptId: launch.clientPromptId,
       turnEventIndex,
@@ -3598,6 +3638,10 @@ export class AgentsStore {
       this.composerPrompt = existing ? `${launch.prompt}\n\n${existing}` : launch.prompt;
     }
     if (launch.attachments.length > 0) this.addPromptAttachments(launch.attachments.map((attachment) => ({ ...attachment })));
+    if (launch.mentions?.length) {
+      const restored = launch.mentions;
+      this.composerMentions = [...this.composerMentions.filter((mention) => !restored.some((other) => other.uri === mention.uri)), ...restored];
+    }
   }
 
   /**
@@ -3667,7 +3711,7 @@ export class AgentsStore {
         onSelected: (id) => {
           this.patchLaunch(launchId, { sessionId: id });
           if (!hasInput) return;
-          turnEventIndex = this.addOptimisticUserPrompt(id, launch.prompt, launch.attachments, launch.clientPromptId);
+          turnEventIndex = this.addOptimisticUserPrompt(id, launch.prompt, launch.attachments, launch.clientPromptId, launch.mentions);
           this.activeSession.runState = 'submitting';
           this.activeSession.activityLabel = 'Setting up session\u2026';
         }
@@ -3708,7 +3752,8 @@ export class AgentsStore {
       this.scheduleSessionRuntimeRefresh(agentId, sessionId, record.client);
       await record.client.sendPrompt(sessionId, input.prompt, input.attachments, {
         imageMode: chatPreferencesStore.imageSendMode,
-        clientPromptId: input.clientPromptId
+        clientPromptId: input.clientPromptId,
+        mentions: input.mentions
       });
       this.dropLaunchInput(launchId);
     } catch (error) {
@@ -3745,6 +3790,7 @@ export class AgentsStore {
     }
     const prompt = (retryFailure?.prompt ?? explicit?.prompt ?? this.composerPrompt).trim();
     const attachments = (retryFailure?.attachments ?? explicit?.attachments ?? this.promptAttachments).map((attachment) => ({ ...attachment }));
+    const mentions: AcceptedMention[] = retryFailure?.mentions ?? explicit?.mentions ?? extractActiveMentions(prompt, this.composerMentions);
     if (!prompt && attachments.length === 0) {
       this.error = 'Enter a message or attach at least one file.';
       return;
@@ -3766,7 +3812,7 @@ export class AgentsStore {
     let turnEventIndex = retryFailure?.turnEventIndex ?? explicit?.turnEventIndex;
     // A launch prompt always has its turn on screen, so a failure can offer Retry instead of vanishing.
     if (explicit && turnEventIndex === undefined) {
-      turnEventIndex = this.addOptimisticUserPrompt(sessionId, prompt, attachments, clientPromptId);
+      turnEventIndex = this.addOptimisticUserPrompt(sessionId, prompt, attachments, clientPromptId, mentions);
     }
     let promptRun: { runId: string | null } | null = null;
 
@@ -3811,6 +3857,7 @@ export class AgentsStore {
           attachments,
           clientPromptId,
           imageMode,
+          mentions,
           ownsAction
         );
         return;
@@ -3832,7 +3879,7 @@ export class AgentsStore {
         throw new Error('This agent does not support embedded resources. Remove file attachments or use an agent with embedded context support.');
       }
 
-      turnEventIndex ??= this.addOptimisticUserPrompt(sessionId, prompt, attachments, clientPromptId);
+      turnEventIndex ??= this.addOptimisticUserPrompt(sessionId, prompt, attachments, clientPromptId, mentions);
       this.activeSession.undo.stack = [];
       this.activeSession.undo.lastRevertedFiles = [];
       this.activeSession.undo.lastMessage = null;
@@ -3842,6 +3889,7 @@ export class AgentsStore {
       this.activeSession.lastError = null;
       if (!retryFailure && !explicit) {
         this.composerPrompt = '';
+        this.composerMentions = [];
         this.clearPromptAttachments();
       }
       // From here the session's own failure/retry UI owns the prompt.
@@ -3853,7 +3901,8 @@ export class AgentsStore {
       this.pendingPromptRuns.set(promptKey, pendingRuns);
       const promptResponse = record.client.sendPrompt(sessionId, prompt, attachments, {
         imageMode,
-        clientPromptId
+        clientPromptId,
+        mentions
       });
       this.scheduleSessionRuntimeRefresh(agentId, sessionId, record.client);
       const response = await promptResponse;
@@ -3865,6 +3914,7 @@ export class AgentsStore {
       this.lastPromptResponse = response;
       if (retryFailure && this.composerPrompt.trim() === prompt && attachmentsMatch(this.promptAttachments, attachments)) {
         this.composerPrompt = '';
+        this.composerMentions = [];
         this.clearPromptAttachments();
       }
       await this.drainQueuedSessionUpdates(agentId, sessionId);
@@ -3911,6 +3961,7 @@ export class AgentsStore {
         // Restore the rejected text and learn the current owner from the agent.
         if (!retryFailure && !this.composerPrompt.trim() && this.promptAttachments.length === 0) {
           this.composerPrompt = prompt;
+          this.composerMentions = mentions;
           this.promptAttachments = attachments.map((attachment) => ({ ...attachment }));
         }
         void this.refreshSessionsForAgent(agentId).then(() => {
@@ -3928,6 +3979,7 @@ export class AgentsStore {
       }
       if (!retryFailure && !this.composerPrompt.trim() && this.promptAttachments.length === 0) {
         this.composerPrompt = prompt;
+        this.composerMentions = mentions;
         this.promptAttachments = attachments.map((attachment) => ({ ...attachment }));
       }
       this.activeSession.runState = 'failed';
@@ -3938,7 +3990,8 @@ export class AgentsStore {
         turnEventIndex,
         prompt,
         attachments,
-        clientPromptId
+        clientPromptId,
+        mentions
       };
       this.activeSession.lastError = normalizedError.message;
       this.activeSession.activityLabel = normalizedError.title;
@@ -3961,6 +4014,7 @@ export class AgentsStore {
     attachments: PromptAttachment[],
     clientInputId: string,
     imageMode: 'image' | 'resource',
+    mentions: AcceptedMention[],
     ownsAction: () => boolean
   ) {
     if (!ownsAction()) return;
@@ -3983,8 +4037,8 @@ export class AgentsStore {
     this.inputSubmissionsBySession.set(key, (this.inputSubmissionsBySession.get(key) ?? 0) + 1);
     try {
       const result = delivery === 'steer'
-        ? await client.steerSession(sessionId, prompt, attachments, clientInputId, runtime.active_run_id ?? undefined, imageMode)
-        : await client.queueSession(sessionId, prompt, attachments, clientInputId, imageMode);
+        ? await client.steerSession(sessionId, prompt, attachments, clientInputId, runtime.active_run_id ?? undefined, imageMode, mentions)
+        : await client.queueSession(sessionId, prompt, attachments, clientInputId, imageMode, mentions);
       this.applySubmitInputResult(agentId, sessionId, pending, result);
       if (!ownsAction()) return;
       if (result.status === 'started' && !this.activeSessionRuntime?.observation) {
@@ -3994,6 +4048,7 @@ export class AgentsStore {
       }
       if (this.composerPrompt.trim() === prompt && attachmentsMatch(this.promptAttachments, attachments)) {
         this.composerPrompt = '';
+        this.composerMentions = [];
         this.clearPromptAttachments();
       }
       this.activeSession.lastError = null;
@@ -6837,7 +6892,8 @@ export class AgentsStore {
     sessionId: string,
     prompt: string,
     attachments: PromptAttachment[],
-    clientPromptId: string
+    clientPromptId: string,
+    mentions: AcceptedMention[] = []
   ): number {
     const eventIndex = getNextConversationEventIndex(this.activeSession);
     const id = `${sessionId}-optimistic-user-${eventIndex + 1}`;
@@ -6860,7 +6916,8 @@ export class AgentsStore {
             id: attachment.id,
             name: attachment.name,
             size: attachment.size
-          })
+          }),
+      ...mentions.map((mention): SessionContentBlock => ({ type: 'resource_link', uri: mention.uri, name: mention.name }))
     ];
     this.activeSession.transcript.push({
       id,
@@ -7327,6 +7384,7 @@ function contentBlockKey(content: unknown): string {
   if (block.type === 'image') {
     return `image:${block.id ?? block.name ?? ''}:${block.mimeType}:${block.data?.length ?? 0}:${hashString(block.data ?? '')}`;
   }
+  if (block.type === 'resource_link') return `resource_link:${block.uri}`;
   return `resource:${block.id ?? block.name ?? block.uri}:${block.mimeType ?? ''}:${block.data?.length ?? block.text?.length ?? 0}:${hashString(block.data ?? block.text ?? '')}`;
 }
 
@@ -7787,7 +7845,7 @@ function attachmentsMatch(left: PromptAttachment[], right: PromptAttachment[]): 
 }
 
 function attachmentIdentityKey(block: SessionContentBlock): string | null {
-  if (block.type === 'text') return null;
+  if (block.type === 'text' || block.type === 'resource_link') return null;
   if (block.id) return block.id;
   if (block.uri?.startsWith('attachment:///')) {
     const identity = decodeURIComponent(block.uri.slice('attachment:///'.length).split('/')[0] ?? '');
@@ -7829,6 +7887,9 @@ function readRawAttachmentIdentity(value: unknown, depth = 0): string | null {
 }
 
 function contentBlocksMatch(left: SessionContentBlock, right: SessionContentBlock): boolean {
+  if (left.type === 'resource_link' || right.type === 'resource_link') {
+    return left.type === 'resource_link' && right.type === 'resource_link' && left.uri === right.uri;
+  }
   if (left.type !== right.type) return attachmentIdentitiesMatch(left, right);
   if (left.type === 'text' && right.type === 'text') return left.text === right.text;
   if (left.type === 'image' && right.type === 'image') {

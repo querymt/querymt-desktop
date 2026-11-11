@@ -153,6 +153,8 @@ const mockClient = vi.hoisted(() => {
     redoSession: vi.fn(async () => ({ success: true, restored: true, undo_stack: [] })),
     forkSession: vi.fn(async () => ({ sessionId: 'fork-session' })),
     supportsImagePrompts: vi.fn(() => true),
+    supportsWorkspaceFiles: vi.fn(() => false),
+    workspaceFiles: vi.fn(async () => ({ status: 'ready', entries: [], truncated: false })),
     supportsEmbeddedContext: vi.fn(() => true),
     getInitializeResponse: vi.fn(() => ({
       protocolVersion: 1,
@@ -837,7 +839,7 @@ describe('AgentsStore visibility-aware polling', () => {
     expect(mockClient.steerSession).not.toHaveBeenCalled();
     release(activeRuntime); await background; await action;
     expect(mockClient.getSessionRuntimeStatus).toHaveBeenCalledTimes(2);
-    expect(mockClient.steerSession).toHaveBeenCalledWith('session-1', expect.any(String), expect.any(Array), expect.any(String), 'new-run', expect.anything());
+    expect(mockClient.steerSession).toHaveBeenCalledWith('session-1', expect.any(String), expect.any(Array), expect.any(String), 'new-run', expect.anything(), []);
   });
 
   it.each(['selection', 'disconnect', 'replace', 'dispose'] as const)('retires stale runtime and timers on %s', async (change) => {
@@ -7527,7 +7529,8 @@ describe('AgentsStore prompt session start', () => {
       [],
       expect.any(String),
       'run-1',
-      'image'
+      'image',
+      []
     );
     expect(mockClient.sendPrompt).not.toHaveBeenCalled();
     expect(store.composerPrompt).toBe('');
@@ -7879,7 +7882,8 @@ describe('AgentsStore prompt session start', () => {
       '/compact',
       [],
       expect.any(String),
-      'image'
+      'image',
+      []
     );
     expect(mockClient.steerSession).not.toHaveBeenCalled();
   });
@@ -11566,5 +11570,133 @@ describe('first-run setup support', () => {
     expect(store.primaryAgentId).toBe('agent-1');
     expect(store.readiness.setupComplete).toBe(false);
     expect(store.readiness.checks.find((check) => check.id === 'providers')?.status).toBe('blocked');
+  });
+});
+
+describe('AgentsStore file mentions', () => {
+  const a = { text: '@a.ts', uri: 'file:///repo/a.ts', name: 'a.ts', isDir: false };
+  const b = { text: '@b.ts', uri: 'file:///repo/b.ts', name: 'b.ts', isDir: false };
+
+  beforeEach(() => {
+    // Earlier tests can leave a pending sendPrompt implementation behind.
+    mockClient.sendPrompt.mockReset().mockResolvedValue({ stopReason: 'end_turn' });
+  });
+
+  function activeStore() {
+    const store = createStore();
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    return store;
+  }
+
+  it('sends only the mentions still present and clears them after a successful send', async () => {
+    const store = activeStore();
+    store.composerPrompt = 'compare @a.ts please';
+    store.setComposerMentions([a, b]);
+
+    await store.sendPromptToActiveSession();
+
+    expect(mockClient.sendPrompt).toHaveBeenCalledWith(
+      'session-1', 'compare @a.ts please', [],
+      expect.objectContaining({ mentions: [a] })
+    );
+    expect(store.composerMentions).toEqual([]);
+    expect(store.composerPrompt).toBe('');
+  });
+
+  it('includes the links in the optimistic user message', async () => {
+    const store = activeStore();
+    store.composerPrompt = 'see @a.ts';
+    store.setComposerMentions([a]);
+    await store.sendPromptToActiveSession();
+    const blocks = store.activeSession.transcript.find((item) => item.kind === 'user_message_chunk')?.blocks;
+    expect(blocks).toEqual([
+      { type: 'text', text: 'see @a.ts' },
+      { type: 'resource_link', uri: 'file:///repo/a.ts', name: 'a.ts' }
+    ]);
+  });
+
+  it('keeps mentions with the draft when a send fails preflight', async () => {
+    mockClient.supportsImagePrompts.mockReturnValueOnce(false);
+    const store = activeStore();
+    store.composerPrompt = 'Review @a.ts';
+    store.setComposerMentions([a]);
+    store.promptAttachments = [{ id: 'image-1', name: 'photo.png', mimeType: 'image/png', size: 3, data: 'aW1n' }];
+
+    await store.sendPromptToActiveSession();
+
+    expect(mockClient.sendPrompt).not.toHaveBeenCalled();
+    expect(store.composerPrompt).toBe('Review @a.ts');
+    expect(store.composerMentions).toEqual([a]);
+  });
+
+  it('discards recorded mentions when the launch cwd, target or agent changes', () => {
+    const store = createStore();
+    store.setComposerMentions([a]);
+    store.setComposerCwd('/other');
+    expect(store.composerMentions).toEqual([]);
+
+    store.setComposerMentions([a]);
+    store.setComposerCwd('/other');
+    expect(store.composerMentions).toEqual([a]);
+
+    store.setComposerTarget('node-2');
+    expect(store.composerMentions).toEqual([]);
+
+    store.setComposerMentions([a]);
+    store.setComposerAgent('agent-2');
+    expect(store.composerMentions).toEqual([]);
+  });
+
+  it('reconciles an echoed mention prompt into one message', async () => {
+    const store = activeStore();
+    await store.connectAgent('agent-1');
+    store.activeAgentId = 'agent-1';
+    store.activeSessionId = 'session-1';
+    store.activeSession.sessionId = 'session-1';
+    store.activeSession.transcript = [{
+      id: 'session-1-optimistic-user-1', kind: 'user_message_chunk', text: 'see @a.ts',
+      blocks: [{ type: 'text', text: 'see @a.ts' }, { type: 'resource_link', uri: a.uri, name: a.name }],
+      messageId: 'session-1-optimistic-user-1', clientPromptId: 'client-1', eventIndex: 0
+    }];
+
+    mockClient.emitSessionUpdate({
+      sessionId: 'session-1',
+      update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'resource_link', uri: a.uri, name: a.name },
+        messageId: 'authoritative-1'
+      }
+    });
+
+    expect(store.activeSession.transcript.filter((item) => item.id.includes('-optimistic-user-'))).toHaveLength(0);
+    expect(store.activeSession.transcript.find((item) => item.messageId === 'authoritative-1')).toMatchObject({ eventIndex: 0 });
+  });
+
+  it('exposes a completion source only for agents advertising the workspace file query', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    mockClient.supportsWorkspaceFiles.mockReturnValue(false);
+    expect(store.mentionSource('agent-1')).toBeNull();
+    expect(store.supportsWorkspaceFiles('agent-1')).toBe(false);
+    mockClient.supportsWorkspaceFiles.mockReturnValue(true);
+    const source = store.mentionSource('agent-1');
+    expect(source).not.toBeNull();
+    expect(store.mentionSource('agent-1')).toBe(source);
+    expect(store.mentionSource(null)).toBeNull();
+    await source!.query({ session_id: 's1', query: 'a' });
+    expect(mockClient.workspaceFiles).toHaveBeenCalledWith({ session_id: 's1', query: 'a' });
+  });
+
+  it('dispatches indexReady notifications to the completion source', async () => {
+    const store = createStore();
+    await store.connectAgent('agent-1');
+    mockClient.supportsWorkspaceFiles.mockReturnValue(true);
+    const handler = vi.fn();
+    const unsubscribe = store.mentionSource('agent-1')!.onIndexReady(handler);
+    mockClient.emitExtensionNotification({ method: 'querymt/workspace/indexReady', params: { session_id: 's1', workspace_root: '/repo' } });
+    mockClient.emitExtensionNotification({ method: 'querymt/session/inputState', params: {} });
+    expect(handler).toHaveBeenCalledExactlyOnceWith({ session_id: 's1', workspace_root: '/repo' });
+    unsubscribe();
   });
 });

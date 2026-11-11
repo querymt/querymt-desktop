@@ -598,7 +598,7 @@ function pendingInputContent(
 }
 
 function blockToPromptAttachment(block: SessionContentBlock): PromptAttachment[] {
-  if (block.type === 'text' || block.data == null) return [];
+  if (block.type === 'text' || block.type === 'resource_link' || block.data == null) return [];
   return [{
     id: block.id ?? block.uri ?? `snapshot-attachment-${block.name ?? block.mimeType ?? 'file'}`,
     name: block.name ?? block.uri?.split('/').at(-1) ?? (block.type === 'image' ? 'image' : 'attachment'),

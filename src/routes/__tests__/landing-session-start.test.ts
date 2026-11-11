@@ -104,6 +104,9 @@ function createAgentsStore() {
       if (agentId) agentsStore.launchModelIds[agentId] = value;
     }),
     refreshModelsForAgent: vi.fn(async () => undefined),
+    composerMentions: [] as unknown[],
+    setComposerMentions: vi.fn(),
+    mentionSource: vi.fn(() => null),
     chooseLaunchModel: vi.fn((agentId: string | null | undefined, value: string) => {
       if (agentId) agentsStore.launchModelIds[agentId] = value;
     }),
@@ -379,6 +382,22 @@ describe('Landing page session start', () => {
     await fireEvent.click(within(notice).getByRole('button', { name: 'Retry' }));
     expect(agentsStore.retryLaunch).toHaveBeenCalledWith('pending-launch-3');
     expect(goto).toHaveBeenCalledWith('/sessions/agent-1/pending-launch-3');
+  });
+
+  it('offers @ completion for a local launch cwd only', async () => {
+    const source = { query: vi.fn(), onIndexReady: vi.fn() };
+    agentsStore.mentionSource.mockReturnValue(source as never);
+    agentsStore.composerCwd = '/tmp/work';
+    render(LandingPage);
+    let props = vi.mocked(SessionComposer).mock.calls.at(-1)![1];
+    expect(props.mentionSource).toBe(source);
+    expect(props.mentionTarget).toEqual({ cwd: '/tmp/work' });
+    cleanup();
+
+    agentsStore.composerTargetId = 'peer-1';
+    render(LandingPage);
+    props = vi.mocked(SessionComposer).mock.calls.at(-1)![1];
+    expect(props.mentionSource).toBeNull();
   });
 
   it('offers the Workspace choice for the launcher agent even when no composer agent is set', async () => {

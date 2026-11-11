@@ -1,5 +1,6 @@
 import type { ComposerWorkspaceMode } from '$lib/domain/session-workspace';
 import type { PromptAttachment } from '$lib/domain/types';
+import type { AcceptedMention } from '$lib/domain/mention-controller';
 
 /**
  * A launch is the client-side stand-in for a session whose `session/new` is
@@ -43,6 +44,8 @@ export interface PendingLaunch {
   status: PendingLaunchStatus;
   error: string | null;
   prompt: string;
+  /** Mentions still present in the prompt when the launch started. */
+  mentions?: AcceptedMention[];
   attachments: PromptAttachment[];
   clientPromptId: string;
   settings: LaunchSettings;
@@ -79,6 +82,7 @@ export interface PromptSendInput {
   agentId: string;
   sessionId: string;
   prompt: string;
+  mentions?: AcceptedMention[];
   attachments: PromptAttachment[];
   clientPromptId: string;
   /** Set when the optimistic user turn is already in the transcript. */

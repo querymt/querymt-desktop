@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionConversationTurn } from '$lib/domain/session-conversation';
+import type { SessionContentBlock } from '$lib/domain/types';
 import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
 import * as frontMatter from '$lib/domain/message-frontmatter';
 import SessionTurn from './SessionTurn.svelte';
@@ -1098,5 +1099,40 @@ describe('SessionTurn', () => {
     expect(workItems[0].tagName).toBe('DETAILS');
     expect(workItems[1].tagName).toBe('DETAILS');
     expect(container.querySelectorAll('.session-reasoning-summary-item')).toHaveLength(0);
+  });
+});
+
+describe('SessionTurn file mention chips', () => {
+  const withBlocks = (blocks: SessionContentBlock[]): SessionConversationTurn => ({
+    id: 'mention-turn', forkMessageId: null,
+    user: { id: 'mention-user', messageId: 'mention-message', text: 'compare @a.ts', html: '<p>compare @a.ts</p>', blocks },
+    content: []
+  });
+
+  it('renders a chip per file:// resource_link', () => {
+    const { getAllByTestId, getByText } = render(SessionTurn, {
+      turn: withBlocks([
+        { type: 'text', text: 'compare @a.ts' },
+        { type: 'resource_link', uri: 'file:///repo/a.ts', name: 'a.ts' },
+        { type: 'resource_link', uri: 'file:///repo/src/', name: 'src' }
+      ])
+    });
+    expect(getAllByTestId('file-chip')).toHaveLength(2);
+    expect(getByText('a.ts', { selector: '.session-file-chip span' })).toBeInTheDocument();
+  });
+
+  it('renders no chip for an attachment:/// link', () => {
+    const { queryAllByTestId } = render(SessionTurn, {
+      turn: withBlocks([
+        { type: 'text', text: 'x' },
+        { type: 'resource_link', uri: 'attachment:///file-1/notes.txt', name: 'notes.txt' }
+      ])
+    });
+    expect(queryAllByTestId('file-chip')).toHaveLength(0);
+  });
+
+  it('renders no chip when there are no file links', () => {
+    const { queryAllByTestId } = render(SessionTurn, { turn: withBlocks([{ type: 'text', text: 'plain' }]) });
+    expect(queryAllByTestId('file-chip')).toHaveLength(0);
   });
 });

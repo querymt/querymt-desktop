@@ -20,7 +20,7 @@ import {
   type SessionNotification,
   type SetSessionConfigOptionRequest
 } from '@agentclientprotocol/sdk/unstable';
-import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment, PromptSendOptions, SessionPin, SessionLifecycle, SessionLifecyclePatch } from '$lib/domain/types';
+import type { AgentConfig, AgentControlHealth, ModelEntry, ModelInfo, PromptAttachment, PromptMention, PromptSendOptions, SessionPin, SessionLifecycle, SessionLifecyclePatch } from '$lib/domain/types';
 import type {
   AttachRemoteSessionRequest,
   AuthMethod,
@@ -96,6 +96,7 @@ import {
   QMT_METHOD_SESSION_SET_DELEGATE_MODEL,
   QMT_METHOD_SESSION_UNDO,
   QMT_METHOD_SESSION_UNDO_STACK,
+  QMT_METHOD_WORKSPACE_FILES,
   QMT_NOTIFICATION_ELICITATION_RECOVERY_AUTHORITY,
   QuerymtExtensions,
   parseQuerymtElicitationRecoveryAuthority,
@@ -110,6 +111,8 @@ import {
   type QuerymtRedoResponse,
   type QuerymtUndoResponse,
   type QuerymtUndoStackResponse,
+  type QuerymtWorkspaceFilesRequest,
+  type QuerymtWorkspaceFilesResponse,
   toLogicalQuerymtMethod,
   type QuerymtLogicalMethod,
   type QuerymtWorktreeCreateRequest,
@@ -761,6 +764,17 @@ export class DesktopAcpClient {
     return this.supportsQuerymtMethod(QMT_METHOD_SESSION_SET_PINNED);
   }
 
+  /** Whether the agent advertises `querymt/workspace/files` (file mentions). */
+  supportsWorkspaceFiles(): boolean {
+    return this.supportsQuerymtMethod(QMT_METHOD_WORKSPACE_FILES);
+  }
+
+  async workspaceFiles(request: QuerymtWorkspaceFilesRequest): Promise<QuerymtWorkspaceFilesResponse> {
+    if (!this.querymtExtensions) await this.connect();
+    this.assertQuerymtMethod(QMT_METHOD_WORKSPACE_FILES);
+    return this.querymtExtensions!.workspaceFiles(request);
+  }
+
   async setSessionPinned(sessionId: string, pinned: boolean): Promise<SessionPin> {
     if (!this.querymtExtensions) await this.connect();
     if (!this.supportsSessionPins()) throw new Error('Session pins are unsupported by this agent.');
@@ -1103,7 +1117,7 @@ export class DesktopAcpClient {
     if (!this.connection) {
       await this.connect();
     }
-    const content = this.buildPromptContent(prompt, attachments, options.imageMode ?? 'image');
+    const content = this.buildPromptContent(prompt, attachments, options.imageMode ?? 'image', options.mentions);
     try {
       return await this.connection!.agent.request('session/prompt', {
         sessionId,
@@ -1123,7 +1137,8 @@ export class DesktopAcpClient {
     attachments: PromptAttachment[],
     clientInputId: string,
     expectedRunId?: string,
-    imageMode: PromptSendOptions['imageMode'] = 'image'
+    imageMode: PromptSendOptions['imageMode'] = 'image',
+    mentions: PromptMention[] = []
   ): Promise<SubmitInputResult> {
     return this.submitSessionInput(
       QMT_METHOD_SESSION_STEER,
@@ -1132,7 +1147,8 @@ export class DesktopAcpClient {
       attachments,
       clientInputId,
       expectedRunId,
-      imageMode
+      imageMode,
+      mentions
     );
   }
 
@@ -1141,7 +1157,8 @@ export class DesktopAcpClient {
     prompt: string,
     attachments: PromptAttachment[],
     clientInputId: string,
-    imageMode: PromptSendOptions['imageMode'] = 'image'
+    imageMode: PromptSendOptions['imageMode'] = 'image',
+    mentions: PromptMention[] = []
   ): Promise<SubmitInputResult> {
     return this.submitSessionInput(
       QMT_METHOD_SESSION_QUEUE,
@@ -1150,7 +1167,8 @@ export class DesktopAcpClient {
       attachments,
       clientInputId,
       undefined,
-      imageMode
+      imageMode,
+      mentions
     );
   }
 
@@ -1176,13 +1194,14 @@ export class DesktopAcpClient {
     attachments: PromptAttachment[],
     clientInputId: string,
     expectedRunId: string | undefined,
-    imageMode: PromptSendOptions['imageMode'] = 'image'
+    imageMode: PromptSendOptions['imageMode'] = 'image',
+    mentions: PromptMention[] = []
   ): Promise<SubmitInputResult> {
     if (!this.querymtExtensions) await this.connect();
     this.assertQuerymtMethod(method);
     const request: QuerymtSubmitInputRequest = {
       session_id: sessionId,
-      prompt: this.buildPromptContent(prompt, attachments, imageMode ?? 'image'),
+      prompt: this.buildPromptContent(prompt, attachments, imageMode ?? 'image', mentions),
       client_input_id: clientInputId,
       ...(expectedRunId ? { expected_run_id: expectedRunId } : {})
     };
@@ -1194,7 +1213,8 @@ export class DesktopAcpClient {
   private buildPromptContent(
     prompt: string,
     attachments: PromptAttachment[],
-    imageMode: NonNullable<PromptSendOptions['imageMode']>
+    imageMode: NonNullable<PromptSendOptions['imageMode']>,
+    mentions: PromptMention[] = []
   ): ContentBlock[] {
     const hasImages = attachments.some((attachment) => attachment.mimeType.startsWith('image/'));
     const hasResources = attachments.some(
@@ -1230,6 +1250,10 @@ export class DesktopAcpClient {
           }
         });
       }
+    }
+    // resource_link is baseline ACP; the agent-provided URI is sent verbatim.
+    for (const mention of mentions) {
+      content.push({ type: 'resource_link', uri: mention.uri, name: mention.name });
     }
     return content;
   }
