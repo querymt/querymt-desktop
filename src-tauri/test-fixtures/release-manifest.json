@@ -1,0 +1,30 @@
+{
+  "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVBNkVBOTlCQTRBMDk1MTIKUldRU2xhQ2ttNmx1V3JZTCs1ekZnaUVDcUNQMTRPb1l3RnNCWVlGN1dreXd0QWtqZE1mS0JIUDcK",
+  "cases": {
+    "a": {
+      "release_manifest": "eyJ0eXBlIjoicXVlcnltdC1kZXNrdG9wLXJlbGVhc2UtbWFuaWZlc3QvdjEiLCJ2ZXJzaW9uIjoiMC4xLjExLW5pZ2h0bHkuMjAyNjExMTExMDAwMDAiLCJxbXRjb2RlX3ZlcnNpb24iOiIwLjYuMC1uaWdodGx5LjIwMjYxMTExMDU0NjI5In0=",
+      "release_manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRU2xhQ2ttNmx1V2lpaGkwOUxwWDZETlBmcHZUUWU2UXRKOXI4VXNUQWZ3K1J1ZjFXVVFONXVWWCtDcGZmOUhCdXJDQzVoMVI1MUxDNEc0UGYwK0NPbjFET0R5OURVSVFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDA4NzY4CWZpbGU6YS5qc29uCXZlcnNpb246MC4xLjExLW5pZ2h0bHkuMjAyNjExMTExMDAwMDAKTjZKdHJQa0h6Mm9kNlhGZzFoWlk3TjJMV2dCMTNBd2kzMjdYQjBEaDBFOHd4R3AycU5OekRVNWg2OWtMNmlDOVkvQyt1YW8yVE9IbTZpMng2WC9qQ0E9PQo=",
+      "payload": "{\"type\":\"querymt-desktop-release-manifest/v1\",\"version\":\"0.1.11-nightly.20261111100000\",\"qmtcode_version\":\"0.6.0-nightly.20261111054629\"}"
+    },
+    "b": {
+      "release_manifest": "eyJ0eXBlIjoicXVlcnltdC1kZXNrdG9wLXJlbGVhc2UtbWFuaWZlc3QvdjEiLCJ2ZXJzaW9uIjoiMC4xLjExIiwicW10Y29kZV92ZXJzaW9uIjoiMC42LjAifQ==",
+      "release_manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRU2xhQ2ttNmx1V2pyb1Y1akdjRTl4OFFBT1IwQzFEMnA0ZmxBV2V4VEgzeTl2eHlrQy9YeVZ2VExVQkhKcTV0Vi9XVm9PSm4wYVZwV1ZRTFFTa25iSEkzamQ5SnlhK0EwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDA4NzY5CWZpbGU6Yi5qc29uCXZlcnNpb246MC4xLjExCjdiZXdOUjhiTVliclFwQnlIM2NWM0pQMmVUUGsrUTF4TDJPZWZ3OUZ1cElTaTFJb1RUczcyNTlHZ2ZtNjR6blVtQUtCMm5BSUd6bFlwU3IzMjN2dkF3PT0K",
+      "payload": "{\"type\":\"querymt-desktop-release-manifest/v1\",\"version\":\"0.1.11\",\"qmtcode_version\":\"0.6.0\"}"
+    },
+    "c": {
+      "release_manifest": "eyJ0eXBlIjoicXVlcnltdC1kZXNrdG9wLXJlbGVhc2UtbWFuaWZlc3QvdjEiLCJ2ZXJzaW9uIjoiMC4xLjExLW5pZ2h0bHkuMjAyNjExMTExMDAwMDAiLCJxbXRjb2RlX3ZlcnNpb24iOiIwLjYuMC1uaWdodGx5LjIwMjYxMTExMDU0NjI5In0=",
+      "release_manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRU2xhQ2ttNmx1V2pUWlJJbXd5b2xHbHh3d0RnMzQ1VWRoZysxOHNQenFZVFVLbWU2Zk5vN0lucERLU2FMNkwvZTlSNWk2aEFhbDdhdk1PdnhzbUJWbFRGcjFhR1FtNVFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDA4NzY5CWZpbGU6Yy5qc29uCndxbEhKMHVpUjJzSkZJVmtCNnFQZnJnVHJzS0xhTER0a1VsMkhINlRONm5zWW9pa3U1NnVURXFKaDM0cXk0bXNZQmVRd3dFRkpiU3BjN1RmTWtPK0FnPT0K",
+      "payload": "{\"type\":\"querymt-desktop-release-manifest/v1\",\"version\":\"0.1.11-nightly.20261111100000\",\"qmtcode_version\":\"0.6.0-nightly.20261111054629\"}"
+    },
+    "d": {
+      "release_manifest": "eyJ0eXBlIjoib3RoZXIvdjEiLCJ2ZXJzaW9uIjoiMC4xLjExLW5pZ2h0bHkuMjAyNjExMTExMDAwMDAiLCJxbXRjb2RlX3ZlcnNpb24iOiIwLjYuMC1uaWdodGx5LjIwMjYxMTExMDU0NjI5In0=",
+      "release_manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRU2xhQ2ttNmx1V3IrMEFld1ZpQnJOcHdoMGxUU1UyTldhTUQwK3VJRWtzNHZmR2xiZmIyNWFjdGZxRXZYQzZHTFhiaklsVmZPdHhFMGFvdFpvNFdqNjRrNjdmQ0pQNHc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDA4NzY5CWZpbGU6ZC5qc29uCXZlcnNpb246MC4xLjExLW5pZ2h0bHkuMjAyNjExMTExMDAwMDAKRW5JNkVGd0g2U2hqMFdZbStGeENGdnZKREphSkZFRWtyMjVrQllncHFobllUODI4Y0dyZVJ2a0tLYzMyT0k4dHZjMWxwcFZlL21RUGZhcW5EZzYxQlE9PQo=",
+      "payload": "{\"type\":\"other/v1\",\"version\":\"0.1.11-nightly.20261111100000\",\"qmtcode_version\":\"0.6.0-nightly.20261111054629\"}"
+    },
+    "e": {
+      "release_manifest": "eyJ0eXBlIjoicXVlcnltdC1kZXNrdG9wLXJlbGVhc2UtbWFuaWZlc3QvdjEiLCJ2ZXJzaW9uIjoiMC4xLjExLW5pZ2h0bHkuMjAyNjExMTExMDAwMDAiLCJxbXRjb2RlX3ZlcnNpb24iOiIwLjYuMC1uaWdodGx5LjIwMjYxMTExMDU0NjI5In0=",
+      "release_manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRU2xhQ2ttNmx1V2tEZnA2RmRjY1BPZTdra3dWcVRjVGY1NVdqdjdMd2VxS2dVVkI3cVZuYko4aStVZEFmeEJybDV5UUJSS3ZDbENqY3p5K0g3QzRrUzJReVBicUJyRndFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDA4NzcwCWZpbGU6ZS5qc29uCXZlcnNpb246MC4xLjkKSkVzOTM1Z3Z0cURXaEFiOGtzQWgyVTBKWXg5UTZKNXMyUjczcmZzbmRna1hSUWJjRFNWeHl1YUxvNk5PUndRZHNiT0hNUXFUQ3h0QnN2YmJmQmE3RHc9PQo=",
+      "payload": "{\"type\":\"querymt-desktop-release-manifest/v1\",\"version\":\"0.1.11-nightly.20261111100000\",\"qmtcode_version\":\"0.6.0-nightly.20261111054629\"}"
+    }
+  }
+}

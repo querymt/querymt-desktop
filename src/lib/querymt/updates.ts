@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 
 export type UpdateChannel = 'stable' | 'nightly';
 export type InstallKind = 'macApp' | 'nsis' | 'appImage' | 'deb' | 'portable';
-export type RefusalReason = 'qmtcodeDowngrade' | 'qmtcodeMissing' | 'invalidVersion';
+export type RefusalReason = 'qmtcodeDowngrade' | 'qmtcodeMissing' | 'invalidVersion' | 'unverifiedRelease';
 export type FailureKind = 'network' | 'feedMissing' | 'invalidFeed' | 'other';
 
 export type UpdateState =

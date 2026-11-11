@@ -59,6 +59,11 @@
   
   Verify with unit tests for both endpoint lists per channel, the URL rewrite (match, non-match, statistics off) and the retry decision, and update the existing URL tests (`updates.rs` channel/feed tests).
 
+- [x] 5.8 Make saving preferences atomic: `updates_set_preferences` applies the patch to a copy and replaces the in-memory preferences only after `save_preferences` succeeds, so a failed save cannot undo a statistics opt-out. Verify by review; the save path is unchanged.
+- [x] 5.9 Check each endpoint with its own updater instance (D11), so a query.mt response that is HTTP 200 with invalid JSON, or has no verifiable manifest, falls through to the GitHub feed. Verify by review against the plugin's endpoint loop (a non-JSON 200 aborts the plugin's own fallback).
+- [x] 5.10 Add the signed release manifest (D12): `verify_manifest` in `updates.rs` (signature, bound version, type, channel) and use only its qmtcode version for the gate; add `RefusalReason::UnverifiedRelease`. Verify with unit tests on fixtures signed by the real `tauri signer sign` (valid, tampered, other key, other version, no signed version, wrong type, wrong channel, forged raw feed field).
+- [x] 5.11 Generate and sign the manifest in CI: `updater-feed.mjs --write-manifest` and `--manifest-signature`, a signing step in the publish jobs of `nightly.yml` and `release.yml`. Verify with node tests (valid, missing, stale qmtcode, wrong bound version, other key, channel/version mismatch).
+
 ## 6. Frontend
 
 - [x] 6.1 Add an updates store that wraps the commands and the `updates://state` event. Verify with vitest tests that mock `invoke`.
@@ -76,6 +81,7 @@
 - [ ] 8.1 Nightly→nightly: install nightly N (updater-enabled), publish nightly N+1, and confirm that an automatic check offers N+1 and installs it on macOS, Windows, a Wry AppImage and a CEF AppImage, with the sidecar restarted afterwards.
 - [ ] 8.2 Channel switch: on nightly `0.1.8-nightly.*`, switch to stable while the stable is `0.1.7`. Confirm the "waiting" status. Publish `0.1.8` (in a fork) and confirm it is offered.
 - [ ] 8.3 qmtcode gate: publish a test feed whose `qmtcode_version` is lower than the installed one and confirm the update is refused with that reason.
+- [ ] 8.3a Manifest: publish a test feed whose `release_manifest` was edited (or removed) and confirm the update is reported as unverified and, with statistics on, that the GitHub feed is tried next.
 - [ ] 8.4 Tampering: modify an artifact in a test feed and confirm that the install aborts and the current version still runs.
 - [ ] 8.5 Statistics: with statistics on, confirm a check and an install appear as `check` and `download` events in `qmt_desktop_updates`; with statistics off, confirm (via proxy log) that no request goes to query.mt; with the worker routes blocked, confirm the check and install still succeed from GitHub.
 

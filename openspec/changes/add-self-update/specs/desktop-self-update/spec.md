@@ -40,7 +40,7 @@ The desktop SHALL offer an update only when the feed's desktop version is strict
 - **THEN** no update is offered
 
 ### Requirement: Updates never downgrade the bundled qmtcode
-The desktop SHALL refuse an update whose feed reports a bundled qmtcode version lower than the qmtcode version bundled with the running build, or whose feed omits the qmtcode version. A refused update SHALL be reported with its reason and SHALL NOT be downloaded.
+The desktop SHALL refuse an update whose authenticated release manifest reports a bundled qmtcode version lower than the qmtcode version bundled with the running build, or whose manifest omits the qmtcode version. The qmtcode version SHALL be read only from the authenticated release manifest, never from unsigned feed fields. A refused update SHALL be reported with its reason and SHALL NOT be downloaded.
 
 #### Scenario: Stable bundling older qmtcode is refused
 - **WHEN** a build bundling qmtcode `0.6.0-nightly.20261105111147` sees a newer desktop update that bundles qmtcode `0.5.2`
@@ -53,6 +53,29 @@ The desktop SHALL refuse an update whose feed reports a bundled qmtcode version 
 #### Scenario: Missing qmtcode version
 - **WHEN** the feed entry has no qmtcode version
 - **THEN** the update is not offered
+
+#### Scenario: Forged qmtcode version in the feed
+- **WHEN** an unsigned feed field claims a newer qmtcode version than the one in the signed release manifest
+- **THEN** only the manifest's version is used for the gate
+
+### Requirement: Release metadata is authenticated
+The desktop SHALL offer an update only if the feed carries a release manifest whose signature verifies against the public key embedded in the build, is bound to the offered desktop version, has the expected type, and belongs to the selected channel. Otherwise the update SHALL NOT be offered and SHALL be reported as unverified.
+
+#### Scenario: Tampered manifest
+- **WHEN** the manifest content was changed after signing
+- **THEN** the update is not offered and is reported as unverified
+
+#### Scenario: Replayed manifest of another version
+- **WHEN** the manifest is signed for a different desktop version than the one offered
+- **THEN** the update is not offered and is reported as unverified
+
+#### Scenario: Other channel's release
+- **WHEN** a stable build is served a nightly release with a valid manifest, or the reverse
+- **THEN** the update is not offered and is reported as unverified
+
+#### Scenario: Missing manifest
+- **WHEN** a newer release has no release manifest or no manifest signature
+- **THEN** the update is not offered and is reported as unverified
 
 ### Requirement: Updates are signature-verified
 The desktop SHALL install an update only after verifying the downloaded artifact against the public key embedded in the build. A verification failure SHALL abort the install, leave the current installation unchanged and be shown to the user.
@@ -149,10 +172,14 @@ When statistics are enabled, update checks SHALL go first to the query.mt check 
 - **THEN** statistics are still off
 
 ### Requirement: Statistics never block updates
-A failure of the query.mt check or download redirect SHALL NOT prevent an update. A failed check request through query.mt SHALL fall back to the GitHub feed for the same channel within the same check, and a failed download through query.mt SHALL be retried once from the GitHub URL in the feed. Signature verification failures SHALL NOT be retried.
+A failure of the query.mt check or download redirect SHALL NOT prevent an update. A failed check request through query.mt, including a response that is not a usable feed or has no verifiable release manifest, SHALL fall back to the GitHub feed for the same channel within the same check, and a failed download through query.mt SHALL be retried once from the GitHub URL in the feed. Signature verification failures SHALL NOT be retried.
 
 #### Scenario: Worker unavailable during check
 - **WHEN** statistics are enabled and query.mt returns an error or is unreachable
+- **THEN** the same check reads the GitHub feed and reports its result normally
+
+#### Scenario: Worker returns an unusable feed
+- **WHEN** statistics are enabled and query.mt answers with HTTP 200 but a body that is not a valid feed
 - **THEN** the same check reads the GitHub feed and reports its result normally
 
 #### Scenario: Worker unavailable during download

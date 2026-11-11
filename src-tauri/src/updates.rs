@@ -237,6 +237,8 @@ pub enum RefusalReason {
     QmtcodeDowngrade,
     QmtcodeMissing,
     InvalidVersion,
+    /// The feed carries no valid signed release manifest for the offered version.
+    UnverifiedRelease,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,6 +302,122 @@ pub fn evaluate(running: &str, embedded_qmtcode: Option<&str>, offered: &Offered
         };
     }
     Verdict::Offer
+}
+
+/// `type` of the signed release manifest (design D12).
+const MANIFEST_TYPE: &str = "querymt-desktop-release-manifest/v1";
+
+/// Release metadata that was authenticated with the updater key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedRelease {
+    pub version: String,
+    pub qmtcode_version: String,
+}
+
+#[derive(Deserialize)]
+struct ManifestPayload {
+    #[serde(rename = "type")]
+    kind: String,
+    version: String,
+    qmtcode_version: String,
+}
+
+/// Authenticates the feed's `release_manifest` (design D12).
+///
+/// The feed itself is untrusted: only the manifest bytes signed with the updater key
+/// count. It must be signed for exactly the announced desktop version (the signature's
+/// trusted comment carries `version:`), have the expected `type`, name a valid qmtcode
+/// version and belong to the selected channel. Everything the downgrade gate reads comes
+/// from the returned value, never from the raw feed.
+pub fn verify_manifest(
+    feed: &serde_json::Value,
+    pubkey: &str,
+    channel: UpdateChannel,
+    announced_version: &str,
+) -> Result<VerifiedRelease, String> {
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let field = |name: &str| {
+        feed.get(name)
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| format!("the feed has no {name}"))
+    };
+    let text = |value: &str, what: &str| -> Result<String, String> {
+        let bytes = engine
+            .decode(value.trim())
+            .map_err(|error| format!("{what} is not valid base64: {error}"))?;
+        String::from_utf8(bytes).map_err(|_| format!("{what} is not valid text"))
+    };
+
+    let payload = engine
+        .decode(field("release_manifest")?.trim())
+        .map_err(|error| format!("the release manifest is not valid base64: {error}"))?;
+    let key = minisign_verify::PublicKey::decode(&text(pubkey, "the updater public key")?)
+        .map_err(|error| format!("invalid updater public key: {error}"))?;
+    let signature = minisign_verify::Signature::decode(&text(
+        field("release_manifest_signature")?,
+        "the release manifest signature",
+    )?)
+    .map_err(|error| format!("invalid release manifest signature: {error}"))?;
+    key.verify(&payload, &signature, false)
+        .map_err(|error| format!("the release manifest signature does not verify: {error}"))?;
+
+    // Only after `verify` is the trusted comment authenticated.
+    let signed_version = signature
+        .trusted_comment()
+        .split('\t')
+        .find_map(|part| part.strip_prefix("version:"))
+        .ok_or("the release manifest signature carries no version")?;
+    let payload: ManifestPayload = serde_json::from_slice(&payload)
+        .map_err(|error| format!("the release manifest is not valid: {error}"))?;
+    if payload.kind != MANIFEST_TYPE {
+        return Err(format!(
+            "unexpected release manifest type `{}`",
+            payload.kind
+        ));
+    }
+
+    let parse = |what: &str, value: &str| {
+        Version::parse(value.trim_start_matches('v'))
+            .map_err(|_| format!("invalid {what} version `{value}` in the release manifest"))
+    };
+    let manifest_version = parse("desktop", &payload.version)?;
+    parse("qmtcode", &payload.qmtcode_version)?;
+    if parse("signed", signed_version)? != manifest_version
+        || parse("announced", announced_version)? != manifest_version
+    {
+        return Err(format!(
+            "the release manifest is for {}, not the offered {announced_version}",
+            payload.version
+        ));
+    }
+    let manifest_channel = if manifest_version.pre.as_str().starts_with("nightly") {
+        UpdateChannel::Nightly
+    } else {
+        UpdateChannel::Stable
+    };
+    if manifest_channel != channel {
+        return Err(format!(
+            "the release manifest is for the {} channel, not {}",
+            manifest_channel.name(),
+            channel.name()
+        ));
+    }
+    Ok(VerifiedRelease {
+        version: payload.version,
+        qmtcode_version: payload.qmtcode_version,
+    })
+}
+
+/// The updater public key from the app's plugin configuration.
+fn updater_pubkey(app: &AppHandle) -> Option<String> {
+    app.config()
+        .plugins
+        .0
+        .get("updater")?
+        .get("pubkey")?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// Persisted user choices (`updates.json` in the app config dir).
@@ -770,64 +888,80 @@ async fn check_inner(
             "updates are not available on this platform".into(),
         );
     };
+    let Some(pubkey) = updater_pubkey(app) else {
+        return fail(
+            FailureKind::Other,
+            "the updater public key is not configured".into(),
+        );
+    };
 
-    // The feed's version is recorded by the comparator so a feed that is *behind*
-    // the running build (stable older than a nightly) can be reported as such.
-    let observed = Arc::new(Mutex::new(None::<String>));
-    let record = observed.clone();
-    let hook_app = app.clone();
-    // Statistics on: query.mt first, GitHub as fallback inside the same check.
-    let endpoints = check_endpoints(channel, preferences.send_statistics)
-        .iter()
-        .map(|endpoint| tauri::Url::parse(endpoint))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    let updater = match app
-        .updater_builder()
-        .endpoints(endpoints)
-        .map_err(|e| e.to_string())?
-        .timeout(CHECK_TIMEOUT)
-        .target(target)
-        .version_comparator(move |current, release| {
-            *record.lock().expect("observed version lock") = Some(release.version.to_string());
-            release.version > current
-        })
-        // Windows exits during the install: stop the sidecar first.
-        .on_before_exit(move || {
-            stop_sidecars(&hook_app);
-            hook_app.cleanup_before_exit();
-        })
-        .build()
-    {
-        Ok(updater) => updater,
-        Err(error) => return fail(categorize_failure(&error), error.to_string()),
+    // Statistics on: query.mt first, the GitHub feed as fallback. Each endpoint is checked
+    // on its own, so a feed that errors, is not valid JSON or has no verifiable release
+    // manifest falls through to the next one instead of ending the check.
+    let endpoints = check_endpoints(channel, preferences.send_statistics);
+    let mut outcome = None;
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        let result = check_feed(app, endpoint, &target, &pubkey, channel).await;
+        let usable = matches!(
+            result,
+            Ok(FeedOutcome::NotNewer { .. } | FeedOutcome::Verified { .. })
+        );
+        if !usable && index + 1 < endpoints.len() {
+            match &result {
+                Err((kind, detail)) => {
+                    eprintln!(
+                        "Update feed {endpoint} failed ({kind:?}): {detail}; trying the next feed"
+                    )
+                }
+                Ok(FeedOutcome::Unverified { detail, .. }) => {
+                    eprintln!(
+                        "Update feed {endpoint} was not verifiable: {detail}; trying the next feed"
+                    )
+                }
+                Ok(_) => {}
+            }
+            continue;
+        }
+        outcome = Some(result);
+        break;
+    }
+    let outcome = match outcome {
+        Some(Ok(outcome)) => outcome,
+        Some(Err((kind, detail))) => return fail(kind, detail),
+        None => return fail(FailureKind::Other, "no update feed is configured".into()),
     };
 
     let running = app.package_info().version.to_string();
-    let checked = updater.check().await;
-    let update = match checked {
-        Ok(update) => update,
-        Err(error) => return fail(categorize_failure(&error), error.to_string()),
+    let (update, verified) = match outcome {
+        FeedOutcome::NotNewer { offered } => {
+            return Ok(finish(
+                classify_not_newer(&running, offered.as_deref()),
+                None,
+            ));
+        }
+        FeedOutcome::Unverified { version, detail } => {
+            eprintln!("Update {version} was refused: {detail}");
+            return Ok(finish(
+                UpdateState::Refused {
+                    message: format!(
+                        "Version {version} could not be verified, so it was not offered."
+                    ),
+                    version,
+                    reason: RefusalReason::UnverifiedRelease,
+                },
+                None,
+            ));
+        }
+        FeedOutcome::Verified { update, verified } => (*update, verified),
     };
 
-    let Some(update) = update else {
-        let offered = observed.lock().expect("observed version lock").clone();
-        return Ok(finish(
-            classify_not_newer(&running, offered.as_deref()),
-            None,
-        ));
-    };
-
-    let feed_qmtcode = update
-        .raw_json
-        .get("qmtcode_version")
-        .and_then(|value| value.as_str());
+    // The gate reads only the authenticated manifest, never the raw feed.
     let verdict = evaluate(
         &update.current_version,
         EMBEDDED_QMTCODE,
         &Offered {
-            version: &update.version,
-            qmtcode_version: feed_qmtcode,
+            version: &verified.version,
+            qmtcode_version: Some(&verified.qmtcode_version),
         },
     );
     match verdict {
@@ -842,7 +976,7 @@ async fn check_inner(
                 version: update.version.clone(),
                 notes: update.body.clone().filter(|n| !n.is_empty()),
                 date: update.date.map(|d| d.to_string()),
-                qmtcode_version: feed_qmtcode.map(str::to_string),
+                qmtcode_version: Some(verified.qmtcode_version.clone()),
                 can_install: kind.self_installs(),
                 release_url: release_url(channel, &update.version),
                 skipped,
@@ -861,6 +995,74 @@ async fn check_inner(
             },
             None,
         )),
+    }
+}
+
+/// The result of checking one feed endpoint.
+enum FeedOutcome {
+    /// The feed has nothing newer; `offered` is the version it lists, if it was parsed.
+    NotNewer { offered: Option<String> },
+    /// A newer release whose manifest is signed for it.
+    Verified {
+        update: Box<Update>,
+        verified: VerifiedRelease,
+    },
+    /// A newer release without a valid signed manifest.
+    Unverified { version: String, detail: String },
+}
+
+/// Checks one feed endpoint and authenticates what it offers.
+async fn check_feed(
+    app: &AppHandle,
+    endpoint: &str,
+    target: &str,
+    pubkey: &str,
+    channel: UpdateChannel,
+) -> Result<FeedOutcome, (FailureKind, String)> {
+    let other = |error: String| (FailureKind::Other, error);
+    let url = tauri::Url::parse(endpoint).map_err(|e| other(e.to_string()))?;
+
+    // The feed's version is recorded by the comparator so a feed that is *behind*
+    // the running build (stable older than a nightly) can be reported as such.
+    let observed = Arc::new(Mutex::new(None::<String>));
+    let record = observed.clone();
+    let hook_app = app.clone();
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![url])
+        .map_err(|e| other(e.to_string()))?
+        .timeout(CHECK_TIMEOUT)
+        .target(target.to_string())
+        .version_comparator(move |current, release| {
+            *record.lock().expect("observed version lock") = Some(release.version.to_string());
+            release.version > current
+        })
+        // Windows exits during the install: stop the sidecar first.
+        .on_before_exit(move || {
+            stop_sidecars(&hook_app);
+            hook_app.cleanup_before_exit();
+        })
+        .build()
+        .map_err(|e| (categorize_failure(&e), e.to_string()))?;
+
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| (categorize_failure(&e), e.to_string()))?;
+    let Some(update) = update else {
+        let offered = observed.lock().expect("observed version lock").clone();
+        return Ok(FeedOutcome::NotNewer { offered });
+    };
+
+    match verify_manifest(&update.raw_json, pubkey, channel, &update.version) {
+        Ok(verified) => Ok(FeedOutcome::Verified {
+            update: Box::new(update),
+            verified,
+        }),
+        Err(detail) => Ok(FeedOutcome::Unverified {
+            version: update.version,
+            detail,
+        }),
     }
 }
 
@@ -901,21 +1103,26 @@ pub fn updates_set_preferences(
         let mut preferences = manager.preferences.lock().expect("update preferences lock");
         let build = UpdateChannel::from_build(BUILD_CHANNEL);
         let before = preferences.effective_channel(build);
+        // Apply to a copy and swap it in only once it is on disk: a failed save must not
+        // leave e.g. a statistics opt-out undone in memory.
+        let mut candidate = preferences.clone();
         if let Some(channel) = patch.channel {
-            preferences.channel = Some(channel);
+            candidate.channel = Some(channel);
         }
         if let Some(auto_check) = patch.auto_check {
-            preferences.auto_check = auto_check;
+            candidate.auto_check = auto_check;
         }
         if let Some(send_statistics) = patch.send_statistics {
-            preferences.send_statistics = send_statistics;
+            candidate.send_statistics = send_statistics;
         }
         if let Some(skipped) = patch.skipped_version {
-            preferences.skipped_version = (!skipped.is_empty()).then_some(skipped);
+            candidate.skipped_version = (!skipped.is_empty()).then_some(skipped);
         }
-        save_preferences(&manager.preferences_path, &preferences)
+        save_preferences(&manager.preferences_path, &candidate)
             .map_err(|error| format!("Failed to save update preferences: {error}"))?;
-        preferences.effective_channel(build) != before
+        let changed = candidate.effective_channel(build) != before;
+        *preferences = candidate;
+        changed
     };
 
     // A result from the old channel's feed must not be installed after switching, and a
@@ -1074,6 +1281,109 @@ mod tests {
             Verdict::Refused { reason, .. } => reason,
             other => panic!("expected a refusal, got {other:?}"),
         }
+    }
+
+    // --- signed release manifest (design D12) --------------------------------
+    // Fixtures are signed by the real `tauri signer sign`:
+    //   a: nightly 0.1.11-nightly.20261111100000, qmtcode 0.6.0-nightly.20261111054629, signed for it
+    //   b: stable 0.1.11, qmtcode 0.6.0, signed for it
+    //   c: same payload as a, signed WITHOUT an app version
+    //   d: payload with another `type`, signed for the version
+    //   e: same payload as a, signed for version 0.1.9
+    const NIGHTLY: &str = "0.1.11-nightly.20261111100000";
+
+    fn fixtures() -> serde_json::Value {
+        serde_json::from_str(include_str!("../test-fixtures/release-manifest.json")).unwrap()
+    }
+
+    fn feed_for(case: &str) -> (serde_json::Value, String) {
+        let f = fixtures();
+        let c = &f["cases"][case];
+        (
+            serde_json::json!({
+                "version": "ignored",
+                "qmtcode_version": "9.9.9",
+                "release_manifest": c["release_manifest"],
+                "release_manifest_signature": c["release_manifest_signature"],
+            }),
+            f["pubkey"].as_str().unwrap().to_string(),
+        )
+    }
+
+    #[test]
+    fn verified_manifest_supplies_the_gate_inputs() {
+        let (feed, key) = feed_for("a");
+        let verified = verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).unwrap();
+        // The raw feed claims qmtcode 9.9.9; only the signed value counts.
+        assert_eq!(verified.qmtcode_version, "0.6.0-nightly.20261111054629");
+        assert_eq!(verified.version, NIGHTLY);
+
+        let (feed, key) = feed_for("b");
+        let verified = verify_manifest(&feed, &key, UpdateChannel::Stable, "0.1.11").unwrap();
+        assert_eq!(verified.qmtcode_version, "0.6.0");
+    }
+
+    #[test]
+    fn tampered_or_unsigned_manifests_are_rejected() {
+        let (mut feed, key) = feed_for("a");
+        // A feed that swaps in a different qmtcode keeps the old signature.
+        let forged = r#"{"type":"querymt-desktop-release-manifest/v1","version":"0.1.11-nightly.20261111100000","qmtcode_version":"0.9.0"}"#;
+        {
+            use base64::Engine;
+            feed["release_manifest"] = base64::engine::general_purpose::STANDARD
+                .encode(forged)
+                .into();
+        }
+        let err = verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).unwrap_err();
+        assert!(err.contains("does not verify"), "{err}");
+
+        let (mut feed, key) = feed_for("a");
+        feed.as_object_mut().unwrap().remove("release_manifest");
+        assert!(verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).is_err());
+        let (mut feed, key) = feed_for("a");
+        feed.as_object_mut()
+            .unwrap()
+            .remove("release_manifest_signature");
+        assert!(verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).is_err());
+    }
+
+    #[test]
+    fn manifest_signed_by_another_key_is_rejected() {
+        let (feed, _) = feed_for("a");
+        // The production updater key, not the fixture key.
+        let other = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYxMkNFNTAzRTcwMjM2RjMKUldUek5nTG5BK1VzWVVyUFViUDFnNHFVM3BuN2pybEMwMFVkakc4WGdCcjdLV3hkbUl3cVV3dEIK";
+        assert!(verify_manifest(&feed, other, UpdateChannel::Nightly, NIGHTLY).is_err());
+    }
+
+    #[test]
+    fn manifest_must_be_signed_for_exactly_the_offered_version() {
+        // Signed for 0.1.9 while the feed offers 0.1.11-nightly: an old manifest replayed.
+        let (feed, key) = feed_for("e");
+        let err = verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).unwrap_err();
+        assert!(err.contains("not the offered"), "{err}");
+
+        // Signature without an app version.
+        let (feed, key) = feed_for("c");
+        let err = verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).unwrap_err();
+        assert!(err.contains("carries no version"), "{err}");
+
+        // Valid manifest, but the feed announces another version.
+        let (feed, key) = feed_for("a");
+        assert!(verify_manifest(&feed, &key, UpdateChannel::Nightly, "0.1.12").is_err());
+    }
+
+    #[test]
+    fn manifest_must_match_type_and_channel() {
+        let (feed, key) = feed_for("d");
+        let err = verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).unwrap_err();
+        assert!(err.contains("unexpected release manifest type"), "{err}");
+
+        // A nightly manifest is never accepted for a stable user, and vice versa.
+        let (feed, key) = feed_for("a");
+        let err = verify_manifest(&feed, &key, UpdateChannel::Stable, NIGHTLY).unwrap_err();
+        assert!(err.contains("channel"), "{err}");
+        let (feed, key) = feed_for("b");
+        assert!(verify_manifest(&feed, &key, UpdateChannel::Nightly, "0.1.11").is_err());
     }
 
     // --- channel -> endpoint ------------------------------------------------
@@ -1508,7 +1818,9 @@ mod tests {
             ..Default::default()
         };
         save_preferences(&path, &prefs).unwrap();
-        assert!(fs::read_to_string(&path).unwrap().contains("sendStatistics"));
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("sendStatistics"));
         let loaded = load_preferences(&path);
         assert!(!loaded.send_statistics);
         assert_eq!(loaded, prefs);

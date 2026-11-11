@@ -5,7 +5,18 @@
 //     --dist dist --version-name <vX.Y.Z|nightly> --version <semver> \
 //     --base-url <download url prefix> --qmtcode-version <semver> \
 //     --pubkey-from src-tauri/tauri.conf.json --out dist/latest.json \
+//     --manifest-signature manifest.json.sig \
 //     [--notes-file notes.md] [--pub-date <RFC 3339>] [--verify-pubkey <base64>]
+//
+//   node scripts/release/updater-feed.mjs --write-manifest manifest.json \
+//     --version <semver> --qmtcode-version <semver>
+//
+// The feed also carries a signed release manifest (design D12): the exact bytes of
+// `{type, version, qmtcode_version}`, base64 encoded, plus a signature made with the
+// updater key (`tauri signer sign --app-version <version> manifest.json`). Apps read
+// the qmtcode version only from there, because the rest of the feed is untrusted.
+// `--write-manifest` writes those bytes; sign them, then pass the .sig as
+// --manifest-signature. The signature is verified before the feed is written.
 //
 // Signatures are verified against the key in --pubkey-from (the key the build
 // embeds). During a key rotation the transition release embeds the NEW key but
@@ -70,20 +81,42 @@ export function assertSignedVersion(signed, announced) {
   if (!same) throw new Error(`signature is bound to version ${signed}, not the announced ${announced}`);
 }
 
+/** `type` of the signed release manifest; the app refuses any other value. */
+export const MANIFEST_TYPE = 'querymt-desktop-release-manifest/v1';
+
+/**
+ * The exact bytes that are signed. Deterministic, so the feed step can rebuild them
+ * instead of trusting a file that was passed around between steps.
+ */
+export function buildManifestPayload({ version, qmtcodeVersion }) {
+  for (const [label, value] of [['version', version], ['qmtcode version', qmtcodeVersion]]) {
+    try {
+      parseSemver(value);
+    } catch {
+      throw new Error(`${label} '${value}' is not a valid semver version`);
+    }
+  }
+  return Buffer.from(JSON.stringify({ type: MANIFEST_TYPE, version, qmtcode_version: qmtcodeVersion }));
+}
+
 /**
  * Pure feed construction.
+ *
+ * `manifestSignature` is the base64 content of the `.sig` for `buildManifestPayload`.
+ * It must verify against `publicKeyBase64` and be bound to `version`.
  *
  * @param {object} options
  * @param {Map<string, Buffer>|Record<string, Buffer>} options.files  file name -> content for everything in dist/
  * @param {string} options.versionName  `vX.Y.Z` or `nightly`
  * @param {string} options.version      desktop semver (without `v`)
  * @param {string} options.qmtcodeVersion
+ * @param {string} options.manifestSignature
  * @param {string} options.baseUrl
  * @param {string} options.publicKeyBase64
  * @param {string} [options.notes]
  * @param {string} [options.pubDate]
  */
-export function buildFeed({ files, versionName, version, qmtcodeVersion, baseUrl, publicKeyBase64, notes = '', pubDate }) {
+export function buildFeed({ files, versionName, version, qmtcodeVersion, manifestSignature, baseUrl, publicKeyBase64, notes = '', pubDate }) {
   const errors = [];
   const fileMap = files instanceof Map ? files : new Map(Object.entries(files));
 
@@ -98,6 +131,28 @@ export function buildFeed({ files, versionName, version, qmtcodeVersion, baseUrl
     errors.push(`version name '${versionName}' must be 'nightly' or 'v${version}'`);
   }
   if (!/^https:\/\//.test(baseUrl ?? '')) errors.push(`base URL '${baseUrl}' must be an https URL`);
+
+  // The channel is not signed separately: it follows from the signed version, which the
+  // app checks against the selected channel.
+  const isNightlyVersion = /-nightly\./.test(version ?? '');
+  if ((versionName === 'nightly') !== isNightlyVersion) {
+    errors.push(`version '${version}' does not belong to release '${versionName}'`);
+  }
+
+  let manifest = null;
+  try {
+    manifest = buildManifestPayload({ version, qmtcodeVersion });
+    if (!manifestSignature?.trim()) throw new Error('release manifest signature is missing');
+    const { signedVersion } = verifyTauriSignature({
+      data: manifest,
+      signatureBase64: manifestSignature.trim(),
+      publicKeyBase64
+    });
+    assertSignedVersion(signedVersion, version);
+  } catch (error) {
+    manifest = null;
+    errors.push(`release manifest: ${error.message}`);
+  }
 
   const platforms = {};
   for (const [key, name] of Object.entries(expectedPlatforms(versionName))) {
@@ -133,6 +188,8 @@ export function buildFeed({ files, versionName, version, qmtcodeVersion, baseUrl
     notes,
     pub_date: pubDate ?? new Date().toISOString(),
     qmtcode_version: qmtcodeVersion,
+    release_manifest: manifest.toString('base64'),
+    release_manifest_signature: manifestSignature.trim(),
     platforms
   };
 }
@@ -147,8 +204,11 @@ function parseArgs(argv) {
     if (value === undefined) throw new Error(`${arg} needs a value`);
     args[arg.slice(2)] = value;
   }
-  for (const required of ['dist', 'version-name', 'version', 'base-url', 'qmtcode-version', 'pubkey-from', 'out']) {
-    if (!args[required]) throw new Error(`missing --${required}`);
+  const required = args['write-manifest']
+    ? ['version', 'qmtcode-version']
+    : ['dist', 'version-name', 'version', 'base-url', 'qmtcode-version', 'manifest-signature', 'pubkey-from', 'out'];
+  for (const name of required) {
+    if (!args[name]) throw new Error(`missing --${name}`);
   }
   return args;
 }
@@ -156,6 +216,11 @@ function parseArgs(argv) {
 /** CLI entry: reads `dist/`, builds the feed and writes it to `--out`. */
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args['write-manifest']) {
+    writeFileSync(args['write-manifest'], buildManifestPayload({ version: args.version, qmtcodeVersion: args['qmtcode-version'] }));
+    console.log(`Wrote ${args['write-manifest']}: sign it with \`tauri signer sign --app-version ${args.version}\``);
+    return;
+  }
   const files = new Map();
   for (const name of readdirSync(args.dist)) files.set(name, readFileSync(join(args.dist, name)));
 
@@ -172,6 +237,7 @@ function main() {
     versionName: args['version-name'],
     version: args.version,
     qmtcodeVersion: args['qmtcode-version'],
+    manifestSignature: readFileSync(args['manifest-signature'], 'utf8'),
     baseUrl: args['base-url'],
     publicKeyBase64: verifyKey || publicKeyBase64,
     notes: args['notes-file'] ? readFileSync(args['notes-file'], 'utf8').trim() : '',

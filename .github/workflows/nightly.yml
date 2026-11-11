@@ -454,8 +454,24 @@ jobs:
           Bundled qmtcode: \`${QMTCODE_VERSION}\`
           EOF
 
-      # Fails, and publishes nothing, when any platform artifact or signature is
-      # missing or does not verify against the updater public key.
+      # The feed is untrusted by the app; the qmtcode version it reads comes from this
+      # manifest, signed with the updater key and bound to the desktop version (design D12).
+      - name: Install the Tauri CLI for signing
+        run: npm ci --ignore-scripts
+
+      - name: Sign the release manifest
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          node scripts/release/updater-feed.mjs --write-manifest manifest.json \
+            --version "$NIGHTLY_VERSION" --qmtcode-version "$QMTCODE_VERSION"
+          npx --no-install tauri signer sign --app-version "$NIGHTLY_VERSION" manifest.json
+          test -s manifest.json.sig
+
+      # Fails, and publishes nothing, when any platform artifact, signature or the
+      # release manifest is missing or does not verify against the updater public key.
       - name: Generate updater feed
         env:
           UPDATER_VERIFY_PUBKEY: ${{ vars.UPDATER_VERIFY_PUBKEY }}
@@ -474,6 +490,7 @@ jobs:
             --version "$NIGHTLY_VERSION" \
             --base-url "https://github.com/${GH_REPO}/releases/download/nightly" \
             --qmtcode-version "$QMTCODE_VERSION" \
+            --manifest-signature manifest.json.sig \
             --pubkey-from src-tauri/tauri.conf.json \
             --notes-file notes.md \
             --out artifacts/latest.json

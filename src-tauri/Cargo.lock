@@ -3752,9 +3752,11 @@ dependencies = [
 name = "querymt-desktop"
 version = "0.1.10"
 dependencies = [
+ "base64 0.23.1",
  "cef",
  "dirs 7.0.0",
  "futures-util",
+ "minisign-verify",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
