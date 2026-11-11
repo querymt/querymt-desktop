@@ -2,8 +2,9 @@
 // X.Y.Z-<prerelease> (dot-separated identifiers); build metadata is rejected
 // because the release scheme deliberately never uses it.
 
-const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?$/;
 
+/** Parses `X.Y.Z[-prerelease]`; throws on anything else, including build metadata. */
 export function parseSemver(text) {
   const match = SEMVER.exec(text);
   if (!match) throw new Error(`'${text}' is not a valid semver version`);
@@ -17,6 +18,7 @@ export function parseSemver(text) {
 
 const isNumeric = (id) => /^\d+$/.test(id);
 
+/** Compares prerelease identifier lists by semver precedence. */
 function comparePre(a, b) {
   // A version without a prerelease sorts above one with.
   if (a.length === 0 && b.length === 0) return 0;

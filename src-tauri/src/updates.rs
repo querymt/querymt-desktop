@@ -15,7 +15,7 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -36,6 +36,10 @@ const RELEASES_URL: &str = "https://github.com/querymt/querymt-desktop/releases"
 /// First automatic check after start, then every [`CHECK_INTERVAL`].
 pub const FIRST_CHECK_DELAY: Duration = Duration::from_secs(30);
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+/// Deadline for one feed request, so a hung server cannot leave a check stuck.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+/// Deadline for downloading one update package.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// Channel this build was published on (`QMT_RELEASE_CHANNEL`, default `stable`).
 const BUILD_CHANNEL: &str = env!("QMT_RELEASE_CHANNEL");
@@ -55,6 +59,7 @@ pub enum UpdateChannel {
 }
 
 impl UpdateChannel {
+    /// Maps the build-time channel name to a channel; anything but `nightly` is stable.
     pub fn from_build(value: &str) -> Self {
         if value == "nightly" {
             Self::Nightly
@@ -99,6 +104,7 @@ pub fn updater_target(os: &str, arch: &str, cef_runtime: bool) -> Option<String>
     }
 }
 
+/// The updater platform key for this build, if updates are supported.
 fn current_target() -> Option<String> {
     updater_target(
         std::env::consts::OS,
@@ -136,6 +142,7 @@ pub struct InstallProbe<'a> {
     pub appimage: bool,
 }
 
+/// Classifies the running install from the probe.
 pub fn detect_install_kind(probe: &InstallProbe<'_>) -> InstallKind {
     match probe.os {
         "macos" => {
@@ -160,6 +167,7 @@ pub fn detect_install_kind(probe: &InstallProbe<'_>) -> InstallKind {
     }
 }
 
+/// Probes the running process and classifies its install kind.
 fn current_install_kind() -> InstallKind {
     let exe = std::env::current_exe().unwrap_or_default();
     detect_install_kind(&InstallProbe {
@@ -257,6 +265,7 @@ pub struct UpdatePreferences {
 }
 
 impl Default for UpdatePreferences {
+    /// Stable channel preferences with automatic checks on.
     fn default() -> Self {
         Self {
             channel: None,
@@ -267,6 +276,7 @@ impl Default for UpdatePreferences {
 }
 
 impl UpdatePreferences {
+    /// The saved channel, or the build channel when none was chosen.
     pub fn effective_channel(&self, build: UpdateChannel) -> UpdateChannel {
         self.channel.unwrap_or(build)
     }
@@ -288,6 +298,7 @@ pub fn load_preferences(path: &Path) -> UpdatePreferences {
     }
 }
 
+/// Writes the preferences file, creating its directory.
 pub fn save_preferences(path: &Path, preferences: &UpdatePreferences) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -322,6 +333,7 @@ pub enum FailureKind {
     Other,
 }
 
+/// Maps an updater error to a user-facing failure kind.
 pub fn categorize_failure(error: &tauri_plugin_updater::Error) -> FailureKind {
     use tauri_plugin_updater::Error as E;
     match error {
@@ -354,6 +366,7 @@ pub fn failure_handling(manual: bool) -> FailureHandling {
     }
 }
 
+/// Builds the message shown for a failed check.
 fn failure_message(kind: FailureKind, detail: &str) -> String {
     match kind {
         FailureKind::Network => format!("Could not reach the update server: {detail}"),
@@ -468,9 +481,21 @@ pub struct UpdateManager {
     pending: Mutex<Option<Update>>,
     last_check: Mutex<Option<u64>>,
     checking: AtomicBool,
+    /// Bumped when the selected channel changes; a check only commits its result if the
+    /// generation it started with is still current.
+    generation: AtomicU64,
+}
+
+/// Whether an install owns the update state.
+fn is_installing(state: &UpdateState) -> bool {
+    matches!(
+        state,
+        UpdateState::Installing { .. } | UpdateState::Installed { .. }
+    )
 }
 
 impl UpdateManager {
+    /// Loads the preferences and starts idle.
     pub fn load(preferences_path: PathBuf) -> Self {
         let preferences = load_preferences(&preferences_path);
         Self {
@@ -480,9 +505,11 @@ impl UpdateManager {
             pending: Mutex::new(None),
             last_check: Mutex::new(None),
             checking: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
         }
     }
 
+    /// A snapshot of the preferences.
     fn preferences(&self) -> UpdatePreferences {
         self.preferences
             .lock()
@@ -490,16 +517,105 @@ impl UpdateManager {
             .clone()
     }
 
+    /// A snapshot of the update state.
     fn state(&self) -> UpdateState {
         self.state.lock().expect("update state lock").clone()
     }
 
+    /// Stores a state and notifies the webview.
     fn set_state(&self, app: &AppHandle, state: UpdateState) -> UpdateState {
         *self.state.lock().expect("update state lock") = state.clone();
         let _ = app.emit(STATE_EVENT, &state);
         state
     }
 
+    /// Moves to `Checking` unless an install owns the state. Returns whether it did.
+    fn begin_check(&self, app: &AppHandle) -> bool {
+        {
+            let mut state = self.state.lock().expect("update state lock");
+            if is_installing(&state) {
+                return false;
+            }
+            *state = UpdateState::Checking;
+        }
+        let _ = app.emit(STATE_EVENT, &UpdateState::Checking);
+        true
+    }
+
+    /// Records a check outcome and its pending update atomically. Returns `None`, and
+    /// changes nothing, when the channel changed since the check started or an install
+    /// has taken over the state.
+    fn commit_check(
+        &self,
+        app: &AppHandle,
+        generation: u64,
+        state: UpdateState,
+        pending: Option<Update>,
+    ) -> Option<UpdateState> {
+        {
+            let mut current = self.state.lock().expect("update state lock");
+            if self.generation.load(Ordering::SeqCst) != generation || is_installing(&current) {
+                return None;
+            }
+            *self.pending.lock().expect("pending update lock") = pending;
+            *current = state.clone();
+        }
+        let _ = app.emit(STATE_EVENT, &state);
+        Some(state)
+    }
+
+    /// Invalidates running checks and any pending update after a channel switch,
+    /// unless an install is already in progress.
+    fn reset_for_channel_change(&self, app: &AppHandle) {
+        let reset = {
+            let mut current = self.state.lock().expect("update state lock");
+            self.generation.fetch_add(1, Ordering::SeqCst);
+            if is_installing(&current) {
+                false
+            } else {
+                *self.pending.lock().expect("pending update lock") = None;
+                *current = UpdateState::Idle;
+                true
+            }
+        };
+        if reset {
+            let _ = app.emit(STATE_EVENT, &UpdateState::Idle);
+        }
+    }
+
+    /// Validates the state, takes the pending update and marks the install as started,
+    /// all under the state lock, so concurrent installs cannot claim the same update.
+    fn claim_install(&self, app: &AppHandle) -> Result<(Update, String), String> {
+        const NONE: &str = "There is no update to install.";
+        let (update, version) = {
+            let mut state = self.state.lock().expect("update state lock");
+            let UpdateState::Available {
+                version,
+                can_install: true,
+                ..
+            } = &*state
+            else {
+                return Err(NONE.into());
+            };
+            let version = version.clone();
+            let Some(update) = self.pending.lock().expect("pending update lock").take() else {
+                return Err(NONE.into());
+            };
+            *state = UpdateState::Installing {
+                version: version.clone(),
+            };
+            (update, version)
+        };
+        let _ = app.emit(
+            STATE_EVENT,
+            &UpdateState::Installing {
+                version: version.clone(),
+            },
+        );
+        Ok((update, version))
+    }
+
+    /// The full status shown in Settings.
     fn status(&self, app: &AppHandle) -> UpdatesStatus {
         let preferences = self.preferences();
         UpdatesStatus {
@@ -516,6 +632,7 @@ impl UpdateManager {
     }
 }
 
+/// Seconds since the Unix epoch.
 fn now_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -523,8 +640,14 @@ fn now_seconds() -> u64 {
         .unwrap_or_default()
 }
 
+/// Stops the managed agents and refuses new launches until [`resume_sidecars`].
 fn stop_sidecars(app: &AppHandle) {
-    app.state::<AcpAgentManager>().shutdown_all();
+    app.state::<AcpAgentManager>().begin_maintenance();
+}
+
+/// Allows agent launches again after an update attempt that did not replace the app.
+fn resume_sidecars(app: &AppHandle) {
+    app.state::<AcpAgentManager>().end_maintenance();
 }
 
 /// Runs one check against the selected channel's feed and records the outcome.
@@ -533,11 +656,11 @@ fn stop_sidecars(app: &AppHandle) {
 /// show it; a failed *automatic* check is only logged and recorded as status.
 pub async fn run_check(app: &AppHandle, manual: bool) -> Result<UpdateState, String> {
     let manager = app.state::<UpdateManager>();
-    if matches!(
-        manager.state(),
-        UpdateState::Installing { .. } | UpdateState::Installed { .. }
-    ) || manager.checking.swap(true, Ordering::SeqCst)
-    {
+    if manager.checking.swap(true, Ordering::SeqCst) {
+        return Ok(manager.state());
+    }
+    if !manager.begin_check(app) {
+        manager.checking.store(false, Ordering::SeqCst);
         return Ok(manager.state());
     }
     let result = check_inner(app, &manager, manual).await;
@@ -546,29 +669,42 @@ pub async fn run_check(app: &AppHandle, manual: bool) -> Result<UpdateState, Str
     result
 }
 
+/// One check against the selected channel; commits its result only if the channel is unchanged.
 async fn check_inner(
     app: &AppHandle,
     manager: &UpdateManager,
     manual: bool,
 ) -> Result<UpdateState, String> {
+    // Read before the preferences: a channel switch saves them before bumping the
+    // generation, so a stale generation is the only way to see stale preferences.
+    let generation = manager.generation.load(Ordering::SeqCst);
     let preferences = manager.preferences();
     let channel = preferences.effective_channel(UpdateChannel::from_build(BUILD_CHANNEL));
-    manager.set_state(app, UpdateState::Checking);
+
+    // Commits the outcome unless the channel changed or an install took over meanwhile.
+    let finish = |state: UpdateState, pending: Option<Update>| -> UpdateState {
+        manager
+            .commit_check(app, generation, state, pending)
+            .unwrap_or_else(|| manager.state())
+    };
 
     let fail = |kind: FailureKind, detail: String| -> Result<UpdateState, String> {
         let message = failure_message(kind, &detail);
         eprintln!("Update check failed ({kind:?}): {detail}");
-        manager.set_state(
+        let committed = manager.commit_check(
             app,
+            generation,
             UpdateState::Error {
                 message: message.clone(),
                 failure: kind,
                 manual,
             },
+            None,
         );
-        match failure_handling(manual) {
-            FailureHandling::Show => Err(message),
-            FailureHandling::LogOnly => Ok(manager.state()),
+        match (committed, failure_handling(manual)) {
+            (None, _) => Ok(manager.state()),
+            (Some(_), FailureHandling::Show) => Err(message),
+            (Some(_), FailureHandling::LogOnly) => Ok(manager.state()),
         }
     };
 
@@ -589,6 +725,7 @@ async fn check_inner(
         .updater_builder()
         .endpoints(vec![endpoint])
         .map_err(|e| e.to_string())?
+        .timeout(CHECK_TIMEOUT)
         .target(target)
         .version_comparator(move |current, release| {
             *record.lock().expect("observed version lock") = Some(release.version.to_string());
@@ -613,9 +750,11 @@ async fn check_inner(
     };
 
     let Some(update) = update else {
-        *manager.pending.lock().expect("pending update lock") = None;
         let offered = observed.lock().expect("observed version lock").clone();
-        return Ok(manager.set_state(app, classify_not_newer(&running, offered.as_deref())));
+        return Ok(finish(
+            classify_not_newer(&running, offered.as_deref()),
+            None,
+        ));
     };
 
     let feed_qmtcode = update
@@ -647,24 +786,20 @@ async fn check_inner(
                 release_url: release_url(channel, &update.version),
                 skipped,
             };
-            *manager.pending.lock().expect("pending update lock") = Some(update);
-            Ok(manager.set_state(app, state))
+            Ok(finish(state, Some(update)))
         }
-        Verdict::NotNewer => {
-            *manager.pending.lock().expect("pending update lock") = None;
-            Ok(manager.set_state(app, classify_not_newer(&running, Some(&update.version))))
-        }
-        Verdict::Refused { reason, message } => {
-            *manager.pending.lock().expect("pending update lock") = None;
-            Ok(manager.set_state(
-                app,
-                UpdateState::Refused {
-                    version: update.version.clone(),
-                    reason,
-                    message,
-                },
-            ))
-        }
+        Verdict::NotNewer => Ok(finish(
+            classify_not_newer(&running, Some(&update.version)),
+            None,
+        )),
+        Verdict::Refused { reason, message } => Ok(finish(
+            UpdateState::Refused {
+                version: update.version.clone(),
+                reason,
+                message,
+            },
+            None,
+        )),
     }
 }
 
@@ -717,15 +852,10 @@ pub fn updates_set_preferences(
         preferences.effective_channel(build) != before
     };
 
-    // A result from the old channel's feed must not be installed after switching.
-    if changed_channel
-        && !matches!(
-            manager.state(),
-            UpdateState::Installing { .. } | UpdateState::Installed { .. }
-        )
-    {
-        *manager.pending.lock().expect("pending update lock") = None;
-        manager.set_state(&app, UpdateState::Idle);
+    // A result from the old channel's feed must not be installed after switching, and a
+    // check still running for it must not publish its result.
+    if changed_channel {
+        manager.reset_for_channel_change(&app);
     }
     Ok(manager.status(&app))
 }
@@ -748,28 +878,8 @@ pub async fn updates_install(
     manager: State<'_, UpdateManager>,
     on_event: Channel<InstallProgress>,
 ) -> Result<(), String> {
-    let (update, version) = {
-        let state = manager.state();
-        let UpdateState::Available {
-            version,
-            can_install: true,
-            ..
-        } = state
-        else {
-            return Err("There is no update to install.".into());
-        };
-        let pending = manager.pending.lock().expect("pending update lock").clone();
-        let Some(update) = pending else {
-            return Err("There is no update to install.".into());
-        };
-        (update, version)
-    };
-    manager.set_state(
-        &app,
-        UpdateState::Installing {
-            version: version.clone(),
-        },
-    );
+    let (mut update, version) = manager.claim_install(&app)?;
+    update.timeout = Some(DOWNLOAD_TIMEOUT);
 
     let fail = |message: String| {
         *manager.pending.lock().expect("pending update lock") = None;
@@ -812,12 +922,16 @@ pub async fn updates_install(
         Err(error) => return fail(format!("Update download failed: {error}")),
     };
 
-    // No file may be replaced while the sidecar still runs.
+    // No file may be replaced while a sidecar runs or can start: agent launches stay
+    // refused from here until the install has finished.
     stop_sidecars(&app);
     let installed = tauri::async_runtime::spawn_blocking(move || update.install(bytes))
         .await
         .map_err(|error| error.to_string())
         .and_then(|result| result.map_err(|error| format!("Update install failed: {error}")));
+    // The guard covers only the file replacement; agents may launch again once it is done
+    // (a user who postpones the restart keeps a working app).
+    resume_sidecars(&app);
     if let Err(message) = installed {
         return fail(message);
     }

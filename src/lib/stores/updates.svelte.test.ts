@@ -194,4 +194,56 @@ describe('UpdatesStore', () => {
     await store.restart();
     expect(invoke).toHaveBeenLastCalledWith('updates_restart');
   });
+
+  it('reopen overrides a saved skip for the reviewed version', async () => {
+    invoke.mockResolvedValueOnce(status({ skippedVersion: '0.1.11', state: available({ skipped: true }) }));
+    const store = await loadStore();
+    await store.initialize();
+    expect(store.prompt).toBeNull();
+
+    store.reopen();
+    expect(store.prompt?.kind).toBe('available');
+  });
+
+  it('a manual check that finds the postponed version shows the prompt again', async () => {
+    invoke.mockResolvedValueOnce(status({ state: available() }));
+    const store = await loadStore();
+    await store.initialize();
+    store.later('0.1.11');
+    expect(store.prompt).toBeNull();
+
+    invoke.mockResolvedValueOnce(status({ state: available() }));
+    await store.checkNow();
+    expect(store.dismissedVersion).toBeNull();
+    expect(store.prompt?.kind).toBe('available');
+  });
+
+  it('a manual check keeps the dismissal for a different version', async () => {
+    invoke.mockResolvedValueOnce(status({ state: available() }));
+    const store = await loadStore();
+    await store.initialize();
+    store.later('0.1.10');
+
+    invoke.mockResolvedValueOnce(status({ state: available() }));
+    await store.checkNow();
+    expect(store.dismissedVersion).toBe('0.1.10');
+  });
+
+  it('keeps a failed install visible, but not a failed automatic check', async () => {
+    invoke.mockResolvedValueOnce(status({ state: available() }));
+    const store = await loadStore();
+    await store.initialize();
+
+    const error: UpdateState = { kind: 'error', message: 'boom', failure: 'other', manual: true };
+    emitState?.(error);
+    expect(store.prompt).toBeNull();
+
+    invoke.mockRejectedValueOnce('Update install failed: disk full');
+    await store.install();
+    expect(store.installError).toBe('Update install failed: disk full');
+    expect(store.prompt).toEqual(error);
+
+    store.dismissInstallError();
+    expect(store.prompt).toBeNull();
+  });
 });

@@ -52,7 +52,9 @@ The app checks for updates in the background (Settings → Updates) and never do
 - **qmtcode gate:** an update that would downgrade the bundled qmtcode is refused, so a session database is never opened by an older qmtcode. A stable desktop release fails CI if its bundled qmtcode is older than the one in the current nightly.
 - **Install kinds:** macOS app, Windows NSIS and Linux AppImage update in place. `.deb` and the CEF `.tar.gz` only show a link to the release page.
 - **Signing:** every update is verified against the public key in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`). The private key and its password live only in the `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repository secrets, plus one backup in the maintainers' password manager. Losing the key means existing installs can no longer update and must be reinstalled.
-- **Key rotation:** release one build that embeds the new public key, signed with the old key. Once users have updated, switch the secrets to the new key.
+- **Key rotation:** installed apps only accept updates signed with the key they embed, so rotate in two steps.
+  1. Transition release: put the new public key in `tauri.conf.json`, keep the old private key in the `TAURI_SIGNING_PRIVATE_KEY` secrets, and set the repository variable `UPDATER_VERIFY_PUBKEY` to the *old* public key. The feed builder (`updater-feed.mjs --verify-pubkey`) then checks the artifacts against the old key that signed them, while the build embeds the new one.
+  2. Once users have updated, switch the secrets to the new private key and delete `UPDATER_VERIFY_PUBKEY`; normal releases verify against the embedded key again.
 
 ## Development
 
@@ -91,6 +93,14 @@ npm run tauri:cef -- build
 ```
 
 CEF is experimental; Wry remains the stable fallback.
+
+`bundle.createUpdaterArtifacts` is on, so a build without `TAURI_SIGNING_PRIVATE_KEY` fails when it tries to sign. For a local package that you do not publish, skip signing:
+
+```bash
+npm run tauri -- build --no-sign
+```
+
+Published builds are always signed; CI fails when the signing key is missing.
 
 Desktop icons are generated from `static/favicon.svg` with `npm run tauri -- icon static/favicon.svg`.
 Keep the desktop PNG, ICO, and ICNS outputs in `src-tauri/icons`; mobile and Appx icons are not used.

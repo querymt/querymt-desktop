@@ -61,10 +61,15 @@ export function resolveQmtcode({ which, release, manifest, targets = QMTCODE_TAR
     throw new Error(`release tag ${release.tag_name} does not match release.json version ${manifest.version}`);
   }
 
+  // Stable asset labels must carry the manifest version; nightly labels are
+  // `nightly` or the legacy `nightly-<short sha>` form.
+  const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const label = which === 'latest' ? `v${escape(manifest.version)}` : 'nightly(?:-[0-9a-f]{7,40})?';
+
   const assets = {};
   const missing = [];
   for (const { target, ext } of targets) {
-    const pattern = new RegExp(`^qmtcode-[^/]+-${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.${ext.replace('.', '\\.')}$`);
+    const pattern = new RegExp(`^qmtcode-${label}-${escape(target)}\\.${escape(ext)}$`);
     const matches = (release.assets ?? []).filter((asset) => pattern.test(asset.name));
     if (matches.length !== 1) {
       missing.push(`${target} (${matches.length} matches)`);
@@ -85,12 +90,14 @@ export function resolveQmtcode({ which, release, manifest, targets = QMTCODE_TAR
   };
 }
 
+/** GETs a URL and returns its JSON body; throws on a non-2xx response. */
 async function fetchJson(fetchImpl, url, headers) {
   const response = await fetchImpl(url, { headers, redirect: 'follow' });
   if (!response.ok) throw new Error(`GET ${url} failed: HTTP ${response.status}`);
   return response.json();
 }
 
+/** Fetches the querymt release and its release.json, then resolves the bundled qmtcode. */
 export async function fetchAndResolve({ which, repo, token, fetchImpl = fetch }) {
   const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'querymt-desktop-release' };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -106,6 +113,7 @@ export async function fetchAndResolve({ which, repo, token, fetchImpl = fetch })
   return resolveQmtcode({ which, release, manifest });
 }
 
+/** Parses the command line options. */
 function parseArgs(argv) {
   const args = { which: null, repo: 'querymt/querymt', githubOutput: false };
   for (let i = 0; i < argv.length; i++) {
@@ -120,6 +128,7 @@ function parseArgs(argv) {
   return args;
 }
 
+/** CLI entry: prints the resolved release as JSON and optionally writes GITHUB_OUTPUT. */
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const result = await fetchAndResolve({ which: args.which, repo: args.repo, token: process.env.GITHUB_TOKEN });

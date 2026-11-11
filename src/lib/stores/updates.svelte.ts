@@ -17,6 +17,7 @@ export interface DownloadProgress {
   total: number | null;
 }
 
+/** Extracts a displayable message from a thrown value. */
 function errorMessage(error: unknown, fallback: string): string {
   if (typeof error === 'string' && error) return error;
   if (error instanceof Error && error.message) return error.message;
@@ -31,21 +32,31 @@ export class UpdatesStore {
   checking = $state(false);
   /** Version the user chose "Later" for; the prompt stays hidden for it until the app restarts. */
   dismissedVersion = $state<string | null>(null);
+  /** Version the user explicitly asked to review; overrides a saved skip for that version. */
+  reviewVersion = $state<string | null>(null);
+  /** Message of a failed user-initiated install; keeps the prompt visible so it can be retried. */
+  installError = $state<string | null>(null);
   supported = $state(false);
   initialized = $state(false);
 
   private unlisten: (() => void) | null = null;
 
+  /** The current update state, `idle` before the first status arrives. */
   get state(): UpdateState {
     return this.status?.state ?? { kind: 'idle' };
   }
 
-  /** The non-modal prompt: a pending update the user has not skipped or postponed, or a finished install. */
+  /**
+   * The non-modal prompt: a pending update the user has not skipped or postponed, a finished
+   * install, or the failure of an install the user started. Failed automatic checks never prompt.
+   */
   get prompt(): UpdateState | null {
     const state = this.state;
     if (state.kind === 'available') {
-      return state.skipped || this.dismissedVersion === state.version ? null : state;
+      if (this.dismissedVersion === state.version) return null;
+      return state.skipped && this.reviewVersion !== state.version ? null : state;
     }
+    if (state.kind === 'error') return this.installError ? state : null;
     if (state.kind === 'installing') return state;
     if (state.kind === 'installed') {
       return this.dismissedVersion === state.version ? null : state;
@@ -53,6 +64,7 @@ export class UpdatesStore {
     return null;
   }
 
+  /** Loads the status and subscribes to state events; a no-op outside supported Tauri builds. */
   async initialize(): Promise<void> {
     if (this.initialized || !platformCapabilities.selfUpdate || !isTauriRuntime()) return;
     this.initialized = true;
@@ -65,12 +77,14 @@ export class UpdatesStore {
     }
   }
 
+  /** Unsubscribes from state events. */
   dispose(): void {
     this.unlisten?.();
     this.unlisten = null;
     this.initialized = false;
   }
 
+  /** Applies a state pushed by the backend. */
   private applyState(state: UpdateState): void {
     if (this.status) this.status = { ...this.status, state };
   }
@@ -84,10 +98,12 @@ export class UpdatesStore {
     }
   }
 
+  /** Switches the update channel. */
   setChannel(channel: 'stable' | 'nightly'): Promise<void> {
     return this.savePreferences({ channel });
   }
 
+  /** Turns background update checks on or off. */
   setAutoCheck(autoCheck: boolean): Promise<void> {
     return this.savePreferences({ autoCheck });
   }
@@ -98,9 +114,17 @@ export class UpdatesStore {
     return this.savePreferences({ skippedVersion: version });
   }
 
-  /** Shows the prompt again, e.g. from Settings after "Later". */
+  /** Shows the prompt again, e.g. from Settings after "Later" or "Skip", without another check. */
   reopen(): void {
     this.dismissedVersion = null;
+    const state = this.state;
+    this.reviewVersion = state.kind === 'available' ? state.version : null;
+  }
+
+  /** Hides the failure of a user-initiated install. */
+  dismissInstallError(): void {
+    this.installError = null;
+    this.actionError = null;
   }
 
   /** Hides the prompt until the next launch without touching the saved preferences. */
@@ -108,12 +132,19 @@ export class UpdatesStore {
     this.dismissedVersion = version;
   }
 
+  /** Runs a user-initiated check. */
   async checkNow(): Promise<void> {
     if (this.checking) return;
     this.checking = true;
     this.actionError = null;
     try {
       this.status = await checkForUpdates(true);
+      this.installError = null;
+      // An explicit check surfaces the update again, even if the user chose "Later" for it.
+      const state = this.status.state;
+      if (state.kind === 'available' && state.version === this.dismissedVersion) {
+        this.dismissedVersion = null;
+      }
     } catch (error) {
       this.actionError = errorMessage(error, 'The update check failed.');
     } finally {
@@ -121,8 +152,10 @@ export class UpdatesStore {
     }
   }
 
+  /** Downloads and installs the pending update, reporting progress. */
   async install(): Promise<void> {
     this.actionError = null;
+    this.installError = null;
     this.progress = { received: 0, total: null };
     const onEvent = (event: InstallEvent) => {
       const current = this.progress ?? { received: 0, total: null };
@@ -135,11 +168,13 @@ export class UpdatesStore {
       await installUpdate(onEvent);
     } catch (error) {
       this.actionError = errorMessage(error, 'The update could not be installed.');
+      this.installError = this.actionError;
     } finally {
       this.progress = null;
     }
   }
 
+  /** Restarts into the installed version. */
   async restart(): Promise<void> {
     this.actionError = null;
     try {

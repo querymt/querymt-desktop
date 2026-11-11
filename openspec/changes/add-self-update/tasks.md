@@ -5,7 +5,7 @@
 - [x] 1.1 Add a nightly version step to querymt `nightly.yml` using the D2 algorithm (workspace `[workspace.package].version`, next patch if tag `v<base>` exists, `-nightly.<UTC YYYYMMDDHHMMSS>`). Expose it as output `qmt_version` and set the asset label `version_name=nightly`. Verify with a table test covering `0.6.0` (no tag → `0.6.0-nightly.*`) and `0.6.0` with tag `v0.6.0` (→ `0.6.1-nightly.*`).
 - [x] 1.2 Split `build.yml` inputs into `version_name` (asset label) and `qmt_version` (embedded `QMT_VERSION`). Update `release.yml` to pass `vX.Y.Z` for both. Verify that a nightly run's `qmtcode --version` prints `0.6.0-nightly.<ts>` and its assets are named `qmtcode-nightly-<target>.*`.
 - [ ] 1.3 Upload `release.json` (`version`, `channel`, `commit`, `published_at`) from both querymt `nightly.yml` and `release.yml`. Verify it is downloadable from `releases/download/nightly/release.json` and `releases/latest/download/release.json`.
-- [x] 1.4 Add the stable gate to querymt `release.yml`: fail if the tag doesn't match the workspace version, or if `semver(tag) > base(nightly)` and `git merge-base --is-ancestor <nightly.commit> <tag commit>` fails. Verify with dry runs: `v0.6.0` on an old commit fails, `v0.6.0` on a descendant passes, `v0.5.3` passes.
+- [x] 1.4 Add the stable gate to querymt `release.yml`: fail if the tag doesn't match the workspace version, or if `semver(tag) >= base(nightly)` and `git merge-base --is-ancestor <nightly.commit> <tag commit>` fails. Verify with dry runs: `v0.6.0` on an old commit fails, `v0.6.0` on a descendant passes, `v0.5.3` passes.
 - [ ] 1.5 Replace the delete-then-create nightly publish with the staged draft flow (`nightly-staging` draft → delete old → retag → publish). Verify that a forced upload failure leaves the previous `nightly` release in place.
 - [ ] 1.6 Add `client_payload[querymt_version]` to the `qmtcode-nightly` dispatch. Verify that the desktop nightly run logs the received version.
 - [x] 1.7 Document the nightly/stable versioning and the stable gate in the querymt release docs or README. Verify by reviewing the merged doc.
@@ -19,13 +19,13 @@
 
 - [x] 3.1 Generate the updater keypair (`npm run tauri signer generate`), store the private key and password as `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repo secrets plus a backup in a password manager, and put the pubkey in `tauri.conf.json` `plugins.updater.pubkey`. Verify that `npm run tauri:wry build` with the key produces `.sig` files.
 - [x] 3.2 Set `bundle.createUpdaterArtifacts: true`. Verify that a local macOS build emits `.app.tar.gz` and `.app.tar.gz.sig`.
-- [ ] 3.3 Sign the CEF AppImage in `scripts/cef/package.sh` with `tauri signer sign` when the key is set, and fail when `REQUIRE_UPDATER_SIGNATURE=1` and no key is present. Verify the `.sig` is next to the AppImage in `bundle/appimage/`.
+- [x] 3.3 Sign the CEF AppImage in `scripts/cef/package.sh` with `tauri signer sign` when the key is set, and fail when `REQUIRE_UPDATER_SIGNATURE=1` and no key is present. Verify the `.sig` is next to the AppImage in `bundle/appimage/`.
 
 ## 4. Desktop CI: shared collect and feed
 
 - [x] 4.1 Add `scripts/release/collect-bundles.sh` (D5), which copies installers, updater artifacts and `.sig` files for Wry and CEF into `dist/` with `<prefix>-<version_name>-<suffix><ext>` names. Verify by running it on a local build tree.
 - [x] 4.2 Add `scripts/release/updater-feed.mjs` (D4), which builds `latest.json` from `dist/`, a base download URL, version, notes, `qmtcode_version` and the expected platform key list (`darwin-*`, `windows-x86_64`, `linux-*-wry`, `linux-*-cef`). It fails on any missing key, artifact or signature. Verify with node tests for a complete feed, a missing signature and a missing platform.
-- [ ] 4.3 Update `nightly.yml`:
+- [x] 4.3 Update `nightly.yml`:
   - compute the version once in `check-changes` via 2.1 and pass it to all matrix jobs;
   - resolve qmtcode via 2.2;
   - export `QMT_RELEASE_CHANNEL=nightly`, `QMTCODE_VERSION`, the signing secrets and `REQUIRE_UPDATER_SIGNATURE=1`;
@@ -42,7 +42,7 @@
   - add the gate that fails if the bundled qmtcode < the qmtcode version in the desktop nightly feed.
   
   Verify on a test tag in a fork: the release has `latest.json`, and the gate fails when the qmtcode version is forced lower.
-- [ ] 4.5 Update `versions.yml` if needed so the CI-stamped nightly version is not checked against committed files. Verify that a nightly run passes the version check.
+- [x] 4.5 Update `versions.yml` if needed so the CI-stamped nightly version is not checked against committed files. Verify that a nightly run passes the version check.
 
 ## 5. Rust updater backend
 

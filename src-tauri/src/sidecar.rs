@@ -8,7 +8,10 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{ipc::Channel, Emitter, Manager};
@@ -59,6 +62,7 @@ pub enum ProgramSource {
 }
 
 impl ProgramSource {
+    /// Short name used in logs and status.
     fn label(self) -> &'static str {
         match self {
             ProgramSource::Bundled => "bundled",
@@ -86,7 +90,13 @@ pub struct AgentLogEvent {
 #[derive(Default, Clone)]
 pub struct AcpAgentManager {
     inner: Arc<Mutex<HashMap<String, ManagedAgentProcess>>>,
+    /// Held while application files are being replaced (self-update): no agent may launch.
+    maintenance: Arc<AtomicBool>,
 }
+
+/// Message returned by launch paths while an update is replacing application files.
+pub const MAINTENANCE_MESSAGE: &str =
+    "An update is being installed; agents cannot start until it finishes.";
 
 struct ManagedAgentProcess {
     child: Option<Child>,
@@ -121,6 +131,7 @@ struct ManagedAgentState {
 }
 
 impl ManagedAgentState {
+    /// A not-yet-started state for a configured agent.
     fn configured(agent_id: &str, command_line: String) -> Self {
         Self {
             agent_id: agent_id.to_string(),
@@ -135,6 +146,7 @@ impl ManagedAgentState {
         }
     }
 
+    /// Converts the internal state to the status sent to the webview.
     fn into_status(self) -> AgentRuntimeStatus {
         AgentRuntimeStatus {
             agent_id: self.agent_id,
@@ -151,6 +163,7 @@ impl ManagedAgentState {
 }
 
 impl ManagedAgentProcess {
+    /// A process record with no running child.
     fn new(agent_id: &str, command_line: String) -> Self {
         Self {
             child: None,
@@ -188,6 +201,11 @@ impl AcpAgentManager {
         command_line: String,
     ) -> Result<AgentRuntimeStatus, String> {
         let mut inner = self.inner.lock().expect("agent manager lock poisoned");
+        // Checked under the agent lock: `begin_maintenance` stops everything under the
+        // same lock, so a launch either finishes before it or is refused here.
+        if self.maintenance.load(Ordering::SeqCst) {
+            return Err(MAINTENANCE_MESSAGE.to_string());
+        }
         let process = inner
             .entry(agent_id.clone())
             .or_insert_with(|| ManagedAgentProcess::new(&agent_id, command_line.clone()));
@@ -316,8 +334,28 @@ impl AcpAgentManager {
         agent_id: String,
         command_line: String,
     ) -> Result<AgentRuntimeStatus, String> {
+        if self.maintenance.load(Ordering::SeqCst) {
+            return Err(MAINTENANCE_MESSAGE.to_string());
+        }
         let _ = self.stop(agent_id.clone());
         self.start(app, agent_id, command_line)
+    }
+
+    /// Refuses every agent launch and stops running agents, until [`Self::end_maintenance`].
+    /// Used while an update replaces application files.
+    pub fn begin_maintenance(&self) {
+        self.maintenance.store(true, Ordering::SeqCst);
+        self.shutdown_all();
+    }
+
+    /// Allows agent launches again after a failed update.
+    pub fn end_maintenance(&self) {
+        self.maintenance.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether an update currently blocks agent launches.
+    pub fn in_maintenance(&self) -> bool {
+        self.maintenance.load(Ordering::SeqCst)
     }
 
     pub fn shutdown_all(&self) {

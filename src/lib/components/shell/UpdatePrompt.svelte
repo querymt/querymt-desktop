@@ -50,6 +50,15 @@
           Skip this version
         </button>
       </div>
+    {:else if prompt.kind === 'error'}
+      <strong>The update could not be installed</strong>
+      <p class="update-prompt-error" role="alert">{updatesStore.installError ?? prompt.message}</p>
+      <div class="update-prompt-actions">
+        <button class="action-btn action-btn-primary" type="button" onclick={() => void updatesStore.checkNow()}>
+          Check again
+        </button>
+        <button class="action-btn" type="button" onclick={() => updatesStore.dismissInstallError()}>Dismiss</button>
+      </div>
     {:else if prompt.kind === 'installing'}
       <strong>Installing QueryMT {prompt.version}…</strong>
       {#if percent !== null}

@@ -208,3 +208,27 @@ test('CLI writes latest.json for a complete dist and fails on an incomplete one'
   assert.throws(() => execFileSync('node', args.map((a) => (a === out ? failing : a)), { stdio: 'pipe' }));
   assert.throws(() => readFileSync(failing), /ENOENT/);
 });
+
+test('CLI --verify-pubkey checks signatures against the key that signed them, not the embedded one', () => {
+  const oldKey = newKeypair();
+  const newKey = newKeypair();
+  newKey.keyId.set(Buffer.from('b1b2b3b4b5b6b7b8', 'hex'));
+  const dir = mkdtempSync(join(tmpdir(), 'updater-feed-rotate-'));
+  const dist = join(dir, 'dist');
+  mkdirSync(dist);
+  for (const [name, data] of completeDist(oldKey)) writeFileSync(join(dist, name), data);
+  // The build embeds the NEW key; the artifacts are signed with the OLD one.
+  const config = join(dir, 'tauri.conf.json');
+  writeFileSync(config, JSON.stringify({ plugins: { updater: { pubkey: newKey.publicKeyBase64 } } }));
+  const base = [
+    SCRIPT, '--dist', dist, '--version-name', 'nightly', '--version', VERSION, '--base-url', BASE_URL,
+    '--qmtcode-version', QMTCODE, '--pubkey-from', config
+  ];
+
+  assert.throws(() => execFileSync('node', [...base, '--out', join(dir, 'a.json')], { stdio: 'pipe' }));
+  execFileSync('node', [...base, '--verify-pubkey', oldKey.publicKeyBase64, '--out', join(dir, 'b.json')], { stdio: 'pipe' });
+  assert.equal(Object.keys(JSON.parse(readFileSync(join(dir, 'b.json'), 'utf8')).platforms).length, 7);
+  assert.throws(() =>
+    execFileSync('node', [...base, '--verify-pubkey', 'not-a-key', '--out', join(dir, 'c.json')], { stdio: 'pipe' })
+  );
+});

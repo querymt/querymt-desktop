@@ -134,9 +134,11 @@ jobs:
       - name: Check bundled qmtcode against the desktop nightly
         env:
           BUNDLED: ${{ steps.core.outputs.version }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           node scripts/release/check-qmtcode-gate.mjs \
             --bundled "$BUNDLED" \
+            --repo "${GITHUB_REPOSITORY}" \
             --nightly-feed-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/latest.json"
 
   release:
@@ -404,10 +406,19 @@ jobs:
       # Fails, and publishes nothing, when any platform artifact or signature is
       # missing or does not verify against the updater public key.
       - name: Generate updater feed
+        env:
+          UPDATER_VERIFY_PUBKEY: ${{ vars.UPDATER_VERIFY_PUBKEY }}
         run: |
           set -euo pipefail
           test "$VERSION_NAME" = "$RELEASE_TAG"
+          # Key rotation only: the old public key that signed this release's artifacts
+          # (repository variable UPDATER_VERIFY_PUBKEY). Unset for normal releases.
+          VERIFY_ARGS=()
+          if [ -n "${UPDATER_VERIFY_PUBKEY:-}" ]; then
+            VERIFY_ARGS=(--verify-pubkey "$UPDATER_VERIFY_PUBKEY")
+          fi
           node scripts/release/updater-feed.mjs \
+            "${VERIFY_ARGS[@]}" \
             --dist artifacts \
             --version-name "$VERSION_NAME" \
             --version "$VERSION" \

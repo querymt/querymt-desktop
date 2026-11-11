@@ -12,6 +12,7 @@ import { createHash, createPublicKey, verify } from 'node:crypto';
 
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
+/** Decodes a base64 string holding a minisign text file. */
 function decodeText(base64) {
   return Buffer.from(base64.trim(), 'base64').toString('utf8');
 }
@@ -26,6 +27,7 @@ export function parsePublicKey(base64) {
   return { keyId: raw.subarray(2, 10), key: raw.subarray(10) };
 }
 
+/** Verifies an Ed25519 signature with a raw 32-byte public key. */
 function ed25519Verify(publicKey, message, signature) {
   const key = createPublicKey({
     key: Buffer.concat([ED25519_SPKI_PREFIX, publicKey]),

@@ -36,7 +36,7 @@ Every querymt stable and nightly release SHALL publish a `release.json` asset wi
 - **THEN** it reads the qmtcode version and commit from `release.json`
 
 ### Requirement: Future stable never regresses the current nightly
-A querymt stable release SHALL fail before publishing if its version is greater than the base of the published nightly and its tag commit does not contain the published nightly's commit.
+A querymt stable release SHALL fail before publishing if its version is greater than or equal to the base of the published nightly and its tag commit does not contain the published nightly's commit.
 
 #### Scenario: Stable cut from an old commit
 - **WHEN** `v0.6.0` is tagged on a commit that does not contain the published `0.6.0-nightly.*` commit

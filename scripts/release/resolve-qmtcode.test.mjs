@@ -82,10 +82,24 @@ test('fails when a target asset is missing', () => {
 test('fails on an ambiguous asset match', () => {
   const release = releaseFixture('nightly');
   release.assets.push({
-    name: 'qmtcode-nightly-extra-aarch64-apple-darwin.tar.gz',
+    name: 'qmtcode-nightly-d530f82-aarch64-apple-darwin.tar.gz',
     browser_download_url: 'https://example.test/dup'
   });
   assert.throws(() => resolveQmtcode({ which: 'nightly', release, manifest: nightlyManifest }), /aarch64-apple-darwin/);
+});
+
+test('ignores stable assets whose label is not the manifest version', () => {
+  const release = releaseFixture('v0.6.0', { tag: 'v0.6.0' });
+  release.assets.push({
+    name: 'qmtcode-v0.5.2-aarch64-apple-darwin.tar.gz',
+    browser_download_url: 'https://example.test/stale'
+  });
+  const result = resolveQmtcode({ which: 'latest', release, manifest: stableManifest });
+  assert.equal(result.assets['aarch64-apple-darwin'].name, 'qmtcode-v0.6.0-aarch64-apple-darwin.tar.gz');
+  assert.throws(
+    () => resolveQmtcode({ which: 'latest', release: releaseFixture('v0.5.2', { tag: 'v0.6.0' }), manifest: stableManifest }),
+    /missing qmtcode assets/
+  );
 });
 
 test('fails on inconsistent manifests', () => {

@@ -14,6 +14,9 @@ const updatesStore = vi.hoisted(() => ({
   install: vi.fn(async () => {}),
   restart: vi.fn(async () => {}),
   later: vi.fn(),
+  checkNow: vi.fn(async () => {}),
+  dismissInstallError: vi.fn(),
+  installError: null as string | null,
   skip: vi.fn(async () => {})
 }));
 vi.mock('$lib/stores/updates.svelte', () => ({ updatesStore }));
@@ -36,6 +39,7 @@ afterEach(() => {
   updatesStore.prompt = null;
   updatesStore.progress = null;
   updatesStore.actionError = null;
+  updatesStore.installError = null;
   updatesStore.state = { kind: 'idle' };
 });
 
@@ -115,5 +119,17 @@ describe('UpdatePrompt', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('The app could not restart.');
     await fireEvent.click(screen.getByRole('button', { name: 'Restart now' }));
     expect(updatesStore.restart).toHaveBeenCalled();
+  });
+
+  it('shows a failed install with a recovery action', async () => {
+    updatesStore.prompt = { kind: 'error', message: 'Update install failed', failure: 'other', manual: true };
+    updatesStore.installError = 'Update install failed: disk full';
+    render(UpdatePrompt);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Update install failed: disk full');
+    await fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    expect(updatesStore.checkNow).toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(updatesStore.dismissInstallError).toHaveBeenCalled();
   });
 });

@@ -36,6 +36,7 @@ export function parseTags(text) {
   return tags;
 }
 
+/** Computes `<base>-nightly.<timestamp>`, bumping the patch when `v<base>` is already tagged. */
 export function computeNightlyVersion({ version, tags, timestamp }) {
   const match = STABLE_VERSION.exec(version);
   if (!match) throw new Error(`project version '${version}' is not X.Y.Z`);
@@ -48,6 +49,7 @@ export function computeNightlyVersion({ version, tags, timestamp }) {
   return `${major}.${minor}.${nextPatch}-nightly.${timestamp}`;
 }
 
+/** Parses the command line options. */
 function parseArgs(argv) {
   const args = { package: 'package.json', remote: 'origin', tagsFile: null, timestamp: null };
   for (let i = 0; i < argv.length; i++) {
@@ -65,11 +67,13 @@ function parseArgs(argv) {
   return args;
 }
 
+/** Reads the existing release tags from the arguments or `git ls-remote`. */
 function readTags(args) {
   if (args.tagsFile) return readFileSync(args.tagsFile === '-' ? 0 : args.tagsFile, 'utf8');
   return execFileSync('git', ['ls-remote', '--tags', args.remote], { encoding: 'utf8' });
 }
 
+/** CLI entry: prints the nightly version. */
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const { version } = JSON.parse(readFileSync(args.package, 'utf8'));

@@ -5,7 +5,13 @@
 //     --dist dist --version-name <vX.Y.Z|nightly> --version <semver> \
 //     --base-url <download url prefix> --qmtcode-version <semver> \
 //     --pubkey-from src-tauri/tauri.conf.json --out dist/latest.json \
-//     [--notes-file notes.md] [--pub-date <RFC 3339>]
+//     [--notes-file notes.md] [--pub-date <RFC 3339>] [--verify-pubkey <base64>]
+//
+// Signatures are verified against the key in --pubkey-from (the key the build
+// embeds). During a key rotation the transition release embeds the NEW key but
+// is still signed with the OLD one; pass the old key as --verify-pubkey so the
+// feed is checked against the key that signed the artifacts, which is also the
+// key the already-installed apps trust.
 //
 // The feed lists, per platform key, the artifact URL and the signature (the
 // content of the artifact's .sig file). The script fails, and writes nothing,
@@ -25,7 +31,7 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseSemver } from './lib/semver.mjs';
-import { verifyTauriSignature } from './lib/minisign.mjs';
+import { parsePublicKey, verifyTauriSignature } from './lib/minisign.mjs';
 
 /** Expected platform key -> artifact file name for a release. */
 export function expectedPlatforms(versionName) {
@@ -108,6 +114,7 @@ export function buildFeed({ files, versionName, version, qmtcodeVersion, baseUrl
   };
 }
 
+/** Parses the command line into a name -> value map; every option needs a value. */
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
@@ -123,6 +130,7 @@ function parseArgs(argv) {
   return args;
 }
 
+/** CLI entry: reads `dist/`, builds the feed and writes it to `--out`. */
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const files = new Map();
@@ -131,13 +139,18 @@ function main() {
   const publicKeyBase64 = JSON.parse(readFileSync(args['pubkey-from'], 'utf8'))?.plugins?.updater?.pubkey;
   if (!publicKeyBase64) throw new Error(`${args['pubkey-from']} has no plugins.updater.pubkey`);
 
+  // The key signatures are checked against: the key that signed the artifacts, which
+  // differs from the embedded key only on the release that rotates it.
+  const verifyKey = args['verify-pubkey']?.trim();
+  if (verifyKey) parsePublicKey(verifyKey);
+
   const feed = buildFeed({
     files,
     versionName: args['version-name'],
     version: args.version,
     qmtcodeVersion: args['qmtcode-version'],
     baseUrl: args['base-url'],
-    publicKeyBase64,
+    publicKeyBase64: verifyKey || publicKeyBase64,
     notes: args['notes-file'] ? readFileSync(args['notes-file'], 'utf8').trim() : '',
     pubDate: args['pub-date']
   });

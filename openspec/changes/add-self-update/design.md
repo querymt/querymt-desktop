@@ -107,7 +107,7 @@ These land first; the desktop depends on them through `release.json` and compara
    - Result: binaries report `0.6.0-nightly.20261105111147`, and assets become `qmtcode-nightly-<target>` (no SHA).
 2. **`build.yml`.** Accept separate `version_name` (asset label) and `qmt_version` (embedded version) inputs. `QMT_VERSION` is set from `qmt_version`. Stable passes `vX.Y.Z` for both; `build.rs` already strips `v`.
 3. **`release.json`.** Both workflows upload `{ "version", "channel", "commit", "published_at" }`. Desktop workflows read it instead of parsing asset names or notes. Fallback for one transition release: if `release.json` is missing, desktop CI fails rather than guessing.
-4. **Stable gate in `release.yml`.** Before building, fetch the published nightly `release.json`. If `semver(tag) > base(nightly.version)` and `git merge-base --is-ancestor <nightly.commit> <tag commit>` fails, stop with an error naming both commits.
+4. **Stable gate in `release.yml`.** Before building, fetch the published nightly `release.json`. If `semver(tag) >= base(nightly.version)` and `git merge-base --is-ancestor <nightly.commit> <tag commit>` fails, stop with an error naming both commits.
    - Patch releases on older lines (`v0.5.3` while the nightly is `0.6.0-nightly.*`) pass, because they sort below the nightly.
    - Also check that the tag equals the workspace version.
 5. **Staged nightly replacement.** Copy the desktop pattern: upload to a `nightly-staging` draft, delete the old `nightly`, retag the draft, publish. If an upload fails, the old nightly stays.
