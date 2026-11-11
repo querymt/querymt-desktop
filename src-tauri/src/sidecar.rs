@@ -727,6 +727,18 @@ struct LaunchedAgent {
 const BUNDLED_AGENT_NAME: &str = "qmtcode";
 
 /// Resolves and spawns the agent process for a command line.
+/// The desktop app is a GUI-subsystem process on Windows, so a console child
+/// (the agent) would otherwise get its own visible console window.
+#[cfg(windows)]
+fn hide_console_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_console_window(_command: &mut Command) {}
+
 fn launch_agent(app: &AppHandle, command_line: &str) -> Result<LaunchedAgent, String> {
     let parts = shlex::split(command_line)
         .ok_or_else(|| "Could not parse command line for ACP agent.".to_string())?;
@@ -750,6 +762,7 @@ fn launch_agent(app: &AppHandle, command_line: &str) -> Result<LaunchedAgent, St
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    hide_console_window(&mut command);
 
     let mut child = command.spawn().map_err(|error| {
         format!(
@@ -943,13 +956,14 @@ const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 fn run_version_command(program: &Path, timeout: Duration) -> Option<String> {
     use std::io::Read;
 
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::null());
+    hide_console_window(&mut command);
+    let mut child = command.spawn().ok()?;
     let mut stdout = child.stdout.take()?;
 
     // Read on a helper thread so a program that never exits cannot block the probe.
