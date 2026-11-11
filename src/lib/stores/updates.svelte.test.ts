@@ -22,6 +22,7 @@ function status(overrides: Partial<UpdatesStatus> = {}): UpdatesStatus {
     qmtcodeVersion: '0.5.2',
     installKind: 'macApp',
     autoCheck: true,
+    sendStatistics: true,
     skippedVersion: null,
     lastCheck: null,
     state: { kind: 'idle' },
@@ -96,6 +97,19 @@ describe('UpdatesStore', () => {
     invoke.mockResolvedValueOnce(status({ autoCheck: false }));
     await store.setAutoCheck(false);
     expect(invoke).toHaveBeenLastCalledWith('updates_set_preferences', { patch: { autoCheck: false } });
+  });
+
+  it('saves the statistics preference independently of auto-check', async () => {
+    invoke.mockResolvedValueOnce(status());
+    const store = await loadStore();
+    await store.initialize();
+    expect(store.status?.sendStatistics).toBe(true);
+
+    invoke.mockResolvedValueOnce(status({ sendStatistics: false }));
+    await store.setSendStatistics(false);
+    expect(invoke).toHaveBeenLastCalledWith('updates_set_preferences', { patch: { sendStatistics: false } });
+    expect(store.status?.sendStatistics).toBe(false);
+    expect(store.status?.autoCheck).toBe(true);
   });
 
   it('runs a manual check and reports its failure', async () => {

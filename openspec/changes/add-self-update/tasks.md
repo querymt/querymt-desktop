@@ -51,16 +51,25 @@
 - [x] 5.3 Implement preferences persistence (`updates.json` in the app config dir: channel, autoCheck, skippedVersion), defaulting to the build channel. Verify with unit tests for defaults and a round trip.
 - [x] 5.4 Implement the commands `updates_status`, `updates_set_preferences`, `updates_check`, `updates_install` (progress `Channel`) and `updates_restart`, plus the `PendingUpdate` state. Register them in `lib.rs`, add the plugin without any `updater:*` capability, and add an `on_before_exit` hook calling `AcpAgentManager::shutdown_all()`. `updates_restart` also calls `shutdown_all()` before `app.restart()`. Verify that `cargo test` passes and that `capabilities/default.json` has no `updater:` entry.
 - [x] 5.5 Implement the scheduler: first check after 30s, then every 6h when auto-check is on. Emit `updates://state`; automatic failures (including 404) are logged without prompting. Verify with a unit test for the scheduling decision (auto off, skipped version, failure categorisation).
+- [x] 5.6 Add `sendStatistics` to `UpdatePreferences` (default `true`, missing field reads as `true`), `updates_status` and `updates_set_preferences` (D8, D11). Verify with unit tests for the default, a file without the field, and a round trip.
+- [x] 5.7 Implement statistics routing in `updates.rs` (D11):
+  - endpoint list per channel: query.mt check URL with `?v={{current_version}}&t={{target}}` first, then the GitHub feed; GitHub only when statistics are off;
+  - rewrite `https://github.com/querymt/querymt-desktop/releases/download/<tag>/<asset>` to `https://query.mt/download/desktop/update/<tag>/<asset>` when statistics are on, leaving other URLs unchanged;
+  - retry a failed rewritten download once from the GitHub URL, never after a signature failure.
+  
+  Verify with unit tests for both endpoint lists per channel, the URL rewrite (match, non-match, statistics off) and the retry decision, and update the existing URL tests (`updates.rs` channel/feed tests).
 
 ## 6. Frontend
 
 - [x] 6.1 Add an updates store that wraps the commands and the `updates://state` event. Verify with vitest tests that mock `invoke`.
 - [x] 6.2 Add an Updates group to `src/routes/settings/+page.svelte`: current version and qmtcode version, channel selector, auto-check switch, Check now, and status (including "Waiting for a stable release newer than X" and the qmtcode-downgrade refusal). Verify with tests in `settings-page.test.ts`.
 - [x] 6.3 Add a non-modal update-available prompt: Install & restart / Later / Skip this version, with download progress. Notify-only install kinds show a release link instead of Install. Verify with component tests for the self-install and notify-only variants.
+- [x] 6.4 Add a "Send anonymous update statistics" switch to the Updates group, with a short description of what is sent (channel, version, platform; no identifiers) and wire it to `sendStatistics` in the updates store. Verify with tests in `settings-page.test.ts` and the store tests.
 
 ## 7. Documentation
 
 - [x] 7.1 Add an "Updates and release channels" section to the README: channels, switching rules (no downgrades, waiting for the next stable), deb/tar behavior, versioning scheme, the stable qmtcode gate, and the signing key custody and rotation procedure. Verify by review against the specs.
+- [x] 7.2 Add an "Update statistics" paragraph to the README section: on by default, the query.mt URLs used, exactly which fields are recorded (event, channel, version, target, country), that no IP or install ID is stored, how to turn it off, and the GitHub fallback. Verify by review against D11.
 
 ## 8. End-to-end verification
 
@@ -68,8 +77,18 @@
 - [ ] 8.2 Channel switch: on nightly `0.1.8-nightly.*`, switch to stable while the stable is `0.1.7`. Confirm the "waiting" status. Publish `0.1.8` (in a fork) and confirm it is offered.
 - [ ] 8.3 qmtcode gate: publish a test feed whose `qmtcode_version` is lower than the installed one and confirm the update is refused with that reason.
 - [ ] 8.4 Tampering: modify an artifact in a test feed and confirm that the install aborts and the current version still runs.
+- [ ] 8.5 Statistics: with statistics on, confirm a check and an install appear as `check` and `download` events in `qmt_desktop_updates`; with statistics off, confirm (via proxy log) that no request goes to query.mt; with the worker routes blocked, confirm the check and install still succeed from GitHub.
+
+## 9. Website (`querymt-website`, deploy before the first stable with D5 names)
+
+- [x] 9.1 Update `src/data/landing.ts` `desktopAssetPackage` to recognise the D5 installer names (`QueryMT-Desktop-vX.Y.Z-macos-<arch>.dmg`, `QueryMT-Desktop-vX.Y.Z-windows-x64-setup.exe`, `QueryMT-Desktop-{wry,cef}-vX.Y.Z-linux-<arch>.{AppImage,deb}`), keeping the old names for existing releases. Verify with tests against fixture release JSON for both naming schemes.
+- [x] 9.2 Add the `UPDATES` Analytics Engine binding for dataset `qmt_desktop_updates` in `wrangler.toml` and a `writeUpdateEvent` helper that records `[event, channel, version, target, country]` only. Verify with a unit test using a mock binding that no IP, hash or user agent is written.
+- [x] 9.3 Add `GET|HEAD /updates/desktop/<stable|nightly>/latest.json` to `worker.js`: validate the channel, record a `check` event on GET (invalid `v`/`t` recorded as `unknown`), 302 to the fixed GitHub feed URL with `Cache-Control: no-store`. Verify with worker tests for both channels, invalid channel (404, nothing recorded) and HEAD (not recorded).
+- [x] 9.4 Add `GET|HEAD /download/desktop/update/<tag>/<asset>`, matched before the installer route: accept only `vX.Y.Z`/`nightly` tags and D5 updater artifact names for that tag, derive the target from the name, record a `download` event on GET, 302 to the fixed GitHub asset URL. Verify with worker tests for each of the 7 targets, an unknown asset and a path-traversal attempt (404, nothing recorded).
+- [x] 9.5 Deploy the website and confirm with `curl -I` that both routes redirect to the published GitHub feed and assets, and that the events appear in `qmt_desktop_updates`.
 
 ## Workflow follow-up
 
 - Tasks in group 1 live in `querymt/querymt`; open a linked PR there and land it before group 4.
+- Tasks in group 9 live in `querymt-website`; deploy them before 4.4 publishes the first stable with D5 names and before 5.7 ships.
 - Archive this change after the first updater-enabled stable release is verified.

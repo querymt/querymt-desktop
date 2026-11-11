@@ -138,6 +138,7 @@ const updatesStore = vi.hoisted(() => {
     qmtcodeVersion: '0.5.2',
     installKind: 'macApp',
     autoCheck: true,
+    sendStatistics: true,
     skippedVersion: null,
     lastCheck: null,
     state: { kind: 'idle' }
@@ -152,6 +153,7 @@ const updatesStore = vi.hoisted(() => {
     initialize: vi.fn(async () => {}),
     setChannel: vi.fn(async () => {}),
     setAutoCheck: vi.fn(async () => {}),
+    setSendStatistics: vi.fn(async () => {}),
     checkNow: vi.fn(async () => {}),
     reopen: vi.fn(),
     restart: vi.fn(async () => {})
@@ -868,6 +870,29 @@ describe('Updates settings', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
     expect(updatesStore.checkNow).toHaveBeenCalled();
+  });
+
+  it('shows the statistics switch on by default with a description of what is sent', async () => {
+    openUpdates();
+
+    const toggle = await screen.findByRole('switch', { name: 'Send anonymous update statistics' });
+    expect(toggle).toBeChecked();
+    expect(screen.getByText(/No IP address, identifier or personal data is stored/)).toBeInTheDocument();
+  });
+
+  it('turns statistics off without touching automatic checks', async () => {
+    openUpdates();
+
+    await fireEvent.click(await screen.findByRole('switch', { name: 'Send anonymous update statistics' }));
+    expect(updatesStore.setSendStatistics).toHaveBeenCalledWith(false);
+    expect(updatesStore.setAutoCheck).not.toHaveBeenCalled();
+  });
+
+  it('reflects a saved statistics opt-out', async () => {
+    setUpdateState({ kind: 'idle' }, { sendStatistics: false });
+    openUpdates();
+
+    expect(await screen.findByRole('switch', { name: 'Send anonymous update statistics' })).not.toBeChecked();
   });
 
   it('saves a channel change', async () => {

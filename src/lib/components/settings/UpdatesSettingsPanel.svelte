@@ -95,6 +95,22 @@
 
     <div class="settings-simple-row">
       <div class="settings-simple-main">
+        <h3>Send anonymous update statistics</h3>
+        <p>
+          Update checks and downloads go through query.mt, which counts them by release channel, app version,
+          platform and country. No IP address, identifier or personal data is stored. Turn this off to contact
+          GitHub only.
+        </p>
+      </div>
+      <AppSwitch
+        checked={status.sendStatistics}
+        ariaLabel="Send anonymous update statistics"
+        onCheckedChange={(checked) => void updatesStore.setSendStatistics(checked)}
+      />
+    </div>
+
+    <div class="settings-simple-row">
+      <div class="settings-simple-main">
         <h3>Update status</h3>
         <p
           role="status"

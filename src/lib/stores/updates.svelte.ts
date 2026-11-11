@@ -108,6 +108,11 @@ export class UpdatesStore {
     return this.savePreferences({ autoCheck });
   }
 
+  /** Turns anonymous update statistics (checks and downloads through query.mt) on or off. */
+  setSendStatistics(sendStatistics: boolean): Promise<void> {
+    return this.savePreferences({ sendStatistics });
+  }
+
   /** Automatic checks stop prompting for this version; "Check now" still shows it. */
   skip(version: string): Promise<void> {
     this.dismissedVersion = version;

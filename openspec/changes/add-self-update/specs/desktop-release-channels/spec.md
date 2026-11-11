@@ -63,3 +63,50 @@ A stable desktop release SHALL fail before publishing if its bundled qmtcode ver
 #### Scenario: Stable would bundle older qmtcode
 - **WHEN** a stable release would bundle qmtcode `0.5.2` while the desktop nightly feed records `0.6.0-nightly.20261105111147`
 - **THEN** the release workflow fails with an explanation and publishes nothing
+
+### Requirement: Feed artifact URLs point to GitHub
+Artifact URLs in `latest.json` SHALL be the canonical GitHub release download URLs, so the feed works without query.mt.
+
+#### Scenario: Feed independent of query.mt
+- **WHEN** a release publishes `latest.json`
+- **THEN** every platform `url` starts with `https://github.com/querymt/querymt-desktop/releases/download/<tag>/`
+
+### Requirement: query.mt update statistics redirects
+The query.mt website worker SHALL provide `GET /updates/desktop/<stable|nightly>/latest.json` and `GET /download/desktop/update/<tag>/<asset>`. Each SHALL validate its input, record one data point, and redirect with HTTP 302 to the fixed GitHub URL of that feed or release asset. HEAD requests SHALL redirect without being recorded.
+
+#### Scenario: Check redirect
+- **WHEN** `GET /updates/desktop/nightly/latest.json?v=0.1.8-nightly.20261106143200&t=linux-x86_64-cef` is requested
+- **THEN** a `check` event with channel `nightly`, that version and target is recorded, and the response redirects to `https://github.com/querymt/querymt-desktop/releases/download/nightly/latest.json`
+
+#### Scenario: Update download redirect
+- **WHEN** `GET /download/desktop/update/v0.1.8/QueryMT-Desktop-v0.1.8-macos-aarch64.app.tar.gz` is requested
+- **THEN** a `download` event for `darwin-aarch64` is recorded, and the response redirects to the same asset under `https://github.com/querymt/querymt-desktop/releases/download/v0.1.8/`
+
+#### Scenario: HEAD request
+- **WHEN** either route is requested with HEAD
+- **THEN** it redirects and records nothing
+
+### Requirement: Update redirects accept only known release assets
+The update download route SHALL accept only `vX.Y.Z` or `nightly` tags and updater artifact names produced by the release workflows, and SHALL respond 404 without recording anything to any other request, including an unknown channel on the check route.
+
+#### Scenario: Unknown asset
+- **WHEN** the download route is requested with an asset name that is not an updater artifact for that tag
+- **THEN** it responds 404 and records nothing
+
+#### Scenario: Path traversal
+- **WHEN** the download route is requested with a tag or asset containing `..` or extra path segments
+- **THEN** it responds 404 and records nothing
+
+### Requirement: Update statistics are anonymous and separate
+Update statistics SHALL be recorded in the Analytics Engine dataset `qmt_desktop_updates`, separate from installer downloads in `qmt_installs`. Each data point SHALL contain only event, channel, version, target and country, and SHALL NOT contain an IP address, IP hash, user agent or install identifier.
+
+#### Scenario: Recorded fields
+- **WHEN** a `check` or `download` event is recorded
+- **THEN** it is written to `qmt_desktop_updates` with only event, channel, version, target and country, and nothing is written to `qmt_installs`
+
+### Requirement: Landing-page downloads match release asset names
+The query.mt landing page and its tracked `/download/desktop/<tag>/<asset>` route SHALL recognise the installer names produced by the release workflows (`<prefix>-<vX.Y.Z>-<suffix><ext>`) before a stable release with those names is published.
+
+#### Scenario: First stable with new names
+- **WHEN** stable `v0.1.8` is published with assets named `QueryMT-Desktop-v0.1.8-macos-aarch64.dmg` and `QueryMT-Desktop-wry-v0.1.8-linux-x86_64.AppImage`
+- **THEN** the landing page offers both downloads and the tracked route redirects them

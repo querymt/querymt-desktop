@@ -32,6 +32,15 @@ const STABLE_FEED: &str =
 const NIGHTLY_FEED: &str =
     "https://github.com/querymt/querymt-desktop/releases/download/nightly/latest.json";
 const RELEASES_URL: &str = "https://github.com/querymt/querymt-desktop/releases";
+/// Release assets are published under this prefix (`<tag>/<asset>`), also in the feeds.
+const GITHUB_DOWNLOAD_PREFIX: &str =
+    "https://github.com/querymt/querymt-desktop/releases/download/";
+/// With update statistics on, release assets are fetched through this redirect (design D11).
+const STATS_DOWNLOAD_PREFIX: &str = "https://query.mt/download/desktop/update/";
+/// With update statistics on, feeds are fetched through this redirect first (design D11).
+/// Tauri fills in `{{current_version}}` and `{{target}}`; nothing else is sent.
+const STATS_FEED_TEMPLATE: &str =
+    "https://query.mt/updates/desktop/{channel}/latest.json?v={{current_version}}&t={{target}}";
 
 /// First automatic check after start, then every [`CHECK_INTERVAL`].
 pub const FIRST_CHECK_DELAY: Duration = Duration::from_secs(30);
@@ -75,6 +84,45 @@ impl UpdateChannel {
             Self::Nightly => NIGHTLY_FEED,
         }
     }
+
+    /// The channel name used in the statistics redirect path.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Nightly => "nightly",
+        }
+    }
+}
+
+/// Endpoints for one check, in the order they are tried: with statistics on the
+/// query.mt redirect for the channel first and the GitHub feed as fallback, otherwise
+/// the GitHub feed only (no request ever goes to query.mt).
+pub fn check_endpoints(channel: UpdateChannel, send_statistics: bool) -> Vec<String> {
+    let mut endpoints = Vec::new();
+    if send_statistics {
+        endpoints.push(STATS_FEED_TEMPLATE.replace("{channel}", channel.name()));
+    }
+    endpoints.push(channel.feed_url().to_string());
+    endpoints
+}
+
+/// The query.mt download URL for a release asset URL of this repository, or `None` for
+/// any other URL (those are downloaded unchanged). Only exactly `<tag>/<asset>` below
+/// the release download prefix is rewritten.
+pub fn statistics_download_url(url: &str) -> Option<String> {
+    let rest = url.strip_prefix(GITHUB_DOWNLOAD_PREFIX)?;
+    let (tag, asset) = rest.split_once('/')?;
+    let plain = |part: &str| {
+        !part.is_empty() && part != "." && part != ".." && !part.contains(['/', '?', '#', '\\'])
+    };
+    (plain(tag) && plain(asset)).then(|| format!("{STATS_DOWNLOAD_PREFIX}{tag}/{asset}"))
+}
+
+/// Whether a failed download through query.mt is retried once from the GitHub URL:
+/// only transport and HTTP failures. A signature or archive failure aborts the install.
+pub fn retry_download_from_github(error: &tauri_plugin_updater::Error) -> bool {
+    use tauri_plugin_updater::Error as E;
+    matches!(error, E::Reqwest(_) | E::Network(_))
 }
 
 /// Link to the release page of `version`, shown for notify-only installs.
@@ -262,15 +310,19 @@ pub struct UpdatePreferences {
     pub channel: Option<UpdateChannel>,
     pub auto_check: bool,
     pub skipped_version: Option<String>,
+    /// Send anonymous update statistics through query.mt (design D11). On unless the
+    /// user turned it off; a file without the field also reads as on.
+    pub send_statistics: bool,
 }
 
 impl Default for UpdatePreferences {
-    /// Stable channel preferences with automatic checks on.
+    /// Build channel, automatic checks and anonymous statistics on.
     fn default() -> Self {
         Self {
             channel: None,
             auto_check: true,
             skipped_version: None,
+            send_statistics: true,
         }
     }
 }
@@ -459,6 +511,7 @@ pub struct UpdatesStatus {
     pub qmtcode_version: Option<String>,
     pub install_kind: InstallKind,
     pub auto_check: bool,
+    pub send_statistics: bool,
     pub skipped_version: Option<String>,
     /// Unix seconds of the last finished check.
     pub last_check: Option<u64>,
@@ -470,6 +523,7 @@ pub struct UpdatesStatus {
 pub struct PreferencesPatch {
     pub channel: Option<UpdateChannel>,
     pub auto_check: Option<bool>,
+    pub send_statistics: Option<bool>,
     /// `Some("")` clears the skipped version.
     pub skipped_version: Option<String>,
 }
@@ -625,6 +679,7 @@ impl UpdateManager {
             qmtcode_version: EMBEDDED_QMTCODE.map(str::to_string),
             install_kind: current_install_kind(),
             auto_check: preferences.auto_check,
+            send_statistics: preferences.send_statistics,
             skipped_version: preferences.skipped_version,
             last_check: *self.last_check.lock().expect("update last check lock"),
             state: self.state(),
@@ -721,10 +776,15 @@ async fn check_inner(
     let observed = Arc::new(Mutex::new(None::<String>));
     let record = observed.clone();
     let hook_app = app.clone();
-    let endpoint = tauri::Url::parse(channel.feed_url()).map_err(|e| e.to_string())?;
+    // Statistics on: query.mt first, GitHub as fallback inside the same check.
+    let endpoints = check_endpoints(channel, preferences.send_statistics)
+        .iter()
+        .map(|endpoint| tauri::Url::parse(endpoint))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     let updater = match app
         .updater_builder()
-        .endpoints(vec![endpoint])
+        .endpoints(endpoints)
         .map_err(|e| e.to_string())?
         .timeout(CHECK_TIMEOUT)
         .target(target)
@@ -847,6 +907,9 @@ pub fn updates_set_preferences(
         if let Some(auto_check) = patch.auto_check {
             preferences.auto_check = auto_check;
         }
+        if let Some(send_statistics) = patch.send_statistics {
+            preferences.send_statistics = send_statistics;
+        }
         if let Some(skipped) = patch.skipped_version {
             preferences.skipped_version = (!skipped.is_empty()).then_some(skipped);
         }
@@ -885,6 +948,19 @@ pub async fn updates_install(
     let (mut update, version) = manager.claim_install(&app)?;
     update.timeout = Some(DOWNLOAD_TIMEOUT);
 
+    // Statistics on: fetch release assets through query.mt (design D11). The feed's own
+    // URL stays the fallback.
+    let github_url = update.download_url.clone();
+    let mut through_statistics = false;
+    if manager.preferences().send_statistics {
+        if let Some(url) = statistics_download_url(github_url.as_str())
+            .and_then(|url| tauri::Url::parse(&url).ok())
+        {
+            update.download_url = url;
+            through_statistics = true;
+        }
+    }
+
     let fail = |message: String| {
         *manager.pending.lock().expect("pending update lock") = None;
         manager.set_state(
@@ -900,28 +976,17 @@ pub async fn updates_install(
 
     // `download` verifies the signature before returning; a failure aborts here and
     // the installed version is untouched.
-    let mut started = false;
-    let progress = on_event.clone();
-    let finished = on_event.clone();
-    let bytes = match update
-        .download(
-            move |chunk, total| {
-                if !started {
-                    started = true;
-                    let _ = progress.send(InstallProgress::Started {
-                        content_length: total,
-                    });
-                }
-                let _ = progress.send(InstallProgress::Progress {
-                    chunk_length: chunk,
-                });
-            },
-            move || {
-                let _ = finished.send(InstallProgress::Finished);
-            },
-        )
-        .await
-    {
+    let mut downloaded = download_with_progress(&update, &on_event).await;
+    if let Err(error) = &downloaded {
+        // A failed query.mt download is retried once from GitHub; a failed signature
+        // check is not, so a tampered artifact is never fetched a second time.
+        if through_statistics && retry_download_from_github(error) {
+            eprintln!("Update download through query.mt failed ({error}); retrying from GitHub");
+            update.download_url = github_url;
+            downloaded = download_with_progress(&update, &on_event).await;
+        }
+    }
+    let bytes = match downloaded {
         Ok(bytes) => bytes,
         Err(error) => return fail(format!("Update download failed: {error}")),
     };
@@ -947,6 +1012,34 @@ pub async fn updates_install(
     manager.set_state(&app, UpdateState::Installed { version });
     let _ = on_event.send(InstallProgress::Installed);
     Ok(())
+}
+
+/// Downloads and verifies the package from `update.download_url`, reporting progress.
+async fn download_with_progress(
+    update: &Update,
+    on_event: &Channel<InstallProgress>,
+) -> tauri_plugin_updater::Result<Vec<u8>> {
+    let mut started = false;
+    let progress = on_event.clone();
+    let finished = on_event.clone();
+    update
+        .download(
+            move |chunk, total| {
+                if !started {
+                    started = true;
+                    let _ = progress.send(InstallProgress::Started {
+                        content_length: total,
+                    });
+                }
+                let _ = progress.send(InstallProgress::Progress {
+                    chunk_length: chunk,
+                });
+            },
+            move || {
+                let _ = finished.send(InstallProgress::Finished);
+            },
+        )
+        .await
 }
 
 /// Stops the managed agents and relaunches into the installed version.
@@ -1359,6 +1452,7 @@ mod tests {
             channel: Some(UpdateChannel::Nightly),
             auto_check: false,
             skipped_version: Some("0.1.9".into()),
+            send_statistics: false,
         };
         save_preferences(&path, &prefs).unwrap();
         assert_eq!(load_preferences(&path), prefs);
@@ -1391,6 +1485,150 @@ mod tests {
         let prefs = load_preferences(&path);
         assert_eq!(prefs.channel, Some(UpdateChannel::Nightly));
         assert!(prefs.auto_check);
+    }
+
+    #[test]
+    fn statistics_default_to_on_and_a_file_without_the_field_reads_as_on() {
+        assert!(UpdatePreferences::default().send_statistics);
+        assert!(load_preferences(&temp_path("stats-missing")).send_statistics);
+
+        let path = temp_path("stats-old-file");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"channel":"stable","autoCheck":false}"#).unwrap();
+        let prefs = load_preferences(&path);
+        assert!(prefs.send_statistics);
+        assert!(!prefs.auto_check);
+    }
+
+    #[test]
+    fn statistics_opt_out_round_trips_in_camel_case() {
+        let path = temp_path("stats-round-trip");
+        let prefs = UpdatePreferences {
+            send_statistics: false,
+            ..Default::default()
+        };
+        save_preferences(&path, &prefs).unwrap();
+        assert!(fs::read_to_string(&path).unwrap().contains("sendStatistics"));
+        let loaded = load_preferences(&path);
+        assert!(!loaded.send_statistics);
+        assert_eq!(loaded, prefs);
+    }
+
+    #[test]
+    fn statistics_is_independent_of_automatic_checks() {
+        let prefs = UpdatePreferences {
+            auto_check: false,
+            ..Default::default()
+        };
+        assert!(prefs.send_statistics);
+        assert!(!scheduled_check_due(&prefs));
+    }
+
+    // --- statistics routing (design D11) -------------------------------------
+
+    #[test]
+    fn statistics_on_tries_query_mt_first_then_github() {
+        assert_eq!(
+            check_endpoints(UpdateChannel::Stable, true),
+            vec![
+                "https://query.mt/updates/desktop/stable/latest.json?v={{current_version}}&t={{target}}"
+                    .to_string(),
+                UpdateChannel::Stable.feed_url().to_string(),
+            ]
+        );
+        assert_eq!(
+            check_endpoints(UpdateChannel::Nightly, true),
+            vec![
+                "https://query.mt/updates/desktop/nightly/latest.json?v={{current_version}}&t={{target}}"
+                    .to_string(),
+                UpdateChannel::Nightly.feed_url().to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn statistics_off_never_touches_query_mt() {
+        for channel in [UpdateChannel::Stable, UpdateChannel::Nightly] {
+            assert_eq!(
+                check_endpoints(channel, false),
+                vec![channel.feed_url().to_string()]
+            );
+        }
+    }
+
+    #[test]
+    fn statistics_endpoints_are_valid_urls_that_keep_the_template_variables() {
+        for channel in [UpdateChannel::Stable, UpdateChannel::Nightly] {
+            let endpoints = check_endpoints(channel, true);
+            for endpoint in &endpoints {
+                tauri::Url::parse(endpoint).unwrap();
+            }
+            // The updater substitutes these in the query string of the parsed URL, so
+            // they must survive `Url` serialisation unescaped.
+            let stats = tauri::Url::parse(&endpoints[0]).unwrap();
+            assert_eq!(stats.host_str(), Some("query.mt"));
+            assert!(
+                stats
+                    .to_string()
+                    .ends_with("?v={{current_version}}&t={{target}}"),
+                "{stats}"
+            );
+        }
+    }
+
+    #[test]
+    fn release_asset_urls_are_rewritten_through_query_mt() {
+        assert_eq!(
+            statistics_download_url(
+                "https://github.com/querymt/querymt-desktop/releases/download/v0.1.8/QueryMT-Desktop-v0.1.8-macos-aarch64.app.tar.gz"
+            ),
+            Some(
+                "https://query.mt/download/desktop/update/v0.1.8/QueryMT-Desktop-v0.1.8-macos-aarch64.app.tar.gz"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            statistics_download_url(
+                "https://github.com/querymt/querymt-desktop/releases/download/nightly/QueryMT-Desktop-wry-nightly-linux-x86_64.AppImage"
+            ),
+            Some(
+                "https://query.mt/download/desktop/update/nightly/QueryMT-Desktop-wry-nightly-linux-x86_64.AppImage"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn other_urls_are_downloaded_unchanged() {
+        for url in [
+            // another repository or host
+            "https://github.com/other/repo/releases/download/v1/a.tar.gz",
+            "https://example.com/querymt-desktop/releases/download/v1/a.tar.gz",
+            "https://query.mt/download/desktop/update/v1/a.tar.gz",
+            // not exactly <tag>/<asset>
+            "https://github.com/querymt/querymt-desktop/releases/download/v1",
+            "https://github.com/querymt/querymt-desktop/releases/download/v1/",
+            "https://github.com/querymt/querymt-desktop/releases/download/v1/a/b.tar.gz",
+            "https://github.com/querymt/querymt-desktop/releases/download//a.tar.gz",
+            "https://github.com/querymt/querymt-desktop/releases/download/../a.tar.gz",
+            "https://github.com/querymt/querymt-desktop/releases/download/v1/a.tar.gz?x=1",
+            "https://github.com/querymt/querymt-desktop/releases/latest/download/latest.json",
+            "",
+        ] {
+            assert_eq!(statistics_download_url(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn only_transport_failures_retry_from_github() {
+        use tauri_plugin_updater::Error as E;
+        assert!(retry_download_from_github(&E::Network(
+            "Download request failed with status: 502".into()
+        )));
+        // A signature or archive failure aborts the install without a second download.
+        assert!(!retry_download_from_github(&E::SignatureUtf8("x".into())));
+        assert!(!retry_download_from_github(&E::BinaryNotFoundInArchive));
+        assert!(!retry_download_from_github(&E::ReleaseNotFound));
     }
 
     #[test]

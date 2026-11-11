@@ -33,6 +33,8 @@ export interface UpdatesStatus {
   qmtcodeVersion: string | null;
   installKind: InstallKind;
   autoCheck: boolean;
+  /** Send anonymous update statistics through query.mt. */
+  sendStatistics: boolean;
   skippedVersion: string | null;
   /** Unix seconds of the last finished check. */
   lastCheck: number | null;
@@ -42,6 +44,7 @@ export interface UpdatesStatus {
 export interface UpdatePreferencesPatch {
   channel?: UpdateChannel;
   autoCheck?: boolean;
+  sendStatistics?: boolean;
   /** An empty string clears the skipped version. */
   skippedVersion?: string;
 }

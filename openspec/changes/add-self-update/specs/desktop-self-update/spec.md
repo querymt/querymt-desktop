@@ -7,15 +7,15 @@ Lets QueryMT Desktop find, verify and install newer builds of itself on the user
 ## ADDED Requirements
 
 ### Requirement: Channel-specific update feed
-The desktop SHALL check for updates only against the feed of the selected channel: stable uses the latest stable release feed, nightly uses the rolling nightly release feed. The selected channel SHALL default to the channel the running build was published on.
+The desktop SHALL check for updates only against the feed of the selected channel: stable uses the latest stable release feed, nightly uses the rolling nightly release feed. A feed MAY be reached through the query.mt statistics redirect for the same channel. The selected channel SHALL default to the channel the running build was published on.
 
 #### Scenario: Stable build checks the stable feed
 - **WHEN** a stable build with no saved channel preference checks for updates
-- **THEN** it requests only the stable feed and never sees nightly builds
+- **THEN** it requests only the stable feed (directly or through the stable statistics redirect) and never sees nightly builds
 
 #### Scenario: Nightly build checks the nightly feed
 - **WHEN** a nightly build with no saved channel preference checks for updates
-- **THEN** it requests only the nightly feed
+- **THEN** it requests only the nightly feed (directly or through the nightly statistics redirect)
 
 ### Requirement: User can switch update channel
 The desktop SHALL let the user choose stable or nightly in Settings, persist the choice across restarts, and use it for all later checks.
@@ -116,8 +116,49 @@ The desktop SHALL stop all managed qmtcode processes before the installer replac
 - **THEN** managed agent processes are stopped, the app relaunches, and the new version starts its own sidecar
 
 ### Requirement: Updater is not controllable from the webview
-The webview SHALL NOT be able to choose update endpoints, public keys or version rules. Update checks and installs SHALL be exposed only through desktop commands that apply the channel and gating rules.
+The webview SHALL NOT be able to choose update endpoints, download URLs, public keys or version rules. It MAY only switch the statistics preference, which selects between endpoint lists fixed in the desktop build. Update checks and installs SHALL be exposed only through desktop commands that apply the channel and gating rules.
 
 #### Scenario: No direct updater permission
 - **WHEN** the frontend capability set is inspected
 - **THEN** it grants no `updater:*` permission
+
+### Requirement: Anonymous update statistics setting
+The desktop SHALL offer a "Send anonymous update statistics" setting in Settings, separate from automatic checks, enabled by default and persisted across restarts. Settings SHALL describe what is sent. When disabled, the desktop SHALL NOT contact query.mt for checks or downloads.
+
+#### Scenario: Setting described
+- **WHEN** the user opens the Updates group in Settings
+- **THEN** the statistics switch is shown, on by default, with a description of the data sent
+
+### Requirement: Update requests through query.mt
+When statistics are enabled, update checks SHALL go first to the query.mt check URL for the selected channel, carrying only the running version and the update target, and update downloads of GitHub release assets SHALL go through the query.mt update download URL. The desktop SHALL NOT send any install identifier.
+
+#### Scenario: Statistics enabled by default
+- **WHEN** a build with no saved statistics preference checks for updates on the stable channel
+- **THEN** the first request goes to `https://query.mt/updates/desktop/stable/latest.json` with the running version and target as query parameters
+
+#### Scenario: Statistics disabled
+- **WHEN** the user turns statistics off and then checks for and installs an update
+- **THEN** the feed and the artifact are requested only from GitHub, and no request goes to query.mt
+
+#### Scenario: Download through query.mt
+- **WHEN** statistics are enabled and the user installs an update whose feed URL is `https://github.com/querymt/querymt-desktop/releases/download/<tag>/<asset>`
+- **THEN** the artifact is requested from `https://query.mt/download/desktop/update/<tag>/<asset>`
+
+#### Scenario: Setting persists
+- **WHEN** the user turns statistics off and restarts the app
+- **THEN** statistics are still off
+
+### Requirement: Statistics never block updates
+A failure of the query.mt check or download redirect SHALL NOT prevent an update. A failed check request through query.mt SHALL fall back to the GitHub feed for the same channel within the same check, and a failed download through query.mt SHALL be retried once from the GitHub URL in the feed. Signature verification failures SHALL NOT be retried.
+
+#### Scenario: Worker unavailable during check
+- **WHEN** statistics are enabled and query.mt returns an error or is unreachable
+- **THEN** the same check reads the GitHub feed and reports its result normally
+
+#### Scenario: Worker unavailable during download
+- **WHEN** statistics are enabled and the download through query.mt fails
+- **THEN** the artifact is downloaded from the GitHub URL, verified and installed
+
+#### Scenario: Tampered artifact through query.mt
+- **WHEN** an artifact downloaded through query.mt fails signature verification
+- **THEN** the install is aborted without a retry and the running version stays installed

@@ -12,7 +12,8 @@ See proposal.md (Why). Current state that shapes the approach:
   - The nightly is deleted and recreated in place, so there is a gap with no release during upload.
   - `release.yml` uses `version_name=${{ github.ref_name }}` and has no check against the nightly.
   - Observed on 2026-11-05: latest stable is `v0.5.2` (2026-06-25), the nightly is at workspace `0.6.0`, 372 commits ahead.
-- **Tauri updater.** Requires signed artifacts, compares `update.version > current` by default, can override endpoints and target at runtime from Rust, and exposes the full feed entry as `raw_json`. Windows NSIS installs exit the app (`on_before_exit` hook).
+- **Tauri updater.** Requires signed artifacts, compares `update.version > current` by default, can override endpoints and target at runtime from Rust, and exposes the full feed entry as `raw_json`. Windows NSIS installs exit the app (`on_before_exit` hook). It tries endpoints in order, moving to the next one on a transport error or non-success status, substitutes `{{current_version}}` and `{{target}}` in endpoint URLs, and exposes `Update::download_url` as a public field.
+- **Website analytics.** The `querymt-website` worker already counts GETs on `/download/desktop/<tag>/<asset>` in the Analytics Engine dataset `qmt_installs` (with a salted IP hash) and 302-redirects them to GitHub. `landing.ts` `desktopAssetPackage` only recognises tauri-action names (`QueryMT.Desktop_<ver>_aarch64.dmg`, `QueryMT-Desktop-wry-<ver>-linux-...`), not the D5 names.
 
 ## Goals / Non-Goals
 
@@ -27,6 +28,7 @@ See proposal.md (Why). Current state that shapes the approach:
 - An apt repository, Apple notarization, Windows code signing.
 - A schema-version guard inside qmtcode that refuses a newer `sessions.db`. Strongly recommended upstream, but not part of this change.
 - Delta or differential updates.
+- Per-install identifiers or unique-user counts in update statistics.
 
 ## Decisions
 
@@ -57,7 +59,7 @@ Endpoints:
 - stable: `https://github.com/querymt/querymt-desktop/releases/latest/download/latest.json`
 - nightly: `https://github.com/querymt/querymt-desktop/releases/download/nightly/latest.json`
 
-`tauri.conf.json` carries only `pubkey`. Endpoints are set per check through `updater_builder().endpoints(..).target(..)`.
+`tauri.conf.json` carries only `pubkey`. Endpoints are set per check through `updater_builder().endpoints(..).target(..)`. These GitHub URLs stay the canonical feeds; when update statistics are on, the query.mt check URL is tried first and the GitHub feed second (D11).
 - *Alternative: tauri-action's generated feed.* Only covers Wry, doesn't fit the renamed assets or CEF, and nightly doesn't use tauri-action. Rejected in favor of one script, `scripts/release/updater-feed.mjs`.
 
 ### D5. Unified build/collect for stable and nightly
@@ -83,8 +85,8 @@ The check still runs for notify-only kinds, so they get the release link.
 ### D8. Commands, state and lifecycle
 New module `updates.rs`, all `#[cfg(desktop)]`.
 - Commands:
-  - `updates_status` → `{ channel, buildChannel, currentVersion, qmtcodeVersion, installKind, autoCheck, lastCheck, state }`
-  - `updates_set_preferences({ channel?, autoCheck?, skippedVersion? })`
+  - `updates_status` → `{ channel, buildChannel, currentVersion, qmtcodeVersion, installKind, autoCheck, sendStatistics, lastCheck, state }`
+  - `updates_set_preferences({ channel?, autoCheck?, sendStatistics?, skippedVersion? })`
   - `updates_check({ manual })`
   - `updates_install(onEvent: Channel)`, which downloads, verifies and installs, reporting progress
   - `updates_restart`
@@ -115,6 +117,25 @@ These land first; the desktop depends on them through `release.json` and compara
 
 Why the gate checks ancestry and not just version order: the danger is a stable with a *higher* version but *older* code (fewer migrations) than the nightly users already run. Version order alone can't detect that; ancestry can. With base = next patch after an existing tag, every nightly after `v0.6.0` is `0.6.1-nightly.*`, which sorts above `0.6.0`. Users on that nightly therefore wait for `0.6.1`, which the ancestry gate guarantees is newer code.
 
+### D11. Anonymous update statistics through query.mt
+Update checks and update downloads go through redirects on the existing query.mt worker, so they show up in Cloudflare Analytics next to installer downloads.
+
+- **Setting.** `sendStatistics` in `updates.json`, default `true` (opt-out). A file without the field reads as `true`. It is separate from `autoCheck`: manual checks follow it too. Settings shows a "Send anonymous update statistics" switch with a short description of what is sent.
+- **Checks.** With statistics on, the endpoint list is:
+  1. `https://query.mt/updates/desktop/<channel>/latest.json?v={{current_version}}&t={{target}}`
+  2. the GitHub feed for the same channel (D4)
+
+  With statistics off, only the GitHub feed is used. Both lists are constants in Rust; the webview only toggles the boolean. A worker that is down or returns an error falls through to GitHub within the same check (worst case two `CHECK_TIMEOUT`s).
+- **Downloads.** The feed keeps canonical GitHub URLs (`https://github.com/querymt/querymt-desktop/releases/download/<tag>/<asset>`), so it works without query.mt. With statistics on, Rust rewrites a URL of exactly that form to `https://query.mt/download/desktop/update/<tag>/<asset>` before downloading; any other URL is used unchanged. If the rewritten download fails with a transport or HTTP error, it is retried once from the original GitHub URL. A signature failure is never retried: the install aborts as for any tampered artifact.
+- **Worker routes** (`querymt-website/worker.js`):
+  - `GET /updates/desktop/<stable|nightly>/latest.json`: validates the channel, caps and validates `v` (semver) and `t` (one of the 7 feed keys, invalid values recorded as `unknown`), records a `check` event, and 302-redirects to the fixed GitHub feed URL for that channel with `Cache-Control: no-store`.
+  - `GET /download/desktop/update/<tag>/<asset>`: `<tag>` is `vX.Y.Z` or `nightly`, and `<asset>` must be a known updater artifact name for that tag (D5 names: `.app.tar.gz`, NSIS `-setup.exe`, Wry/CEF `.AppImage`). Records a `download` event with the target derived from the asset name and 302-redirects to the fixed GitHub asset URL. Unknown input → 404, nothing recorded.
+  - HEAD requests redirect but are not counted. The update route is matched before the existing `/download/desktop/<tag>/<asset>` route (which only accepts two path segments).
+- **Dataset.** New Analytics Engine binding `UPDATES` → dataset `qmt_desktop_updates`, separate from `qmt_installs`. Data point: `indexes: [event]`, `blobs: [event, channel, version, target, country]`, `doubles: [1]`. No IP, IP hash, user agent (the updater's is constant anyway), city or ASN, and the desktop sends no install ID. Counts are therefore checks and downloads, not unique users; roughly 4 checks per running install per day give an estimate of active installs by version, channel and platform.
+- **Security.** Redirect targets are built from fixed host and repo prefixes plus validated segments, so the worker can't redirect anywhere else. The version gates run in Rust on the feed contents, and the signature is checked against the embedded key, so a compromised worker can delay updates but can't change what is installed.
+- *Alternative: tracking URLs inside `latest.json`.* Would count downloads even with statistics off and make the feed depend on query.mt. Rejected.
+- *Alternative: reuse `qmt_installs` with a marker.* Mixes user-initiated installer downloads with background traffic and keeps an IP hash. Rejected by the user.
+
 ## Risks / Trade-offs
 
 - [Signing key lost or leaked] → Store the private key with a password in a password manager plus repo secrets. Document key rotation (ship a build with a new pubkey that is signed by the old key) in the README.
@@ -125,11 +146,15 @@ Why the gate checks ancestry and not just version order: the danger is a stable 
 - [Clock skew between runners] → Each workflow stamps one timestamp in a single job and passes it to all matrix jobs.
 - [`.deb` users never self-update] → Notification and link. A future apt repo is out of scope.
 - [macOS app in `/Applications` not writable by a standard user] → The updater falls back to its admin prompt. Accepted.
+- [Statistics on by default is telemetry] → Only channel, version, target and country, no identifiers; disclosed in Settings and the README; one switch turns it off and then nothing is sent to query.mt.
+- [query.mt down or misconfigured] → Checks fall back to GitHub and downloads retry from GitHub; updates keep working. Rollback is removing the worker routes.
+- [Landing page breaks on D5 asset names] → Website patterns are updated and deployed before the first stable with the new names (task group 9).
 
 ## Migration Plan
 
 1. Land the upstream querymt changes (D10) and wait for one nightly that publishes `release.json`.
 2. Generate the signing keypair, add the secrets, and commit the pubkey.
-3. Land the desktop CI changes. The first nightly publishes `latest.json`.
-4. Land the app updater. The next nightly and stable are the first updater-enabled builds, and users install them by hand once.
-5. Rollback: revert the workflows. Installed apps then see no feed (404) and stay quiet. A bad release is fixed by publishing a higher version.
+3. Deploy the `querymt-website` changes (landing-page asset patterns, update routes, `qmt_desktop_updates` dataset). This must be live before the first stable with D5 asset names and before any build that sends statistics.
+4. Land the desktop CI changes. The first nightly publishes `latest.json`.
+5. Land the app updater. The next nightly and stable are the first updater-enabled builds, and users install them by hand once.
+6. Rollback: revert the workflows. Installed apps then see no feed (404) and stay quiet. A bad release is fixed by publishing a higher version. If the worker routes misbehave, remove them: apps fall back to GitHub.
