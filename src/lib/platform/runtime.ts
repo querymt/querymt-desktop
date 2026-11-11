@@ -12,9 +12,11 @@ export const platformCapabilities = Object.freeze({
   nativeProfileTemplates: isDesktop,
   nativeWorkspacePicker: isDesktop,
   workspacePathSuggestions: isDesktop,
-  windowControls: isDesktop
+  windowControls: isDesktop,
+  selfUpdate: isDesktop
 });
 
+/** Whether the app runs inside Tauri. */
 export function isTauriRuntime(): boolean {
   return browser && '__TAURI_INTERNALS__' in window;
 }

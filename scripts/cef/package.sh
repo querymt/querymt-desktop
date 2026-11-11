@@ -5,6 +5,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
+# Updater signing. The AppImage is the self-updatable artifact, so it gets a
+# detached .sig made with the Tauri updater key. CI sets
+# REQUIRE_UPDATER_SIGNATURE=1 so a missing key fails the build instead of
+# publishing an unsigned updater artifact; local builds just skip signing.
+HAVE_SIGNING_KEY=0
+if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
+  HAVE_SIGNING_KEY=1
+fi
+if [ "${REQUIRE_UPDATER_SIGNATURE:-}" = "1" ] && [ "$HAVE_SIGNING_KEY" != "1" ]; then
+  echo "REQUIRE_UPDATER_SIGNATURE=1 but neither TAURI_SIGNING_PRIVATE_KEY nor TAURI_SIGNING_PRIVATE_KEY_PATH is set" >&2
+  exit 1
+fi
+
 stage_library_family() {
   local name="$1"
   local dest="$2"
@@ -160,8 +173,19 @@ if [ -n "${APPIMAGE_RUNTIME_FILE:-}" ]; then
   [ -f "$APPIMAGE_RUNTIME_FILE" ] || { echo "AppImage runtime not found at $APPIMAGE_RUNTIME_FILE" >&2; exit 1; }
   APPIMAGE_ARGS+=(--runtime-file "$APPIMAGE_RUNTIME_FILE")
 fi
+APPIMAGE_FILE="$OUT/appimage/QueryMT-Desktop-cef-$VERSION-linux-$ARCH.AppImage"
 ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" "${APPIMAGE_ARGS[@]}" "$APPDIR" \
-  "$OUT/appimage/QueryMT-Desktop-cef-$VERSION-linux-$ARCH.AppImage"
+  "$APPIMAGE_FILE"
+
+if [ "$HAVE_SIGNING_KEY" = "1" ]; then
+  # Bind the signature to the app version, as `tauri build` does for the other
+  # artifacts: updaters with `requireSignedVersion` reject unversioned signatures.
+  npx --no-install tauri signer sign --app-version "$VERSION" "$APPIMAGE_FILE"
+  [ -s "$APPIMAGE_FILE.sig" ] || { echo "updater signature $APPIMAGE_FILE.sig was not created" >&2; exit 1; }
+  echo "Signed $APPIMAGE_FILE"
+else
+  echo "No updater signing key set; $APPIMAGE_FILE is unsigned" >&2
+fi
 
 NFPM="${NFPM:-$(command -v nfpm || true)}"
 [ -n "$NFPM" ] || { echo "nfpm not found" >&2; exit 1; }

@@ -26,4 +26,14 @@ describe('SettingsSubnav', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Connectors/ }));
     expect(onSelect).toHaveBeenCalledWith('connectors');
   });
+
+  it('shows the Updates destination only for builds that can update themselves', async () => {
+    const onSelect = vi.fn();
+    const { rerender } = render(SettingsSubnav, { selected: 'general', onSelect });
+    expect(screen.queryByRole('button', { name: /Updates/ })).not.toBeInTheDocument();
+
+    await rerender({ selected: 'general', onSelect, showUpdates: true });
+    await fireEvent.click(screen.getByRole('button', { name: /Updates/ }));
+    expect(onSelect).toHaveBeenCalledWith('updates');
+  });
 });

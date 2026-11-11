@@ -38,8 +38,25 @@ Linux release filenames identify the runtime:
 - `QueryMT-Desktop-wry-<version>-linux-<arch>.*`: stable default, using the system WebKitGTK webview.
 - `QueryMT-Desktop-cef-<version>-linux-<arch>.*`: experimental CEF runtime, bundling Chromium instead of using WebKitGTK.
 
+`<version>` is `vX.Y.Z` for stable releases and `nightly` for the rolling nightly.
+
 Choose `x86_64` for Intel/AMD Linux or `aarch64` for ARM64 Linux. Both runtimes provide
 AppImage and Debian (`.deb`) packages; CEF also provides a portable `.tar.gz`.
+
+## Updates and release channels
+
+The app checks for updates in the background (Settings → Updates) and never downloads without confirmation. Stable and nightly are separate channels, each with its own `latest.json` feed.
+
+- **Versions:** stable is `X.Y.Z`. A nightly is `<base>-nightly.<UTC YYYYMMDDHHMMSS>`, where `<base>` is the project version, or the next patch if tag `v<base>` already exists. The commit SHA is never part of the version.
+- **No downgrades:** an update is offered only if it is strictly newer. Switching a nightly to stable shows "Waiting for a stable release newer than X" until a newer stable is published. Reinstalling a stable build by hand is possible, but it may not open data written by a newer nightly.
+- **qmtcode gate:** an update that would downgrade the bundled qmtcode is refused, so a session database is never opened by an older qmtcode. A stable desktop release fails CI if its bundled qmtcode is older than the one in the current nightly.
+- **Signed release manifest:** the feed is treated as untrusted. Each `latest.json` carries a manifest (`release_manifest`, `release_manifest_signature`) with the desktop and qmtcode versions, signed with the updater key and bound to the desktop version. The app reads the qmtcode version only from it and does not offer a release whose manifest is missing or does not verify.
+- **Install kinds:** macOS app, Windows NSIS and Linux AppImage update in place. `.deb` and the CEF `.tar.gz` only show a link to the release page.
+- **Update statistics:** on by default, switch off in Settings → Updates. Checks and downloads go through `query.mt` (falling back to GitHub), which records only event, channel, app version, platform and country. No IP, install ID or other identifier is stored. With the switch off, only GitHub is contacted.
+- **Signing:** every update is verified against the public key in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`). The private key and its password live only in the `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` repository secrets, plus one backup in the maintainers' password manager. Losing the key means existing installs can no longer update and must be reinstalled.
+- **Key rotation:** installed apps only accept updates signed with the key they embed, so rotate in two steps.
+  1. Transition release: put the new public key in `tauri.conf.json`, keep the old private key in the `TAURI_SIGNING_PRIVATE_KEY` secrets, and set the repository variable `UPDATER_VERIFY_PUBKEY` to the *old* public key. The feed builder (`updater-feed.mjs --verify-pubkey`) then checks the artifacts against the old key that signed them, while the build embeds the new one.
+  2. Once users have updated, switch the secrets to the new private key and delete `UPDATER_VERIFY_PUBKEY`; normal releases verify against the embedded key again.
 
 ## Development
 
@@ -78,6 +95,14 @@ npm run tauri:cef -- build
 ```
 
 CEF is experimental; Wry remains the stable fallback.
+
+`bundle.createUpdaterArtifacts` is on, so a build without `TAURI_SIGNING_PRIVATE_KEY` fails when it tries to sign. For a local package that you do not publish, skip signing:
+
+```bash
+npm run tauri -- build --no-sign
+```
+
+Published builds are always signed; CI fails when the signing key is missing.
 
 Desktop icons are generated from `static/favicon.svg` with `npm run tauri -- icon static/favicon.svg`.
 Keep the desktop PNG, ICO, and ICNS outputs in `src-tauri/icons`; mobile and Appx icons are not used.

@@ -8,6 +8,8 @@
   import RecentSessionRail from '$lib/components/shell/RecentSessionRail.svelte';
   import ScheduleDialog from '$lib/components/automations/ScheduleDialog.svelte';
   import CommandPalette from '$lib/components/shell/CommandPalette.svelte';
+  import UpdatePrompt from '$lib/components/shell/UpdatePrompt.svelte';
+  import { updatesStore } from '$lib/stores/updates.svelte';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { appearanceStore } from '$lib/stores/appearance.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
@@ -70,6 +72,7 @@
   });
 
   onMount(() => {
+    /** Re-validates pinned sessions when the window becomes visible. */
     const reconcilePins = () => { if (!document.hidden) void agentsStore.ensurePinnedSessions(); };
     const timer = setInterval(reconcilePins, 5 * 60_000);
     document.addEventListener('visibilitychange', reconcilePins);
@@ -86,6 +89,7 @@
     return routeToSection[pathname] ?? 'Start';
   });
 
+  /** Stops links from opening new webview windows. */
   function preventNewWindowNavigation(event: MouseEvent) {
     const target = event.target instanceof Element ? event.target.closest('a[href]') : null;
     if (!target) {
@@ -100,6 +104,7 @@
     }
   }
 
+  /** Runs the callback after the first paint. */
   function showOnFirstPaint(callback: () => void): () => void {
     if (document.visibilityState === 'hidden') {
       if (document.readyState === 'complete') {
@@ -119,6 +124,7 @@
     appearanceStore.initialize();
     chatPreferencesStore.initialize();
     sidebarStore.initialize();
+    void updatesStore.initialize();
     // Decide before initialization writes anything that would make a fresh install look used.
     const firstRun = detectFirstRun();
     const initialized = agentsStore.initialize();
@@ -136,6 +142,7 @@
     let cancelShow: (() => void) | undefined;
     let unlistenResize: (() => void) | undefined;
     let unlistenFocus: (() => void) | undefined;
+    /** Removes the desktop window listeners. */
     const cleanupDesktopWindow = () => {
       cancelShow?.();
       unlistenResize?.();
@@ -154,6 +161,7 @@
           return;
         }
 
+        /** Syncs the maximized flag with the window. */
         const updateMaximized = async () => {
           windowMaximized = await appWindow.isMaximized();
         };
@@ -202,6 +210,7 @@
       void windowDecorationsStore.initialize();
     }
 
+    /** Handles global keyboard shortcuts. */
     const onKeyDown = async (event: KeyboardEvent) => {
       if (event.key === 'Escape' && isSessionCancellable) {
         const now = Date.now();
@@ -270,9 +279,11 @@
       }
       cleanupDesktopWindow();
       agentsStore.dispose();
+      updatesStore.dispose();
     };
   });
 
+  /** Maps a shortcut key to a rail item index. */
   function getRailShortcutIndex(key: string): number | null {
     if (key === '0') {
       return 9;
@@ -285,20 +296,24 @@
     return null;
   }
 
+  /** Minimizes the window. */
   async function minimizeWindow() {
     await (await getNativeWindow()).minimize();
   }
 
+  /** Maximizes or restores the window. */
   async function toggleMaximizeWindow() {
     const appWindow = await getNativeWindow();
     await appWindow.toggleMaximize();
     windowMaximized = await appWindow.isMaximized();
   }
 
+  /** Closes the window. */
   async function closeWindow() {
     await (await getNativeWindow()).close();
   }
 
+  /** Starts a native resize drag from a window edge. */
   async function startResizeDrag(direction: WindowResizeDirection, event: PointerEvent) {
     if (event.button !== 0 || windowMaximized) {
       return;
@@ -416,6 +431,7 @@
 
     </div>
     <div bind:this={overlayPortalTarget} class="app-overlay-root"></div>
+    <UpdatePrompt />
     {/if}
   </div>
 </Tooltip.Provider>

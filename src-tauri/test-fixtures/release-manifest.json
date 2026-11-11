@@ -1,0 +1,30 @@
+{
+  "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ0QzNFRjYzNzhGNDhCRjAKUldUd2kvUjRZKy9EMVBXM0tYbkNka2FBR3dWR2F2R1NrS2JxMUY5U2crNklOQnpWZWNhandUN2kK",
+  "cases": {
+    "a": {
+      "release_manifest": "eyJ0eXBlIjoicXVlcnltdC1kZXNrdG9wLXJlbGVhc2UtbWFuaWZlc3QvdjEiLCJ2ZXJzaW9uIjoiMC4xLjExLW5pZ2h0bHkuMjAyNjExMTExMDAwMDAiLCJxbXRjb2RlX3ZlcnNpb24iOiIwLjYuMC1uaWdodGx5LjIwMjYxMTExMDU0NjI5Iiwic2lnbmF0dXJlcyI6eyJkYXJ3aW4tYWFyY2g2NCI6InNpZy1kYXJ3aW4tYWFyY2g2NCIsImxpbnV4LXg4Nl82NC1jZWYiOiJzaWctbGludXgteDg2XzY0LWNlZiJ9fQ==",
+      "release_manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUd2kvUjRZKy9EMVBvVW05NnRHZWZGVGVjd0FpcEtRWXFleTE3cktJYzByVHViUlhFRkFGTmJOM21mSDJLMU9kMGEva2pXQnQ2WWgweHppd0YwOHVGL0pGYm1SbERYNmdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDEwODk5CWZpbGU6YS5qc29uCXZlcnNpb246MC4xLjExLW5pZ2h0bHkuMjAyNjExMTExMDAwMDAKalBST0FqNWtndGtuT1B3SWlXLzJrSm1vd1NNaDhSMGNXN0RVMjVCSy9mU05EcGg4THhKRG5Nc09VTFRMWktvbmdLK1Nxbm5sRDhYeklCQkFhSU5uQ3c9PQo=",
+      "payload": "{\"type\":\"querymt-desktop-release-manifest/v1\",\"version\":\"0.1.11-nightly.20261111100000\",\"qmtcode_version\":\"0.6.0-nightly.20261111054629\",\"signatures\":{\"darwin-aarch64\":\"sig-darwin-aarch64\",\"linux-x86_64-cef\":\"sig-linux-x86_64-cef\"}}"
+    },
+    "b": {
+      "release_manifest": "eyJ0eXBlIjoicXVlcnltdC1kZXNrdG9wLXJlbGVhc2UtbWFuaWZlc3QvdjEiLCJ2ZXJzaW9uIjoiMC4xLjExIiwicW10Y29kZV92ZXJzaW9uIjoiMC42LjAiLCJzaWduYXR1cmVzIjp7ImRhcndpbi1hYXJjaDY0Ijoic2lnLWRhcndpbi1hYXJjaDY0IiwibGludXgteDg2XzY0LWNlZiI6InNpZy1saW51eC14ODZfNjQtY2VmIn19",
+      "release_manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUd2kvUjRZKy9EMU5RejlGd2grQm9Mc09JMWw3Q0RYV0ZUMU5SZHY3SVg1blNZSVo2NmJpTThMMGVpN05lOVc2Q0k0dGxIUmRHaEpyMXpXQkxBM2lBU3ZJZjlUdUhiWFFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDEwODk5CWZpbGU6Yi5qc29uCXZlcnNpb246MC4xLjExCkpaWkJWNnV6ZDhyc0MvUjYydkt6bHBMcWNjNXdUMnBiZ1M5d2dhRFlPTXZYMEswcmpSZTV1bS8rYlI4R0pQZjRJTXFvN0o0SmowOVJJQmFETEIwRERRPT0K",
+      "payload": "{\"type\":\"querymt-desktop-release-manifest/v1\",\"version\":\"0.1.11\",\"qmtcode_version\":\"0.6.0\",\"signatures\":{\"darwin-aarch64\":\"sig-darwin-aarch64\",\"linux-x86_64-cef\":\"sig-linux-x86_64-cef\"}}"
+    },
+    "c": {
+      "release_manifest": "eyJ0eXBlIjoicXVlcnltdC1kZXNrdG9wLXJlbGVhc2UtbWFuaWZlc3QvdjEiLCJ2ZXJzaW9uIjoiMC4xLjExLW5pZ2h0bHkuMjAyNjExMTExMDAwMDAiLCJxbXRjb2RlX3ZlcnNpb24iOiIwLjYuMC1uaWdodGx5LjIwMjYxMTExMDU0NjI5Iiwic2lnbmF0dXJlcyI6eyJkYXJ3aW4tYWFyY2g2NCI6InNpZy1kYXJ3aW4tYWFyY2g2NCIsImxpbnV4LXg4Nl82NC1jZWYiOiJzaWctbGludXgteDg2XzY0LWNlZiJ9fQ==",
+      "release_manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUd2kvUjRZKy9EMUFCTlMzVm82a2oxbEEvV2d4M3lGd1ptbStMdUVBTVE2Sm9FbTE3ZFkyZnBBY0Z4c0U0SEgvN0FDdkVtd01qTVYyU1k2SGJFSHZxdXd2cW1ITGMzUHcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDEwOTAwCWZpbGU6Yy5qc29uCkJHVkZ3NW15OUhLL3E3N3pvanp3K3FlUnlicHRqN1RUQ1dWaUQxb1hrSW9obTRjbUNjenVpeXZUY1dTcXhiMzlwREhsRGZUY0daZnk0VjA3Y2Nac0JnPT0K",
+      "payload": "{\"type\":\"querymt-desktop-release-manifest/v1\",\"version\":\"0.1.11-nightly.20261111100000\",\"qmtcode_version\":\"0.6.0-nightly.20261111054629\",\"signatures\":{\"darwin-aarch64\":\"sig-darwin-aarch64\",\"linux-x86_64-cef\":\"sig-linux-x86_64-cef\"}}"
+    },
+    "d": {
+      "release_manifest": "eyJ0eXBlIjoib3RoZXIvdjEiLCJ2ZXJzaW9uIjoiMC4xLjExLW5pZ2h0bHkuMjAyNjExMTExMDAwMDAiLCJxbXRjb2RlX3ZlcnNpb24iOiIwLjYuMC1uaWdodGx5LjIwMjYxMTExMDU0NjI5Iiwic2lnbmF0dXJlcyI6eyJkYXJ3aW4tYWFyY2g2NCI6InNpZy1kYXJ3aW4tYWFyY2g2NCIsImxpbnV4LXg4Nl82NC1jZWYiOiJzaWctbGludXgteDg2XzY0LWNlZiJ9fQ==",
+      "release_manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUd2kvUjRZKy9EMUNVb3MyNlkwTjRZS3NFeXJNcFdkZGo2UGh6dkpqZ1FlODNORHVCWi9adHBmZWRDMjk5QnRWSW8xR1FVRStONHpnelFaTDVxeGdpNEcyM3lZME9uMVFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDEwOTAwCWZpbGU6ZC5qc29uCXZlcnNpb246MC4xLjExLW5pZ2h0bHkuMjAyNjExMTExMDAwMDAKTEVNU2xObkRhZ0QvVW1qc0ltdmtjczVaemUxaDNsUXk1T1d0Lzd4OTBQUUdOYXlkdS83cG1FVTBrakllWUNlZldUamsxd2Q5djZCNU9yTDlYcVhjRHc9PQo=",
+      "payload": "{\"type\":\"other/v1\",\"version\":\"0.1.11-nightly.20261111100000\",\"qmtcode_version\":\"0.6.0-nightly.20261111054629\",\"signatures\":{\"darwin-aarch64\":\"sig-darwin-aarch64\",\"linux-x86_64-cef\":\"sig-linux-x86_64-cef\"}}"
+    },
+    "e": {
+      "release_manifest": "eyJ0eXBlIjoicXVlcnltdC1kZXNrdG9wLXJlbGVhc2UtbWFuaWZlc3QvdjEiLCJ2ZXJzaW9uIjoiMC4xLjExLW5pZ2h0bHkuMjAyNjExMTExMDAwMDAiLCJxbXRjb2RlX3ZlcnNpb24iOiIwLjYuMC1uaWdodGx5LjIwMjYxMTExMDU0NjI5Iiwic2lnbmF0dXJlcyI6eyJkYXJ3aW4tYWFyY2g2NCI6InNpZy1kYXJ3aW4tYWFyY2g2NCIsImxpbnV4LXg4Nl82NC1jZWYiOiJzaWctbGludXgteDg2XzY0LWNlZiJ9fQ==",
+      "release_manifest_signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUd2kvUjRZKy9EMURRdTFhVXhBOG5YY1FGVVZhdkNlYi9LZHBPajB0NEs0VkxUdTNPaFRjRldUM05NM0Q0Q3BxWEFLOUxKRDZ5ZGxKV1dvRXVtL2hVb3RaamszbFpnVUFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDEwOTAwCWZpbGU6ZS5qc29uCXZlcnNpb246MC4xLjkKVEl3TzNwM3htQkhLeXF1NXBIU282V0EybzRjdVVVZWRXeWFKdXp4SUtOSXIrUkJnT2p1OHh4cG1DMWZTZkpqMmVxTllYam8zd1o5T0RCa1N5NHh1Q1E9PQo=",
+      "payload": "{\"type\":\"querymt-desktop-release-manifest/v1\",\"version\":\"0.1.11-nightly.20261111100000\",\"qmtcode_version\":\"0.6.0-nightly.20261111054629\",\"signatures\":{\"darwin-aarch64\":\"sig-darwin-aarch64\",\"linux-x86_64-cef\":\"sig-linux-x86_64-cef\"}}"
+    }
+  }
+}

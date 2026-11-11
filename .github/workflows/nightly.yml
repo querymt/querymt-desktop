@@ -34,41 +34,66 @@ jobs:
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
       version_name: ${{ steps.version.outputs.name }}
-      qmtcode_revision: ${{ steps.core.outputs.sha }}
-      qmtcode_asset: ${{ steps.core.outputs.asset }}
+      nightly_version: ${{ steps.version.outputs.version }}
+      qmtcode_revision: ${{ steps.core.outputs.commit }}
+      qmtcode_version: ${{ steps.core.outputs.version }}
+      qmtcode_assets: ${{ steps.core.outputs.assets }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+
+      - name: Test release scripts
+        run: |
+          node --test scripts/release/*.test.mjs scripts/release/lib/*.test.mjs
+          bash scripts/release/test-collect-bundles.sh
+
+      # Fail before building anything: an unsigned nightly must never be published.
+      - name: Require updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is not set; nightly updater artifacts cannot be signed."
+            exit 1
+          fi
+
+      # The qmtcode version and commit come from the release.json published with
+      # the querymt nightly, never from asset names or notes. Every matrix job
+      # downloads the asset URLs resolved here, so all artifacts of this nightly
+      # bundle the same qmtcode.
       - name: Resolve latest QueryMT nightly release
         id: core
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          DISPATCHED_VERSION: ${{ github.event.client_payload.querymt_version }}
+          DISPATCHED_SHA: ${{ github.event.client_payload.querymt_sha }}
         run: |
-          if ! RELEASE_JSON=$(gh api "repos/${CORE_REPO}/releases/tags/${CORE_RELEASE_TAG}"); then
-            echo "::error::No '${CORE_RELEASE_TAG}' release found in ${CORE_REPO}; the desktop nightly depends on it."
-            exit 1
+          set -euo pipefail
+          RESOLVED=$(node scripts/release/resolve-qmtcode.mjs nightly --repo "$CORE_REPO" --github-output)
+          VERSION=$(jq -r .version <<<"$RESOLVED")
+          COMMIT=$(jq -r .commit <<<"$RESOLVED")
+          echo "Latest QueryMT nightly: $VERSION ($COMMIT)"
+
+          # The dispatch payload is informational: a manual dispatch carries none,
+          # and release.json stays the source of truth.
+          if [ -n "$DISPATCHED_VERSION" ]; then
+            echo "Dispatch announced QueryMT nightly $DISPATCHED_VERSION (${DISPATCHED_SHA})"
+            if [ "$DISPATCHED_VERSION" != "$VERSION" ]; then
+              echo "::warning::Dispatch announced $DISPATCHED_VERSION but the published nightly is $VERSION; using the published release.json."
+            fi
           fi
-
-          ASSET=$(jq -r '[.assets[].name | select(startswith("qmtcode-"))] | first // empty' <<<"$RELEASE_JSON")
-          if [ -z "$ASSET" ]; then
-            echo "::error::The ${CORE_REPO} '${CORE_RELEASE_TAG}' release has no qmtcode-* assets."
-            exit 1
-          fi
-
-          # target_commitish is a SHA for the core nightly; resolve anyway so a
-          # branch name can never end up in the comparison.
-          TARGET=$(jq -r '.target_commitish' <<<"$RELEASE_JSON")
-          SHA=$(gh api "repos/${CORE_REPO}/commits/${TARGET}" --jq '.sha')
-          test -n "$SHA"
-
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
-          echo "Latest QueryMT nightly: $SHA ($ASSET)"
 
       - name: Check for changes
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          CURRENT_CORE_SHA: ${{ steps.core.outputs.sha }}
+          CURRENT_CORE_SHA: ${{ steps.core.outputs.commit }}
           CURRENT_DESKTOP_SHA: ${{ github.sha }}
         run: |
           LAST_JSON=$(gh release view nightly --json targetCommitish,body 2>/dev/null || echo '{}')
@@ -89,9 +114,17 @@ jobs:
             echo "No Desktop or QueryMT nightly changes since the last nightly"
           fi
 
-      - name: Generate version string
+      # <base>-nightly.<UTC YYYYMMDDHHMMSS>, computed once here and passed to
+      # every matrix job so all artifacts of one nightly share a version.
+      # `name` is the asset label, so the rolling release URLs stay stable.
+      - name: Generate version
         id: version
-        run: echo "name=nightly-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          VERSION=$(node scripts/release/nightly-version.mjs "$(date -u +%Y%m%d%H%M%S)")
+          echo "Nightly version: $VERSION"
+          echo "name=nightly" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
   versions:
     name: Version consistency
@@ -120,23 +153,23 @@ jobs:
             runtime: wry
             platform: macos-latest
             target: aarch64-apple-darwin
-            qmtcode_asset_glob: qmtcode-*-aarch64-apple-darwin.tar.gz
-            tauri_args: --target aarch64-apple-darwin --bundles dmg
+            qmtcode_target: aarch64-apple-darwin
+            tauri_args: --target aarch64-apple-darwin --bundles app,dmg
             asset_prefix: QueryMT-Desktop
             asset_suffix: macos-aarch64
           - name: macOS Intel
             runtime: wry
             platform: macos-26-intel
             target: x86_64-apple-darwin
-            qmtcode_asset_glob: qmtcode-*-x86_64-apple-darwin.tar.gz
-            tauri_args: --target x86_64-apple-darwin --bundles dmg
+            qmtcode_target: x86_64-apple-darwin
+            tauri_args: --target x86_64-apple-darwin --bundles app,dmg
             asset_prefix: QueryMT-Desktop
             asset_suffix: macos-x86_64
           - name: Windows x64
             runtime: wry
             platform: windows-latest
             target: x86_64-pc-windows-msvc
-            qmtcode_asset_glob: qmtcode-*-x86_64-pc-windows-msvc.zip
+            qmtcode_target: x86_64-pc-windows-msvc
             tauri_args: --target x86_64-pc-windows-msvc --bundles nsis
             asset_prefix: QueryMT-Desktop
             asset_suffix: windows-x64-setup
@@ -144,7 +177,7 @@ jobs:
             runtime: wry
             platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            qmtcode_asset_glob: qmtcode-*-x86_64-unknown-linux-musl.tar.gz
+            qmtcode_target: x86_64-unknown-linux-musl
             tauri_args: --target x86_64-unknown-linux-gnu --bundles appimage,deb
             asset_prefix: QueryMT-Desktop-wry
             asset_suffix: linux-x86_64
@@ -152,16 +185,18 @@ jobs:
             runtime: wry
             platform: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            qmtcode_asset_glob: qmtcode-*-aarch64-unknown-linux-musl.tar.gz
+            qmtcode_target: aarch64-unknown-linux-musl
             tauri_args: --target aarch64-unknown-linux-gnu --bundles appimage,deb
             asset_prefix: QueryMT-Desktop-wry
             asset_suffix: linux-aarch64
           - name: Linux x64 (CEF)
             runtime: cef
             arch: x86_64
+            asset_prefix: QueryMT-Desktop-cef
+            asset_suffix: linux-x86_64
             platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            qmtcode_asset_glob: qmtcode-*-x86_64-unknown-linux-musl.tar.gz
+            qmtcode_target: x86_64-unknown-linux-musl
             nfpm_arch: x86_64
             nfpm_sha256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
             appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
@@ -169,9 +204,11 @@ jobs:
           - name: Linux arm64 (CEF)
             runtime: cef
             arch: aarch64
+            asset_prefix: QueryMT-Desktop-cef
+            asset_suffix: linux-aarch64
             platform: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            qmtcode_asset_glob: qmtcode-*-aarch64-unknown-linux-musl.tar.gz
+            qmtcode_target: aarch64-unknown-linux-musl
             nfpm_arch: arm64
             nfpm_sha256: a9a75213763783b7669719e505474c748c5ad7dc66591a195619deb50f85c2f4
             appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
@@ -179,6 +216,13 @@ jobs:
 
     env:
       VERSION_NAME: ${{ needs.check-changes.outputs.version_name }}
+      NIGHTLY_VERSION: ${{ needs.check-changes.outputs.nightly_version }}
+      # Build metadata compiled into the app, and updater signing.
+      QMT_RELEASE_CHANNEL: nightly
+      QMTCODE_VERSION: ${{ needs.check-changes.outputs.qmtcode_version }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      REQUIRE_UPDATER_SIGNATURE: '1'
 
     steps:
       - name: Checkout
@@ -243,7 +287,9 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          QMTCODE_ASSET_GLOB: ${{ matrix.qmtcode_asset_glob }}
+          QMTCODE_ASSET_NAME: ${{ fromJSON(needs.check-changes.outputs.qmtcode_assets)[matrix.qmtcode_target].name }}
+          QMTCODE_ASSET_URL: ${{ fromJSON(needs.check-changes.outputs.qmtcode_assets)[matrix.qmtcode_target].api_url }}
+          QMTCODE_ASSET_DIGEST: ${{ fromJSON(needs.check-changes.outputs.qmtcode_assets)[matrix.qmtcode_target].digest }}
           TAURI_TARGET: ${{ matrix.target }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -252,16 +298,26 @@ jobs:
             Authorization = "Bearer $env:GH_TOKEN"
             'X-GitHub-Api-Version' = '2022-11-28'
           }
-          $release = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:CORE_REPO/releases/tags/$env:CORE_RELEASE_TAG"
-          $asset = $release.assets | Where-Object { $_.name -like $env:QMTCODE_ASSET_GLOB } | Select-Object -First 1
-          if (-not $asset) {
-            throw "No qmtcode asset matching '$env:QMTCODE_ASSET_GLOB' found in $($release.tag_name)."
+          if (-not $env:QMTCODE_ASSET_URL -or -not $env:QMTCODE_ASSET_DIGEST) {
+            throw "No pinned qmtcode asset (id URL and sha256 digest) resolved for ${{ matrix.qmtcode_target }}."
+          }
+          $asset = [pscustomobject]@{
+            name = $env:QMTCODE_ASSET_NAME
+            api_url = $env:QMTCODE_ASSET_URL
+            digest = $env:QMTCODE_ASSET_DIGEST
           }
 
           New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
           New-Item -ItemType Directory -Force -Path qmtcode-extract | Out-Null
           $archive = Join-Path $PWD $asset.name
-          Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile $archive
+          # Download by asset id: if querymt replaced the release since it was resolved,
+          # the id no longer exists and this fails instead of fetching a different build.
+          $headers['Accept'] = 'application/octet-stream'
+          Invoke-WebRequest -Headers $headers -Uri $asset.api_url -OutFile $archive
+          $actual = 'sha256:' + (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
+          if ($actual -ne $asset.digest) {
+            throw "$($asset.name) does not match the resolved digest ($actual != $($asset.digest))."
+          }
 
           if ($asset.name.EndsWith('.zip')) {
             Expand-Archive -Path $archive -DestinationPath qmtcode-extract -Force
@@ -288,28 +344,20 @@ jobs:
           $tauriConfig.bundle | Add-Member -NotePropertyName externalBin -NotePropertyValue @('binaries/qmtcode') -Force
           $tauriConfig | ConvertTo-Json -Depth 20 | Set-Content $tauriConfigPath
 
-          "QMTCODE_VERSION=$($release.tag_name)" >> $env:GITHUB_ENV
-          "QMTCODE_ASSET=$($asset.name)" >> $env:GITHUB_ENV
-
-      # Stamp the app version so the binary identifies itself as a nightly.
-      # Done in the CI workspace only; versions.yml already validated the
-      # committed files. The "g" prefix keeps the semver prerelease identifier
-      # valid even when the short SHA is all digits with a leading zero.
+      # Stamp the app version (the same <base>-nightly.<timestamp> the feed
+      # carries) in the CI workspace only; versions.yml already validated the
+      # committed files.
       - name: Stamp nightly version
         shell: bash
         run: |
-          SHORT="${VERSION_NAME#nightly-}"
-          NIGHTLY_VERSION=$(SHORT="$SHORT" node -e '
+          node -e '
             const fs = require("fs");
-            const base = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
             const path = "src-tauri/tauri.conf.json";
             const config = JSON.parse(fs.readFileSync(path, "utf8"));
-            config.version = base + "-nightly.g" + process.env.SHORT;
+            config.version = process.env.NIGHTLY_VERSION;
             fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
-            console.log(config.version);
-          ')
-          echo "Nightly version: $NIGHTLY_VERSION"
-          echo "NIGHTLY_VERSION=$NIGHTLY_VERSION" >> "$GITHUB_ENV"
+            console.log("Nightly version: " + config.version);
+          '
 
       - name: Build Tauri bundles (Wry)
         if: matrix.runtime == 'wry'
@@ -333,38 +381,7 @@ jobs:
           TARGET: ${{ matrix.target }}
           ASSET_PREFIX: ${{ matrix.asset_prefix }}
           ASSET_SUFFIX: ${{ matrix.asset_suffix }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          mkdir -p dist
-
-          if [ "$RUNTIME" = wry ]; then
-            # Default Tauri names contain spaces and the app version; rename to
-            # <prefix>-nightly-<sha>-<suffix>.<ext>.
-            bundle="src-tauri/target/${TARGET}/release/bundle"
-            for file in "$bundle"/dmg/*.dmg "$bundle"/nsis/*.exe \
-                        "$bundle"/appimage/*.AppImage "$bundle"/deb/*.deb; do
-              ext=".${file##*.}"
-              cp "$file" "dist/${ASSET_PREFIX}-${VERSION_NAME}-${ASSET_SUFFIX}${ext}"
-            done
-          else
-            # package.sh embeds the (semver) version in the file names; swap it
-            # for nightly-<sha> to match the other assets.
-            bundle="src-tauri/target/release/bundle"
-            for file in "$bundle"/appimage/* "$bundle"/deb/* "$bundle"/tar/*; do
-              name="$(basename "$file")"
-              cp "$file" "dist/${name//${NIGHTLY_VERSION}/${VERSION_NAME}}"
-            done
-          fi
-
-          if [ -z "$(ls -A dist)" ]; then
-            echo "::error::No bundles were produced for ${TARGET} (${RUNTIME})."
-            exit 1
-          fi
-
-          # Checksums are published as one SHA256SUMS file by publish-nightly
-          # (GitHub also shows a digest for every release asset).
-          ls -l dist
+        run: bash scripts/release/collect-bundles.sh
 
       - name: Upload nightly assets
         uses: actions/upload-artifact@v7
@@ -384,7 +401,17 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       VERSION_NAME: ${{ needs.check-changes.outputs.version_name }}
+      NIGHTLY_VERSION: ${{ needs.check-changes.outputs.nightly_version }}
+      QMTCODE_VERSION: ${{ needs.check-changes.outputs.qmtcode_version }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+
       - name: Download desktop bundles
         uses: actions/download-artifact@v8
         with:
@@ -408,6 +435,72 @@ jobs:
 
           cp embedded-ui/querymt-embedded-ui.tar.gz "artifacts/querymt-embedded-ui-${VERSION_NAME}.tar.gz"
 
+      # The commit SHAs live in the notes only; they are not part of any version.
+      # The `QueryMT: <sha>` line is parsed by the next run's check-changes.
+      - name: Write release notes
+        env:
+          DESKTOP_SHA: ${{ github.sha }}
+          QMTCODE_REVISION: ${{ needs.check-changes.outputs.qmtcode_revision }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<EOF
+          **This is a pre-release nightly build of QueryMT Desktop.**
+
+          It is not intended for production use.
+
+          Version: \`${NIGHTLY_VERSION}\`
+          Commit: \`${DESKTOP_SHA}\`
+          QueryMT: \`${QMTCODE_REVISION}\`
+          Bundled qmtcode: \`${QMTCODE_VERSION}\`
+          EOF
+
+      # The feed is untrusted by the app; the qmtcode version it reads comes from this
+      # manifest, signed with the updater key and bound to the desktop version (design D12).
+      - name: Install the Tauri CLI for signing
+        run: npm ci --ignore-scripts
+
+      - name: Sign the release manifest
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          node scripts/release/updater-feed.mjs --write-manifest manifest.json \
+            --dist artifacts --version-name "$VERSION_NAME" \
+            --version "$NIGHTLY_VERSION" --qmtcode-version "$QMTCODE_VERSION"
+          npx --no-install tauri signer sign --app-version "$NIGHTLY_VERSION" manifest.json
+          test -s manifest.json.sig
+
+      # Fails, and publishes nothing, when any platform artifact, signature or the
+      # release manifest is missing or does not verify against the updater public key.
+      - name: Generate updater feed
+        env:
+          UPDATER_VERIFY_PUBKEY: ${{ vars.UPDATER_VERIFY_PUBKEY }}
+        run: |
+          set -euo pipefail
+          # Key rotation only: the old public key that signed this release's artifacts
+          # (repository variable UPDATER_VERIFY_PUBKEY). Unset for normal releases.
+          VERIFY_ARGS=()
+          if [ -n "${UPDATER_VERIFY_PUBKEY:-}" ]; then
+            VERIFY_ARGS=(--verify-pubkey "$UPDATER_VERIFY_PUBKEY")
+          fi
+          node scripts/release/updater-feed.mjs \
+            "${VERIFY_ARGS[@]}" \
+            --dist artifacts \
+            --version-name "$VERSION_NAME" \
+            --version "$NIGHTLY_VERSION" \
+            --base-url "https://github.com/${GH_REPO}/releases/download/nightly" \
+            --qmtcode-version "$QMTCODE_VERSION" \
+            --manifest-signature manifest.json.sig \
+            --pubkey-from src-tauri/tauri.conf.json \
+            --notes-file notes.md \
+            --out artifacts/latest.json
+
+      # The signatures are embedded in latest.json, which is all the updater reads.
+      # The generator has already verified every .sig; don't publish them separately.
+      - name: Drop detached signatures
+        run: rm -f artifacts/*.sig
+
       # One combined checksum file instead of a .sha256 file per asset.
       - name: Generate SHA256SUMS
         working-directory: artifacts
@@ -428,8 +521,6 @@ jobs:
         id: draft
         env:
           DESKTOP_SHA: ${{ github.sha }}
-          QMTCODE_REVISION: ${{ needs.check-changes.outputs.qmtcode_revision }}
-          QMTCODE_ASSET: ${{ needs.check-changes.outputs.qmtcode_asset }}
         run: |
           set -euo pipefail
 
@@ -439,20 +530,9 @@ jobs:
             gh api -X DELETE "repos/${GH_REPO}/releases/${id}"
           done
 
-          # The `QueryMT: <sha>` line is parsed by the next run's check-changes.
-          cat > notes.md <<EOF
-          **This is a pre-release nightly build of QueryMT Desktop.**
-
-          It is not intended for production use.
-
-          Commit: \`${DESKTOP_SHA}\`
-          QueryMT: \`${QMTCODE_REVISION}\`
-          Bundled qmtcode: \`${QMTCODE_ASSET}\`
-          EOF
-
           gh release create nightly-staging \
             --draft \
-            --title "Nightly Build (${VERSION_NAME})" \
+            --title "Nightly Build (${NIGHTLY_VERSION})" \
             --notes-file notes.md \
             --prerelease \
             --target "$DESKTOP_SHA" \
@@ -494,3 +574,14 @@ jobs:
             echo "::error::nightly tag points at ${TAG_SHA}, expected ${DESKTOP_SHA}"
             exit 1
           fi
+
+      # The published feed must be what the installed apps will read.
+      - name: Verify published feed
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            curl -fsSL "https://github.com/${GH_REPO}/releases/download/nightly/latest.json" -o published.json && break
+            sleep 5
+          done
+          jq -e --arg v "$NIGHTLY_VERSION" '.version == $v and (.platforms | length) == 7' published.json
+          jq -c '{version, qmtcode_version, platforms: (.platforms | keys)}' published.json
