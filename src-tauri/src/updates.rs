@@ -320,6 +320,8 @@ struct ManifestPayload {
     kind: String,
     version: String,
     qmtcode_version: String,
+    /// Updater target -> signature of that target's artifact.
+    signatures: std::collections::HashMap<String, String>,
 }
 
 /// Authenticates the feed's `release_manifest` (design D12).
@@ -327,13 +329,18 @@ struct ManifestPayload {
 /// The feed itself is untrusted: only the manifest bytes signed with the updater key
 /// count. It must be signed for exactly the announced desktop version (the signature's
 /// trusted comment carries `version:`), have the expected `type`, name a valid qmtcode
-/// version and belong to the selected channel. Everything the downgrade gate reads comes
-/// from the returned value, never from the raw feed.
+/// version and belong to the selected channel. It also lists the signature of every
+/// target's artifact, and the one the feed offers for `target` must be that signature:
+/// the plugin verifies the download against it, so an artifact built for another target
+/// can't be installed in its place. Everything the downgrade gate reads comes from the
+/// returned value, never from the raw feed.
 pub fn verify_manifest(
     feed: &serde_json::Value,
     pubkey: &str,
     channel: UpdateChannel,
     announced_version: &str,
+    target: &str,
+    artifact_signature: &str,
 ) -> Result<VerifiedRelease, String> {
     use base64::Engine;
     let engine = base64::engine::general_purpose::STANDARD;
@@ -401,6 +408,11 @@ pub fn verify_manifest(
             "the release manifest is for the {} channel, not {}",
             manifest_channel.name(),
             channel.name()
+        ));
+    }
+    if payload.signatures.get(target).map(|s| s.trim()) != Some(artifact_signature.trim()) {
+        return Err(format!(
+            "the release manifest does not cover the offered {target} artifact"
         ));
     }
     Ok(VerifiedRelease {
@@ -1054,7 +1066,14 @@ async fn check_feed(
         return Ok(FeedOutcome::NotNewer { offered });
     };
 
-    match verify_manifest(&update.raw_json, pubkey, channel, &update.version) {
+    match verify_manifest(
+        &update.raw_json,
+        pubkey,
+        channel,
+        &update.version,
+        &update.target,
+        &update.signature,
+    ) {
         Ok(verified) => Ok(FeedOutcome::Verified {
             update: Box::new(update),
             verified,
@@ -1251,8 +1270,12 @@ async fn download_with_progress(
 
 /// Stops the managed agents and relaunches into the installed version.
 #[tauri::command]
-pub fn updates_restart(app: AppHandle) -> Result<(), String> {
-    stop_sidecars(&app);
+pub async fn updates_restart(app: AppHandle) -> Result<(), String> {
+    // `begin_maintenance` blocks while agents and version probes stop.
+    let stopping = app.clone();
+    tauri::async_runtime::spawn_blocking(move || stop_sidecars(&stopping))
+        .await
+        .map_err(|error| error.to_string())?;
     app.restart()
 }
 
@@ -1290,7 +1313,10 @@ mod tests {
     //   c: same payload as a, signed WITHOUT an app version
     //   d: payload with another `type`, signed for the version
     //   e: same payload as a, signed for version 0.1.9
+    // Every payload lists the signatures of two targets (TARGET -> SIG, OTHER_TARGET -> ...).
     const NIGHTLY: &str = "0.1.11-nightly.20261111100000";
+    const TARGET: &str = "darwin-aarch64";
+    const SIG: &str = "sig-darwin-aarch64";
 
     fn fixtures() -> serde_json::Value {
         serde_json::from_str(include_str!("../test-fixtures/release-manifest.json")).unwrap()
@@ -1313,13 +1339,15 @@ mod tests {
     #[test]
     fn verified_manifest_supplies_the_gate_inputs() {
         let (feed, key) = feed_for("a");
-        let verified = verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).unwrap();
+        let verified =
+            verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY, TARGET, SIG).unwrap();
         // The raw feed claims qmtcode 9.9.9; only the signed value counts.
         assert_eq!(verified.qmtcode_version, "0.6.0-nightly.20261111054629");
         assert_eq!(verified.version, NIGHTLY);
 
         let (feed, key) = feed_for("b");
-        let verified = verify_manifest(&feed, &key, UpdateChannel::Stable, "0.1.11").unwrap();
+        let verified =
+            verify_manifest(&feed, &key, UpdateChannel::Stable, "0.1.11", TARGET, SIG).unwrap();
         assert_eq!(verified.qmtcode_version, "0.6.0");
     }
 
@@ -1334,17 +1362,22 @@ mod tests {
                 .encode(forged)
                 .into();
         }
-        let err = verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).unwrap_err();
+        let err =
+            verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY, TARGET, SIG).unwrap_err();
         assert!(err.contains("does not verify"), "{err}");
 
         let (mut feed, key) = feed_for("a");
         feed.as_object_mut().unwrap().remove("release_manifest");
-        assert!(verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).is_err());
+        assert!(
+            verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY, TARGET, SIG).is_err()
+        );
         let (mut feed, key) = feed_for("a");
         feed.as_object_mut()
             .unwrap()
             .remove("release_manifest_signature");
-        assert!(verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).is_err());
+        assert!(
+            verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY, TARGET, SIG).is_err()
+        );
     }
 
     #[test]
@@ -1352,38 +1385,65 @@ mod tests {
         let (feed, _) = feed_for("a");
         // The production updater key, not the fixture key.
         let other = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYxMkNFNTAzRTcwMjM2RjMKUldUek5nTG5BK1VzWVVyUFViUDFnNHFVM3BuN2pybEMwMFVkakc4WGdCcjdLV3hkbUl3cVV3dEIK";
-        assert!(verify_manifest(&feed, other, UpdateChannel::Nightly, NIGHTLY).is_err());
+        assert!(
+            verify_manifest(&feed, other, UpdateChannel::Nightly, NIGHTLY, TARGET, SIG).is_err()
+        );
     }
 
     #[test]
     fn manifest_must_be_signed_for_exactly_the_offered_version() {
         // Signed for 0.1.9 while the feed offers 0.1.11-nightly: an old manifest replayed.
         let (feed, key) = feed_for("e");
-        let err = verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).unwrap_err();
+        let err =
+            verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY, TARGET, SIG).unwrap_err();
         assert!(err.contains("not the offered"), "{err}");
 
         // Signature without an app version.
         let (feed, key) = feed_for("c");
-        let err = verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).unwrap_err();
+        let err =
+            verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY, TARGET, SIG).unwrap_err();
         assert!(err.contains("carries no version"), "{err}");
 
         // Valid manifest, but the feed announces another version.
         let (feed, key) = feed_for("a");
-        assert!(verify_manifest(&feed, &key, UpdateChannel::Nightly, "0.1.12").is_err());
+        assert!(
+            verify_manifest(&feed, &key, UpdateChannel::Nightly, "0.1.12", TARGET, SIG).is_err()
+        );
+    }
+
+    #[test]
+    fn manifest_binds_each_target_to_its_artifact_signature() {
+        let (feed, key) = feed_for("a");
+        let check = |target: &str, sig: &str| {
+            verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY, target, sig)
+        };
+        assert!(check(TARGET, SIG).is_ok());
+        assert!(check("linux-x86_64-cef", "sig-linux-x86_64-cef").is_ok());
+        // Another target's artifact offered under this target.
+        let err = check(TARGET, "sig-linux-x86_64-cef").unwrap_err();
+        assert!(err.contains("does not cover"), "{err}");
+        // A target the manifest does not list.
+        assert!(check("windows-x86_64", "sig-windows-x86_64").is_err());
+        // An unrelated signature.
+        assert!(check(TARGET, "forged").is_err());
     }
 
     #[test]
     fn manifest_must_match_type_and_channel() {
         let (feed, key) = feed_for("d");
-        let err = verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY).unwrap_err();
+        let err =
+            verify_manifest(&feed, &key, UpdateChannel::Nightly, NIGHTLY, TARGET, SIG).unwrap_err();
         assert!(err.contains("unexpected release manifest type"), "{err}");
 
         // A nightly manifest is never accepted for a stable user, and vice versa.
         let (feed, key) = feed_for("a");
-        let err = verify_manifest(&feed, &key, UpdateChannel::Stable, NIGHTLY).unwrap_err();
+        let err =
+            verify_manifest(&feed, &key, UpdateChannel::Stable, NIGHTLY, TARGET, SIG).unwrap_err();
         assert!(err.contains("channel"), "{err}");
         let (feed, key) = feed_for("b");
-        assert!(verify_manifest(&feed, &key, UpdateChannel::Nightly, "0.1.11").is_err());
+        assert!(
+            verify_manifest(&feed, &key, UpdateChannel::Nightly, "0.1.11", TARGET, SIG).is_err()
+        );
     }
 
     // --- channel -> endpoint ------------------------------------------------

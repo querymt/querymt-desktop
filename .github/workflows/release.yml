@@ -96,7 +96,7 @@ jobs:
 
       - name: Test release scripts
         run: |
-          node --test scripts/release/*.test.mjs
+          node --test scripts/release/*.test.mjs scripts/release/lib/*.test.mjs
           bash scripts/release/test-collect-bundles.sh
 
       - name: Require updater signing key
@@ -412,8 +412,21 @@ jobs:
           Bundled qmtcode: \`${QMTCODE_VERSION}\`
           EOF
 
-      # The feed is untrusted by the app; the qmtcode version it reads comes from this
-      # manifest, signed with the updater key and bound to the desktop version (design D12).
+      # A rerun must not rebind a published desktop version to another qmtcode: the
+      # latest querymt stable is resolved at run time and may have moved on since.
+      - name: Keep the release bound to its qmtcode
+        run: |
+          set -euo pipefail
+          if gh release download "$RELEASE_TAG" -p latest.json -O existing.json 2>/dev/null; then
+            jq -e --arg q "$QMTCODE_VERSION" '.qmtcode_version == $q' existing.json >/dev/null || {
+              echo "::error::$RELEASE_TAG was already published with qmtcode $(jq -r .qmtcode_version existing.json), not $QMTCODE_VERSION"
+              exit 1
+            }
+          fi
+
+      # The feed is untrusted by the app; the qmtcode version and the per-target artifact
+      # signatures it reads come from this manifest, signed with the updater key and
+      # bound to the desktop version (design D12).
       - name: Install the Tauri CLI for signing
         run: npm ci --ignore-scripts
 
@@ -424,6 +437,7 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/release/updater-feed.mjs --write-manifest manifest.json \
+            --dist artifacts --version-name "$VERSION_NAME" \
             --version "$VERSION" --qmtcode-version "$QMTCODE_VERSION"
           npx --no-install tauri signer sign --app-version "$VERSION" manifest.json
           test -s manifest.json.sig

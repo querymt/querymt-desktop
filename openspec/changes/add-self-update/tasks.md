@@ -80,8 +80,9 @@
 
 - [ ] 8.1 Nightly→nightly: install nightly N (updater-enabled), publish nightly N+1, and confirm that an automatic check offers N+1 and installs it on macOS, Windows, a Wry AppImage and a CEF AppImage, with the sidecar restarted afterwards.
 - [ ] 8.2 Channel switch: on nightly `0.1.8-nightly.*`, switch to stable while the stable is `0.1.7`. Confirm the "waiting" status. Publish `0.1.8` (in a fork) and confirm it is offered.
-- [ ] 8.3 qmtcode gate: publish a test feed whose `qmtcode_version` is lower than the installed one and confirm the update is refused with that reason.
+- [ ] 8.3 qmtcode gate: publish (in a fork) a newer desktop release whose validly signed release manifest names a `qmtcode_version` lower than the installed one, and confirm the update is refused as a qmtcode downgrade (not as unverified).
 - [ ] 8.3a Manifest: publish a test feed whose `release_manifest` was edited (or removed) and confirm the update is reported as unverified and, with statistics on, that the GitHub feed is tried next.
+- [ ] 8.3b Target binding: in a test feed, swap the url and signature of two targets (for example the x86_64 and aarch64 CEF AppImages) and confirm the update is reported as unverified and nothing is installed.
 - [ ] 8.4 Tampering: modify an artifact in a test feed and confirm that the install aborts and the current version still runs.
 - [ ] 8.5 Statistics: with statistics on, confirm a check and an install appear as `check` and `download` events in `qmt_desktop_updates`; with statistics off, confirm (via proxy log) that no request goes to query.mt; with the worker routes blocked, confirm the check and install still succeed from GitHub.
 

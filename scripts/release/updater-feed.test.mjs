@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { signedVersion, verifyTauriSignature } from './lib/minisign.mjs';
-import { assertSignedVersion, buildFeed, buildManifestPayload, expectedPlatforms, MANIFEST_TYPE } from './updater-feed.mjs';
+import { assertSignedVersion, buildFeed, buildManifestPayload, collectSignatures, expectedPlatforms, MANIFEST_TYPE } from './updater-feed.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./updater-feed.mjs', import.meta.url));
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -54,8 +54,11 @@ function completeDist(keypair, versionName = 'nightly', signedVersion = VERSION)
 }
 
 /** Signs the release manifest the way CI does: `tauri signer sign --app-version <version>`. */
-function manifestSignature(keypair, version = VERSION, qmtcodeVersion = QMTCODE, signedFor = version) {
-  return signFile(keypair, buildManifestPayload({ version, qmtcodeVersion }), signedFor).toString('utf8');
+function manifestSignature(keypair, files, { version = VERSION, qmtcodeVersion = QMTCODE, signedFor = version } = {}) {
+  // The dist's own release name, whatever name the feed under test is asked for.
+  const versionName = [...files.keys()].some((name) => name.includes('-nightly-')) ? 'nightly' : 'v0.1.11';
+  const signatures = collectSignatures(files, versionName);
+  return signFile(keypair, buildManifestPayload({ version, qmtcodeVersion, signatures }), signedFor).toString('utf8');
 }
 
 const build = (files, keypair, overrides = {}) =>
@@ -64,7 +67,10 @@ const build = (files, keypair, overrides = {}) =>
     versionName: 'nightly',
     version: VERSION,
     qmtcodeVersion: QMTCODE,
-    manifestSignature: manifestSignature(keypair, overrides.version ?? VERSION, overrides.qmtcodeVersion ?? QMTCODE),
+    manifestSignature: manifestSignature(keypair, files, {
+      version: overrides.version,
+      qmtcodeVersion: overrides.qmtcodeVersion
+    }),
     baseUrl: BASE_URL,
     publicKeyBase64: keypair.publicKeyBase64,
     notes: 'notes',
@@ -95,7 +101,10 @@ test('builds a complete feed with verified signatures', () => {
   assert.deepEqual(JSON.parse(manifest.toString()), {
     type: MANIFEST_TYPE,
     version: VERSION,
-    qmtcode_version: QMTCODE
+    qmtcode_version: QMTCODE,
+    signatures: Object.fromEntries(
+      Object.entries(feed.platforms).map(([key, platform]) => [key, platform.signature])
+    )
   });
   assert.equal(
     verifyTauriSignature({
@@ -209,13 +218,14 @@ test('CLI writes latest.json for a complete dist and fails on an incomplete one'
   const dir = mkdtempSync(join(tmpdir(), 'updater-feed-'));
   const dist = join(dir, 'dist');
   mkdirSync(dist);
-  for (const [name, data] of completeDist(keypair)) writeFileSync(join(dist, name), data);
+  const files = completeDist(keypair);
+  for (const [name, data] of files) writeFileSync(join(dist, name), data);
   const config = join(dir, 'tauri.conf.json');
   writeFileSync(config, JSON.stringify({ plugins: { updater: { pubkey: keypair.publicKeyBase64 } } }));
   writeFileSync(join(dir, 'notes.md'), 'Commit: abc\n');
   const out = join(dir, 'latest.json');
   const sig = join(dir, 'manifest.json.sig');
-  writeFileSync(sig, manifestSignature(keypair));
+  writeFileSync(sig, manifestSignature(keypair, files));
   const args = [
     SCRIPT, '--dist', dist, '--version-name', 'nightly', '--version', VERSION, '--base-url', BASE_URL,
     '--qmtcode-version', QMTCODE, '--manifest-signature', sig, '--pubkey-from', config, '--out', out,
@@ -240,13 +250,14 @@ test('CLI --verify-pubkey checks signatures against the key that signed them, no
   const dir = mkdtempSync(join(tmpdir(), 'updater-feed-rotate-'));
   const dist = join(dir, 'dist');
   mkdirSync(dist);
-  for (const [name, data] of completeDist(oldKey)) writeFileSync(join(dist, name), data);
+  const files = completeDist(oldKey);
+  for (const [name, data] of files) writeFileSync(join(dist, name), data);
   // The build embeds the NEW key; the artifacts are signed with the OLD one.
   const config = join(dir, 'tauri.conf.json');
   writeFileSync(config, JSON.stringify({ plugins: { updater: { pubkey: newKey.publicKeyBase64 } } }));
   // The manifest is signed with the same (old) key as the artifacts.
   const sig = join(dir, 'manifest.json.sig');
-  writeFileSync(sig, manifestSignature(oldKey));
+  writeFileSync(sig, manifestSignature(oldKey, files));
   const base = [
     SCRIPT, '--dist', dist, '--version-name', 'nightly', '--version', VERSION, '--base-url', BASE_URL,
     '--qmtcode-version', QMTCODE, '--manifest-signature', sig, '--pubkey-from', config
@@ -316,7 +327,7 @@ test('rejects a manifest signature that does not cover the announced qmtcode ver
   const keypair = newKeypair();
   const files = completeDist(keypair);
   // Signed for qmtcode 0.5.0 while the feed would announce a newer one.
-  const stale = manifestSignature(keypair, VERSION, '0.5.0');
+  const stale = manifestSignature(keypair, files, { qmtcodeVersion: '0.5.0' });
   assert.throws(() => build(files, keypair, { manifestSignature: stale }), /release manifest: signature does not match/);
 });
 
@@ -324,17 +335,17 @@ test('rejects a manifest signature bound to another version or made by another k
   const keypair = newKeypair();
   const files = completeDist(keypair);
   assert.throws(
-    () => build(files, keypair, { manifestSignature: manifestSignature(keypair, VERSION, QMTCODE, '0.1.10') }),
+    () => build(files, keypair, { manifestSignature: manifestSignature(keypair, files, { signedFor: '0.1.10' }) }),
     /release manifest: .*bound to version 0\.1\.10/
   );
   assert.throws(
-    () => build(files, keypair, { manifestSignature: manifestSignature(keypair, VERSION, QMTCODE, null) }),
+    () => build(files, keypair, { manifestSignature: manifestSignature(keypair, files, { signedFor: null }) }),
     /release manifest: .*carries no app version/
   );
   const other = newKeypair();
   other.keyId.set(Buffer.from('c1c2c3c4c5c6c7c8', 'hex'));
   assert.throws(
-    () => build(files, keypair, { manifestSignature: manifestSignature(other) }),
+    () => build(files, keypair, { manifestSignature: manifestSignature(other, files) }),
     /release manifest: signed by key/
   );
 });
@@ -351,9 +362,26 @@ test('rejects a nightly version in a stable release and the reverse', () => {
 });
 
 test('manifest payload is deterministic', () => {
+  const signatures = { 'darwin-aarch64': 'sig-a' };
   assert.equal(
-    buildManifestPayload({ version: '0.1.11', qmtcodeVersion: '0.6.0' }).toString(),
-    `{"type":"${MANIFEST_TYPE}","version":"0.1.11","qmtcode_version":"0.6.0"}`
+    buildManifestPayload({ version: '0.1.11', qmtcodeVersion: '0.6.0', signatures }).toString(),
+    `{"type":"${MANIFEST_TYPE}","version":"0.1.11","qmtcode_version":"0.6.0","signatures":{"darwin-aarch64":"sig-a"}}`
   );
-  assert.throws(() => buildManifestPayload({ version: 'nightly', qmtcodeVersion: '0.6.0' }), /not a valid semver/);
+  assert.throws(() => buildManifestPayload({ version: 'nightly', qmtcodeVersion: '0.6.0', signatures }), /not a valid semver/);
+  assert.throws(() => buildManifestPayload({ version: '0.1.11', qmtcodeVersion: '0.6.0', signatures: {} }), /no artifact signatures/);
+});
+
+test('rejects a manifest that binds another artifact signature to a target', () => {
+  const keypair = newKeypair();
+  const files = completeDist(keypair);
+  // Signed over a dist where two targets' artifacts were swapped.
+  const swapped = new Map(files);
+  const a = 'QueryMT-Desktop-cef-nightly-linux-x86_64.AppImage.sig';
+  const b = 'QueryMT-Desktop-cef-nightly-linux-aarch64.AppImage.sig';
+  swapped.set(a, files.get(b));
+  swapped.set(b, files.get(a));
+  assert.throws(
+    () => build(files, keypair, { manifestSignature: manifestSignature(keypair, swapped) }),
+    /release manifest: signature does not match/
+  );
 });

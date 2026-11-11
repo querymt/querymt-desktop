@@ -9,14 +9,18 @@
 //     [--notes-file notes.md] [--pub-date <RFC 3339>] [--verify-pubkey <base64>]
 //
 //   node scripts/release/updater-feed.mjs --write-manifest manifest.json \
+//     --dist dist --version-name <vX.Y.Z|nightly> \
 //     --version <semver> --qmtcode-version <semver>
 //
 // The feed also carries a signed release manifest (design D12): the exact bytes of
-// `{type, version, qmtcode_version}`, base64 encoded, plus a signature made with the
-// updater key (`tauri signer sign --app-version <version> manifest.json`). Apps read
-// the qmtcode version only from there, because the rest of the feed is untrusted.
-// `--write-manifest` writes those bytes; sign them, then pass the .sig as
-// --manifest-signature. The signature is verified before the feed is written.
+// `{type, version, qmtcode_version, signatures}`, base64 encoded, plus a signature made
+// with the updater key (`tauri signer sign --app-version <version> manifest.json`).
+// `signatures` maps every platform key to the signature of its artifact, so the app can
+// tell that the artifact offered for its target is the one this release built for it.
+// Apps read the qmtcode version and the per-target signatures only from there, because
+// the rest of the feed is untrusted. `--write-manifest` writes those bytes; sign them,
+// then pass the .sig as --manifest-signature. The signature is verified before the feed
+// is written.
 //
 // Signatures are verified against the key in --pubkey-from (the key the build
 // embeds). During a key rotation the transition release embeds the NEW key but
@@ -85,10 +89,25 @@ export function assertSignedVersion(signed, announced) {
 export const MANIFEST_TYPE = 'querymt-desktop-release-manifest/v1';
 
 /**
- * The exact bytes that are signed. Deterministic, so the feed step can rebuild them
- * instead of trusting a file that was passed around between steps.
+ * Platform key -> trimmed content of the artifact's .sig, for every platform whose
+ * signature is present, in the fixed `expectedPlatforms` order.
  */
-export function buildManifestPayload({ version, qmtcodeVersion }) {
+export function collectSignatures(files, versionName) {
+  const fileMap = files instanceof Map ? files : new Map(Object.entries(files));
+  const signatures = {};
+  for (const [key, name] of Object.entries(expectedPlatforms(versionName))) {
+    const signature = fileMap.get(`${name}.sig`)?.toString('utf8').trim();
+    if (signature) signatures[key] = signature;
+  }
+  return signatures;
+}
+
+/**
+ * The exact bytes that are signed. Deterministic, so the feed step can rebuild them
+ * instead of trusting a file that was passed around between steps. `signatures` binds
+ * each target to its artifact (design D12).
+ */
+export function buildManifestPayload({ version, qmtcodeVersion, signatures }) {
   for (const [label, value] of [['version', version], ['qmtcode version', qmtcodeVersion]]) {
     try {
       parseSemver(value);
@@ -96,7 +115,10 @@ export function buildManifestPayload({ version, qmtcodeVersion }) {
       throw new Error(`${label} '${value}' is not a valid semver version`);
     }
   }
-  return Buffer.from(JSON.stringify({ type: MANIFEST_TYPE, version, qmtcode_version: qmtcodeVersion }));
+  if (!signatures || Object.keys(signatures).length === 0) {
+    throw new Error('no artifact signatures to bind into the manifest');
+  }
+  return Buffer.from(JSON.stringify({ type: MANIFEST_TYPE, version, qmtcode_version: qmtcodeVersion, signatures }));
 }
 
 /**
@@ -141,7 +163,7 @@ export function buildFeed({ files, versionName, version, qmtcodeVersion, manifes
 
   let manifest = null;
   try {
-    manifest = buildManifestPayload({ version, qmtcodeVersion });
+    manifest = buildManifestPayload({ version, qmtcodeVersion, signatures: collectSignatures(fileMap, versionName) });
     if (!manifestSignature?.trim()) throw new Error('release manifest signature is missing');
     const { signedVersion } = verifyTauriSignature({
       data: manifest,
@@ -205,7 +227,7 @@ function parseArgs(argv) {
     args[arg.slice(2)] = value;
   }
   const required = args['write-manifest']
-    ? ['version', 'qmtcode-version']
+    ? ['dist', 'version-name', 'version', 'qmtcode-version']
     : ['dist', 'version-name', 'version', 'base-url', 'qmtcode-version', 'manifest-signature', 'pubkey-from', 'out'];
   for (const name of required) {
     if (!args[name]) throw new Error(`missing --${name}`);
@@ -216,13 +238,19 @@ function parseArgs(argv) {
 /** CLI entry: reads `dist/`, builds the feed and writes it to `--out`. */
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  const files = new Map();
+  for (const name of readdirSync(args.dist)) files.set(name, readFileSync(join(args.dist, name)));
   if (args['write-manifest']) {
-    writeFileSync(args['write-manifest'], buildManifestPayload({ version: args.version, qmtcodeVersion: args['qmtcode-version'] }));
+    const signatures = collectSignatures(files, args['version-name']);
+    const missing = Object.keys(expectedPlatforms(args['version-name'])).filter((key) => !signatures[key]);
+    if (missing.length > 0) throw new Error(`no artifact signature for: ${missing.join(', ')}`);
+    writeFileSync(
+      args['write-manifest'],
+      buildManifestPayload({ version: args.version, qmtcodeVersion: args['qmtcode-version'], signatures })
+    );
     console.log(`Wrote ${args['write-manifest']}: sign it with \`tauri signer sign --app-version ${args.version}\``);
     return;
   }
-  const files = new Map();
-  for (const name of readdirSync(args.dist)) files.set(name, readFileSync(join(args.dist, name)));
 
   const publicKeyBase64 = JSON.parse(readFileSync(args['pubkey-from'], 'utf8'))?.plugins?.updater?.pubkey;
   if (!publicKeyBase64) throw new Error(`${args['pubkey-from']} has no plugins.updater.pubkey`);

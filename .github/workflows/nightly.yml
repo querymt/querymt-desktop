@@ -49,7 +49,7 @@ jobs:
 
       - name: Test release scripts
         run: |
-          node --test scripts/release/*.test.mjs
+          node --test scripts/release/*.test.mjs scripts/release/lib/*.test.mjs
           bash scripts/release/test-collect-bundles.sh
 
       # Fail before building anything: an unsigned nightly must never be published.
@@ -466,6 +466,7 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/release/updater-feed.mjs --write-manifest manifest.json \
+            --dist artifacts --version-name "$VERSION_NAME" \
             --version "$NIGHTLY_VERSION" --qmtcode-version "$QMTCODE_VERSION"
           npx --no-install tauri signer sign --app-version "$NIGHTLY_VERSION" manifest.json
           test -s manifest.json.sig
