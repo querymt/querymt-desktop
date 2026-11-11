@@ -4,10 +4,10 @@
 
 The agent repository identified by `${QUERYMT_AGENT_REPO}` is outside the allowed edit roots of this repo-local change. The variable denotes the root of the sibling QueryMT agent checkout. These tasks require a separately authorized companion change there. Do not edit that repository as part of a desktop-only apply.
 
-- [ ] 1.1 Agree on the request/response shape of `querymt/workspace/files`, including `uri` and `name` per entry and the error mapping (D1). Agree on the `querymt/workspace/indexReady { session_id, workspace_root }` notification (D4) and the capability entries.
+- [x] 1.1 Agree on the request/response shape of `querymt/workspace/files`, including `uri` and `name` per entry and the error mapping (D1). Agree on the `querymt/workspace/indexReady { session_id, workspace_root }` notification (D4) and the capability entries.
   - Verify: typeshare-generated request, response and notification types exist.
   - Verify: a serde round-trip test covers `ready`, `not_ready`, and `truncated`.
-- [ ] 1.2 In the agent companion change, implement the handler with local-session, remote-session and cwd-only routing (D2):
+- [x] 1.2 In the agent companion change, implement the handler with local-session, remote-session and cwd-only routing (D2):
   - add an optional `cwd` field to `GetFileIndexResponse` with `#[serde(default)]`, and confirm the mesh codec tolerates it;
   - use `typed-path` for remote cwd filtering and `url` for building entry URIs;
   - add the `moka` TTL cache on the relay node;
@@ -22,7 +22,7 @@ The agent repository identified by `${QUERYMT_AGENT_REPO}` is outside the allowe
   - a cwd-only query creating no session;
   - a mesh test against a remote session;
   - a unit test that turns Windows-style remote paths into correct relative paths and URIs on a Unix host.
-- [ ] 1.3 In the agent companion change, add `frizbee` as a pinned direct dependency and implement ranking in one module (D3):
+- [x] 1.3 In the agent companion change, add `frizbee` as a pinned direct dependency and implement ranking in one module (D3):
   - a path pass;
   - a basename pass over the path-pass matches;
   - typo budget `query_chars / 4`;
@@ -32,12 +32,12 @@ The agent repository identified by `${QUERYMT_AGENT_REPO}` is outside the allowe
   Verify:
   - unit tests that a basename match outranks a scattered match (`mod` → `src/model.rs` before `src/m/o/d/x.rs`), that `/`-segment starts get a bonus, that output is identical across runs, and that an empty query returns shallow entries first;
   - a benchmark over 100k synthetic paths that stays well under the 80 ms debounce budget.
-- [ ] 1.4 In the agent companion change:
+- [x] 1.4 In the agent companion change:
   - list the method and notification in `querymt/capabilities`;
   - forward `WorkspaceIndexReady` for local and remote sessions as `querymt/workspace/indexReady` on stdio and WebSocket.
 
   Verify capability and notification tests in `crates/agent/src/agent/handle/tests`, including a remote session's readiness reaching a local client.
-- [ ] 1.5 In the agent companion change, resolve `file://` `resource_link` blocks when prompt, steer and queue requests are accepted, producing persisted `MentionContext` parts and keeping the original blocks in `MessagePart::Prompt` / `Steering` (D5):
+- [x] 1.5 In the agent companion change, resolve `file://` `resource_link` blocks when prompt, steer and queue requests are accepted, producing persisted `MentionContext` parts and keeping the original blocks in `MessagePart::Prompt` / `Steering` (D5):
   - parse with `url::Url::to_file_path`, rejecting non-local hosts;
   - `dunce::canonicalize` both the target and the root, and read the canonical path;
   - apply the per-mention and total caps;
@@ -52,12 +52,12 @@ The agent repository identified by `${QUERYMT_AGENT_REPO}` is outside the allowe
   - a `file://host/...` link;
   - non-`file` schemes keeping their existing handling;
   - a queued input capturing content at enqueue time.
-- [ ] 1.6 In the agent companion change, make `convert_prompt_blocks` emit a textual reference instead of a `MediaSource::Url` attachment, for `file://` links only. Include `MentionContext` content in rebuilt context, degrading image snapshots to a textual reference for models without image support, and in the context-size estimates of compaction, maintenance and the delegation summarizer.
+- [x] 1.6 In the agent companion change, make `convert_prompt_blocks` emit a textual reference instead of a `MediaSource::Url` attachment, for `file://` links only. Include `MentionContext` content in rebuilt context, degrading image snapshots to a textual reference for models without image support, and in the context-size estimates of compaction, maintenance and the delegation summarizer.
   - Verify a test where the file changes after submission but the rebuilt context keeps the submitted snapshot.
   - Verify replayed history still contains the original `resource_link` and no `MentionContext` content.
   - Verify the compaction estimate grows with mention size.
   - Verify an image snapshot sent to a text-only model becomes a reference.
-- [ ] 1.7 Regenerate the agent's typeshare output and copy it to `src/lib/querymt/generated/types.ts` in this repository.
+- [x] 1.7 Regenerate the agent's typeshare output and copy it to `src/lib/querymt/generated/types.ts` in this repository.
   - Verify `npm run check` passes with the new types.
 
 ## 2. Desktop Extension Client (this repository)

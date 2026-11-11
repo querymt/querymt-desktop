@@ -1730,6 +1730,12 @@ export interface RemoteSessionInfo {
 	profile_id?: string;
 	profile_label?: string;
 	model_id?: string;
+	/**
+	 * Owner-reported runtime state: `idle`, `running`, `waiting`,
+	 * `cancel_requested`, `active` (live, status unavailable) or `persisted`
+	 * (not loaded on the owner).
+	 */
+	runtime_state?: string;
 }
 
 export interface RemoteSessionListInfo {
@@ -1919,11 +1925,24 @@ export interface TruncatedEntry {
 	full_bytes: number;
 }
 
+export interface UserPromptRecord {
+	messageId: string;
+	/** Zero-based position in persisted message history; this is not an event sequence. */
+	messageOrder: number;
+	timestamp: number;
+	blocks: any;
+}
+
 export interface SessionHistoryResponse {
 	/** Events whose `seq` is their history position, ascending. */
 	events: AgentEvent[];
 	history: HistoryInfo;
 	truncated: TruncatedEntry[];
+	/**
+	 * Structured prompt blocks for the prompts among `events` (remote
+	 * sessions; same shape as the load snapshot's `userPrompts`).
+	 */
+	userPrompts?: UserPromptRecord[];
 }
 
 /**
@@ -2031,14 +2050,6 @@ export interface SessionRuntimeStatus {
 export interface StreamCursor {
 	local_seq: number;
 	remote_seq_by_source: Record<string, number>;
-}
-
-export interface UserPromptRecord {
-	messageId: string;
-	/** Zero-based position in persisted message history; this is not an event sequence. */
-	messageOrder: number;
-	timestamp: number;
-	blocks: any;
 }
 
 export interface SessionLoadSnapshot {
@@ -2175,6 +2186,54 @@ export interface Usage {
 	 * `None` means the provider reported no breakdown.
 	 */
 	cache_write_tiers?: CacheWriteTiers;
+}
+
+/** One file or directory returned by a workspace query. */
+export interface WorkspaceFileEntry {
+	/** Path relative to the query's working directory, always `/`-separated. */
+	path: string;
+	/** Absolute path on the agent's machine, in that machine's native format. */
+	abs_path: string;
+	/** `file://` URI of `abs_path`, built by the agent. */
+	uri: string;
+	/** Base name of the entry. */
+	name: string;
+	is_dir: boolean;
+}
+
+/**
+ * Request of `querymt/workspace/files`. Exactly one of `session_id` and `cwd`
+ * must be set.
+ */
+export interface WorkspaceFilesRequest {
+	session_id?: string;
+	cwd?: string;
+	query?: string;
+	limit?: number;
+}
+
+/** Whether the workspace index could answer the query. */
+export enum WorkspaceFilesStatus {
+	Ready = "ready",
+	NotReady = "not_ready",
+}
+
+/** Response of `querymt/workspace/files`. */
+export interface WorkspaceFilesResponse {
+	status: WorkspaceFilesStatus;
+	workspace_root?: string;
+	cwd?: string;
+	entries: WorkspaceFileEntry[];
+	truncated: boolean;
+}
+
+/**
+ * The workspace index of a session finished building; open `not_ready`
+ * file lists should re-query.
+ */
+export interface WorkspaceIndexReadyNotification {
+	session_id: string;
+	workspace_root: string;
 }
 
 /**
