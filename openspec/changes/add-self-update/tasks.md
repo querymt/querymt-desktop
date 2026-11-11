@@ -7,7 +7,7 @@
 - [ ] 1.3 Upload `release.json` (`version`, `channel`, `commit`, `published_at`) from both querymt `nightly.yml` and `release.yml`. Verify it is downloadable from `releases/download/nightly/release.json` and `releases/latest/download/release.json`.
 - [x] 1.4 Add the stable gate to querymt `release.yml`: fail if the tag doesn't match the workspace version, or if `semver(tag) >= base(nightly)` and `git merge-base --is-ancestor <nightly.commit> <tag commit>` fails. Verify with dry runs: `v0.6.0` on an old commit fails, `v0.6.0` on a descendant passes, `v0.5.3` passes.
 - [ ] 1.5 Replace the delete-then-create nightly publish with the staged draft flow (`nightly-staging` draft → delete old → retag → publish). Verify that a forced upload failure leaves the previous `nightly` release in place.
-- [ ] 1.6 Add `client_payload[querymt_version]` to the `qmtcode-nightly` dispatch. Verify that the desktop nightly run logs the received version.
+- [x] 1.6 Add `client_payload[querymt_version]` to the `qmtcode-nightly` dispatch. Verify that the desktop nightly run logs the received version.
 - [x] 1.7 Document the nightly/stable versioning and the stable gate in the querymt release docs or README. Verify by reviewing the merged doc.
 
 ## 2. Desktop release versioning scripts
@@ -78,7 +78,7 @@
 
 ## 8. End-to-end verification
 
-- [ ] 8.1 Nightly→nightly: install nightly N (updater-enabled), publish nightly N+1, and confirm that an automatic check offers N+1 and installs it on macOS, Windows, a Wry AppImage and a CEF AppImage, with the sidecar restarted afterwards.
+- [x] 8.1 Nightly→nightly: install nightly N (updater-enabled), publish nightly N+1, and confirm that an automatic check offers N+1 and installs it on macOS, Windows, a Wry AppImage and a CEF AppImage, with the sidecar restarted afterwards.
 - [ ] 8.2 Channel switch: on nightly `0.1.8-nightly.*`, switch to stable while the stable is `0.1.7`. Confirm the "waiting" status. Publish `0.1.8` (in a fork) and confirm it is offered.
 - [ ] 8.3 qmtcode gate: publish (in a fork) a newer desktop release whose validly signed release manifest names a `qmtcode_version` lower than the installed one, and confirm the update is refused as a qmtcode downgrade (not as unverified).
 - [ ] 8.3a Manifest: publish a test feed whose `release_manifest` was edited (or removed) and confirm the update is reported as unverified and, with statistics on, that the GitHub feed is tried next.
