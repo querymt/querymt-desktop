@@ -37,7 +37,7 @@ Every self-updatable artifact (macOS `.app.tar.gz`, Windows NSIS setup, Wry AppI
 
 #### Scenario: CEF AppImage signed
 - **WHEN** a CEF AppImage is packaged for a release
-- **THEN** a matching `.sig` is published next to it
+- **THEN** its signature is verified against the updater public key and recorded in `latest.json`; detached `.sig` files are not published as release assets
 
 ### Requirement: One update feed per channel
 Each release SHALL publish a `latest.json` feed listing the desktop version, release notes, publish date, the bundled qmtcode version, and per-platform artifact URL and signature. Platform keys SHALL be `darwin-<arch>`, `windows-<arch>`, `linux-<arch>-wry` and `linux-<arch>-cef`. Stable feeds SHALL be reachable at the latest-release download URL and nightly feeds at the `nightly` release download URL.

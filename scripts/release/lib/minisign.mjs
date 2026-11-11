@@ -58,7 +58,8 @@ export function parseSignature(base64) {
 
 /**
  * Verifies `signatureBase64` for `data` against the base64 `publicKeyBase64`.
- * Throws with a descriptive message on any mismatch.
+ * Throws with a descriptive message on any mismatch. Returns the authenticated
+ * `{ signedVersion }` (null for a signature made without an app version).
  */
 export function verifyTauriSignature({ data, signatureBase64, publicKeyBase64 }) {
   const publicKey = parsePublicKey(publicKeyBase64);
@@ -77,4 +78,19 @@ export function verifyTauriSignature({ data, signatureBase64, publicKeyBase64 })
   if (!ed25519Verify(publicKey.key, globalMessage, sig.globalSignature)) {
     throw new Error('signature trusted comment does not verify');
   }
+  // Only now is the trusted comment authenticated, so only now may it be read.
+  return { signedVersion: signedVersion(sig.trustedComment) };
+}
+
+/**
+ * Reads the `version` field of a trusted comment, which `tauri build` and
+ * `tauri signer sign --app-version` write as tab separated `key:value` pairs
+ * (`timestamp:...\tfile:...\tversion:1.2.3`). Returns null when there is none.
+ * Mirrors the updater plugin's own parsing.
+ */
+export function signedVersion(trustedComment) {
+  for (const field of trustedComment.split('\t')) {
+    if (field.startsWith('version:')) return field.slice('version:'.length);
+  }
+  return null;
 }

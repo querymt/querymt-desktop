@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { verifyTauriSignature } from './lib/minisign.mjs';
-import { buildFeed, expectedPlatforms } from './updater-feed.mjs';
+import { signedVersion, verifyTauriSignature } from './lib/minisign.mjs';
+import { assertSignedVersion, buildFeed, expectedPlatforms } from './updater-feed.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./updater-feed.mjs', import.meta.url));
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
@@ -22,10 +22,11 @@ function newKeypair() {
   return { privateKey: createPrivateKey(privateKey.export({ format: 'pem', type: 'pkcs8' })), keyId, publicKeyBase64: Buffer.from(text).toString('base64') };
 }
 
-function signFile(keypair, data) {
+/** Signs like `tauri build`: the trusted comment carries `version:` unless `version` is null. */
+function signFile(keypair, data, version = VERSION) {
   const digest = createHash('blake2b512').update(data).digest();
   const signature = sign(null, digest, keypair.privateKey);
-  const trusted = 'timestamp:1\tfile:test';
+  const trusted = version === null ? 'timestamp:1\tfile:test' : `timestamp:1\tfile:test\tversion:${version}`;
   const global = sign(null, Buffer.concat([signature, Buffer.from(trusted)]), keypair.privateKey);
   const text =
     `untrusted comment: signature from tauri secret key\n` +
@@ -39,12 +40,12 @@ const VERSION = '0.1.11-nightly.20261111100000';
 const QMTCODE = '0.6.0-nightly.20261111054629';
 const BASE_URL = 'https://github.com/querymt/querymt-desktop/releases/download/nightly';
 
-function completeDist(keypair, versionName = 'nightly') {
+function completeDist(keypair, versionName = 'nightly', signedVersion = VERSION) {
   const files = new Map();
   for (const name of Object.values(expectedPlatforms(versionName))) {
     const data = Buffer.from(`artifact ${name}`);
     files.set(name, data);
-    files.set(`${name}.sig`, signFile(keypair, data));
+    files.set(`${name}.sig`, signFile(keypair, data, signedVersion));
   }
   // Non-updater assets are ignored.
   files.set(`QueryMT-Desktop-${versionName}-macos-aarch64.dmg`, Buffer.from('dmg'));
@@ -96,7 +97,7 @@ test('builds a complete feed with verified signatures', () => {
 
 test('stable feed uses the vX.Y.Z asset names', () => {
   const keypair = newKeypair();
-  const files = completeDist(keypair, 'v0.1.11');
+  const files = completeDist(keypair, 'v0.1.11', '0.1.11');
   const feed = build(files, keypair, {
     versionName: 'v0.1.11',
     version: '0.1.11',
@@ -231,4 +232,49 @@ test('CLI --verify-pubkey checks signatures against the key that signed them, no
   assert.throws(() =>
     execFileSync('node', [...base, '--verify-pubkey', 'not-a-key', '--out', join(dir, 'c.json')], { stdio: 'pipe' })
   );
+});
+
+test('rejects signatures without an app version', () => {
+  const keypair = newKeypair();
+  assert.throws(() => build(completeDist(keypair, 'nightly', null), keypair), /carries no app version/);
+});
+
+test('rejects signatures bound to a different version than the announced one', () => {
+  const keypair = newKeypair();
+  const files = completeDist(keypair, 'nightly', '0.1.10');
+  assert.throws(() => build(files, keypair), /bound to version 0\.1\.10, not the announced/);
+});
+
+test('reports a version-bound failure per platform, for example a single CEF artifact', () => {
+  const keypair = newKeypair();
+  const files = completeDist(keypair);
+  const cef = [...files.keys()].find((name) => name.includes('cef') && name.endsWith('.AppImage'));
+  files.set(`${cef}.sig`, signFile(keypair, files.get(cef), null));
+  assert.throws(() => build(files, keypair), (error) => error.errors.length === 1 && /linux-.*cef/.test(error.errors[0]));
+});
+
+test('assertSignedVersion compares as semver and ignores a leading v', () => {
+  assertSignedVersion('1.2.3', '1.2.3');
+  assertSignedVersion('v1.2.3', '1.2.3');
+  assertSignedVersion(VERSION, VERSION);
+  assert.throws(() => assertSignedVersion('1.2.3', '1.2.4'), /bound to version/);
+  assert.throws(() => assertSignedVersion(null, '1.2.3'), /no app version/);
+  assert.throws(() => assertSignedVersion('', '1.2.3'), /no app version/);
+});
+
+test('signedVersion reads the version field of a trusted comment', () => {
+  assert.equal(signedVersion('timestamp:1\tfile:a\tversion:1.2.3'), '1.2.3');
+  assert.equal(signedVersion('timestamp:1\tfile:a'), null);
+  assert.equal(signedVersion('timestamp:1\tfile:version:9'), null);
+});
+
+test('verifyTauriSignature returns the authenticated signed version', () => {
+  const keypair = newKeypair();
+  const data = Buffer.from('payload');
+  const result = verifyTauriSignature({
+    data,
+    signatureBase64: signFile(keypair, data, '0.2.0').toString('utf8'),
+    publicKeyBase64: keypair.publicKeyBase64
+  });
+  assert.equal(result.signedVersion, '0.2.0');
 });

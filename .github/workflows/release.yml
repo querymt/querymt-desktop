@@ -437,6 +437,11 @@ jobs:
             --notes-file notes.md \
             --out artifacts/latest.json
 
+      # The signatures are embedded in latest.json, which is all the updater reads.
+      # The generator has already verified every .sig; don't publish them separately.
+      - name: Drop detached signatures
+        run: rm -f artifacts/*.sig
+
       - name: Upload assets to the draft release
         run: |
           set -euo pipefail

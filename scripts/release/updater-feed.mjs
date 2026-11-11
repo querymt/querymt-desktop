@@ -30,7 +30,7 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { parseSemver } from './lib/semver.mjs';
+import { compareSemver, parseSemver } from './lib/semver.mjs';
 import { parsePublicKey, verifyTauriSignature } from './lib/minisign.mjs';
 
 /** Expected platform key -> artifact file name for a release. */
@@ -46,6 +46,28 @@ export function expectedPlatforms(versionName) {
     platforms[`linux-${arch}-cef`] = `QueryMT-Desktop-cef-${vn}-linux-${arch}.AppImage`;
   }
   return platforms;
+}
+
+/**
+ * The app version a signature is bound to must be the announced version: otherwise a
+ * tampered feed could pair a new version number with an older, validly signed
+ * artifact. Missing versions are rejected too, because the updater is configured with
+ * `requireSignedVersion` and would refuse such an update anyway.
+ */
+export function assertSignedVersion(signed, announced) {
+  if (!signed) {
+    throw new Error(
+      'signature carries no app version (sign with `tauri build` or `tauri signer sign --app-version`)'
+    );
+  }
+  const normalize = (value) => value.replace(/^v/, '');
+  let same;
+  try {
+    same = compareSemver(normalize(signed), normalize(announced)) === 0;
+  } catch {
+    same = signed === announced;
+  }
+  if (!same) throw new Error(`signature is bound to version ${signed}, not the announced ${announced}`);
 }
 
 /**
@@ -91,7 +113,8 @@ export function buildFeed({ files, versionName, version, qmtcodeVersion, baseUrl
     }
     const signatureBase64 = signature.toString('utf8').trim();
     try {
-      verifyTauriSignature({ data: artifact, signatureBase64, publicKeyBase64 });
+      const { signedVersion } = verifyTauriSignature({ data: artifact, signatureBase64, publicKeyBase64 });
+      assertSignedVersion(signedVersion, version);
     } catch (error) {
       errors.push(`${key}: ${name}: ${error.message}`);
       continue;

@@ -178,7 +178,9 @@ ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" "${APPIMAGE_ARGS[@]}" "$
   "$APPIMAGE_FILE"
 
 if [ "$HAVE_SIGNING_KEY" = "1" ]; then
-  npx --no-install tauri signer sign "$APPIMAGE_FILE"
+  # Bind the signature to the app version, as `tauri build` does for the other
+  # artifacts: updaters with `requireSignedVersion` reject unversioned signatures.
+  npx --no-install tauri signer sign --app-version "$VERSION" "$APPIMAGE_FILE"
   [ -s "$APPIMAGE_FILE.sig" ] || { echo "updater signature $APPIMAGE_FILE.sig was not created" >&2; exit 1; }
   echo "Signed $APPIMAGE_FILE"
 else

@@ -65,7 +65,7 @@ Endpoints:
 ### D5. Unified build/collect for stable and nightly
 `release.yml` drops `tauri-action` and runs the same steps as `nightly.yml`: `npm run tauri:wry build`, then `scripts/release/collect-bundles.sh`. That script copies the installer, updater artifact and `.sig` files into `dist/` with predictable names: `<prefix>-<version_name>-<suffix><ext>`, where `version_name` is `vX.Y.Z` or `nightly`.
 - Nightly asset names become `...-nightly-<suffix>`, without a SHA. The rolling release URL stays stable and the feed is the source of truth.
-- The publish job in each workflow runs `updater-feed.mjs` over `dist/` with a manifest of expected platform keys. It fails if any key, artifact or signature is missing, then uploads `latest.json` together with the other assets.
+- The publish job in each workflow runs `updater-feed.mjs` over `dist/` with a manifest of expected platform keys. It fails if any key, artifact or signature is missing, then uploads `latest.json` together with the other assets. The signatures live in `latest.json`, so the detached `.sig` files are deleted before upload and are not release assets.
 
 ### D6. Signing
 - `bundle.createUpdaterArtifacts: true`. Wry builds get `TAURI_SIGNING_PRIVATE_KEY` and `..._PASSWORD` from secrets.

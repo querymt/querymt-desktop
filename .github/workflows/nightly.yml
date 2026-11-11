@@ -478,6 +478,11 @@ jobs:
             --notes-file notes.md \
             --out artifacts/latest.json
 
+      # The signatures are embedded in latest.json, which is all the updater reads.
+      # The generator has already verified every .sig; don't publish them separately.
+      - name: Drop detached signatures
+        run: rm -f artifacts/*.sig
+
       # One combined checksum file instead of a .sha256 file per asset.
       - name: Generate SHA256SUMS
         working-directory: artifacts
