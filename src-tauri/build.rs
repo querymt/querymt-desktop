@@ -1,3 +1,4 @@
+/// Build script entry: forwards release metadata and runs the Tauri build.
 fn main() {
     if std::env::var_os("CARGO_FEATURE_CEF").is_some()
         && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")

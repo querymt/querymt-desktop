@@ -6,7 +6,13 @@
 // Reads the `release.json` published with the querymt release (never asset
 // names or notes) and prints JSON:
 //
-//   { "version", "commit", "channel", "tag", "assets": { "<target>": { "name", "url" } } }
+//   { "version", "commit", "channel", "tag",
+//     "assets": { "<target>": { "name", "id", "url", "api_url", "digest" } } }
+//
+// Assets are pinned by GitHub asset id and sha256 digest. Consumers download
+// `api_url` (an id-specific URL that stops resolving if the release is replaced)
+// and must verify the file against `digest`; the moving `url` is informational.
+// release.json itself is verified against its asset digest before it is parsed.
 //
 // It fails when release.json is missing or inconsistent, or when any expected
 // target has no qmtcode asset: a desktop release must bundle the same qmtcode
@@ -18,6 +24,7 @@
 //
 // GITHUB_TOKEN, when set, is used for API and asset requests.
 
+import { createHash } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { parseSemver } from './lib/semver.mjs';
@@ -32,6 +39,7 @@ export const QMTCODE_TARGETS = [
 
 const CHANNEL_FOR = { latest: 'stable', nightly: 'nightly' };
 const COMMIT = /^[0-9a-f]{40}$/;
+const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
 /**
  * Pure resolution step. `release` is the GitHub release object, `manifest` the
@@ -63,6 +71,7 @@ export function resolveQmtcode({ which, release, manifest, targets = QMTCODE_TAR
 
   // Stable asset labels must carry the manifest version; nightly labels are
   // `nightly` or the legacy `nightly-<short sha>` form.
+  /** Escapes a string for use inside a RegExp. */
   const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const label = which === 'latest' ? `v${escape(manifest.version)}` : 'nightly(?:-[0-9a-f]{7,40})?';
 
@@ -70,15 +79,31 @@ export function resolveQmtcode({ which, release, manifest, targets = QMTCODE_TAR
   const missing = [];
   for (const { target, ext } of targets) {
     const pattern = new RegExp(`^qmtcode-${label}-${escape(target)}\\.${escape(ext)}$`);
+    /** Assets of the release matching this target. */
     const matches = (release.assets ?? []).filter((asset) => pattern.test(asset.name));
     if (matches.length !== 1) {
       missing.push(`${target} (${matches.length} matches)`);
       continue;
     }
-    assets[target] = { name: matches[0].name, url: matches[0].browser_download_url };
+    const [asset] = matches;
+    if (!DIGEST.test(asset.digest ?? '')) {
+      missing.push(`${target} (${asset.name} has no sha256 digest)`);
+      continue;
+    }
+    if (!Number.isInteger(asset.id) || typeof asset.url !== 'string') {
+      missing.push(`${target} (${asset.name} has no asset id)`);
+      continue;
+    }
+    assets[target] = {
+      name: asset.name,
+      id: asset.id,
+      url: asset.browser_download_url,
+      api_url: asset.url,
+      digest: asset.digest
+    };
   }
   if (missing.length > 0) {
-    throw new Error(`${release.tag_name} is missing qmtcode assets for: ${missing.join(', ')}`);
+    throw new Error(`${release.tag_name} is missing usable qmtcode assets for: ${missing.join(', ')}`);
   }
 
   return {
@@ -97,7 +122,26 @@ async function fetchJson(fetchImpl, url, headers) {
   return response.json();
 }
 
-/** Fetches the querymt release and its release.json, then resolves the bundled qmtcode. */
+/**
+ * Downloads a release asset through its id-specific API URL and verifies it against the
+ * digest GitHub recorded for it. Returns the bytes.
+ */
+async function fetchVerifiedAsset(fetchImpl, asset, headers) {
+  if (!DIGEST.test(asset.digest ?? '')) throw new Error(`${asset.name} has no sha256 digest`);
+  const response = await fetchImpl(asset.url, {
+    headers: { ...headers, Accept: 'application/octet-stream' },
+    redirect: 'follow'
+  });
+  if (!response.ok) throw new Error(`GET ${asset.url} failed: HTTP ${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const actual = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  if (actual !== asset.digest) {
+    throw new Error(`${asset.name} does not match its recorded digest (${actual} != ${asset.digest})`);
+  }
+  return bytes;
+}
+
+/** Fetches the querymt release and its digest-verified release.json, then resolves the bundled qmtcode. */
 export async function fetchAndResolve({ which, repo, token, fetchImpl = fetch }) {
   const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'querymt-desktop-release' };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -105,9 +149,10 @@ export async function fetchAndResolve({ which, repo, token, fetchImpl = fetch })
   const path = which === 'latest' ? 'releases/latest' : 'releases/tags/nightly';
   const release = await fetchJson(fetchImpl, `https://api.github.com/repos/${repo}/${path}`, headers);
 
+  /** The release.json asset, if the release has one. */
   const manifestAsset = (release.assets ?? []).find((asset) => asset.name === 'release.json');
   const manifest = manifestAsset
-    ? await fetchJson(fetchImpl, manifestAsset.browser_download_url, { ...headers, Accept: 'application/json' })
+    ? JSON.parse((await fetchVerifiedAsset(fetchImpl, manifestAsset, headers)).toString('utf8'))
     : null;
 
   return resolveQmtcode({ which, release, manifest });

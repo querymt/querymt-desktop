@@ -54,28 +54,34 @@ export type InstallEvent =
 
 export const UPDATE_STATE_EVENT = 'updates://state';
 
+/** Reads the update status. */
 export function getUpdatesStatus(): Promise<UpdatesStatus> {
   return invoke<UpdatesStatus>('updates_status');
 }
 
+/** Saves update preferences and returns the new status. */
 export function setUpdatePreferences(patch: UpdatePreferencesPatch): Promise<UpdatesStatus> {
   return invoke<UpdatesStatus>('updates_set_preferences', { patch });
 }
 
+/** Runs an update check and returns the new status. */
 export function checkForUpdates(manual: boolean): Promise<UpdatesStatus> {
   return invoke<UpdatesStatus>('updates_check', { manual });
 }
 
+/** Installs the pending update, reporting progress through `onEvent`. */
 export function installUpdate(onEvent: (event: InstallEvent) => void): Promise<void> {
   const channel = new Channel<InstallEvent>();
   channel.onmessage = onEvent;
   return invoke<void>('updates_install', { onEvent: channel });
 }
 
+/** Restarts into the installed version. */
 export function restartForUpdate(): Promise<void> {
   return invoke<void>('updates_restart');
 }
 
+/** Subscribes to update state changes. */
 export function listenUpdateState(handler: (state: UpdateState) => void): Promise<() => void> {
   return listen<UpdateState>(UPDATE_STATE_EVENT, ({ payload }) => handler(payload));
 }

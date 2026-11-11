@@ -8,11 +8,13 @@
     progress && progress.total ? Math.min(100, Math.round((progress.received / progress.total) * 100)) : null
   );
 
+  /** Installs the update and restarts if the install finished. */
   async function installAndRestart() {
     await updatesStore.install();
     if (updatesStore.state.kind === 'installed') await updatesStore.restart();
   }
 
+  /** Opens the release page, reporting a failure to open it. */
   async function openRelease(url: string) {
     try {
       await openExternalUrl(url);
@@ -52,7 +54,7 @@
       </div>
     {:else if prompt.kind === 'error'}
       <strong>The update could not be installed</strong>
-      <p class="update-prompt-error" role="alert">{updatesStore.installError ?? prompt.message}</p>
+      <p class="update-prompt-error" role="alert">{updatesStore.actionError ?? updatesStore.installError ?? prompt.message}</p>
       <div class="update-prompt-actions">
         <button class="action-btn action-btn-primary" type="button" onclick={() => void updatesStore.checkNow()}>
           Check again

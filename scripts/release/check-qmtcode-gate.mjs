@@ -99,6 +99,7 @@ export async function resolveNightlyBaseline({
 /** CLI entry: compares the bundled qmtcode with the nightly feed and exits non-zero on failure. */
 async function main() {
   const args = process.argv.slice(2);
+  /** Reads a required `--name value` option. */
   const get = (name) => {
     const i = args.indexOf(`--${name}`);
     if (i < 0 || !args[i + 1]) throw new Error(`missing --${name}`);

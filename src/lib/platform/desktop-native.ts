@@ -10,6 +10,7 @@ interface NativeWebSocketEvent {
   message?: string;
 }
 
+/** Opens an ACP stream over a native (Rust) WebSocket. */
 export async function createNativeWebSocketAcpStream(
   url: string,
   onDisconnect?: (reason: string) => void
@@ -20,6 +21,7 @@ export async function createNativeWebSocketAcpStream(
   let notified = false;
   let readableController!: ReadableStreamDefaultController<AnyMessage>;
 
+  /** Reports a disconnect to the caller at most once. */
   const notifyDisconnect = (reason: string) => {
     if (notified) return;
     notified = true;
@@ -124,11 +126,13 @@ export {
   type SessionLoadTelemetryCounters
 } from '$lib/querymt/session-load-telemetry';
 
+/** Subscribes to agent log events. */
 export async function listenAgentLogs<T>(handler: (payload: T) => void): Promise<() => void> {
   const { listen } = await import('@tauri-apps/api/event');
   return listen<T>('querymt://agent/log', ({ payload }) => handler(payload));
 }
 
+/** Asks the user for a workspace folder. */
 export async function pickWorkspaceDirectory(): Promise<string | null> {
   const { open } = await import('@tauri-apps/plugin-dialog');
   const selection = await open({
@@ -139,6 +143,7 @@ export async function pickWorkspaceDirectory(): Promise<string | null> {
   return typeof selection === 'string' ? selection : null;
 }
 
+/** Opens an http(s) link outside the app. */
 export async function openExternalUrl(value: string): Promise<void> {
   const url = new URL(value);
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -158,16 +163,19 @@ export type WindowResizeDirection =
   | 'SouthEast'
   | 'SouthWest';
 
+/** The current native window. */
 export async function getNativeWindow() {
   const { getCurrentWindow } = await import('@tauri-apps/api/window');
   return getCurrentWindow();
 }
 
+/** The webview runtime the app runs on. */
 export async function getAppRuntime(): Promise<string> {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<string>('app_runtime');
 }
 
+/** Switches between OS and custom window decorations. */
 export async function setWindowDecorationMode(useOsDecorations: boolean): Promise<void> {
   const currentWindow = await getNativeWindow();
   if ((await currentWindow.isDecorated()) !== useOsDecorations) {

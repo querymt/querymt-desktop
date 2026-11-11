@@ -1,22 +1,31 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { fetchAndResolve, QMTCODE_TARGETS, resolveQmtcode } from './resolve-qmtcode.mjs';
 
 const SHA = 'fa1b0c81a1050dfba8a0736052acffd7d094c7e9';
 
-function releaseFixture(label, { tag = 'nightly', withManifest = true, drop = [] } = {}) {
+const sha256 = (data) => `sha256:${createHash('sha256').update(data).digest('hex')}`;
+let nextId = 1000;
+/** An asset the way the GitHub API returns it: id, API url and digest included. */
+const asset = (name, browser_download_url, content = name) => {
+  const id = nextId++;
+  return { id, name, browser_download_url, url: `https://api.github.com/repos/querymt/querymt/releases/assets/${id}`, digest: sha256(content) };
+};
+
+function releaseFixture(label, { tag = 'nightly', withManifest = true, drop = [], manifest = null } = {}) {
   const assets = [];
   for (const { target, ext } of QMTCODE_TARGETS) {
     if (drop.includes(target)) continue;
     const name = `qmtcode-${label}-${target}.${ext}`;
-    assets.push({ name, browser_download_url: `https://example.test/${tag}/${name}` });
+    assets.push(asset(name, `https://example.test/${tag}/${name}`));
     // qmt (not qmtcode) assets and the freebsd/arm windows builds must be ignored.
-    assets.push({ name: `qmt-${label}-${target}.${ext}`, browser_download_url: 'https://example.test/qmt' });
+    assets.push(asset(`qmt-${label}-${target}.${ext}`, 'https://example.test/qmt'));
   }
-  assets.push({ name: `qmtcode-${label}-x86_64-unknown-freebsd.tar.gz`, browser_download_url: 'https://example.test/bsd' });
-  assets.push({ name: `qmtcode-${label}-aarch64-pc-windows-msvc.zip`, browser_download_url: 'https://example.test/winarm' });
+  assets.push(asset(`qmtcode-${label}-x86_64-unknown-freebsd.tar.gz`, 'https://example.test/bsd'));
+  assets.push(asset(`qmtcode-${label}-aarch64-pc-windows-msvc.zip`, 'https://example.test/winarm'));
   if (withManifest) {
-    assets.push({ name: 'release.json', browser_download_url: `https://example.test/${tag}/release.json` });
+    assets.push(asset('release.json', `https://example.test/${tag}/release.json`, JSON.stringify(manifest ?? nightlyManifest)));
   }
   return { tag_name: tag, assets };
 }
@@ -98,7 +107,7 @@ test('ignores stable assets whose label is not the manifest version', () => {
   assert.equal(result.assets['aarch64-apple-darwin'].name, 'qmtcode-v0.6.0-aarch64-apple-darwin.tar.gz');
   assert.throws(
     () => resolveQmtcode({ which: 'latest', release: releaseFixture('v0.5.2', { tag: 'v0.6.0' }), manifest: stableManifest }),
-    /missing qmtcode assets/
+    /missing usable qmtcode assets/
   );
 });
 
@@ -116,23 +125,71 @@ test('fails on inconsistent manifests', () => {
   assert.throws(() => resolve(nightlyManifest, 'beta'), /latest.*nightly/);
 });
 
-test('fetchAndResolve reads release.json from the release assets', async () => {
-  const requested = [];
-  const fetchImpl = async (url) => {
-    requested.push(url);
-    const body = url.endsWith('/releases/tags/nightly')
-      ? releaseFixture('nightly')
-      : url.endsWith('/nightly/release.json')
-        ? nightlyManifest
-        : null;
-    return body ? { ok: true, status: 200, json: async () => body } : { ok: false, status: 404, json: async () => ({}) };
+/** Serves the release API and asset downloads; `tamper` replaces the release.json bytes. */
+function fakeFetch(release, manifestBytes, requested = []) {
+  return async (url, options = {}) => {
+    requested.push({ url, accept: options.headers?.Accept });
+    if (url.endsWith('/releases/tags/nightly') || url.endsWith('/releases/latest')) {
+      return { ok: true, status: 200, json: async () => release };
+    }
+    const manifestAsset = release.assets.find((a) => a.name === 'release.json');
+    if (manifestAsset && url === manifestAsset.url) {
+      return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array(manifestBytes).buffer };
+    }
+    return { ok: false, status: 404, json: async () => ({}) };
   };
-  const result = await fetchAndResolve({ which: 'nightly', repo: 'querymt/querymt', fetchImpl });
+}
+
+test('records asset id, API url and digest for every target', () => {
+  const release = releaseFixture('nightly');
+  const result = resolveQmtcode({ which: 'nightly', release, manifest: nightlyManifest });
+  for (const { target, ext } of QMTCODE_TARGETS) {
+    const source = release.assets.find((a) => a.name === `qmtcode-nightly-${target}.${ext}`);
+    assert.deepEqual(result.assets[target], {
+      name: source.name,
+      id: source.id,
+      url: source.browser_download_url,
+      api_url: source.url,
+      digest: source.digest
+    });
+  }
+});
+
+test('fails when a matching asset has no usable sha256 digest or id', () => {
+  const noDigest = releaseFixture('nightly');
+  delete noDigest.assets.find((a) => a.name === 'qmtcode-nightly-aarch64-apple-darwin.tar.gz').digest;
+  assert.throws(() => resolveQmtcode({ which: 'nightly', release: noDigest, manifest: nightlyManifest }), /no sha256 digest/);
+
+  const badDigest = releaseFixture('nightly');
+  badDigest.assets.find((a) => a.name === 'qmtcode-nightly-aarch64-apple-darwin.tar.gz').digest = 'sha1:abc';
+  assert.throws(() => resolveQmtcode({ which: 'nightly', release: badDigest, manifest: nightlyManifest }), /no sha256 digest/);
+
+  const noId = releaseFixture('nightly');
+  delete noId.assets.find((a) => a.name === 'qmtcode-nightly-aarch64-apple-darwin.tar.gz').id;
+  assert.throws(() => resolveQmtcode({ which: 'nightly', release: noId, manifest: nightlyManifest }), /no asset id/);
+});
+
+test('fetchAndResolve downloads release.json by asset id and verifies its digest', async () => {
+  const requested = [];
+  const release = releaseFixture('nightly');
+  const bytes = Buffer.from(JSON.stringify(nightlyManifest));
+  const result = await fetchAndResolve({ which: 'nightly', repo: 'querymt/querymt', fetchImpl: fakeFetch(release, bytes, requested) });
   assert.equal(result.version, nightlyManifest.version);
-  assert.deepEqual(requested, [
+  const manifestAsset = release.assets.find((a) => a.name === 'release.json');
+  assert.deepEqual(requested.map((r) => r.url), [
     'https://api.github.com/repos/querymt/querymt/releases/tags/nightly',
-    'https://example.test/nightly/release.json'
+    manifestAsset.url
   ]);
+  assert.equal(requested[1].accept, 'application/octet-stream');
+});
+
+test('fetchAndResolve rejects a release.json that does not match its recorded digest', async () => {
+  const release = releaseFixture('nightly');
+  const replaced = Buffer.from(JSON.stringify({ ...nightlyManifest, version: '0.6.0-nightly.20261112000000' }));
+  await assert.rejects(
+    fetchAndResolve({ which: 'nightly', repo: 'querymt/querymt', fetchImpl: fakeFetch(release, replaced) }),
+    /does not match its recorded digest/
+  );
 });
 
 test('fetchAndResolve fails when the release has no release.json asset', async () => {

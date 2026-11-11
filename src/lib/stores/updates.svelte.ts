@@ -157,6 +157,7 @@ export class UpdatesStore {
     this.actionError = null;
     this.installError = null;
     this.progress = { received: 0, total: null };
+    /** Accumulates download progress. */
     const onEvent = (event: InstallEvent) => {
       const current = this.progress ?? { received: 0, total: null };
       if (event.event === 'started') this.progress = { received: 0, total: event.contentLength };

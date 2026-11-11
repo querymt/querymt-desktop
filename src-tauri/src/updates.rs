@@ -640,7 +640,8 @@ fn now_seconds() -> u64 {
         .unwrap_or_default()
 }
 
-/// Stops the managed agents and refuses new launches until [`resume_sidecars`].
+/// Stops the managed agents and refuses new launches until [`resume_sidecars`]. Blocks
+/// while in-flight version probes finish, so call it from a blocking context.
 fn stop_sidecars(app: &AppHandle) {
     app.state::<AcpAgentManager>().begin_maintenance();
 }
@@ -823,11 +824,13 @@ pub fn spawn_scheduler(app: AppHandle) {
 // Commands
 // ---------------------------------------------------------------------------
 
+/// Command: the current update status.
 #[tauri::command]
 pub fn updates_status(app: AppHandle, manager: State<'_, UpdateManager>) -> UpdatesStatus {
     manager.status(&app)
 }
 
+/// Command: saves update preferences; a channel switch discards pending results.
 #[tauri::command]
 pub fn updates_set_preferences(
     app: AppHandle,
@@ -860,6 +863,7 @@ pub fn updates_set_preferences(
     Ok(manager.status(&app))
 }
 
+/// Command: runs an update check (manual or automatic).
 #[tauri::command]
 pub async fn updates_check(
     app: AppHandle,
@@ -924,11 +928,14 @@ pub async fn updates_install(
 
     // No file may be replaced while a sidecar runs or can start: agent launches stay
     // refused from here until the install has finished.
-    stop_sidecars(&app);
-    let installed = tauri::async_runtime::spawn_blocking(move || update.install(bytes))
-        .await
-        .map_err(|error| error.to_string())
-        .and_then(|result| result.map_err(|error| format!("Update install failed: {error}")));
+    let blocking_app = app.clone();
+    let installed = tauri::async_runtime::spawn_blocking(move || {
+        stop_sidecars(&blocking_app);
+        update.install(bytes)
+    })
+    .await
+    .map_err(|error| error.to_string())
+    .and_then(|result| result.map_err(|error| format!("Update install failed: {error}")));
     // The guard covers only the file replacement; agents may launch again once it is done
     // (a user who postpones the restart keeps a working app).
     resume_sidecars(&app);

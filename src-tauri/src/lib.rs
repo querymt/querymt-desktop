@@ -19,6 +19,7 @@ pub type BrowserEngine = tauri_runtime_cef::CefRuntime<tauri::EventLoopMessage>;
 #[cfg(not(all(feature = "cef", target_os = "linux")))]
 pub type BrowserEngine = tauri::Wry;
 
+/// Application entry point: sets up telemetry, plugins and managed state, then runs the Tauri app.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Tonic's lazy OTLP channel starts background tasks while it is constructed.

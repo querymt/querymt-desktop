@@ -93,6 +93,7 @@
     }
   });
 
+  /** Switches the visible settings section. */
   function selectSection(section: SettingsSectionId) {
     selectedSection = section;
     const url = new URL(window.location.href);
@@ -101,6 +102,7 @@
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
   }
 
+  /** Reloads the provider list. */
   async function refreshProviders() {
     if (!selectedAgentId) return;
     refreshingProviders = true;
@@ -114,6 +116,7 @@
     }
   }
 
+  /** Reloads the model list. */
   async function refreshModels() {
     if (!selectedAgentId) return;
     refreshingModels = true;
@@ -129,6 +132,7 @@
     }
   }
 
+  /** Updates the installed plugins. */
   async function updatePlugins() {
     if (!selectedAgentId) return;
     updatingPlugins = true;

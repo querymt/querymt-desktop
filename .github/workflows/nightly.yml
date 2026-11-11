@@ -288,7 +288,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           QMTCODE_ASSET_NAME: ${{ fromJSON(needs.check-changes.outputs.qmtcode_assets)[matrix.qmtcode_target].name }}
-          QMTCODE_ASSET_URL: ${{ fromJSON(needs.check-changes.outputs.qmtcode_assets)[matrix.qmtcode_target].url }}
+          QMTCODE_ASSET_URL: ${{ fromJSON(needs.check-changes.outputs.qmtcode_assets)[matrix.qmtcode_target].api_url }}
+          QMTCODE_ASSET_DIGEST: ${{ fromJSON(needs.check-changes.outputs.qmtcode_assets)[matrix.qmtcode_target].digest }}
           TAURI_TARGET: ${{ matrix.target }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -297,18 +298,26 @@ jobs:
             Authorization = "Bearer $env:GH_TOKEN"
             'X-GitHub-Api-Version' = '2022-11-28'
           }
-          if (-not $env:QMTCODE_ASSET_URL) {
-            throw "No qmtcode asset URL resolved for ${{ matrix.qmtcode_target }}."
+          if (-not $env:QMTCODE_ASSET_URL -or -not $env:QMTCODE_ASSET_DIGEST) {
+            throw "No pinned qmtcode asset (id URL and sha256 digest) resolved for ${{ matrix.qmtcode_target }}."
           }
           $asset = [pscustomobject]@{
             name = $env:QMTCODE_ASSET_NAME
-            browser_download_url = $env:QMTCODE_ASSET_URL
+            api_url = $env:QMTCODE_ASSET_URL
+            digest = $env:QMTCODE_ASSET_DIGEST
           }
 
           New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
           New-Item -ItemType Directory -Force -Path qmtcode-extract | Out-Null
           $archive = Join-Path $PWD $asset.name
-          Invoke-WebRequest -Headers $headers -Uri $asset.browser_download_url -OutFile $archive
+          # Download by asset id: if querymt replaced the release since it was resolved,
+          # the id no longer exists and this fails instead of fetching a different build.
+          $headers['Accept'] = 'application/octet-stream'
+          Invoke-WebRequest -Headers $headers -Uri $asset.api_url -OutFile $archive
+          $actual = 'sha256:' + (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
+          if ($actual -ne $asset.digest) {
+            throw "$($asset.name) does not match the resolved digest ($actual != $($asset.digest))."
+          }
 
           if ($asset.name.EndsWith('.zip')) {
             Expand-Archive -Path $archive -DestinationPath qmtcode-extract -Force

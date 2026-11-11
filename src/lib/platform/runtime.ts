@@ -16,6 +16,7 @@ export const platformCapabilities = Object.freeze({
   selfUpdate: isDesktop
 });
 
+/** Whether the app runs inside Tauri. */
 export function isTauriRuntime(): boolean {
   return browser && '__TAURI_INTERNALS__' in window;
 }

@@ -10,7 +10,7 @@ use std::{
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc, Arc, Condvar, Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -92,6 +92,45 @@ pub struct AcpAgentManager {
     inner: Arc<Mutex<HashMap<String, ManagedAgentProcess>>>,
     /// Held while application files are being replaced (self-update): no agent may launch.
     maintenance: Arc<AtomicBool>,
+    /// Number of `--version` probes still running; maintenance waits for them to finish.
+    probes: Arc<ProbeTracker>,
+}
+
+/// Counts in-flight version probes so an update can wait for them before replacing files.
+#[derive(Default)]
+struct ProbeTracker {
+    running: Mutex<usize>,
+    idle: Condvar,
+}
+
+/// Decrements the probe count when the probe thread ends, however it ends.
+struct ProbeGuard(Arc<ProbeTracker>);
+
+impl ProbeTracker {
+    /// Registers a probe; it is unregistered when the returned guard drops.
+    fn enter(self: &Arc<Self>) -> ProbeGuard {
+        *self.running.lock().expect("probe tracker lock") += 1;
+        ProbeGuard(Arc::clone(self))
+    }
+
+    /// Waits until no probe is running or `timeout` passes. Returns whether none is running.
+    fn wait_idle(&self, timeout: Duration) -> bool {
+        let guard = self.running.lock().expect("probe tracker lock");
+        let (guard, _) = self
+            .idle
+            .wait_timeout_while(guard, timeout, |running| *running > 0)
+            .expect("probe tracker lock");
+        *guard == 0
+    }
+}
+
+impl Drop for ProbeGuard {
+    /// Decrements the probe count when the probe ends.
+    fn drop(&mut self) {
+        let mut running = self.0.running.lock().expect("probe tracker lock");
+        *running = running.saturating_sub(1);
+        self.0.idle.notify_all();
+    }
 }
 
 /// Message returned by launch paths while an update is replacing application files.
@@ -180,6 +219,7 @@ impl ManagedAgentProcess {
 }
 
 impl AcpAgentManager {
+    /// Current runtime status of an agent, registering it if unknown.
     pub fn status(&self, agent_id: String, command_line: String) -> AgentRuntimeStatus {
         let mut inner = self.inner.lock().expect("agent manager lock poisoned");
         let process = inner
@@ -194,6 +234,7 @@ impl AcpAgentManager {
         process.state.clone().into_status()
     }
 
+    /// Launches the agent unless it is running or an update blocks launches.
     pub fn start(
         &self,
         app: &AppHandle,
@@ -287,11 +328,18 @@ impl AcpAgentManager {
             stderr,
             app.clone(),
         );
-        spawn_version_probe(agent_id, Arc::clone(&self.inner), program.path, pid);
+        spawn_version_probe(
+            agent_id,
+            Arc::clone(&self.inner),
+            Arc::clone(&self.probes),
+            program.path,
+            pid,
+        );
 
         Ok(process.state.clone().into_status())
     }
 
+    /// Stops the agent process and detaches its stdout channel.
     pub fn stop(&self, agent_id: String) -> Result<AgentRuntimeStatus, String> {
         let mut inner = self.inner.lock().expect("agent manager lock poisoned");
         let process = inner
@@ -328,6 +376,7 @@ impl AcpAgentManager {
         Ok(process.state.clone().into_status())
     }
 
+    /// Stops and relaunches the agent unless an update blocks launches.
     pub fn restart(
         &self,
         app: &AppHandle,
@@ -341,11 +390,23 @@ impl AcpAgentManager {
         self.start(app, agent_id, command_line)
     }
 
-    /// Refuses every agent launch and stops running agents, until [`Self::end_maintenance`].
-    /// Used while an update replaces application files.
+    /// Refuses every agent launch, stops running agents and waits for in-flight version
+    /// probes (which run the agent binary), until [`Self::end_maintenance`]. Used while an
+    /// update replaces application files.
+    ///
+    /// Blocks for up to a little over [`VERSION_PROBE_TIMEOUT`]; call it from a blocking
+    /// context. The agent lock is not held while waiting, because a finishing probe needs it.
     pub fn begin_maintenance(&self) {
         self.maintenance.store(true, Ordering::SeqCst);
+        // Launches check the flag under the agent lock, so once this returns no new probe
+        // can be registered.
         self.shutdown_all();
+        if !self
+            .probes
+            .wait_idle(VERSION_PROBE_TIMEOUT + Duration::from_secs(2))
+        {
+            eprintln!("A version probe was still running when the update started.");
+        }
     }
 
     /// Allows agent launches again after a failed update.
@@ -358,6 +419,7 @@ impl AcpAgentManager {
         self.maintenance.load(Ordering::SeqCst)
     }
 
+    /// Kills every managed agent process, e.g. at app exit or before an update.
     pub fn shutdown_all(&self) {
         let mut inner = self.inner.lock().expect("agent manager lock poisoned");
 
@@ -395,6 +457,7 @@ impl AcpAgentManager {
         }
     }
 
+    /// The retained log lines of an agent.
     pub fn logs(&self, agent_id: String) -> Vec<AgentLogEntry> {
         let inner = self.inner.lock().expect("agent manager lock poisoned");
         inner
@@ -403,6 +466,7 @@ impl AcpAgentManager {
             .unwrap_or_default()
     }
 
+    /// Routes the agent stdout to a webview channel and returns its generation.
     pub fn attach_stdout_channel(&self, agent_id: String, channel: Channel<String>) -> u64 {
         let mut inner = self.inner.lock().expect("agent manager lock poisoned");
         let process = inner
@@ -413,6 +477,7 @@ impl AcpAgentManager {
         process.stdout_generation
     }
 
+    /// Detaches the stdout channel; a stale generation leaves a newer channel alone.
     pub fn detach_stdout_channel(&self, agent_id: String, generation: Option<u64>) {
         let Some(expected) = generation else {
             return;
@@ -425,6 +490,7 @@ impl AcpAgentManager {
         }
     }
 
+    /// Takes the session updates buffered while no stdout channel was attached.
     pub fn drain_session_updates(
         &self,
         agent_id: String,
@@ -460,6 +526,7 @@ impl AcpAgentManager {
         drained
     }
 
+    /// Writes one ACP JSON line to the agent stdin, tracing requests.
     pub fn write_acp_line(
         &self,
         agent_id: String,
@@ -501,10 +568,12 @@ impl AcpAgentManager {
     }
 }
 
+/// Stable map key for a JSON-RPC id.
 fn request_id_key(value: &serde_json::Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
 }
 
+/// Adds trace context to an outgoing ACP request and returns the pending-request record.
 fn instrument_acp_request(
     agent_id: &str,
     line: &str,
@@ -596,6 +665,7 @@ fn instrument_acp_request(
     ))
 }
 
+/// Completes the span of a request that received its response.
 fn finish_pending_request(process: &mut ManagedAgentProcess, id: &serde_json::Value, bytes: usize) {
     let Some(pending) = process.pending_requests.remove(&request_id_key(id)) else {
         return;
@@ -614,6 +684,7 @@ fn finish_pending_request(process: &mut ManagedAgentProcess, id: &serde_json::Va
     pending.span.record("request.status", "ok");
 }
 
+/// Fails the pending request an unsent line belonged to.
 fn fail_pending_request_for_line(
     process: &mut ManagedAgentProcess,
     line: &str,
@@ -630,6 +701,7 @@ fn fail_pending_request_for_line(
     }
 }
 
+/// Closes all pending request spans with the given status.
 fn close_pending_requests(process: &mut ManagedAgentProcess, status: &'static str) {
     for (_, pending) in process.pending_requests.drain() {
         pending.span.record("request.status", status);
@@ -654,6 +726,7 @@ struct LaunchedAgent {
 /// Base name of the agent binary shipped inside the application bundle.
 const BUNDLED_AGENT_NAME: &str = "qmtcode";
 
+/// Resolves and spawns the agent process for a command line.
 fn launch_agent(app: &AppHandle, command_line: &str) -> Result<LaunchedAgent, String> {
     let parts = shlex::split(command_line)
         .ok_or_else(|| "Could not parse command line for ACP agent.".to_string())?;
@@ -754,6 +827,7 @@ fn bundled_agent_file_names() -> [String; 2] {
     ]
 }
 
+/// Whether the command names the bundled qmtcode.
 fn is_bundled_agent_command(program: &str) -> bool {
     program == BUNDLED_AGENT_NAME || program == format!("{BUNDLED_AGENT_NAME}.exe")
 }
@@ -814,12 +888,14 @@ fn resolve_program(
     Err(missing_agent_message())
 }
 
+/// Looks a program up in a PATH-style variable.
 fn find_on_path(file_name: &str, path_var: &OsStr) -> Option<PathBuf> {
     std::env::split_paths(path_var)
         .map(|dir| dir.join(file_name))
         .find(|candidate| candidate.is_file())
 }
 
+/// Gives a qmtcode child its profile and data directories.
 fn apply_querymt_desktop_environment(
     app: &AppHandle,
     command_line: &str,
@@ -849,6 +925,7 @@ fn apply_querymt_desktop_environment(
     Ok(())
 }
 
+/// The app data, profiles and templates directories for qmtcode.
 fn querymt_desktop_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
     let app_data_dir = app
         .path()
@@ -909,6 +986,7 @@ fn run_version_command(program: &Path, timeout: Duration) -> Option<String> {
 fn spawn_version_probe(
     agent_id: String,
     inner: Arc<Mutex<HashMap<String, ManagedAgentProcess>>>,
+    probes: Arc<ProbeTracker>,
     program: PathBuf,
     pid: u32,
 ) {
@@ -916,7 +994,10 @@ fn spawn_version_probe(
     if !is_querymt_agent(&program) {
         return;
     }
+    // Registered before the thread starts so maintenance can never miss a probe that began.
+    let guard = probes.enter();
     std::thread::spawn(move || {
+        let _guard = guard;
         let Some(version) = run_version_command(&program, VERSION_PROBE_TIMEOUT) else {
             return;
         };
@@ -952,36 +1033,43 @@ fn record_start_failure(process: &mut ManagedAgentProcess, error: &str) -> Agent
     entry
 }
 
+/// The executable file suffix of this platform.
 #[cfg(target_os = "windows")]
 fn executable_suffix() -> &'static str {
     ".exe"
 }
 
+/// The executable file suffix of this platform.
 #[cfg(not(target_os = "windows"))]
 fn executable_suffix() -> &'static str {
     ""
 }
 
+/// The Rust target triple of this build, used to find bundled binaries.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn current_target_triple() -> &'static str {
     "aarch64-apple-darwin"
 }
 
+/// The Rust target triple of this build, used to find bundled binaries.
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn current_target_triple() -> &'static str {
     "x86_64-apple-darwin"
 }
 
+/// The Rust target triple of this build, used to find bundled binaries.
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 fn current_target_triple() -> &'static str {
     "x86_64-pc-windows-msvc"
 }
 
+/// The Rust target triple of this build, used to find bundled binaries.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn current_target_triple() -> &'static str {
     "x86_64-unknown-linux-gnu"
 }
 
+/// The Rust target triple of this build, used to find bundled binaries.
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 fn current_target_triple() -> &'static str {
     "aarch64-unknown-linux-gnu"
@@ -994,16 +1082,19 @@ fn current_target_triple() -> &'static str {
     all(target_os = "linux", target_arch = "x86_64"),
     all(target_os = "linux", target_arch = "aarch64")
 )))]
+/// The Rust target triple of this build, used to find bundled binaries.
 fn current_target_triple() -> &'static str {
     "unsupported-target"
 }
 
+/// The signal that terminated a process, where the platform has one.
 #[cfg(unix)]
 fn exit_signal(status: &ExitStatus) -> Option<i32> {
     use std::os::unix::process::ExitStatusExt;
     status.signal()
 }
 
+/// The signal that terminated a process, where the platform has one.
 #[cfg(not(unix))]
 fn exit_signal(_status: &ExitStatus) -> Option<i32> {
     None
@@ -1047,6 +1138,7 @@ fn quarantine_hint(
     ))
 }
 
+/// Updates the recorded state if the child has exited.
 fn reconcile_child_state(process: &mut ManagedAgentProcess) {
     let Some(child) = process.child.as_mut() else {
         return;
@@ -1109,6 +1201,7 @@ fn reconcile_child_state(process: &mut ManagedAgentProcess) {
     }
 }
 
+/// Reads agent stdout on a thread and forwards it to the attached channel.
 fn spawn_stdout_reader(
     agent_id: String,
     inner: Arc<Mutex<HashMap<String, ManagedAgentProcess>>>,
@@ -1176,6 +1269,7 @@ fn spawn_stdout_reader(
     });
 }
 
+/// Reads agent stderr on a thread into the agent log.
 fn spawn_stderr_reader(
     agent_id: String,
     inner: Arc<Mutex<HashMap<String, ManagedAgentProcess>>>,
@@ -1189,6 +1283,7 @@ fn spawn_stderr_reader(
     });
 }
 
+/// Appends a line to an agent log and emits it to the webview.
 fn append_log(
     agent_id: &str,
     inner: &Arc<Mutex<HashMap<String, ManagedAgentProcess>>>,
@@ -1224,10 +1319,12 @@ fn append_log(
     }
 }
 
+/// Whether a JSON-RPC message is a response rather than a request or notification.
 fn is_acp_response(value: &serde_json::Value) -> bool {
     value.get("id").is_some() && value.get("method").is_none()
 }
 
+/// A session update worth buffering for a reconnecting client, if the line is one.
 fn recovery_session_update(line: &str, delivered: bool) -> Option<serde_json::Value> {
     if delivered {
         return None;
@@ -1237,6 +1334,7 @@ fn recovery_session_update(line: &str, delivered: bool) -> Option<serde_json::Va
         .then_some(value)
 }
 
+/// Appends a log entry, dropping the oldest beyond the cap.
 fn push_log(logs: &mut VecDeque<AgentLogEntry>, stream: &str, message: &str) {
     if logs.len() >= MAX_LOG_LINES {
         logs.pop_front();
@@ -1248,6 +1346,7 @@ fn push_log(logs: &mut VecDeque<AgentLogEntry>, stream: &str, message: &str) {
     });
 }
 
+/// Short log summary of an ACP line received from the agent.
 fn summarize_acp_in_line(line: &str) -> String {
     let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
         return format!("ACP-IN raw={}", truncate_for_log(line));
@@ -1264,6 +1363,7 @@ fn summarize_acp_in_line(line: &str) -> String {
     format!("ACP-IN id={id} method={method}")
 }
 
+/// Short log summary of an ACP line sent to the agent.
 fn summarize_acp_out_line(line: &str) -> String {
     let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
         return truncate_for_log(line);
@@ -1280,6 +1380,7 @@ fn summarize_acp_out_line(line: &str) -> String {
     truncate_for_log(line)
 }
 
+/// Shortens a value for the log on a char boundary.
 fn truncate_for_log(value: &str) -> String {
     const MAX_LEN: usize = 180;
     if value.len() <= MAX_LEN {
@@ -1294,6 +1395,7 @@ fn truncate_for_log(value: &str) -> String {
     format!("{}...", &value[..end])
 }
 
+/// Seconds since the Unix epoch, as a string.
 fn unix_timestamp() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1301,10 +1403,12 @@ fn unix_timestamp() -> String {
         .unwrap_or_else(|_| "0".to_string())
 }
 
+/// The next stdout channel generation; never zero.
 fn next_stdout_generation(current: u64) -> u64 {
     current.wrapping_add(1).max(1)
 }
 
+/// Whether a generation identifies the current channel.
 fn stdout_generation_matches(current: u64, expected: u64) -> bool {
     current != 0 && current == expected
 }
@@ -1383,6 +1487,37 @@ mod tests {
         assert!(!stdout_generation_matches(0, 0));
         assert!(stdout_generation_matches(2, 2));
         assert!(!stdout_generation_matches(2, 1));
+    }
+
+    #[test]
+    fn maintenance_waits_for_running_version_probes() {
+        let manager = AcpAgentManager::default();
+        let guard = manager.probes.enter();
+        let released = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(guard);
+        });
+        let started = Instant::now();
+        assert!(manager.probes.wait_idle(Duration::from_secs(5)));
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        released.join().unwrap();
+    }
+
+    #[test]
+    fn probe_wait_times_out_and_idle_returns_at_once() {
+        let manager = AcpAgentManager::default();
+        assert!(manager.probes.wait_idle(Duration::from_millis(10)));
+        let _guard = manager.probes.enter();
+        assert!(!manager.probes.wait_idle(Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn begin_maintenance_blocks_launches_and_returns_when_idle() {
+        let manager = AcpAgentManager::default();
+        manager.begin_maintenance();
+        assert!(manager.in_maintenance());
+        manager.end_maintenance();
+        assert!(!manager.in_maintenance());
     }
 
     #[test]

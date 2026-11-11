@@ -16,6 +16,7 @@ export function parseSemver(text) {
   };
 }
 
+/** Whether a prerelease identifier is all digits. */
 const isNumeric = (id) => /^\d+$/.test(id);
 
 /** Compares prerelease identifier lists by semver precedence. */

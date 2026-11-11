@@ -132,4 +132,14 @@ describe('UpdatePrompt', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(updatesStore.dismissInstallError).toHaveBeenCalled();
   });
+
+  it('shows the latest recovery error after a failed Check again', async () => {
+    updatesStore.prompt = { kind: 'error', message: 'Update install failed', failure: 'other', manual: true };
+    updatesStore.installError = 'Update install failed: disk full';
+    updatesStore.actionError = 'Could not reach the update server: offline';
+    render(UpdatePrompt);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not reach the update server: offline');
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+  });
 });
