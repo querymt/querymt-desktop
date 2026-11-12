@@ -9324,7 +9324,9 @@ a.session-delegate-session:hover {
   opacity: 0.38;
 }
 
-.session-turn-reverted {
+/* Dim the turn's content, not the article, so the undo notice stays at full strength. */
+.session-turn-reverted > .session-user-message-shell,
+.session-turn-reverted > .session-turn-content {
   opacity: 0.46;
   filter: saturate(0.55);
 }
@@ -9332,6 +9334,107 @@ a.session-delegate-session:hover {
 .session-turn-reverted .session-user-message-shell {
   border-left: 2px dashed var(--border-strong);
   padding-left: 0.65rem;
+}
+
+.session-turn-undone-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  justify-self: start;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* Undo/redo summary shown above the first undone turn. */
+.session-undo-notice {
+  display: grid;
+  gap: 0.3rem;
+  margin-bottom: 0.65rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.6rem;
+  background: var(--accent-dim);
+  color: var(--text);
+  font-size: 0.78rem;
+}
+
+.session-undo-notice-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.session-undo-notice-mark {
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.session-undo-notice-title {
+  font-weight: 600;
+}
+
+.session-undo-notice-detail {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-undo-notice-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.5rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.session-undo-notice-btn:hover,
+.session-undo-notice-btn:focus-visible {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+.session-undo-notice-redo {
+  margin-left: auto;
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+}
+
+.session-undo-notice-chevron-open {
+  transform: rotate(180deg);
+}
+
+.session-undo-notice-text {
+  margin: 0;
+  color: var(--muted);
+}
+
+.session-undo-notice-files {
+  margin: 0;
+  padding: 0 0 0 1.1rem;
+  max-height: 10rem;
+  overflow: auto;
+  color: var(--muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.72rem;
+}
+
+.session-undo-notice-recovery {
+  border-color: var(--danger);
+}
+
+.session-undo-notice-recovery .session-undo-notice-mark {
+  color: var(--danger);
 }
 
 .session-undo-prompt {

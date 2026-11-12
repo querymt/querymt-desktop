@@ -3834,6 +3834,7 @@ export class AgentsStore {
 
       turnEventIndex ??= this.addOptimisticUserPrompt(sessionId, prompt, attachments, clientPromptId);
       this.activeSession.undo.stack = [];
+      this.activeSession.undo.stackRestoreFailed = [];
       this.activeSession.undo.lastRevertedFiles = [];
       this.activeSession.undo.lastMessage = null;
       this.activeSession.runState = 'thinking';
@@ -5179,14 +5180,19 @@ export class AgentsStore {
     this.activeSession.activityLabel = 'Undoing workspace changes...';
     try {
       const response = await record.client.undoSession(sessionId, messageId);
-      if (!response.success) throw new Error(response.message ?? 'Undo failed.');
+      if (!response.success) {
+        // A partly failed undo leaves a recovery frame behind: show it so redo
+        // can restore the state from before the undo.
+        if (this.isSelectedSession(agentId, sessionId)) this.applyUndoStack(response.undo_stack);
+        throw new Error(response.message ?? 'Undo failed.');
+      }
       if (!this.isSelectedSession(agentId, sessionId)) return false;
 
       const revertedFiles = response.reverted_files ?? [];
       const resultMessage = revertedFiles.length
         ? `Undid ${revertedFiles.length} changed file${revertedFiles.length === 1 ? '' : 's'}.`
         : 'Turn undone.';
-      this.activeSession.undo.stack = response.undo_stack.map((frame) => frame.message_id);
+      this.applyUndoStack(response.undo_stack);
       this.activeSession.undo.lastRevertedFiles = revertedFiles;
       this.activeSession.undo.lastMessage = resultMessage;
       if (!this.composerPrompt.trim() && target?.text) this.composerPrompt = target.text;
@@ -5243,10 +5249,13 @@ export class AgentsStore {
     this.activeSession.activityLabel = 'Restoring workspace changes...';
     try {
       const response = await record.client.redoSession(sessionId);
-      if (!response.success) throw new Error(response.message ?? 'Redo failed.');
+      if (!response.success) {
+        if (this.isSelectedSession(agentId, sessionId)) this.applyUndoStack(response.undo_stack);
+        throw new Error(response.message ?? 'Redo failed.');
+      }
       if (!this.isSelectedSession(agentId, sessionId)) return false;
 
-      this.activeSession.undo.stack = response.undo_stack.map((frame) => frame.message_id);
+      this.applyUndoStack(response.undo_stack);
       this.activeSession.undo.lastRevertedFiles = [];
       this.activeSession.undo.lastMessage = 'Turn restored.';
       await this.loadSession(agentId, sessionId, 'redo');
@@ -5416,15 +5425,24 @@ export class AgentsStore {
     }
   }
 
+  /**
+   * Store the server's undo stack. `restore_failed` is absent from agents that
+   * predate it, which reads as a committed frame.
+   */
+  private applyUndoStack(frames: ReadonlyArray<{ message_id: string; restore_failed?: boolean }>) {
+    this.activeSession.undo.stack = frames.map((frame) => frame.message_id);
+    this.activeSession.undo.stackRestoreFailed = frames.map((frame) => frame.restore_failed === true);
+  }
+
   private async hydrateUndoStack(agentId: string, sessionId: string, client: DesktopAcpClient) {
     if (!client.supportsQuerymtMethod(QMT_METHOD_SESSION_UNDO_STACK)) {
-      this.activeSession.undo.stack = [];
+      this.applyUndoStack([]);
       return;
     }
     try {
       const response = await client.getUndoStack(sessionId);
       if (this.isSelectedSession(agentId, sessionId)) {
-        this.activeSession.undo.stack = response.undo_stack.map((frame) => frame.message_id);
+        this.applyUndoStack(response.undo_stack);
       }
     } catch (error) {
       console.warn('Failed to load QueryMT undo stack', error);

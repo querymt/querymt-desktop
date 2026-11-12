@@ -401,6 +401,12 @@ export interface SessionUsageStats {
 
 export interface SessionUndoState {
   stack: string[];
+  /**
+   * Parallel to `stack`: `true` for a frame recorded by an undo that failed
+   * part-way. Such a frame is a recovery point for redo only; the turns it
+   * names are still in the transcript and the next prompt discards it.
+   */
+  stackRestoreFailed: boolean[];
   pendingOperation: 'undo' | 'redo' | null;
   lastRevertedFiles: string[];
   lastMessage: string | null;

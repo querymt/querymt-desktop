@@ -84,7 +84,7 @@
 - [ ] 8.3a Manifest: publish a test feed whose `release_manifest` was edited (or removed) and confirm the update is reported as unverified and, with statistics on, that the GitHub feed is tried next.
 - [ ] 8.3b Target binding: in a test feed, swap the url and signature of two targets (for example the x86_64 and aarch64 CEF AppImages) and confirm the update is reported as unverified and nothing is installed.
 - [ ] 8.4 Tampering: modify an artifact in a test feed and confirm that the install aborts and the current version still runs.
-- [ ] 8.5 Statistics: with statistics on, confirm a check and an install appear as `check` and `download` events in `qmt_desktop_updates`; with statistics off, confirm (via proxy log) that no request goes to query.mt; with the worker routes blocked, confirm the check and install still succeed from GitHub.
+- [x] 8.5 Statistics: with statistics on, confirm a check and an install appear as `check` and `download` events in `qmt_desktop_updates`; with statistics off, confirm (via proxy log) that no request goes to query.mt; with the worker routes blocked, confirm the check and install still succeed from GitHub.
 
 ## 9. Website (`querymt-website`, deploy before the first stable with D5 names)
 

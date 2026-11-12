@@ -15,7 +15,7 @@ export function session(overrides: Partial<ActiveSessionViewModel> = {}): Active
     lastStopReason: null,
     lastError: null,
     usage: { contextUsed: null, contextLimit: null, standardCostUsd: null, activeWorkMs: 0, activeWorkStartedAt: null },
-    undo: { stack: [], pendingOperation: null, lastRevertedFiles: [], lastMessage: null },
+    undo: { stack: [], stackRestoreFailed: [], pendingOperation: null, lastRevertedFiles: [], lastMessage: null },
     ...overrides
   };
 }

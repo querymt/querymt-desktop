@@ -1078,6 +1078,7 @@ describe('activeSessionFromLoadResponse', () => {
       },
       undo: {
         stack: [],
+        stackRestoreFailed: [],
         pendingOperation: null,
         lastRevertedFiles: [],
         lastMessage: null
@@ -1125,6 +1126,7 @@ describe('activeSessionFromLoadResponse', () => {
       },
       undo: {
         stack: [],
+        stackRestoreFailed: [],
         pendingOperation: null,
         lastRevertedFiles: [],
         lastMessage: null

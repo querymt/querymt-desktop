@@ -5,9 +5,10 @@
   import SessionTurn from '$lib/components/session/SessionTurn.svelte';
   import SessionCompactionDivider from '$lib/components/session/SessionCompactionDivider.svelte';
   import SessionTurnDiffPanel from '$lib/components/session/SessionTurnDiffPanel.svelte';
+  import SessionUndoNotice from '$lib/components/session/SessionUndoNotice.svelte';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { getForkTarget } from '$lib/domain/session-fork';
-  import { canUndoToMessage, isTurnReverted } from '$lib/domain/session-undo';
+  import { canUndoToMessage, getRedoMessageId, getSessionUndoNotice, isRedoRecovery, isTurnReverted } from '$lib/domain/session-undo';
   import {
     SESSION_TURN_GAP,
     getConversationViewport,
@@ -305,6 +306,19 @@
     };
   });
 
+  const undoNotice = $derived(getSessionUndoNotice(session));
+  const renderedTurnMessageIds = $derived(
+    new Set(
+      windowedTurns.flatMap((item) =>
+        item.type === 'turn' && !item.turn.compaction && item.turn.user?.messageId ? [item.turn.user.messageId] : []
+      )
+    )
+  );
+  // A recovery notice whose turn is windowed out or not loaded renders after the list instead.
+  const detachedUndoNotice = $derived(
+    undoNotice?.recovery && !renderedTurnMessageIds.has(undoNotice.messageId) ? undoNotice : null
+  );
+
   const busy = $derived(
     ['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState) ||
       session.undo.pendingOperation !== null ||
@@ -411,6 +425,7 @@
               {failedImageKeys}
               onImageFailure={handleImageFailure}
               {reverted}
+              undoNotice={undoNotice && undoNotice.messageId === turn.user?.messageId ? undoNotice : null}
               promptFailure={turn.user?.eventIndex === promptFailure?.turnEventIndex ? promptFailure : null}
               retryPending={promptRetryPending}
               {onRetryPrompt}
@@ -430,8 +445,9 @@
               {onUndo}
               redoAvailable={Boolean(
                 undoSupported && !busy && turnActionsSettled && turn.user?.messageId &&
-                  turn.user.messageId === session.undo.stack.at(-1)
+                  turn.user.messageId === getRedoMessageId(session)
               )}
+              redoRecovery={isRedoRecovery(session)}
               {onRedo}
               diffOpen={diffTurn?.id === turn.id}
               {diffPanelId}
@@ -441,6 +457,13 @@
             />
           {/if}
         {/each}
+        {#if detachedUndoNotice}
+          <SessionUndoNotice
+            notice={detachedUndoNotice}
+            redoAvailable={Boolean(undoSupported && !busy && turnActionsSettled)}
+            {onRedo}
+          />
+        {/if}
       </div>
     </Conversation>
   </section>

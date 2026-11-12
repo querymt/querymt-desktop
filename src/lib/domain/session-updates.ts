@@ -42,6 +42,7 @@ export function createEmptyActiveSession(): ActiveSessionViewModel {
     },
     undo: {
       stack: [],
+      stackRestoreFailed: [],
       pendingOperation: null,
       lastRevertedFiles: [],
       lastMessage: null
@@ -322,6 +323,7 @@ function cloneSession(current: ActiveSessionViewModel): ActiveSessionViewModel {
     undo: {
       ...current.undo,
       stack: current.undo.stack.slice(),
+      stackRestoreFailed: current.undo.stackRestoreFailed.slice(),
       lastRevertedFiles: current.undo.lastRevertedFiles.slice()
     }
   };

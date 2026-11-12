@@ -398,11 +398,13 @@ describe('QuerymtExtensions control methods', () => {
 
   it('reads the undo stack, undoes a message, and redoes', async () => {
     const { extensions, extMethod } = extensionClient();
-    extMethod.mockResolvedValueOnce({ undo_stack: [{ message_id: 'm1' }] });
+    extMethod.mockResolvedValueOnce({ undo_stack: [{ message_id: 'm1', restore_failed: true }] });
     extMethod.mockResolvedValueOnce({ success: true, message_id: 'm1', reverted_files: ['a.ts'], undo_stack: [] });
     extMethod.mockResolvedValueOnce({ success: true, restored: true, undo_stack: [] });
 
-    await expect(extensions.undoStack('session-1')).resolves.toEqual({ undo_stack: [{ message_id: 'm1' }] });
+    await expect(extensions.undoStack('session-1')).resolves.toEqual({
+      undo_stack: [{ message_id: 'm1', restore_failed: true }]
+    });
     await expect(extensions.undoSession('session-1', 'm1')).resolves.toEqual({
       success: true,
       message_id: 'm1',

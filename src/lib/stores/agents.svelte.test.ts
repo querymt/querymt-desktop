@@ -6,6 +6,7 @@ import SessionActivityBar from '$lib/components/session/SessionActivityBar.svelt
 import SessionToolBlock from '$lib/components/session/SessionToolBlock.svelte';
 import SessionDelegatesBubble from '$lib/components/session/SessionDelegatesBubble.svelte';
 import { getSessionToolPresentation } from '$lib/domain/session-tool-presentation';
+import { canUndoToMessage, isRedoRecovery, isTurnReverted } from '$lib/domain/session-undo';
 import SessionHeader from '$lib/components/session/SessionHeader.svelte';
 import { RequestError, type InitializeResponse, type ListSessionsRequest, type PromptResponse, type SessionConfigOption, type SessionInfo, type SessionNotification, type SetSessionConfigOptionRequest } from '@agentclientprotocol/sdk/unstable';
 import type { AgentConfig, DesktopSessionSummary, ModelEntry, PromptAttachment, PromptSendOptions } from '$lib/domain/types';
@@ -143,14 +144,25 @@ const mockClient = vi.hoisted(() => {
     })),
     supportsQuerymtFeature: vi.fn((_feature: string) => false),
     supportsQuerymtMethod: vi.fn(() => true),
-    getUndoStack: vi.fn(async (): Promise<{ undo_stack: Array<{ message_id: string }> }> => ({ undo_stack: [] })),
-    undoSession: vi.fn(async (_sessionId: string, messageId: string) => ({
+    getUndoStack: vi.fn(async (): Promise<{ undo_stack: Array<{ message_id: string; restore_failed: boolean }> }> => ({ undo_stack: [] })),
+    undoSession: vi.fn(async (_sessionId: string, messageId: string): Promise<{
+      success: boolean;
+      message?: string;
+      message_id: string;
+      reverted_files: string[];
+      undo_stack: Array<{ message_id: string; restore_failed: boolean }>;
+    }> => ({
       success: true,
       message_id: messageId,
       reverted_files: ['src/app.ts'],
-      undo_stack: [{ message_id: messageId }]
+      undo_stack: [{ message_id: messageId, restore_failed: false }]
     })),
-    redoSession: vi.fn(async () => ({ success: true, restored: true, undo_stack: [] })),
+    redoSession: vi.fn(async (): Promise<{
+      success: boolean;
+      message?: string;
+      restored: boolean;
+      undo_stack: Array<{ message_id: string; restore_failed: boolean }>;
+    }> => ({ success: true, restored: true, undo_stack: [] })),
     forkSession: vi.fn(async () => ({ sessionId: 'fork-session' })),
     supportsImagePrompts: vi.fn(() => true),
     supportsEmbeddedContext: vi.fn(() => true),
@@ -3885,12 +3897,85 @@ describe('AgentsStore connections', () => {
         updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
       }]
     };
-    mockClient.getUndoStack.mockResolvedValueOnce({ undo_stack: [{ message_id: 'm2' }] });
+    mockClient.getUndoStack.mockResolvedValueOnce({ undo_stack: [{ message_id: 'm2', restore_failed: false }] });
 
     await store.loadSession('agent-1', 'session-1');
 
     expect(mockClient.getUndoStack).toHaveBeenCalledWith('session-1');
     expect(store.activeSession.undo.stack).toEqual(['m2']);
+    expect(store.activeSession.undo.stackRestoreFailed).toEqual([false]);
+  });
+
+  it('hydrates which undo frames failed and treats a missing flag as committed', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'A', cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    // An older agent omits restore_failed entirely.
+    mockClient.getUndoStack.mockResolvedValueOnce({
+      undo_stack: [{ message_id: 'm1' }, { message_id: 'm2', restore_failed: true }]
+    } as unknown as { undo_stack: Array<{ message_id: string; restore_failed: boolean }> });
+
+    await store.loadSession('agent-1', 'session-1');
+
+    expect(store.activeSession.undo.stack).toEqual(['m1', 'm2']);
+    expect(store.activeSession.undo.stackRestoreFailed).toEqual([false, true]);
+  });
+
+  it('keeps the recovery frame when an undo fails part-way so redo can restore it', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'A', cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    await store.loadSession('agent-1', 'session-1');
+    store.activeSession.transcript = [
+      { id: 'u1', kind: 'user_message_chunk', text: 'Change the app', messageId: 'm1' }
+    ];
+    mockClient.undoSession.mockResolvedValueOnce({
+      success: false,
+      message: 'Snapshot error: b.txt. Redo restores the state before this undo.',
+      message_id: 'm1',
+      reverted_files: [],
+      undo_stack: [{ message_id: 'm1', restore_failed: true }]
+    });
+
+    await expect(store.undoActiveSessionTo('m1')).resolves.toBe(false);
+
+    expect(store.activeSession.undo.stack).toEqual(['m1']);
+    expect(store.activeSession.undo.stackRestoreFailed).toEqual([true]);
+    expect(store.activeSession.undo.lastMessage).toContain('b.txt');
+    // The turn is not reverted, so it can be undone again, and redo is offered.
+    expect(isTurnReverted(store.activeSession, 'm1')).toBe(false);
+    expect(canUndoToMessage(store.activeSession, 'm1')).toBe(true);
+    expect(isRedoRecovery(store.activeSession)).toBe(true);
+    await expect(store.redoActiveSession()).resolves.toBe(true);
+    expect(mockClient.redoSession).toHaveBeenCalledWith('session-1');
+  });
+
+  it('discards the recovery frame locally when a new prompt is sent', async () => {
+    const store = createStore();
+    store.sessionsByAgent = {
+      'agent-1': [{
+        agentId: 'agent-1', agentName: 'QMTCODE', sessionId: 'session-1', title: 'A', cwd: '/tmp/work',
+        updatedAt: '2026-07-18T17:00:00Z', runtimeId: 'agent-1', runtimeName: 'QMTCODE', source: 'acp', status: 'idle'
+      }]
+    };
+    await store.loadSession('agent-1', 'session-1');
+    store.activeSession.undo.stack = ['m1'];
+    store.activeSession.undo.stackRestoreFailed = [true];
+
+    store.composerPrompt = 'next';
+
+    await store.sendPromptToActiveSession();
+
+    expect(store.activeSession.undo.stack).toEqual([]);
+    expect(store.activeSession.undo.stackRestoreFailed).toEqual([]);
   });
 
   it('undoes a targeted turn, restores its prompt, and reloads the session', async () => {

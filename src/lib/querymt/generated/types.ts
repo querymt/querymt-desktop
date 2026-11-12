@@ -1697,6 +1697,12 @@ export interface ReasoningPartStored {
 /** A single entry of a session's undo stack. */
 export interface UndoStackFrameResponse {
 	message_id: string;
+	/**
+	 * `true` when the undo that produced this frame failed part-way. Redo
+	 * can still restore the state before that undo, but the frame is
+	 * discarded by the next prompt.
+	 */
+	restore_failed: boolean;
 }
 
 export interface RedoSessionResponse {
@@ -1730,6 +1736,12 @@ export interface RemoteSessionInfo {
 	profile_id?: string;
 	profile_label?: string;
 	model_id?: string;
+	/**
+	 * Owner-reported runtime state: `idle`, `running`, `waiting`,
+	 * `cancel_requested`, `active` (live, status unavailable) or `persisted`
+	 * (not loaded on the owner).
+	 */
+	runtime_state?: string;
 }
 
 export interface RemoteSessionListInfo {
@@ -1919,11 +1931,24 @@ export interface TruncatedEntry {
 	full_bytes: number;
 }
 
+export interface UserPromptRecord {
+	messageId: string;
+	/** Zero-based position in persisted message history; this is not an event sequence. */
+	messageOrder: number;
+	timestamp: number;
+	blocks: any;
+}
+
 export interface SessionHistoryResponse {
 	/** Events whose `seq` is their history position, ascending. */
 	events: AgentEvent[];
 	history: HistoryInfo;
 	truncated: TruncatedEntry[];
+	/**
+	 * Structured prompt blocks for the prompts among `events` (remote
+	 * sessions; same shape as the load snapshot's `userPrompts`).
+	 */
+	userPrompts?: UserPromptRecord[];
 }
 
 /**
@@ -2031,14 +2056,6 @@ export interface SessionRuntimeStatus {
 export interface StreamCursor {
 	local_seq: number;
 	remote_seq_by_source: Record<string, number>;
-}
-
-export interface UserPromptRecord {
-	messageId: string;
-	/** Zero-based position in persisted message history; this is not an event sequence. */
-	messageOrder: number;
-	timestamp: number;
-	blocks: any;
 }
 
 export interface SessionLoadSnapshot {

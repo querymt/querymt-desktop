@@ -1,6 +1,8 @@
 <script lang="ts">
   import { ArrowUpRight, Braces, Check, Copy, Diff, GitFork, LoaderCircle, Redo2, Undo2 } from '@lucide/svelte';
   import SessionPromptError from '$lib/components/session/SessionPromptError.svelte';
+  import SessionUndoNotice from '$lib/components/session/SessionUndoNotice.svelte';
+  import type { SessionUndoNotice as SessionUndoNoticeData } from '$lib/domain/session-undo';
   import SessionAttachmentPreview from '$lib/components/session/SessionAttachmentPreview.svelte';
   import SessionWorkGroup from '$lib/components/session/SessionWorkGroup.svelte';
   import SessionMessageMetadata from '$lib/components/session/SessionMessageMetadata.svelte';
@@ -24,8 +26,10 @@
     onImageFailure,
     undoAvailable = false,
     redoAvailable = false,
+    redoRecovery = false,
     forkAvailable = false,
     reverted = false,
+    undoNotice = null,
     undoPending = false,
     forkPending = false,
     promptFailure = null,
@@ -50,8 +54,12 @@
     onImageFailure?: ((key: string) => void) | null;
     undoAvailable?: boolean;
     redoAvailable?: boolean;
+    /** Redo recovers from an undo that failed part-way; sending a prompt discards it. */
+    redoRecovery?: boolean;
     forkAvailable?: boolean;
     reverted?: boolean;
+    /** Summary of the undo, rendered above the first undone turn. */
+    undoNotice?: SessionUndoNoticeData | null;
     undoPending?: boolean;
     forkPending?: boolean;
     promptFailure?: PromptFailure | null;
@@ -181,8 +189,17 @@
 </script>
 
 <article class:session-turn-reverted={reverted} class="session-turn" data-turn-id={turn.id}>
+  {#if undoNotice}
+    <SessionUndoNotice notice={undoNotice} {redoAvailable} {onRedo} />
+  {/if}
   {#if turn.user}
     <section class="session-user-message-shell">
+      {#if reverted}
+        <span class="session-turn-undone-chip" data-undone-chip>
+          <Undo2 size={11} aria-hidden="true" />
+          Undone
+        </span>
+      {/if}
       {#each userPresentation.attachmentSegments as segment}
         <div class="session-user-message-attachments">
           <SessionAttachmentPreview blocks={segment.blocks} gallery={imageGallery} {failedImageKeys} {onImageFailure} />
@@ -315,8 +332,10 @@
           <button
             class="session-message-action-btn"
             type="button"
-            aria-label="Redo this turn"
-            title="Redo workspace changes for this turn"
+            aria-label={redoRecovery ? 'Recover from failed undo' : 'Redo this turn'}
+            title={redoRecovery
+              ? 'The last undo failed part-way. Redo restores the workspace to before that undo; sending a new prompt discards this option.'
+              : 'Redo workspace changes for this turn'}
             onclick={onRedo}
           >
             <Redo2 size={15} />
