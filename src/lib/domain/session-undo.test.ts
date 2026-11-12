@@ -119,5 +119,19 @@ describe('session undo state', () => {
       session.undo.stackRestoreFailed = [false];
       expect(getSessionUndoNotice(session)).toBeNull();
     });
+
+    it('still reports recovery when the failed frame turn is not loaded', () => {
+      const session = sessionWithTurns();
+      session.undo.stack = ['gone'];
+      session.undo.stackRestoreFailed = [true];
+      session.undo.lastMessage = 'boom';
+      expect(getSessionUndoNotice(session)).toEqual({
+        messageId: 'gone',
+        revertedTurns: 0,
+        recovery: true,
+        files: [],
+        message: 'boom'
+      });
+    });
   });
 });

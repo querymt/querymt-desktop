@@ -993,7 +993,32 @@ describe('ActiveSessionView turn action settle hold', () => {
     const notice = screen.getByRole('status', { name: 'Undo failed part-way' });
     expect(notice).toHaveTextContent('Restore failed: disk full');
     expect(within(notice).getByRole('button', { name: /Restore workspace/ })).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-undo-notice]')).toHaveLength(1);
     expect(document.querySelectorAll('[data-undone-chip]')).toHaveLength(0);
+  });
+
+  it('shows the recovery notice once outside the turns when its turn is not loaded', async () => {
+    const onRedo = vi.fn();
+    const session = settledConversationSession({
+      undo: { stack: ['gone'], stackRestoreFailed: [true], pendingOperation: null, lastRevertedFiles: [], lastMessage: 'Restore failed: disk full' },
+      transcript: [
+        { id: 'user-1', kind: 'user_message_chunk', text: 'First prompt', messageId: 'user-message-1', eventIndex: 1 },
+        { id: 'assistant-1', kind: 'agent_message_chunk', text: 'First answer', messageId: 'assistant-message-1', eventIndex: 2 }
+      ]
+    });
+    vi.useFakeTimers();
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(document.documentElement, 'scrollTop', { configurable: true, value: 0 });
+    render(ActiveSessionView, { session, undoSupported: true, onRedo });
+    await tick();
+    await vi.advanceTimersByTimeAsync(1200);
+    await tick();
+
+    expect(document.querySelectorAll('[data-undo-notice]')).toHaveLength(1);
+    const notice = screen.getByRole('status', { name: 'Undo failed part-way' });
+    expect(notice.closest('[data-turn-id]')).toBeNull();
+    await fireEvent.click(within(notice).getByRole('button', { name: /Restore workspace/ }));
+    expect(onRedo).toHaveBeenCalledOnce();
   });
 
   it('shows no undo notice without an undo frame', async () => {

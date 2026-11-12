@@ -95,9 +95,10 @@ export function getSessionUndoNotice(session: ActiveSessionViewModel): SessionUn
   const messageId = getRedoMessageId(session);
   if (!messageId) return null;
   const turns = getUndoableSessionTurns(session);
-  if (!turns.some((turn) => turn.messageId === messageId)) return null;
-
   const recovery = isRedoRecovery(session);
+  // A failed undo stays recoverable even when its turn is outside the loaded history.
+  if (!recovery && !turns.some((turn) => turn.messageId === messageId)) return null;
+
   const frontier = getCommittedUndoFrontier(session);
   const frontierIndex = frontier ? turns.findIndex((turn) => turn.messageId === frontier) : -1;
   return {
