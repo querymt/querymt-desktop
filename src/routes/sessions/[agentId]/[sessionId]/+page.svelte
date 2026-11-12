@@ -38,7 +38,7 @@
     getCurrentProfileId
   } from '$lib/querymt/config-options';
   import { getForkTarget, type SessionForkTarget } from '$lib/domain/session-fork';
-  import { getUndoAffectedTurnCount, getUndoableSessionTurns } from '$lib/domain/session-undo';
+  import { getCurrentUndoTarget, getUndoAffectedTurnCount, getUndoableSessionTurns } from '$lib/domain/session-undo';
   import { agentsStore } from '$lib/stores/agents.svelte';
   import { sidebarStore } from '$lib/stores/sidebar.svelte';
   import { chatPreferencesStore } from '$lib/stores/chat-preferences.svelte';
@@ -290,10 +290,7 @@
         }
         return;
       }
-      const target = getUndoableSessionTurns(agentsStore.activeSession);
-      const frontier = agentsStore.activeSession.undo.stack.at(-1);
-      const frontierIndex = frontier ? target.findIndex((turn) => turn.messageId === frontier) : target.length;
-      const latest = target.slice(0, frontierIndex >= 0 ? frontierIndex : target.length).at(-1);
+      const latest = getCurrentUndoTarget(agentsStore.activeSession);
       if (undoSupported && latest) {
         event.preventDefault();
         openUndoDialog(latest.messageId);

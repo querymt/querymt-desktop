@@ -7,7 +7,7 @@
   import SessionTurnDiffPanel from '$lib/components/session/SessionTurnDiffPanel.svelte';
   import { buildSessionConversation } from '$lib/domain/session-conversation';
   import { getForkTarget } from '$lib/domain/session-fork';
-  import { canUndoToMessage, isTurnReverted } from '$lib/domain/session-undo';
+  import { canUndoToMessage, getRedoMessageId, getSessionUndoNotice, isRedoRecovery, isTurnReverted } from '$lib/domain/session-undo';
   import {
     SESSION_TURN_GAP,
     getConversationViewport,
@@ -305,6 +305,8 @@
     };
   });
 
+  const undoNotice = $derived(getSessionUndoNotice(session));
+
   const busy = $derived(
     ['submitting', 'thinking', 'streaming', 'tool-running'].includes(session.runState) ||
       session.undo.pendingOperation !== null ||
@@ -411,6 +413,7 @@
               {failedImageKeys}
               onImageFailure={handleImageFailure}
               {reverted}
+              undoNotice={undoNotice && undoNotice.messageId === turn.user?.messageId ? undoNotice : null}
               promptFailure={turn.user?.eventIndex === promptFailure?.turnEventIndex ? promptFailure : null}
               retryPending={promptRetryPending}
               {onRetryPrompt}
@@ -430,8 +433,9 @@
               {onUndo}
               redoAvailable={Boolean(
                 undoSupported && !busy && turnActionsSettled && turn.user?.messageId &&
-                  turn.user.messageId === session.undo.stack.at(-1)
+                  turn.user.messageId === getRedoMessageId(session)
               )}
+              redoRecovery={isRedoRecovery(session)}
               {onRedo}
               diffOpen={diffTurn?.id === turn.id}
               {diffPanelId}

@@ -107,6 +107,7 @@ function sessionWithImages(): ActiveSessionViewModel {
     },
     undo: {
       stack: [],
+      stackRestoreFailed: [],
       pendingOperation: null,
       lastRevertedFiles: [],
       lastMessage: null
@@ -888,7 +889,7 @@ describe('ActiveSessionView turn action settle hold', () => {
   it('attaches redo only to the current undo frontier turn', async () => {
     const onRedo = vi.fn();
     const session = settledConversationSession({
-      undo: { stack: ['user-message-1'], pendingOperation: null, lastRevertedFiles: [], lastMessage: null },
+      undo: { stack: ['user-message-1'], stackRestoreFailed: [false], pendingOperation: null, lastRevertedFiles: [], lastMessage: null },
       transcript: [
         { id: 'user-1', kind: 'user_message_chunk', text: 'First prompt', messageId: 'user-message-1', eventIndex: 1 },
         { id: 'assistant-1', kind: 'agent_message_chunk', text: 'First answer', messageId: 'assistant-message-1', eventIndex: 2 },
@@ -912,6 +913,94 @@ describe('ActiveSessionView turn action settle hold', () => {
     expect(screen.queryByRole('button', { name: 'Undo to this prompt' })).not.toBeInTheDocument();
     await fireEvent.click(redo);
     expect(onRedo).toHaveBeenCalledOnce();
+  });
+
+  it('labels redo as recovery when the undo that made the frame failed part-way', async () => {
+    const onRedo = vi.fn();
+    const session = settledConversationSession({
+      undo: { stack: ['user-message-1'], stackRestoreFailed: [true], pendingOperation: null, lastRevertedFiles: [], lastMessage: null },
+      transcript: [
+        { id: 'user-1', kind: 'user_message_chunk', text: 'First prompt', messageId: 'user-message-1', eventIndex: 1 },
+        { id: 'assistant-1', kind: 'agent_message_chunk', text: 'First answer', messageId: 'assistant-message-1', eventIndex: 2 }
+      ]
+    });
+    vi.useFakeTimers();
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(document.documentElement, 'scrollTop', { configurable: true, value: 0 });
+    render(ActiveSessionView, { session, undoSupported: true, onRedo });
+    await tick();
+    await vi.advanceTimersByTimeAsync(1200);
+    await tick();
+
+    const recover = screen.getByRole('button', { name: 'Recover from failed undo' });
+    expect(recover).toHaveAttribute('title', expect.stringContaining('sending a new prompt discards this option'));
+    expect(screen.queryByRole('button', { name: 'Redo this turn' })).not.toBeInTheDocument();
+    // The failed undo deleted no history, so the turn can still be undone again.
+    expect(screen.getByRole('button', { name: 'Undo to this prompt' })).toBeInTheDocument();
+    await fireEvent.click(recover);
+    expect(onRedo).toHaveBeenCalledOnce();
+  });
+
+  it('explains an undo above the first undone turn and marks undone turns', async () => {
+    const onRedo = vi.fn();
+    const session = settledConversationSession({
+      undo: { stack: ['user-message-2'], stackRestoreFailed: [false], pendingOperation: null, lastRevertedFiles: ['src/a.ts', 'src/b.ts'], lastMessage: 'Undid 2 changed files.' },
+      transcript: [
+        { id: 'user-1', kind: 'user_message_chunk', text: 'First prompt', messageId: 'user-message-1', eventIndex: 1 },
+        { id: 'assistant-1', kind: 'agent_message_chunk', text: 'First answer', messageId: 'assistant-message-1', eventIndex: 2 },
+        { id: 'user-2', kind: 'user_message_chunk', text: 'Second prompt', messageId: 'user-message-2', eventIndex: 3 },
+        { id: 'assistant-2', kind: 'agent_message_chunk', text: 'Second answer', messageId: 'assistant-message-2', eventIndex: 4 }
+      ]
+    });
+    vi.useFakeTimers();
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(document.documentElement, 'scrollTop', { configurable: true, value: 0 });
+    render(ActiveSessionView, { session, undoSupported: true, onRedo });
+    await tick();
+    await vi.advanceTimersByTimeAsync(1200);
+    await tick();
+
+    const notice = screen.getByRole('status', { name: '1 turn undone' });
+    expect(notice.closest('[data-turn-id]')).toHaveTextContent('Second prompt');
+    expect(notice).toHaveTextContent('2 files restored');
+    expect(notice).toHaveTextContent('permanently discards');
+    expect(document.querySelectorAll('[data-undone-chip]')).toHaveLength(1);
+
+    expect(screen.queryByText('src/a.ts')).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: /Show files/ }));
+    expect(screen.getByText('src/a.ts')).toBeInTheDocument();
+
+    await fireEvent.click(within(notice).getByRole('button', { name: /Redo/ }));
+    expect(onRedo).toHaveBeenCalledOnce();
+  });
+
+  it('shows a warning notice instead of an undone count when the undo failed part-way', async () => {
+    const session = settledConversationSession({
+      undo: { stack: ['user-message-1'], stackRestoreFailed: [true], pendingOperation: null, lastRevertedFiles: [], lastMessage: 'Restore failed: disk full' },
+      transcript: [
+        { id: 'user-1', kind: 'user_message_chunk', text: 'First prompt', messageId: 'user-message-1', eventIndex: 1 },
+        { id: 'assistant-1', kind: 'agent_message_chunk', text: 'First answer', messageId: 'assistant-message-1', eventIndex: 2 }
+      ]
+    });
+    vi.useFakeTimers();
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(document.documentElement, 'scrollTop', { configurable: true, value: 0 });
+    render(ActiveSessionView, { session, undoSupported: true });
+    await tick();
+    await vi.advanceTimersByTimeAsync(1200);
+    await tick();
+
+    const notice = screen.getByRole('status', { name: 'Undo failed part-way' });
+    expect(notice).toHaveTextContent('Restore failed: disk full');
+    expect(within(notice).getByRole('button', { name: /Restore workspace/ })).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-undone-chip]')).toHaveLength(0);
+  });
+
+  it('shows no undo notice without an undo frame', async () => {
+    await renderSettledSession(settledConversationSession());
+    await vi.advanceTimersByTimeAsync(1200);
+    await tick();
+    expect(document.querySelector('[data-undo-notice]')).toBeNull();
   });
 
   it('does not show redo for an assistant-only turn with an empty undo stack', async () => {
