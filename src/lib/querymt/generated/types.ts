@@ -1639,13 +1639,23 @@ export interface ModelsChangedNotification {
 	reason: string;
 }
 
+/** How a pending input will reach the run. */
+export enum InputDelivery {
+	Steer = "steer",
+	Queue = "queue",
+}
+
+/** Where a pending input is in its lifecycle. */
+export enum PendingInputState {
+	Accepted = "accepted",
+	Queued = "queued",
+}
+
 /** A queued or steering input that has not started or been applied yet. */
 export interface PendingInputSummary {
 	inputId: string;
-	/** `"steer"` or `"queue"`. */
-	delivery: string;
-	/** `"accepted"` or `"queued"`. */
-	state: string;
+	delivery: InputDelivery;
+	state: PendingInputState;
 	runId?: string;
 	position?: number;
 	blocks?: any;
@@ -1807,13 +1817,27 @@ export interface ScheduleActionResult {
 	action: string;
 }
 
+/** Schedule lifecycle state. */
+export enum ScheduleState {
+	/** Waiting for next_run_at or event threshold. */
+	Armed = "armed",
+	/** Cycle in progress. */
+	Running = "running",
+	/** User paused. */
+	Paused = "paused",
+	/** max_runs reached. */
+	Exhausted = "exhausted",
+	/** Consecutive failures exceeded threshold. */
+	Failed = "failed",
+}
+
 export interface ScheduleInfo {
 	public_id: string;
 	task_public_id: string;
 	session_public_id: string;
 	node_id?: string;
 	trigger: any;
-	state: string;
+	state: ScheduleState;
 	last_run_at?: string;
 	next_run_at?: string;
 	run_count: number;
