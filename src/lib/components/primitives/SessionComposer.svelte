@@ -17,6 +17,9 @@
     type ModelLocationContext
   } from '$lib/querymt/config-options';
   import ComposerAddMenu, { type ComposerAddMenuAction } from './ComposerAddMenu.svelte';
+  import MentionPopup from './MentionPopup.svelte';
+  import { MentionController, type AcceptedMention, type MentionAcceptKey, type MentionQuerySource, type MentionTarget } from '$lib/domain/mention-controller';
+  import { createMentionQuery } from '$lib/domain/mention-query.svelte';
   import { getModeToneIndex } from '$lib/domain/session-mode-tone';
   import type { ComposerOption, ModelEntry, ModelInfo, PromptAttachment, SessionContentBlock, SessionInputDeliveryMode } from '$lib/domain/types';
   import type { SendShortcut } from '$lib/stores/chat-preferences.svelte';
@@ -97,8 +100,18 @@
     onStopPrompt = null,
     onPromptExpandedChange = null,
     sendBlockedReason = null,
+    mentionSource = null,
+    mentionTarget = null,
+    mentions = [],
+    onMentionsChange = null,
     onSendPrompt
   }: {
+    /** `@` completion source; null when the agent lacks the workspace file query. */
+    mentionSource?: MentionQuerySource | null;
+    /** Query target: the active session, or a local launch cwd. Null disables `@` completion. */
+    mentionTarget?: MentionTarget | null;
+    mentions?: AcceptedMention[];
+    onMentionsChange?: ((mentions: AcceptedMention[]) => void) | null;
     /** When set, sending is disabled and this reason is shown. */
     sendBlockedReason?: string | null;
     cwd?: string;
@@ -463,7 +476,73 @@
     onSendPrompt();
   }
 
+  const mentionController = new MentionController();
+  const mentionListboxId = `mention-list-${Math.random().toString(36).slice(2, 10)}`;
+  const mentionOptionId = (index: number) => `${mentionListboxId}-opt-${index}`;
+  let mentionOpen = $state(false);
+  let mentionQueryText = $state<string | null>(null);
+  let mentionSelected = $state(0);
+  const mentionQuery = createMentionQuery({
+    source: () => mentionSource,
+    target: () => mentionTarget,
+    query: () => (mentionOpen ? mentionQueryText : null)
+  });
+  const mentionListVisible = $derived(mentionOpen && !collapsed && !!mentionSource && !!mentionTarget);
+  const mentionActiveOption = $derived(
+    mentionListVisible && mentionQuery.entries.length > 0 ? mentionOptionId(mentionSelected) : undefined
+  );
+
+  function syncMention(element: HTMLTextAreaElement | HTMLInputElement) {
+    if (!mentionSource || !mentionTarget) {
+      mentionController.reset();
+      mentionOpen = false;
+      mentionQueryText = null;
+      return;
+    }
+    const trigger = mentionController.update(element.value, element.selectionStart ?? element.value.length);
+    mentionOpen = trigger !== null;
+    mentionQueryText = trigger?.query ?? null;
+    mentionSelected = mentionController.selectedIndex;
+  }
+
+  function acceptMentionEntry(element: HTMLTextAreaElement | HTMLInputElement, key: MentionAcceptKey, index?: number): boolean {
+    if (index !== undefined) mentionController.selectedIndex = index;
+    const result = mentionController.accept(element.value, mentionQuery.entries, key, mentions);
+    if (!result) return false;
+    element.value = result.text;
+    element.setSelectionRange(result.caret, result.caret);
+    onPromptInput(result.text);
+    onMentionsChange?.(result.mentions);
+    syncMention(element);
+    return true;
+  }
+
+  /** Returns true when the key was consumed by the open completion list. */
+  function handleMentionKeydown(event: KeyboardEvent): boolean {
+    if (!mentionListVisible || event.isComposing) return false;
+    const element = event.currentTarget as HTMLTextAreaElement | HTMLInputElement;
+    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && plain) {
+      event.preventDefault();
+      mentionController.move(event.key === 'ArrowDown' ? 1 : -1, mentionQuery.entries.length);
+      mentionSelected = mentionController.selectedIndex;
+      return true;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      mentionController.dismiss();
+      mentionOpen = false;
+      return true;
+    }
+    if ((event.key === 'Enter' || event.key === 'Tab') && plain && mentionQuery.entries.length > 0) {
+      event.preventDefault();
+      return acceptMentionEntry(element, event.key === 'Enter' ? 'enter' : 'tab');
+    }
+    return false;
+  }
+
   function handlePromptKeydown(event: KeyboardEvent) {
+    if (handleMentionKeydown(event)) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'm') {
       event.preventDefault();
       void modelPickerRef?.openPicker();
@@ -713,12 +792,33 @@
       class={`block w-full resize-none border-0 bg-inherit px-0.5 pt-3 pb-2 text-sm text-[var(--text)] outline-none ${promptMinHeightClass} ${launch ? 'text-base' : ''}`}
       placeholder={sessionOnly ? sessionPlaceholder : launch ? 'Ask QueryMT to inspect, change, debug, explain, or plan something.' : minimal ? 'What should QueryMT do in this workspace?' : 'Ask QueryMT to inspect, plan, change, or explain something in this workspace.'}
       value={prompt}
-      oninput={(event) => onPromptInput((event.currentTarget as HTMLTextAreaElement).value)}
+      aria-activedescendant={mentionActiveOption}
+      oninput={(event) => {
+        const element = event.currentTarget as HTMLTextAreaElement;
+        onPromptInput(element.value);
+        syncMention(element);
+      }}
       onkeydown={handlePromptKeydown}
+      onkeyup={(event) => {
+        if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) syncMention(event.currentTarget as HTMLTextAreaElement);
+      }}
+      onclick={(event) => syncMention(event.currentTarget as HTMLTextAreaElement)}
+      onblur={() => { mentionOpen = false; }}
       onpaste={(event) => {
         if (event.clipboardData?.files.length) void normalizeAndAddFiles(event.clipboardData.files);
       }}
     ></textarea>
+    <MentionPopup
+      open={mentionListVisible}
+      entries={mentionQuery.entries}
+      status={mentionQuery.status}
+      selectedIndex={mentionSelected}
+      anchor={dockElement}
+      listboxId={mentionListboxId}
+      optionId={mentionOptionId}
+      onSelect={(index) => { if (promptElement) acceptMentionEntry(promptElement, 'enter', index); }}
+      onHover={(index) => { mentionController.selectedIndex = index; mentionSelected = index; }}
+    />
   </div>
 
   {#if attachmentErrors.length > 0}

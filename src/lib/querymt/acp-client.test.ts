@@ -1210,3 +1210,66 @@ describe('DesktopAcpClient elicitation recovery', () => {
     });
   });
 });
+
+describe('DesktopAcpClient file mentions', () => {
+  const mentions = [
+    { uri: 'file:///repo/a.ts', name: 'a.ts' },
+    { uri: 'file:///C:/proj/b.ts', name: 'b.ts' }
+  ];
+
+  it('derives workspace file support from advertised methods', () => {
+    const { client } = promptClient({});
+    const internal = client as unknown as { controlCapabilities: unknown };
+    expect(client.supportsWorkspaceFiles()).toBe(false);
+    internal.controlCapabilities = { methods: ['querymt/capabilities'] };
+    expect(client.supportsWorkspaceFiles()).toBe(false);
+    internal.controlCapabilities = { methods: ['querymt/workspace/files'] };
+    expect(client.supportsWorkspaceFiles()).toBe(true);
+  });
+
+  it('appends one resource_link per mention after the text, URIs verbatim', async () => {
+    const { client, prompt } = promptClient({});
+    await client.sendPrompt('s', 'compare @a.ts and @b.ts', [], { mentions });
+    expect(prompt).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: [
+        { type: 'text', text: 'compare @a.ts and @b.ts' },
+        { type: 'resource_link', uri: 'file:///repo/a.ts', name: 'a.ts' },
+        { type: 'resource_link', uri: 'file:///C:/proj/b.ts', name: 'b.ts' }
+      ]
+    }));
+  });
+
+  it('places mention links after attachments', async () => {
+    const { client, prompt } = promptClient({ image: true });
+    await client.sendPrompt('s', 'see', [image], { mentions: [mentions[0]] });
+    const sent = (prompt.mock.calls[0][0] as { prompt: Array<{ type: string }> }).prompt;
+    expect(sent.map((block) => block.type)).toEqual(['text', 'image', 'resource_link']);
+  });
+
+  it('sends no links without mentions', async () => {
+    const { client, prompt } = promptClient({});
+    await client.sendPrompt('s', 'hi');
+    expect((prompt.mock.calls[0][0] as { prompt: unknown[] }).prompt).toEqual([{ type: 'text', text: 'hi' }]);
+  });
+
+  it.each([['steerSession', 'querymt/session/steer'], ['queueSession', 'querymt/session/queue']] as const)(
+    '%s carries the same resource_link blocks',
+    async (method, wire) => {
+      const { client } = promptClient({});
+      const steerSession = vi.fn(async () => ({ status: 'accepted' }));
+      const queueSession = vi.fn(async () => ({ status: 'queued' }));
+      const internal = client as unknown as { controlCapabilities: unknown; querymtExtensions: unknown };
+      internal.controlCapabilities = { methods: [wire] };
+      internal.querymtExtensions = { steerSession, queueSession };
+      if (method === 'steerSession') await client.steerSession('s', 'x @a.ts', [], 'in-1', 'run-1', 'image', [mentions[0]]);
+      else await client.queueSession('s', 'x @a.ts', [], 'in-1', 'image', [mentions[0]]);
+      const target = method === 'steerSession' ? steerSession : queueSession;
+      expect(target).toHaveBeenCalledWith(expect.objectContaining({
+        prompt: [
+          { type: 'text', text: 'x @a.ts' },
+          { type: 'resource_link', uri: 'file:///repo/a.ts', name: 'a.ts' }
+        ]
+      }));
+    }
+  );
+});

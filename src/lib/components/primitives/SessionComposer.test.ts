@@ -1629,3 +1629,138 @@ describe('SessionComposer model picker focus and mode cycling', () => {
     expect(onSessionConfigChange).toHaveBeenCalledWith('mode', 'plan');
   });
 });
+
+describe('SessionComposer @ mentions', () => {
+  const entries = [
+    { path: 'src/a.ts', abs_path: '/repo/src/a.ts', uri: 'file:///repo/src/a.ts', name: 'a.ts', is_dir: false },
+    { path: 'src/lib', abs_path: '/repo/src/lib', uri: 'file:///repo/src/lib', name: 'lib', is_dir: true }
+  ];
+
+  function mentionSetup(overrides: { prompt?: string; response?: Record<string, unknown>; props?: Record<string, unknown> } = {}) {
+    const query = vi.fn(async () => ({ status: 'ready', entries, truncated: false, ...overrides.response }));
+    const source = { query, onIndexReady: () => () => {} };
+    const onPromptInput = vi.fn();
+    const onSendPrompt = vi.fn();
+    const onMentionsChange = vi.fn();
+    const props = {
+      sessionOnly: true,
+      prompt: overrides.prompt ?? '@a',
+      mentionSource: source,
+      mentionTarget: { session_id: 's1' },
+      onPromptInput,
+      onSendPrompt,
+      onMentionsChange,
+      ...overrides.props
+    };
+    renderComposer(props);
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement;
+    return { query, textarea, onPromptInput, onSendPrompt, onMentionsChange };
+  }
+
+  async function open(textarea: HTMLTextAreaElement, value: string) {
+    textarea.focus();
+    textarea.value = value;
+    textarea.setSelectionRange(value.length, value.length);
+    await fireEvent.input(textarea);
+  }
+
+  it('opens a listbox for @ at word start and keeps focus in the textarea', async () => {
+    const { textarea, query } = mentionSetup();
+    await open(textarea, 'look @a');
+    const list = await screen.findByRole('listbox', { hidden: true });
+    expect(within(list).getAllByRole('option', { hidden: true })).toHaveLength(2);
+    expect(query).toHaveBeenCalledWith(expect.objectContaining({ session_id: 's1', query: 'a' }));
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.getAttribute('aria-activedescendant')).toBe(screen.getAllByRole('option', { hidden: true })[0].id);
+  });
+
+  it('does not open for an email address', async () => {
+    const { textarea, query } = mentionSetup();
+    await open(textarea, 'mail foo@bar.com');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(screen.queryByRole('listbox', { hidden: true })).toBeNull();
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('Enter accepts the entry instead of sending', async () => {
+    const { textarea, onPromptInput, onSendPrompt, onMentionsChange } = mentionSetup();
+    await open(textarea, '@a');
+    await screen.findByRole('listbox', { hidden: true });
+    await fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(onSendPrompt).not.toHaveBeenCalled();
+    expect(onPromptInput).toHaveBeenLastCalledWith('@src/a.ts ');
+    expect(onMentionsChange).toHaveBeenLastCalledWith([
+      { text: '@src/a.ts', uri: 'file:///repo/src/a.ts', name: 'a.ts', isDir: false }
+    ]);
+  });
+
+  it('Escape closes the list and leaves the text and mentions alone', async () => {
+    const { textarea, onPromptInput, onMentionsChange } = mentionSetup();
+    await open(textarea, '@a');
+    await screen.findByRole('listbox', { hidden: true });
+    onPromptInput.mockClear();
+    await fireEvent.keyDown(textarea, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('listbox', { hidden: true })).toBeNull());
+    expect(textarea.value).toBe('@a');
+    expect(onPromptInput).not.toHaveBeenCalled();
+    expect(onMentionsChange).not.toHaveBeenCalled();
+  });
+
+  it('Tab drills into a directory without recording a mention and keeps the list open', async () => {
+    const { textarea, onPromptInput, onMentionsChange, query } = mentionSetup();
+    await open(textarea, '@src');
+    await screen.findByRole('listbox', { hidden: true });
+    await fireEvent.keyDown(textarea, { key: 'ArrowDown' });
+    await fireEvent.keyDown(textarea, { key: 'Tab' });
+    expect(onPromptInput).toHaveBeenLastCalledWith('@src/lib/');
+    expect(onMentionsChange).toHaveBeenLastCalledWith([]);
+    await waitFor(() => expect(query).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'src/lib/' })));
+    expect(screen.getByRole('listbox', { hidden: true })).toBeInTheDocument();
+  });
+
+  it('Arrow keys move the selection and Enter takes the selected entry', async () => {
+    const { textarea, onPromptInput } = mentionSetup();
+    await open(textarea, '@');
+    await screen.findByRole('listbox', { hidden: true });
+    await fireEvent.keyDown(textarea, { key: 'ArrowDown' });
+    await waitFor(() => expect(screen.getAllByRole('option', { hidden: true })[1]).toHaveAttribute('aria-selected', 'true'));
+    await fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(onPromptInput).toHaveBeenLastCalledWith('@src/lib/ ');
+  });
+
+  it('does not consume Tab while the list is closed', async () => {
+    const { textarea, onSendPrompt } = mentionSetup({ prompt: 'hello' });
+    await open(textarea, 'hello');
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    textarea.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(onSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('shows no list without the capability or for a launch target that cannot be queried', async () => {
+    const withoutSource = mentionSetup({ props: { mentionSource: null } });
+    await open(withoutSource.textarea, '@a');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(screen.queryByRole('listbox', { hidden: true })).toBeNull();
+    cleanup();
+
+    const withoutTarget = mentionSetup({ props: { mentionTarget: null } });
+    await open(withoutTarget.textarea, '@a');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(screen.queryByRole('listbox', { hidden: true })).toBeNull();
+    expect(withoutTarget.query).not.toHaveBeenCalled();
+  });
+
+  it('Enter still sends when no list is open', async () => {
+    const { textarea, onSendPrompt } = mentionSetup({ prompt: 'hello' });
+    await fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(onSendPrompt).toHaveBeenCalledOnce();
+  });
+
+  it('shows an indexing state while the index is not ready', async () => {
+    const { textarea } = mentionSetup({ response: { status: 'not_ready', entries: [] } });
+    await open(textarea, '@a');
+    expect(await screen.findByText('Indexing…')).toBeInTheDocument();
+    expect(screen.queryByRole('option', { hidden: true })).toBeNull();
+  });
+});

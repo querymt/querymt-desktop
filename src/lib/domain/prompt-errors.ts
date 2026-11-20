@@ -1,5 +1,6 @@
 import { RequestError } from '@agentclientprotocol/sdk/unstable';
 import type { PromptAttachment } from '$lib/domain/types';
+import type { AcceptedMention } from '$lib/domain/mention-controller';
 import { toRemoteNodeUpgradeRequired } from '$lib/domain/remote-errors';
 
 export type PromptErrorKind =
@@ -29,6 +30,8 @@ export interface PromptFailure extends PromptError {
   prompt: string;
   attachments: PromptAttachment[];
   clientPromptId?: string;
+  /** Mentions of the failed prompt, kept so Retry resends them. */
+  mentions?: AcceptedMention[];
 }
 
 interface ProviderErrorData {

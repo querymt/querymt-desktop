@@ -13,7 +13,10 @@ import {
   getNextConversationEventIndex,
   mergeMissingSessionUsage,
   projectSessionRuntime,
-  projectDelegationActivity
+  projectDelegationActivity,
+  normalizeContentBlock,
+  filePathFromUri,
+  fileNameFromUri
 } from './session-updates';
 
 function notification(update: SessionNotification['update']): SessionNotification {
@@ -753,5 +756,38 @@ describe('applySessionNotification stream coalescing', () => {
       text: 'Second title',
       reasoningPartId: 'rs_1:summary:1'
     });
+  });
+});
+
+describe('file mention resource links', () => {
+  it('normalizes file:// resource_link blocks', () => {
+    expect(normalizeContentBlock({ type: 'resource_link', uri: 'file:///repo/src/a.ts', name: 'a.ts' }))
+      .toEqual({ type: 'resource_link', uri: 'file:///repo/src/a.ts', name: 'a.ts', title: undefined });
+  });
+
+  it('falls back to the decoded file name when the link has no name', () => {
+    expect(normalizeContentBlock({ type: 'resource_link', uri: 'file:///repo/my%20notes.md' }))
+      .toMatchObject({ name: 'my notes.md' });
+    expect(fileNameFromUri('file:///repo/src/')).toBe('src');
+  });
+
+  it('drops attachment:/// and other non-file links', () => {
+    expect(normalizeContentBlock({ type: 'resource_link', uri: 'attachment:///file-1/notes.txt', name: 'notes.txt' })).toBeNull();
+    expect(normalizeContentBlock({ type: 'resource_link', uri: 'https://example.com/a', name: 'a' })).toBeNull();
+  });
+
+  it('decodes display paths, including Windows drive letters', () => {
+    expect(filePathFromUri('file:///repo/my%20notes.md')).toBe('/repo/my notes.md');
+    expect(filePathFromUri('file:///C:/proj/b.ts')).toBe('C:/proj/b.ts');
+  });
+
+  it('keeps the link when a user message chunk is replayed', () => {
+    const state = applySessionNotification(createEmptyActiveSession(), notification({
+      sessionUpdate: 'user_message_chunk',
+      messageId: 'm1',
+      content: { type: 'resource_link', uri: 'file:///repo/a.ts', name: 'a.ts' }
+    } as SessionNotification['update']));
+    const user = state.transcript.find((item) => item.kind === 'user_message_chunk');
+    expect(user?.blocks).toEqual([expect.objectContaining({ type: 'resource_link', uri: 'file:///repo/a.ts' })]);
   });
 });

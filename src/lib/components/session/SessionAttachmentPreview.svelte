@@ -68,7 +68,7 @@
   const naturalDimensionsByKey = new Map<string, { width: number; height: number }>();
 
   function blockKey(block: SessionContentBlock, index: number): string {
-    if (block.type === 'text') return `text-${index}`;
+    if (block.type === 'text' || block.type === 'resource_link') return `${block.type}-${index}`;
     return `${block.id ?? block.uri ?? block.type}-${index}`;
   }
 
@@ -77,7 +77,7 @@
     return `local-image:${identity}`;
   }
 
-  function fallbackName(block: Exclude<SessionContentBlock, { type: 'text' }>, index: number): string {
+  function fallbackName(block: Exclude<SessionContentBlock, { type: 'text' | 'resource_link' }>, index: number): string {
     if (block.name) return block.name;
     if (block.type === 'image') return `Image attachment ${index + 1}`;
     try {
@@ -88,7 +88,11 @@
     }
   }
 
-  const attachmentBlocks = $derived(blocks.filter((block) => block.type !== 'text'));
+  // `file://` mention links render as chips in the transcript, not as attachments.
+  const attachmentBlocks = $derived(
+    blocks.filter((block): block is Exclude<SessionContentBlock, { type: 'text' | 'resource_link' }> =>
+      block.type !== 'text' && block.type !== 'resource_link')
+  );
   const localGallery = $derived.by(() =>
     attachmentBlocks.flatMap((block, index): SessionImageGalleryItem[] => {
       if (block.type !== 'image' || !block.data || block.unavailable) return [];

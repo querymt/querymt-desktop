@@ -2232,6 +2232,54 @@ export interface Usage {
 	cache_write_tiers?: CacheWriteTiers;
 }
 
+/** One file or directory returned by a workspace query. */
+export interface WorkspaceFileEntry {
+	/** Path relative to the query's working directory, always `/`-separated. */
+	path: string;
+	/** Absolute path on the agent's machine, in that machine's native format. */
+	abs_path: string;
+	/** `file://` URI of `abs_path`, built by the agent. */
+	uri: string;
+	/** Base name of the entry. */
+	name: string;
+	is_dir: boolean;
+}
+
+/**
+ * Request of `querymt/workspace/files`. Exactly one of `session_id` and `cwd`
+ * must be set.
+ */
+export interface WorkspaceFilesRequest {
+	session_id?: string;
+	cwd?: string;
+	query?: string;
+	limit?: number;
+}
+
+/** Whether the workspace index could answer the query. */
+export enum WorkspaceFilesStatus {
+	Ready = "ready",
+	NotReady = "not_ready",
+}
+
+/** Response of `querymt/workspace/files`. */
+export interface WorkspaceFilesResponse {
+	status: WorkspaceFilesStatus;
+	workspace_root?: string;
+	cwd?: string;
+	entries: WorkspaceFileEntry[];
+	truncated: boolean;
+}
+
+/**
+ * The workspace index of a session finished building; open `not_ready`
+ * file lists should re-query.
+ */
+export interface WorkspaceIndexReadyNotification {
+	session_id: string;
+	workspace_root: string;
+}
+
 /**
  * Preferred authentication method for a provider.
  * 

@@ -243,11 +243,30 @@ export interface SessionResourceBlock {
   unavailable?: boolean;
 }
 
-export type SessionContentBlock = SessionTextBlock | SessionImageBlock | SessionResourceBlock;
+/** A `file://` resource link (an `@` file mention). Other link schemes are not represented. */
+export interface SessionResourceLinkBlock {
+  type: 'resource_link';
+  uri: string;
+  name: string;
+  title?: string;
+}
+
+export type SessionContentBlock =
+  | SessionTextBlock
+  | SessionImageBlock
+  | SessionResourceBlock
+  | SessionResourceLinkBlock;
+
+/** A mention to send as a `resource_link`; `uri` is agent-provided and sent verbatim. */
+export interface PromptMention {
+  uri: string;
+  name: string;
+}
 
 export interface PromptSendOptions {
   imageMode?: ImageSendMode;
   clientPromptId?: string;
+  mentions?: PromptMention[];
 }
 
 export interface ComposerOption {
